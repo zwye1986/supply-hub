@@ -22,7 +22,7 @@ import java.sql.Statement;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
- * 在真实 MySQL 上验证 system Liquibase `002-admin-form-dictionaries`：首次全量写入、二次幂等。
+ * 在真实 MySQL 上验证 system 管理端表单字典：首次全量写入、二次幂等。
  * 设计见 {@code docs/superpowers/specs/2026-09-07-供应链管理端表单字典与标品标签设计.md#7-测试门禁}。
  */
 @Testcontainers(disabledWithoutDocker = true)
@@ -76,24 +76,26 @@ class AdminFormDictionaryMigrationIntegrationTest {
     }
 
     @Test
-    void migrationWritesEightDictionariesOnlyOnce() throws Exception {
+    void migrationWritesNineDictionariesOnlyOnce() throws Exception {
         updateLiquibase();
-        assertEquals(8, queryCount("""
+        assertEquals(9, queryCount("""
                 SELECT COUNT(*) FROM system_dict_type
                 WHERE type IN (
                     'supply_chain_sellable_category', 'supply_chain_product_type',
                     'supply_chain_product_classification', 'supply_chain_distribution_level',
                     'supply_chain_cooperation_mode', 'supply_chain_distributor_type',
-                    'supply_chain_supply_preference', 'supply_chain_buyer_status')
+                    'supply_chain_supply_preference', 'supply_chain_buyer_status',
+                    'supply_chain_supply_mode')
                   AND deleted = b'0'
                 """));
-        assertEquals(33, queryCount("""
+        assertEquals(38, queryCount("""
                 SELECT COUNT(*) FROM system_dict_data
                 WHERE dict_type IN (
                     'supply_chain_sellable_category', 'supply_chain_product_type',
                     'supply_chain_product_classification', 'supply_chain_distribution_level',
                     'supply_chain_cooperation_mode', 'supply_chain_distributor_type',
-                    'supply_chain_supply_preference', 'supply_chain_buyer_status')
+                    'supply_chain_supply_preference', 'supply_chain_buyer_status',
+                    'supply_chain_supply_mode')
                   AND deleted = b'0'
                 """));
         assertEquals(1, queryCount("""
@@ -104,29 +106,47 @@ class AdminFormDictionaryMigrationIntegrationTest {
                 SELECT label FROM system_dict_data
                 WHERE dict_type = 'supply_chain_buyer_status' AND value = 'SUSPENDED' AND deleted = b'0'
                 """));
+        assertEquals(5, queryCount("""
+                SELECT COUNT(*) FROM system_dict_data
+                WHERE dict_type = 'supply_chain_supply_mode' AND deleted = b'0'
+                """));
+        assertEquals("一件代发", queryText("""
+                SELECT label FROM system_dict_data
+                WHERE dict_type = 'supply_chain_supply_mode' AND value = 'DROP_SHIP' AND deleted = b'0'
+                """));
+        assertEquals(1, queryCount("""
+                SELECT COUNT(*) FROM DATABASECHANGELOG
+                WHERE ID = '003-supply-mode-dictionary' AND AUTHOR = 'supply-chain'
+                """));
 
         updateLiquibase();
-        assertEquals(8, queryCount("""
+        assertEquals(9, queryCount("""
                 SELECT COUNT(*) FROM system_dict_type
                 WHERE type IN (
                     'supply_chain_sellable_category', 'supply_chain_product_type',
                     'supply_chain_product_classification', 'supply_chain_distribution_level',
                     'supply_chain_cooperation_mode', 'supply_chain_distributor_type',
-                    'supply_chain_supply_preference', 'supply_chain_buyer_status')
+                    'supply_chain_supply_preference', 'supply_chain_buyer_status',
+                    'supply_chain_supply_mode')
                   AND deleted = b'0'
                 """));
-        assertEquals(33, queryCount("""
+        assertEquals(38, queryCount("""
                 SELECT COUNT(*) FROM system_dict_data
                 WHERE dict_type IN (
                     'supply_chain_sellable_category', 'supply_chain_product_type',
                     'supply_chain_product_classification', 'supply_chain_distribution_level',
                     'supply_chain_cooperation_mode', 'supply_chain_distributor_type',
-                    'supply_chain_supply_preference', 'supply_chain_buyer_status')
+                    'supply_chain_supply_preference', 'supply_chain_buyer_status',
+                    'supply_chain_supply_mode')
                   AND deleted = b'0'
                 """));
         assertEquals(1, queryCount("""
                 SELECT COUNT(*) FROM DATABASECHANGELOG
                 WHERE ID = '002-admin-form-dictionaries' AND AUTHOR = 'supply-chain'
+                """));
+        assertEquals(1, queryCount("""
+                SELECT COUNT(*) FROM DATABASECHANGELOG
+                WHERE ID = '003-supply-mode-dictionary' AND AUTHOR = 'supply-chain'
                 """));
     }
 

@@ -143,6 +143,8 @@
 
 供货配置一行可多选（`supplyModes: string[]`）。唯一键是 `(supplierId, sellableCategory, productType, productClassification)` 三码，不得靠模式拆成两行。实现：范围主表去掉单值 `supply_mode`，子表 `sc_supplier_supply_scope_mode`。Offer 上仍是单值 `offerSupplyMode`（该 SKU 选定的一种）。三码枚举与命中见字典专文。
 
+管理端供货模式下拉后续统一读取 system 数据字典 `supply_chain_supply_mode`；本次只配置字典，不修改前端工程。字典数据仍只负责标签、排序与展示颜色，提交值必须是上表五个枚举名；供应链后端继续用 `SupplyMode` 做封闭校验，不在请求线程远程调用 system 服务。
+
 前端详情里曾经出现的「现货/代发/预售」数字枚举废弃，不入库。
 
 ### 4.2 其它封闭枚举
@@ -522,4 +524,4 @@ O2O / INSTORE 仍 `buyerSettlementAmount = channelPayAmount`，不读三级价�
 | `interfaceapi.admin` | 本文 REST；不编排供应商调用 |
 | `routing` | 不读取 `supplyPreference=COMPREHENSIVE` |
 
-Liquibase 只追加新 changeset；开票为 `023-admin-invoice`；表单字典与三码为 `024-admin-form-dictionary-codes`（system 侧 `002-admin-form-dictionaries`）。禁止回改 `001`–`023`。
+Liquibase 只追加新 changeset；开票为 `023-admin-invoice`；表单字典与三码为 `024-admin-form-dictionary-codes`（system 侧 `002-admin-form-dictionaries`）；供货模式字典由 system 侧 `003-supply-mode-dictionary` 追加。禁止回改已执行变更集。
