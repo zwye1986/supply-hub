@@ -1,0 +1,3 @@
+com.aifuli.framework.datapermission.config.AifuliDataPermissionAutoConfiguration
+com.aifuli.framework.datapermission.config.AifuliDeptDataPermissionAutoConfiguration
+com.aifuli.framework.datapermission.config.AifuliDataPermissionRpcAutoConfiguration

@@ -1,0 +1,23 @@
+databaseChangeLog:
+  - changeSet:
+      id: 001-supplier-form-dictionaries
+      author: supply-chain
+      runInTransaction: true
+      changes:
+        - sqlFile:
+            path: 001-supplier-form-dictionaries.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 002-admin-form-dictionaries
+      author: supply-chain
+      runInTransaction: true
+      changes:
+        - sqlFile:
+            path: 002-admin-form-dictionaries.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false

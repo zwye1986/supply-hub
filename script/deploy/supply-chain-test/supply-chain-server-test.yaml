@@ -1,0 +1,31 @@
+# Nacos Data ID: supply-chain-server-test.yaml；namespace: aifuli-mall-test；group: test。
+spring:
+  cloud:
+    nacos:
+      discovery:
+        enabled: true
+
+aifuli:
+  supply-chain:
+    timer:
+      enabled: false
+    outbox:
+      enabled: false
+    openapi:
+      enabled: false
+    cashier:
+      # pro143 测试环境商城收银台 H5 地址；生产由各环境 Nacos 覆盖，禁止在应用默认配置写死环境域名。
+      h5-base-url: https://fushop.qihaofu.cn
+      h5-path: /api/h5/tbsg-cashier.html
+    instore:
+      home:
+        company-code: L0000A
+      rtmart:
+        enabled: true
+        base-url: https://test.ltsw.cn
+        home-path: /pay_center/rt-pos-api/getRtPosUrl/home
+        detail-path: /pay_center/rt-pos-api/getRtPosUrl/detail
+        connect-timeout: 3s
+        write-timeout: 5s
+        read-timeout: 10s
+        max-response-bytes: 65536

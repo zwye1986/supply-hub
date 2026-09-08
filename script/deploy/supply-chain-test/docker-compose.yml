@@ -1,0 +1,23 @@
+name: supply-chain-test
+
+services:
+  # 单实例、host network 与镜像健康检查协同运行；见 docs/superpowers/specs/2026-08-24-rtmart-entry-adapter-pro143-deployment-design.md#92-compose-运行。
+  supply-chain-server:
+    image: ${SUPPLY_CHAIN_IMAGE:?SUPPLY_CHAIN_IMAGE is required}
+    container_name: supply-chain-server-test
+    pull_policy: never
+    # 不做端口映射，Discovery 显式注册 pro143 内网地址；见 docs/superpowers/specs/2026-08-24-rtmart-entry-adapter-pro143-deployment-design.md#92-compose-运行。
+    network_mode: host
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 45s
+    # 运行时不提权、受控停止和日志轮转；见 docs/superpowers/specs/2026-08-24-rtmart-entry-adapter-pro143-deployment-design.md#92-compose-运行。
+    security_opt:
+      - no-new-privileges:true
+    env_file:
+      - ${SUPPLY_CHAIN_ENV_FILE:-.env}
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"

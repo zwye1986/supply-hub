@@ -1,0 +1,305 @@
+package com.aifuli.module.supplychain.interfaceapi.admin;
+
+import com.aifuli.framework.common.exception.ServiceException;
+import com.aifuli.framework.common.pojo.CommonResult;
+import com.aifuli.framework.common.pojo.PageResult;
+import com.aifuli.module.supplychain.tradecore.buyer.application.ProjectAdminCommandService;
+import com.aifuli.module.supplychain.tradecore.buyer.application.ProjectAdminCommandService.CreateProjectCommand;
+import com.aifuli.module.supplychain.tradecore.buyer.application.ProjectAdminCommandService.UpdateProjectCommand;
+import com.aifuli.module.supplychain.tradecore.buyer.application.ProjectAdminQueryService;
+import com.aifuli.module.supplychain.tradecore.buyer.application.ProjectAdminQueryService.ProjectDetail;
+import com.aifuli.module.supplychain.tradecore.buyer.application.ProjectAdminQueryService.ProjectPageQuery;
+import com.aifuli.module.supplychain.tradecore.buyer.domain.BuyerProjectStatus;
+import com.aifuli.module.supplychain.tradecore.catalog.application.ProjectListingCommandService;
+import com.aifuli.module.supplychain.tradecore.catalog.application.ProjectListingCommandService.ListingLine;
+import com.aifuli.module.supplychain.tradecore.catalog.application.ProjectListingQueryService;
+import com.aifuli.module.supplychain.tradecore.catalog.application.ProjectListingQueryService.ProjectListingListItem;
+import com.aifuli.module.supplychain.tradecore.profile.domain.ClosedEnums;
+import com.aifuli.module.supplychain.tradecore.profile.domain.L3AdjustMode;
+import com.aifuli.module.supplychain.tradecore.profile.domain.ProjectType;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotEmpty;
+import jakarta.validation.constraints.Size;
+import lombok.Data;
+import lombok.RequiredArgsConstructor;
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.List;
+
+import static com.aifuli.framework.common.exception.util.ServiceExceptionUtil.exception;
+import static com.aifuli.framework.common.pojo.CommonResult.success;
+import static com.aifuli.framework.security.core.util.SecurityFrameworkUtils.getLoginUserId;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.ENUM_NOT_OPEN;
+import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.PROJECT_CREATE_EXPRESSION;
+import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.PROJECT_DELETE_EXPRESSION;
+import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.PROJECT_QUERY_EXPRESSION;
+import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.PROJECT_UPDATE_EXPRESSION;
+import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.PROJECT_UPDATE_STATUS_EXPRESSION;
+
+/**
+ * 项目管理端 REST。列表多值筛选、simple 投影、PATCH 状态；不提供 buyers 子资源、不开票、不返回密钥。
+ * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#7-项目}。
+ */
+@Tag(name = "管理后台 - 供应链项目")
+@RestController
+@RequestMapping("/supply-chain/projects")
+@Validated
+@RequiredArgsConstructor
+public class ProjectAdminController {
+
+    private static final String VIEW_SIMPLE = "simple";
+
+    private final ProjectAdminCommandService commandService;
+    private final ProjectAdminQueryService queryService;
+    private final ProjectListingCommandService listingCommandService;
+    private final ProjectListingQueryService listingQueryService;
+
+    @GetMapping
+    @PreAuthorize(PROJECT_QUERY_EXPRESSION)
+    @Operation(summary = "分页查询项目",
+            description = "筛选用 projectName/projectCode/status[]/buyerCode/projectType[]/periodFrom/periodTo。"
+                    + "view=simple 返回 {projectCode,projectName}[]。不要走 GET /buyers/{code}/projects。")
+    public CommonResult<?> page(
+            @Parameter(description = "采购项目名称，模糊") @RequestParam(required = false) String projectName,
+            @Parameter(description = "采购项目全局永久编码") @RequestParam(required = false) String projectCode,
+            @Parameter(description = "项目状态枚举名，可多选") @RequestParam(required = false) List<String> status,
+            @Parameter(description = "采购商永久业务编码") @RequestParam(required = false) String buyerCode,
+            @Parameter(description = "项目类型封闭枚举，可多选") @RequestParam(required = false) List<String> projectType,
+            @Parameter(description = "项目开始日起") @RequestParam(required = false) LocalDate periodFrom,
+            @Parameter(description = "项目结束日止") @RequestParam(required = false) LocalDate periodTo,
+            @Parameter(description = "投影：simple 为名称下拉") @RequestParam(required = false) String view,
+            @Parameter(description = "页码，从 1 开始") @RequestParam(required = false) Integer pageNo,
+            @Parameter(description = "每页条数") @RequestParam(required = false) Integer pageSize) {
+        if (VIEW_SIMPLE.equals(view)) {
+            return success(queryService.listSimple(projectName, projectCode));
+        }
+        List<BuyerProjectStatus> statuses = status == null ? List.of()
+                : status.stream().map(ProjectAdminController::parseProjectStatus).toList();
+        return success(queryService.page(new ProjectPageQuery(
+                projectName, projectCode, statuses, buyerCode, parseProjectTypes(projectType),
+                periodFrom, periodTo, pageNo, pageSize)));
+    }
+
+    @GetMapping("/{projectCode}")
+    @PreAuthorize(PROJECT_QUERY_EXPRESSION)
+    @Operation(summary = "项目详情",
+            description = "身份用 projectCode。含内部主键、只读 skuCount/projectPriceSkuCount；不返回 appId/appKey。")
+    public CommonResult<ProjectDetail> get(@PathVariable String projectCode) {
+        return success(queryService.get(projectCode));
+    }
+
+    @PostMapping
+    @PreAuthorize(PROJECT_CREATE_EXPRESSION)
+    @Operation(summary = "新增项目",
+            description = "系统生成 PRJ_ 编码。catalogMode 恒 MANAGED。创建允许 DRAFT 或 ACTIVE。")
+    public CommonResult<String> create(@Valid @RequestBody ProjectSaveReqVO request) {
+        return success(commandService.create(toCreateCommand(request)));
+    }
+
+    @PutMapping("/{projectCode}")
+    @PreAuthorize(PROJECT_UPDATE_EXPRESSION)
+    @Operation(summary = "整档替换项目档案",
+            description = "身份用 projectCode。非草稿改 buyerCode 拒绝。")
+    public CommonResult<Boolean> update(@PathVariable String projectCode,
+                                        @Valid @RequestBody ProjectSaveReqVO request) {
+        commandService.update(toUpdateCommand(projectCode, request));
+        return success(true);
+    }
+
+    @PatchMapping("/{projectCode}")
+    @PreAuthorize(PROJECT_UPDATE_STATUS_EXPRESSION)
+    @Operation(summary = "部分更新项目",
+            description = "目前仅支持 status：ACTIVE / SUSPENDED / CLOSED。身份用 projectCode。")
+    public CommonResult<Boolean> patch(@PathVariable String projectCode,
+                                       @Valid @RequestBody PatchProjectReqVO request) {
+        if (request.getStatus() != null) {
+            commandService.changeStatus(projectCode, parseProjectStatus(request.getStatus()), getLoginUserId());
+        }
+        return success(true);
+    }
+
+    @GetMapping("/{projectCode}/products")
+    @PreAuthorize(PROJECT_QUERY_EXPRESSION)
+    @Operation(summary = "分页查询项目商品",
+            description = "只返回未移除行。finalPriceCents 为冻结版本单价；distPriceCents 为当前有效 L2。金额单位 CNY 分。")
+    public CommonResult<PageResult<ProjectListingListItem>> pageProducts(
+            @PathVariable String projectCode,
+            @Parameter(description = "页码，从 1 开始") @RequestParam(required = false) Integer pageNo,
+            @Parameter(description = "每页条数") @RequestParam(required = false) Integer pageSize) {
+        return success(listingQueryService.page(projectCode, pageNo, pageSize));
+    }
+
+    @PostMapping("/{projectCode}/products")
+    @PreAuthorize(PROJECT_UPDATE_EXPRESSION)
+    @Operation(summary = "从分销商品发布到项目目录",
+            description = "SKU 必须已是所属 Buyer 的未移除分销商品。默认 l3AdjustMode=FOLLOW_L2。编号 PLT_。金额单位 CNY 分。")
+    public CommonResult<List<String>> addProducts(@PathVariable String projectCode,
+                                                    @Valid @RequestBody AddProjectProductsReqVO request) {
+        List<ListingLine> lines = request.getItems().stream()
+                .map(ProjectAdminController::toListingLine)
+                .toList();
+        return success(listingCommandService.addProducts(projectCode, lines, getLoginUserId()));
+    }
+
+    @PatchMapping("/{projectCode}/products/{listingCode}")
+    @PreAuthorize(PROJECT_UPDATE_EXPRESSION)
+    @Operation(summary = "改项目商品L3覆盖",
+            description = "FOLLOW_L2 不写 L3；EQUAL_L1/CUSTOM 发新版本。不回放已发布版本。金额单位 CNY 分。")
+    public CommonResult<Boolean> patchProduct(@PathVariable String projectCode,
+                                              @PathVariable String listingCode,
+                                              @Valid @RequestBody PatchProjectListingReqVO request) {
+        listingCommandService.patchL3(
+                projectCode, listingCode,
+                ClosedEnums.parseRequired(L3AdjustMode.class, request.getL3AdjustMode()),
+                request.getPercent(), request.getAmountCents(), getLoginUserId());
+        return success(true);
+    }
+
+    @DeleteMapping("/{projectCode}/products/{listingCode}")
+    @PreAuthorize(PROJECT_DELETE_EXPRESSION)
+    @Operation(summary = "逻辑移除项目商品",
+            description = "status=90。历史冻结版本保留。身份用 projectCode 与 listingCode。")
+    public CommonResult<Boolean> retireProduct(@PathVariable String projectCode,
+                                               @PathVariable String listingCode) {
+        listingCommandService.retire(projectCode, listingCode, getLoginUserId());
+        return success(true);
+    }
+
+    private CreateProjectCommand toCreateCommand(ProjectSaveReqVO request) {
+        return new CreateProjectCommand(
+                request.getProjectName(), request.getBuyerCode(), request.getProjectType(),
+                request.getStartDate(), request.getEndDate(), request.getSettlementPartyType(),
+                request.getDescription(), request.getStatus(), getLoginUserId());
+    }
+
+    private UpdateProjectCommand toUpdateCommand(String projectCode, ProjectSaveReqVO request) {
+        return new UpdateProjectCommand(
+                projectCode, request.getProjectName(), request.getBuyerCode(), request.getProjectType(),
+                request.getStartDate(), request.getEndDate(), request.getSettlementPartyType(),
+                request.getDescription(), getLoginUserId());
+    }
+
+    /**
+     * 项目状态不是档案封闭枚举，未知值包装为 ENUM_NOT_OPEN。
+     * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#42-其它封闭枚举}。
+     */
+    private static BuyerProjectStatus parseProjectStatus(String raw) {
+        if (raw == null || raw.isBlank()) {
+            throw exception(ENUM_NOT_OPEN);
+        }
+        try {
+            return BuyerProjectStatus.valueOf(raw.trim());
+        } catch (IllegalArgumentException ex) {
+            ServiceException invalid = exception(ENUM_NOT_OPEN);
+            invalid.initCause(ex);
+            throw invalid;
+        }
+    }
+
+    private static List<String> parseProjectTypes(List<String> raw) {
+        if (raw == null || raw.isEmpty()) {
+            return List.of();
+        }
+        List<String> types = new ArrayList<>();
+        for (String value : raw) {
+            ProjectType type = ClosedEnums.parse(ProjectType.class, value);
+            if (type != null) {
+                types.add(type.name());
+            }
+        }
+        return types;
+    }
+
+    private static ListingLine toListingLine(ProjectProductItemReqVO item) {
+        L3AdjustMode mode = ClosedEnums.parse(L3AdjustMode.class, item.getL3AdjustMode());
+        return new ListingLine(
+                item.getPlatformSkuCode(),
+                mode == null ? L3AdjustMode.FOLLOW_L2 : mode,
+                item.getPercent(),
+                item.getAmountCents());
+    }
+
+    @Data
+    @Schema(description = "项目档案保存")
+    public static class ProjectSaveReqVO {
+        @NotBlank
+        @Size(max = 128)
+        @Schema(description = "采购项目名称")
+        private String projectName;
+        @NotBlank
+        @Schema(description = "采购商永久业务编码")
+        private String buyerCode;
+        @Schema(description = "项目类型封闭枚举")
+        private String projectType;
+        @Schema(description = "项目开始日")
+        private LocalDate startDate;
+        @Schema(description = "项目结束日")
+        private LocalDate endDate;
+        @Schema(description = "结算方，本期仅DISTRIBUTOR")
+        private String settlementPartyType;
+        @Size(max = 500)
+        @Schema(description = "项目说明")
+        private String description;
+        @Schema(description = "创建时允许 DRAFT 或 ACTIVE，空视为草稿")
+        private String status;
+    }
+
+    @Data
+    @Schema(description = "项目部分更新")
+    public static class PatchProjectReqVO {
+        @Schema(description = "项目状态：ACTIVE / SUSPENDED / CLOSED")
+        private String status;
+    }
+
+    @Data
+    @Schema(description = "从分销商品批量发布到项目")
+    public static class AddProjectProductsReqVO {
+        @NotEmpty
+        @Schema(description = "待发布标品行")
+        private List<ProjectProductItemReqVO> items;
+    }
+
+    @Data
+    @Schema(description = "项目商品发布行")
+    public static class ProjectProductItemReqVO {
+        @NotBlank
+        @Schema(description = "平台SKU编码")
+        private String platformSkuCode;
+        @Schema(description = "L3调价方式：FOLLOW_L2 / EQUAL_L1 / CUSTOM，默认 FOLLOW_L2")
+        private String l3AdjustMode;
+        @Schema(description = "CUSTOM时的整数百分比，100等于L1")
+        private Integer percent;
+        @Schema(description = "CUSTOM时加减的CNY分")
+        private Long amountCents;
+    }
+
+    @Data
+    @Schema(description = "改项目商品L3覆盖")
+    public static class PatchProjectListingReqVO {
+        @NotBlank
+        @Schema(description = "L3调价方式：FOLLOW_L2 / EQUAL_L1 / CUSTOM")
+        private String l3AdjustMode;
+        @Schema(description = "CUSTOM时的整数百分比，100等于L1")
+        private Integer percent;
+        @Schema(description = "CUSTOM时加减的CNY分")
+        private Long amountCents;
+    }
+}

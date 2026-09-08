@@ -1,0 +1,50 @@
+spring:
+  cloud:
+    nacos:
+      discovery:
+        enabled: false
+      config:
+        enabled: false
+    # discovery 关闭时，Feign 按服务名静态指向本机中台
+    openfeign:
+      client:
+        config:
+          supply-chain-server:
+            url: http://127.0.0.1:58190
+  # 本地独立 DB，不与中台共用
+  datasource:
+    url: jdbc:mysql://127.0.0.1:3306/taobao_flash_channel?useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&characterEncoding=UTF-8
+    username: root
+    password: ${MYSQL_PASSWORD:}
+    driver-class-name: com.mysql.cj.Driver
+
+springdoc:
+  api-docs:
+    enabled: true
+  swagger-ui:
+    enabled: true
+
+knife4j:
+  enable: true
+
+aifuli:
+  supply-chain:
+    openapi:
+      enabled: true
+    rpc:
+      service-name: supply-chain-server
+
+# 本机联调：开启 mock-eleme；密钥用环境变量注入，勿把私钥提交进库
+# 生成密钥对示例见 docs/集成测试.md「淘宝闪购 O2O 支付闭环」
+tbsg:
+  pay:
+    merchant-id: ${TBSG_PAY_MERCHANT_ID:LOCAL_MOCK_MERCHANT}
+    code: ${TBSG_PAY_CODE:LOCAL_MOCK_PAY_CODE}
+    platform-public-key: ${TBSG_PAY_PLATFORM_PUBLIC_KEY:}
+    merchant-private-key: ${TBSG_PAY_MERCHANT_PRIVATE_KEY:}
+  mock-eleme:
+    enabled: true
+    h5-base-url: http://127.0.0.1:48400/taobaoh5
+    platform-private-key: ${TBSG_MOCK_ELEME_PLATFORM_PRIVATE_KEY:}
+    merchant-public-key: ${TBSG_MOCK_ELEME_MERCHANT_PUBLIC_KEY:}
+    default-pay-amount: 19600

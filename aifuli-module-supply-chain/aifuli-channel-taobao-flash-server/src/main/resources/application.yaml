@@ -1,0 +1,76 @@
+spring:
+  application:
+    name: taobao-flash-channel
+  profiles:
+    active: local
+  main:
+    allow-circular-references: true
+    allow-bean-definition-overriding: true
+  config:
+    import:
+      - optional:classpath:application-${spring.profiles.active}.yaml
+      - optional:nacos:${spring.application.name}-${spring.profiles.active}.yaml
+
+server:
+  port: 48400
+  servlet:
+    context-path: /taobaoh5
+
+springdoc:
+  api-docs:
+    enabled: ${AIFULI_TAOBAO_FLASH_OPENAPI_ENABLED:false}
+    path: /v3/api-docs
+  swagger-ui:
+    enabled: ${AIFULI_TAOBAO_FLASH_OPENAPI_ENABLED:false}
+    path: /swagger-ui
+  default-flat-param-object: true
+
+knife4j:
+  enable: ${AIFULI_TAOBAO_FLASH_OPENAPI_ENABLED:false}
+  setting:
+    language: zh_cn
+
+aifuli:
+  info:
+    version: 1.0.0
+    base-package: com.aifuli.channel.taobaoflash
+  swagger:
+    title: 淘宝闪购渠道服务
+    description: 淘宝闪购 O2O 渠道协议适配：ele.me SDK 验签、SSO、对账，调供应链中台 O2O 命令
+    version: ${aifuli.info.version}
+  # 中台 RPC 配置：渠道服务作为 Feign client 调用供应链中台
+  supply-chain:
+    rpc:
+      service-name: supply-chain-server
+
+# 淘宝闪购渠道配置（敏感凭证通过 Nacos / 环境变量注入，不进仓库）
+tbsg:
+  pay:
+    # 饿了么公钥（验签用）
+    platform-public-key: ${TBSG_PAY_PLATFORM_PUBLIC_KEY:}
+    # 机构私钥（签响应用）
+    merchant-private-key: ${TBSG_PAY_MERCHANT_PRIVATE_KEY:}
+    # 机构支付码 / 外部商户标识（联调必填）
+    code: ${TBSG_PAY_CODE:}
+    merchant-id: ${TBSG_PAY_MERCHANT_ID:}
+  sso:
+    enabled: ${TBSG_SSO_ENABLED:false}
+    secret: ${TBSG_SSO_SECRET:}
+    timestamp-skew-seconds: 300
+    token-expire-days: 7
+  # H5 入口 URL（盒马与淘宝闪购的区别仅在此）
+  entry:
+    h5-url-default: https://tb.ele.me/wow/alsc/mod/69958d4a14beac9d0c5bbbc7/
+    h5-url-hema: https://tb.ele.me/wow/alsc/mod/hema/
+    from: aifuli
+    opensite-source: aifuli
+    welfare-3pp: aifuli
+  # 假饿了么联调（默认关）；详见 docs/集成测试.md
+  mock-eleme:
+    enabled: ${TBSG_MOCK_ELEME_ENABLED:false}
+    h5-base-url: ${TBSG_MOCK_ELEME_H5_BASE_URL:}
+    platform-private-key: ${TBSG_MOCK_ELEME_PLATFORM_PRIVATE_KEY:}
+    merchant-public-key: ${TBSG_MOCK_ELEME_MERCHANT_PUBLIC_KEY:}
+    default-pay-amount: 19600
+
+debug: false

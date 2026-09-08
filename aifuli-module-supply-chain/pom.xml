@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.aifuli</groupId>
+        <artifactId>aifuli</artifactId>
+        <version>${revision}</version>
+    </parent>
+
+    <artifactId>aifuli-module-supply-chain</artifactId>
+    <packaging>pom</packaging>
+
+    <modules>
+        <module>aifuli-module-supply-chain-api</module>
+        <module>aifuli-module-supply-chain-server</module>
+        <module>aifuli-channel-taobao-flash-server</module>
+    </modules>
+
+    <name>${project.artifactId}</name>
+    <description>供应链中台模块</description>
+</project>

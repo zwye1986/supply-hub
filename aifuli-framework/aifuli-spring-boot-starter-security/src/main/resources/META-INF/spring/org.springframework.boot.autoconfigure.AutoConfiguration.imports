@@ -1,0 +1,5 @@
+com.aifuli.framework.security.config.AifuliSecurityRpcAutoConfiguration
+com.aifuli.framework.security.config.AifuliSecurityAutoConfiguration
+com.aifuli.framework.security.config.AifuliWebSecurityConfigurerAdapter
+com.aifuli.framework.operatelog.config.AifuliOperateLogConfiguration
+com.aifuli.framework.operatelog.config.AifuliOperateLogRpcAutoConfiguration

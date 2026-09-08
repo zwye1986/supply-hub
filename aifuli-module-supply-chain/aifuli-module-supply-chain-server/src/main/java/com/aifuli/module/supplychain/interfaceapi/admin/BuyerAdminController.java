@@ -1,0 +1,474 @@
+package com.aifuli.module.supplychain.interfaceapi.admin;
+
+import com.aifuli.framework.common.exception.ServiceException;
+import com.aifuli.framework.common.pojo.CommonResult;
+import com.aifuli.framework.common.pojo.PageResult;
+import com.aifuli.framework.common.util.monitor.TracerUtils;
+import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerInvoiceService;
+import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerInvoiceService.BuyerInvoiceView;
+import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerInvoiceService.SaveInvoiceCommand;
+import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerAdminCommandService;
+import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerAdminCommandService.ContactLine;
+import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerAdminCommandService.CreateBuyerCommand;
+import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerAdminCommandService.UpdateBuyerCommand;
+import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerAdminQueryService;
+import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerAdminQueryService.BuyerChildItem;
+import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerAdminQueryService.BuyerDetail;
+import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerAdminQueryService.BuyerPageQuery;
+import com.aifuli.module.supplychain.tradecore.buyer.domain.BuyerStatus;
+import com.aifuli.module.supplychain.tradecore.catalog.application.BuyerProductCommandService;
+import com.aifuli.module.supplychain.tradecore.catalog.application.BuyerProductCommandService.ProductLine;
+import com.aifuli.module.supplychain.tradecore.catalog.application.BuyerProductQueryService;
+import com.aifuli.module.supplychain.tradecore.catalog.application.BuyerProductQueryService.BuyerProductListItem;
+import com.aifuli.module.supplychain.tradecore.profile.domain.ClosedEnums;
+import com.aifuli.module.supplychain.tradecore.profile.domain.L2AdjustMode;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotEmpty;
+import jakarta.validation.constraints.Size;
+import lombok.Data;
+import lombok.RequiredArgsConstructor;
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.UUID;
+
+import static com.aifuli.framework.common.exception.util.ServiceExceptionUtil.exception;
+import static com.aifuli.framework.common.pojo.CommonResult.success;
+import static com.aifuli.framework.security.core.util.SecurityFrameworkUtils.getLoginUserId;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BUYER_STATUS_CONFLICT;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.ENUM_NOT_OPEN;
+import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.BUYER_CREATE_EXPRESSION;
+import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.BUYER_DELETE_EXPRESSION;
+import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.BUYER_QUERY_EXPRESSION;
+import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.BUYER_UPDATE_EXPRESSION;
+import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.BUYER_UPDATE_STATUS_EXPRESSION;
+
+/**
+ * 分销商管理端 REST。列表多值筛选、simple / parent-options、PATCH 状态；期初走采购商账本。
+ * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#6-分销商buyer}。
+ */
+@Tag(name = "管理后台 - 供应链分销商")
+@RestController
+@RequestMapping("/supply-chain/buyers")
+@Validated
+@RequiredArgsConstructor
+public class BuyerAdminController {
+
+    private static final String VIEW_SIMPLE = "simple";
+    private static final String VIEW_PARENT_OPTIONS = "parent-options";
+
+    private final BuyerAdminCommandService commandService;
+    private final BuyerAdminQueryService queryService;
+    private final BuyerProductCommandService productCommandService;
+    private final BuyerProductQueryService productQueryService;
+    private final BuyerInvoiceService invoiceService;
+
+    @GetMapping
+    @PreAuthorize(BUYER_QUERY_EXPRESSION)
+    @Operation(summary = "分页查询分销商",
+            description = "筛选用 buyerName/buyerCode/distributionLevels/cooperationModes/sellableCategories/status"
+                    + " 与 updatedFrom/To。view=simple 返回 {buyerCode,buyerName}[]；"
+                    + "view=parent-options 收 excludeBuyerCode、forLevel。金额单位 CNY 分。")
+    public CommonResult<?> page(
+            @Parameter(description = "采购商标准名称，模糊") @RequestParam(required = false) String buyerName,
+            @Parameter(description = "采购商永久业务编码") @RequestParam(required = false) String buyerCode,
+            @Parameter(description = "组织等级，可多选：1 / 2 / 3")
+            @RequestParam(required = false) List<Integer> distributionLevels,
+            @Parameter(description = "合作模式枚举名，可多选") @RequestParam(required = false) List<String> cooperationModes,
+            @Parameter(description = "可售品类枚举名，可多选") @RequestParam(required = false) List<String> sellableCategories,
+            @Parameter(description = "管理状态枚举名，可多选：ACTIVE / SUSPENDED / BLACKLIST")
+            @RequestParam(required = false) List<String> status,
+            @Parameter(description = "最后修改时间起，Asia/Shanghai") @RequestParam(required = false) LocalDateTime updatedFrom,
+            @Parameter(description = "最后修改时间止，Asia/Shanghai") @RequestParam(required = false) LocalDateTime updatedTo,
+            @Parameter(description = "投影：simple 为名称下拉，parent-options 为上级下拉")
+            @RequestParam(required = false) String view,
+            @Parameter(description = "上级下拉排除的分销商编码及其子孙")
+            @RequestParam(required = false) String excludeBuyerCode,
+            @Parameter(description = "上级下拉目标等级：2 只要一级，3 只要二级")
+            @RequestParam(required = false) Integer forLevel,
+            @Parameter(description = "页码，从 1 开始") @RequestParam(required = false) Integer pageNo,
+            @Parameter(description = "每页条数") @RequestParam(required = false) Integer pageSize) {
+        if (VIEW_SIMPLE.equals(view)) {
+            return success(queryService.listSimple(buyerName, buyerCode));
+        }
+        if (VIEW_PARENT_OPTIONS.equals(view)) {
+            return success(queryService.listParentOptions(excludeBuyerCode, forLevel));
+        }
+        List<BuyerStatus> statuses = status == null ? List.of()
+                : status.stream().map(BuyerAdminController::parseBuyerStatus).toList();
+        return success(queryService.page(new BuyerPageQuery(
+                buyerName, buyerCode, distributionLevels, cooperationModes, sellableCategories,
+                statuses, updatedFrom, updatedTo, pageNo, pageSize)));
+    }
+
+    @GetMapping("/{buyerCode}")
+    @PreAuthorize(BUYER_QUERY_EXPRESSION)
+    @Operation(summary = "分销商详情",
+            description = "身份用 buyerCode。含内部主键、脱敏字段、只读 accountBalanceCents；下级不嵌套。")
+    public CommonResult<BuyerDetail> get(@PathVariable String buyerCode) {
+        return success(queryService.get(buyerCode));
+    }
+
+    @GetMapping("/{buyerCode}/invoice")
+    @PreAuthorize(BUYER_QUERY_EXPRESSION)
+    @Operation(summary = "查询分销商开票信息",
+            description = "身份用 buyerCode。无开票行时用档案预填返回且不落库；已保存行明文回传。不回写档案。")
+    public CommonResult<BuyerInvoiceView> getInvoice(@PathVariable String buyerCode) {
+        return success(invoiceService.get(buyerCode));
+    }
+
+    @PutMapping("/{buyerCode}/invoice")
+    @PreAuthorize(BUYER_UPDATE_EXPRESSION)
+    @Operation(summary = "保存分销商开票信息",
+            description = "身份用 buyerCode。upsert 开票表，开户账号明文存储，不回写分销商档案。"
+                    + "titleType 为 ENTERPRISE / PERSONAL。")
+    public CommonResult<BuyerInvoiceView> saveInvoice(@PathVariable String buyerCode,
+                                                        @Valid @RequestBody InvoiceSaveReqVO request) {
+        return success(invoiceService.save(buyerCode, new SaveInvoiceCommand(
+                request.getTitleType(), request.getInvoiceTitle(), request.getSocialCreditCode(),
+                request.getPhone(), request.getBankName(), request.getBankAccount(),
+                request.getInvoiceAddress()), getLoginUserId()));
+    }
+
+    @PostMapping
+    @PreAuthorize(BUYER_CREATE_EXPRESSION)
+    @Operation(summary = "新增分销商（含期初）",
+            description = "系统生成 BYR_ 编码。openingBalanceCents 仅创建可写，空视为 0，单位 CNY 分。")
+    public CommonResult<String> create(@Valid @RequestBody BuyerSaveReqVO request) {
+        return success(commandService.create(toCreateCommand(request)));
+    }
+
+    @PutMapping("/{buyerCode}")
+    @PreAuthorize(BUYER_UPDATE_EXPRESSION)
+    @Operation(summary = "编辑分销商档案",
+            description = "身份用 buyerCode。编辑再带 openingBalanceCents 拒绝。金额单位 CNY 分。")
+    public CommonResult<Boolean> update(@PathVariable String buyerCode,
+                                          @Valid @RequestBody BuyerSaveReqVO request) {
+        commandService.update(toUpdateCommand(buyerCode, request));
+        return success(true);
+    }
+
+    @PatchMapping("/{buyerCode}")
+    @PreAuthorize(BUYER_UPDATE_STATUS_EXPRESSION)
+    @Operation(summary = "部分更新分销商",
+            description = "目前仅支持 status：ACTIVE / SUSPENDED / BLACKLIST。身份用 buyerCode。")
+    public CommonResult<Boolean> patch(@PathVariable String buyerCode,
+                                       @Valid @RequestBody PatchBuyerReqVO request) {
+        if (request.getStatus() != null) {
+            commandService.changeStatus(buyerCode, parseBuyerStatus(request.getStatus()), getLoginUserId());
+        }
+        return success(true);
+    }
+
+    @PatchMapping
+    @PreAuthorize(BUYER_UPDATE_STATUS_EXPRESSION)
+    @Operation(summary = "批量暂停或恢复分销商",
+            description = "body.status 仅允许 ACTIVE / SUSPENDED，否则 BUYER_STATUS_CONFLICT。")
+    public CommonResult<Boolean> patchBatch(@Valid @RequestBody BatchStatusReqVO request) {
+        BuyerStatus target = parseBuyerStatus(request.getStatus());
+        if (target != BuyerStatus.ACTIVE && target != BuyerStatus.SUSPENDED) {
+            throw exception(BUYER_STATUS_CONFLICT);
+        }
+        for (String code : request.getBuyerCodes()) {
+            commandService.changeStatus(code, target, getLoginUserId());
+        }
+        return success(true);
+    }
+
+    @GetMapping("/{buyerCode}/children")
+    @PreAuthorize(BUYER_QUERY_EXPRESSION)
+    @Operation(summary = "查询分销商直接下级",
+            description = "只返回直接子节点，不嵌套孙节点。身份用 buyerCode。")
+    public CommonResult<List<BuyerChildItem>> children(@PathVariable String buyerCode) {
+        return success(queryService.children(buyerCode));
+    }
+
+    @GetMapping("/{buyerCode}/products")
+    @PreAuthorize(BUYER_QUERY_EXPRESSION)
+    @Operation(summary = "分页查询分销商品",
+            description = "只返回未移除行。金额单位 CNY 分；pricingRule 为模板/等于L1/自定义公式。")
+    public CommonResult<PageResult<BuyerProductListItem>> pageProducts(
+            @PathVariable String buyerCode,
+            @Parameter(description = "页码，从 1 开始") @RequestParam(required = false) Integer pageNo,
+            @Parameter(description = "每页条数") @RequestParam(required = false) Integer pageSize) {
+        return success(productQueryService.page(buyerCode, pageNo, pageSize));
+    }
+
+    @PostMapping("/{buyerCode}/products")
+    @PreAuthorize(BUYER_UPDATE_EXPRESSION)
+    @Operation(summary = "从标品关联分销商品",
+            description = "默认 l2AdjustMode=FOLLOW_TEMPLATE。编号 BPD_。已移除同行复活而非插入。金额单位 CNY 分。")
+    public CommonResult<List<String>> addProducts(@PathVariable String buyerCode,
+                                                    @Valid @RequestBody AddBuyerProductsReqVO request) {
+        List<ProductLine> lines = request.getItems().stream()
+                .map(BuyerAdminController::toProductLine)
+                .toList();
+        return success(productCommandService.addProducts(buyerCode, lines, getLoginUserId()));
+    }
+
+    @PatchMapping("/{buyerCode}/products/{buyerProductCode}")
+    @PreAuthorize(BUYER_UPDATE_EXPRESSION)
+    @Operation(summary = "改分销商品L2覆盖",
+            description = "FOLLOW_TEMPLATE 清手工覆盖；EQUAL_L1/CUSTOM 无 L1 拒绝。金额单位 CNY 分。")
+    public CommonResult<Boolean> patchProduct(@PathVariable String buyerCode,
+                                              @PathVariable String buyerProductCode,
+                                              @Valid @RequestBody PatchBuyerProductReqVO request) {
+        productCommandService.patchL2(
+                buyerCode, buyerProductCode,
+                ClosedEnums.parseRequired(L2AdjustMode.class, request.getL2AdjustMode()),
+                request.getPercent(), request.getAmountCents(),
+                request.getDisplayThresholdPercent(), getLoginUserId());
+        return success(true);
+    }
+
+    @DeleteMapping("/{buyerCode}/products/{buyerProductCode}")
+    @PreAuthorize(BUYER_DELETE_EXPRESSION)
+    @Operation(summary = "逻辑移除分销商品",
+            description = "status=90。已发布项目 listing 不回放删除。身份用 buyerCode 与 buyerProductCode。")
+    public CommonResult<Boolean> retireProduct(@PathVariable String buyerCode,
+                                               @PathVariable String buyerProductCode) {
+        productCommandService.retire(buyerCode, buyerProductCode, getLoginUserId());
+        return success(true);
+    }
+
+    private CreateBuyerCommand toCreateCommand(BuyerSaveReqVO request) {
+        return new CreateBuyerCommand(
+                request.getBuyerName(), toContacts(request.getContacts()),
+                request.getParentBuyerCode(), request.getDistributionLevel(),
+                request.getDistributorType(), request.getSupplyPreference(),
+                request.getSettlementMethod(), request.getSettlementCycleDays(),
+                request.getCooperationModes(), request.getIntegrationModes(),
+                request.getCooperationStartedAt(), request.getCooperationNote(),
+                request.getLegalEntityName(), request.getCreditCode(),
+                request.getLegalPersonName(), request.getLegalPersonMobile(),
+                request.getContactAddress(), request.getBankName(), request.getBankAccount(),
+                request.getLicenseFileKey(), request.getIdFrontFileKey(), request.getIdBackFileKey(),
+                request.getQualificationFileKey(), request.getLicenseFileKeys(),
+                request.getQualificationFileKeys(), request.getSellableCategories(), request.getProductTypes(),
+                request.getOpeningBalanceCents(), getLoginUserId(), traceId());
+    }
+
+    private UpdateBuyerCommand toUpdateCommand(String buyerCode, BuyerSaveReqVO request) {
+        return new UpdateBuyerCommand(
+                buyerCode, request.getBuyerName(), toContacts(request.getContacts()),
+                request.getParentBuyerCode(), request.getDistributionLevel(),
+                request.getDistributorType(), request.getSupplyPreference(),
+                request.getSettlementMethod(), request.getSettlementCycleDays(),
+                request.getCooperationModes(), request.getIntegrationModes(),
+                request.getCooperationStartedAt(), request.getCooperationNote(),
+                request.getLegalEntityName(), request.getCreditCode(),
+                request.getLegalPersonName(), request.getLegalPersonMobile(),
+                request.getContactAddress(), request.getBankName(), request.getBankAccount(),
+                request.getLicenseFileKey(), request.getIdFrontFileKey(), request.getIdBackFileKey(),
+                request.getQualificationFileKey(), request.getLicenseFileKeys(),
+                request.getQualificationFileKeys(), request.getSellableCategories(), request.getProductTypes(),
+                request.getOpeningBalanceCents(), getLoginUserId());
+    }
+
+    /**
+     * 分销商管理状态不是档案封闭枚举，未知值包装为 ENUM_NOT_OPEN。
+     * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#42-其它封闭枚举}。
+     */
+    private static BuyerStatus parseBuyerStatus(String raw) {
+        if (raw == null || raw.isBlank()) {
+            throw exception(ENUM_NOT_OPEN);
+        }
+        try {
+            return BuyerStatus.valueOf(raw.trim());
+        } catch (IllegalArgumentException ex) {
+            ServiceException invalid = exception(ENUM_NOT_OPEN);
+            invalid.initCause(ex);
+            throw invalid;
+        }
+    }
+
+    private static List<ContactLine> toContacts(List<ContactReqVO> contacts) {
+        if (contacts == null) {
+            return List.of();
+        }
+        return contacts.stream()
+                .map(c -> new ContactLine(c.getName(), c.getMobile(), c.getEmail()))
+                .toList();
+    }
+
+    private static ProductLine toProductLine(BuyerProductItemReqVO item) {
+        L2AdjustMode mode = ClosedEnums.parse(L2AdjustMode.class, item.getL2AdjustMode());
+        return new ProductLine(
+                item.getPlatformSkuCode(),
+                mode == null ? L2AdjustMode.FOLLOW_TEMPLATE : mode,
+                item.getPercent(),
+                item.getAmountCents(),
+                item.getDisplayThresholdPercent());
+    }
+
+    private static String traceId() {
+        String traceId = TracerUtils.getTraceId();
+        return traceId == null || traceId.isBlank() ? "admin-" + UUID.randomUUID() : traceId;
+    }
+
+    @Data
+    @Schema(description = "分销商档案保存")
+    public static class BuyerSaveReqVO {
+        @NotBlank @Size(max = 128)
+        @Schema(description = "采购商标准名称")
+        private String buyerName;
+        private List<ContactReqVO> contacts;
+        @Schema(description = "上级分销商编码，一级为空")
+        private String parentBuyerCode;
+        @Schema(description = "组织等级：1一级 2二级 3三级，默认1")
+        private Integer distributionLevel;
+        @Schema(description = "分销商类型：ENTERPRISE企业 PERSONAL个人 PLATFORM平台")
+        private String distributorType;
+        @Schema(description = "供货择优倾向，不改变路由引擎")
+        private String supplyPreference;
+        @Schema(description = "结算方式封闭枚举")
+        private String settlementMethod;
+        @Min(1) @Schema(description = "结算周期天数")
+        private Integer settlementCycleDays;
+        @Schema(description = "合作模式")
+        private List<String> cooperationModes;
+        @Schema(description = "对接方式：API、H5、MANUAL")
+        private List<String> integrationModes;
+        @Schema(description = "合作开始时间，Asia/Shanghai")
+        private LocalDateTime cooperationStartedAt;
+        @Size(max = 200) @Schema(description = "合作说明")
+        private String cooperationNote;
+        @Size(max = 256) @Schema(description = "公司名称")
+        private String legalEntityName;
+        @Size(max = 32) @Schema(description = "统一社会信用代码")
+        private String creditCode;
+        @Schema(description = "法人姓名")
+        private String legalPersonName;
+        private String legalPersonMobile;
+        @Schema(description = "联系地址")
+        private String contactAddress;
+        @Schema(description = "开户行")
+        private String bankName;
+        private String bankAccount;
+        @Schema(description = "兼容单执照fileKey，数组为空时当作单元素")
+        private String licenseFileKey;
+        private String idFrontFileKey;
+        private String idBackFileKey;
+        @Schema(description = "兼容单资质fileKey，数组为空时当作单元素")
+        private String qualificationFileKey;
+        @Size(max = 5)
+        @Schema(description = "执照文件fileKey，最多5个")
+        private List<String> licenseFileKeys;
+        @Size(max = 5)
+        @Schema(description = "资质文件fileKey，最多5个")
+        private List<String> qualificationFileKeys;
+        @Schema(description = "可售品类枚举名")
+        private List<String> sellableCategories;
+        @Schema(description = "商品类型枚举名")
+        private List<String> productTypes;
+        @Min(0)
+        @Schema(description = "期初余额，单位CNY分，仅创建可写")
+        private Long openingBalanceCents;
+    }
+
+    @Data
+    @Schema(description = "开票信息保存")
+    public static class InvoiceSaveReqVO {
+        @Schema(description = "抬头类型：ENTERPRISE企业，PERSONAL个人")
+        private String titleType;
+        @Size(max = 256)
+        @Schema(description = "开票抬头")
+        private String invoiceTitle;
+        @Size(max = 32)
+        @Schema(description = "统一社会信用代码")
+        private String socialCreditCode;
+        @Size(max = 32)
+        @Schema(description = "电话")
+        private String phone;
+        @Size(max = 128)
+        @Schema(description = "开户行")
+        private String bankName;
+        @Size(max = 64)
+        @Schema(description = "开户账号")
+        private String bankAccount;
+        @Size(max = 512)
+        @Schema(description = "开票地址")
+        private String invoiceAddress;
+    }
+
+    @Data
+    public static class ContactReqVO {
+        private String name;
+        private String mobile;
+        private String email;
+    }
+
+    @Data
+    @Schema(description = "分销商部分更新")
+    public static class PatchBuyerReqVO {
+        @Schema(description = "管理状态：ACTIVE / SUSPENDED / BLACKLIST")
+        private String status;
+    }
+
+    @Data
+    @Schema(description = "批量暂停或恢复")
+    public static class BatchStatusReqVO {
+        @NotEmpty
+        @Schema(description = "采购商永久业务编码列表")
+        private List<String> buyerCodes;
+        @NotBlank
+        @Schema(description = "管理状态，仅 ACTIVE / SUSPENDED")
+        private String status;
+    }
+
+    @Data
+    @Schema(description = "从标品批量关联分销商品")
+    public static class AddBuyerProductsReqVO {
+        @NotEmpty
+        @Schema(description = "待关联标品行")
+        private List<BuyerProductItemReqVO> items;
+    }
+
+    @Data
+    @Schema(description = "分销商品关联行")
+    public static class BuyerProductItemReqVO {
+        @NotBlank
+        @Schema(description = "平台SKU编码")
+        private String platformSkuCode;
+        @Schema(description = "L2调价方式：FOLLOW_TEMPLATE / EQUAL_L1 / CUSTOM，默认 FOLLOW_TEMPLATE")
+        private String l2AdjustMode;
+        @Schema(description = "CUSTOM时的整数百分比，100等于L1")
+        private Integer percent;
+        @Schema(description = "CUSTOM时加减的CNY分")
+        private Long amountCents;
+        @Schema(description = "利润空间低于该百分比时C端隐藏，本批不消费")
+        private Integer displayThresholdPercent;
+    }
+
+    @Data
+    @Schema(description = "改分销商品L2覆盖")
+    public static class PatchBuyerProductReqVO {
+        @NotBlank
+        @Schema(description = "L2调价方式：FOLLOW_TEMPLATE / EQUAL_L1 / CUSTOM")
+        private String l2AdjustMode;
+        @Schema(description = "CUSTOM时的整数百分比，100等于L1")
+        private Integer percent;
+        @Schema(description = "CUSTOM时加减的CNY分")
+        private Long amountCents;
+        @Schema(description = "利润空间低于该百分比时C端隐藏，本批不消费")
+        private Integer displayThresholdPercent;
+    }
+}

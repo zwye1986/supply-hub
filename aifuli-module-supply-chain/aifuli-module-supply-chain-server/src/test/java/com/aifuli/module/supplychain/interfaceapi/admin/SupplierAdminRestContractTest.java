@@ -1,0 +1,163 @@
+package com.aifuli.module.supplychain.interfaceapi.admin;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
+import org.junit.jupiter.api.Test;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+
+import java.lang.reflect.Method;
+import java.util.Arrays;
+import java.util.List;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+/**
+ * 供应商管理端 REST 契约：名词资源、金额分、枚举名、开票子资源无 get/save。
+ * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#36-openapiswagger}。
+ */
+class SupplierAdminRestContractTest {
+
+    @Test
+    void saveReqSerializesCentsAndEnumNames() throws Exception {
+        ObjectMapper mapper = new ObjectMapper().registerModule(new JavaTimeModule());
+        SupplierAdminController.SupplierSaveReqVO vo = new SupplierAdminController.SupplierSaveReqVO();
+        vo.setSupplierName("甲");
+        vo.setOpeningBalanceCents(100L);
+        vo.setIntegrationModes(List.of("API"));
+        String json = mapper.writeValueAsString(vo);
+        assertThat(json).contains("openingBalanceCents").contains("\"API\"").doesNotContain("create");
+        assertThat(json).doesNotContain("accountBalance");
+    }
+
+    @Test
+    void controllerMappingsAreNouns() throws Exception {
+        RequestMapping root = SupplierAdminController.class.getAnnotation(RequestMapping.class);
+        assertThat(root.value()).containsExactly("/supply-chain/suppliers");
+        assertThat(SupplierAdminController.class.getAnnotation(Tag.class)).isNotNull();
+        boolean invoiceGet = Arrays.stream(SupplierAdminController.class.getDeclaredMethods())
+                .anyMatch(method -> {
+                    GetMapping get = method.getAnnotation(GetMapping.class);
+                    return get != null && String.join(",", get.value()).equals("/{supplierCode}/invoice");
+                });
+        boolean invoicePut = Arrays.stream(SupplierAdminController.class.getDeclaredMethods())
+                .anyMatch(method -> {
+                    org.springframework.web.bind.annotation.PutMapping put =
+                            method.getAnnotation(org.springframework.web.bind.annotation.PutMapping.class);
+                    return put != null && String.join(",", put.value()).equals("/{supplierCode}/invoice");
+                });
+        assertThat(invoiceGet).isTrue();
+        assertThat(invoicePut).isTrue();
+        boolean invoiceGetSave = Arrays.stream(SupplierAdminController.class.getDeclaredMethods())
+                .anyMatch(method -> joinedPaths(method).contains("invoice/get")
+                        || joinedPaths(method).contains("invoice/save"));
+        assertThat(invoiceGetSave).isFalse();
+        boolean createPath = Arrays.stream(SupplierAdminController.class.getDeclaredMethods())
+                .anyMatch(method -> {
+                    PostMapping post = method.getAnnotation(PostMapping.class);
+                    return post != null && String.join(",", post.value()).contains("create");
+                });
+        assertThat(createPath).isFalse();
+        boolean simpleList = Arrays.stream(SupplierAdminController.class.getDeclaredMethods())
+                .anyMatch(method -> joinedPaths(method).contains("simple-list"));
+        assertThat(simpleList).isFalse();
+        boolean patchMember = Arrays.stream(SupplierAdminController.class.getDeclaredMethods())
+                .anyMatch(method -> {
+                    PatchMapping patch = method.getAnnotation(PatchMapping.class);
+                    return patch != null && String.join(",", patch.value()).contains("{supplierCode}");
+                });
+        assertThat(patchMember).isTrue();
+        for (Method method : SupplierAdminController.class.getDeclaredMethods()) {
+            if (method.isSynthetic() || !hasHttpMapping(method)) {
+                continue;
+            }
+            assertThat(method.getAnnotation(Operation.class))
+                    .as("%s 必须有 @Operation", method.getName())
+                    .isNotNull();
+        }
+        boolean scopeBatch = Arrays.stream(SupplierAdminController.class.getDeclaredMethods())
+                .anyMatch(method -> joinedPaths(method).contains("supply-scopes/batch"));
+        assertThat(scopeBatch).isFalse();
+        Method listScopes = SupplierAdminController.class.getDeclaredMethod("listScopes", String.class);
+        assertThat(listScopes.getGenericReturnType().getTypeName()).contains("SupplyScopeView");
+        assertThat(listScopes.getGenericReturnType().getTypeName()).doesNotContain("SupplierSupplyScopeDO");
+    }
+
+    @Test
+    void scopeReqSerializesSupplyModesArray() throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        SupplierAdminController.ScopeReqVO vo = new SupplierAdminController.ScopeReqVO();
+        vo.setSellableCategory("MOVIE");
+        vo.setProductType("MOVIE");
+        vo.setProductClassification("MOVIE_TICKET");
+        vo.setSupplyModes(List.of("API_DIRECT", "H5"));
+        vo.setMaxQuantity(100L);
+        vo.setMinQuantity(1L);
+        String json = mapper.writeValueAsString(vo);
+        assertThat(json).contains("supplyModes").contains("API_DIRECT").contains("H5");
+        assertThat(json).doesNotContain("\"supplyMode\"");
+    }
+
+    @Test
+    void offerCollectionUsesItemsAndDoesNotExposeDo() throws Exception {
+        boolean postCollection = Arrays.stream(SupplierAdminController.class.getDeclaredMethods())
+                .anyMatch(method -> {
+                    PostMapping post = method.getAnnotation(PostMapping.class);
+                    return post != null && String.join(",", post.value()).equals("/{supplierCode}/offers");
+                });
+        assertThat(postCollection).isTrue();
+        Method listOffers = Arrays.stream(SupplierAdminController.class.getDeclaredMethods())
+                .filter(method -> "listOffers".equals(method.getName()))
+                .findFirst()
+                .orElseThrow();
+        assertThat(listOffers.getGenericReturnType().getTypeName()).contains("OfferListItem");
+        assertThat(listOffers.getGenericReturnType().getTypeName()).doesNotContain("SupplierOfferDO");
+        SupplierAdminController.OfferItemsReqVO vo = new SupplierAdminController.OfferItemsReqVO();
+        SupplierAdminController.DraftReqVO item = new SupplierAdminController.DraftReqVO();
+        item.setPlatformSkuCode("MOVIE_100");
+        item.setPriceMode("FIXED");
+        item.setSupplyMode("API_DIRECT");
+        vo.setItems(List.of(item));
+        String json = new ObjectMapper().writeValueAsString(vo);
+        assertThat(json).contains("items").contains("MOVIE_100");
+    }
+
+    private static boolean hasHttpMapping(Method method) {
+        return method.getAnnotation(RequestMapping.class) != null
+                || method.getAnnotation(GetMapping.class) != null
+                || method.getAnnotation(PostMapping.class) != null
+                || method.getAnnotation(PatchMapping.class) != null
+                || method.getAnnotation(org.springframework.web.bind.annotation.PutMapping.class) != null
+                || method.getAnnotation(org.springframework.web.bind.annotation.DeleteMapping.class) != null;
+    }
+
+    private static String joinedPaths(Method method) {
+        GetMapping get = method.getAnnotation(GetMapping.class);
+        if (get != null) {
+            return String.join(",", get.value());
+        }
+        PostMapping post = method.getAnnotation(PostMapping.class);
+        if (post != null) {
+            return String.join(",", post.value());
+        }
+        PatchMapping patch = method.getAnnotation(PatchMapping.class);
+        if (patch != null) {
+            return String.join(",", patch.value());
+        }
+        org.springframework.web.bind.annotation.PutMapping put =
+                method.getAnnotation(org.springframework.web.bind.annotation.PutMapping.class);
+        if (put != null) {
+            return String.join(",", put.value());
+        }
+        org.springframework.web.bind.annotation.DeleteMapping delete =
+                method.getAnnotation(org.springframework.web.bind.annotation.DeleteMapping.class);
+        if (delete != null) {
+            return String.join(",", delete.value());
+        }
+        return "";
+    }
+}

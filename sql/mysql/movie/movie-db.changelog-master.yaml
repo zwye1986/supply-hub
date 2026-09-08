@@ -1,0 +1,75 @@
+# 电影平台表专属变更入口；不能包含商城或中台表。
+databaseChangeLog:
+  - logicalFilePath: db/movie/movie-db.changelog-master.yaml
+  - changeSet:
+      id: movie-001-movie-city
+      author: movie
+      dbms: mysql
+      runInTransaction: false
+      changes:
+        - sqlFile:
+            path: releases/1.0.0/001-movie-city.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: movie-002-movie-city-mapping
+      author: movie
+      dbms: mysql
+      runInTransaction: false
+      changes:
+        - sqlFile:
+            path: releases/1.0.0/002-movie-city-mapping.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: movie-003-movie-film
+      author: movie
+      dbms: mysql
+      runInTransaction: false
+      changes:
+        - sqlFile:
+            path: releases/1.0.0/003-movie-film.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: movie-004-movie-film-mapping
+      author: movie
+      dbms: mysql
+      runInTransaction: false
+      changes:
+        - sqlFile:
+            path: releases/1.0.0/004-movie-film-mapping.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: movie-005-movie-cinema
+      author: movie
+      dbms: mysql
+      runInTransaction: false
+      changes:
+        - sqlFile:
+            path: releases/1.0.0/005-movie-cinema.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: movie-006-movie-cinema-mapping
+      author: movie
+      dbms: mysql
+      runInTransaction: false
+      changes:
+        - sqlFile:
+            path: releases/1.0.0/006-movie-cinema-mapping.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false

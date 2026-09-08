@@ -1,0 +1,96 @@
+spring:
+  application:
+    name: supply-chain-server
+  profiles:
+    active: local
+  main:
+    allow-circular-references: true
+    allow-bean-definition-overriding: true
+  config:
+    import:
+      - optional:classpath:application-${spring.profiles.active}.yaml
+      - optional:nacos:${spring.application.name}-${spring.profiles.active}.yaml
+
+server:
+  port: 58190
+
+springdoc:
+  api-docs:
+    enabled: ${AIFULI_SUPPLY_CHAIN_OPENAPI_ENABLED:false}
+    path: /v3/api-docs
+  swagger-ui:
+    enabled: ${AIFULI_SUPPLY_CHAIN_OPENAPI_ENABLED:false}
+    path: /swagger-ui
+  default-flat-param-object: true
+
+knife4j:
+  enable: ${AIFULI_SUPPLY_CHAIN_OPENAPI_ENABLED:false}
+  setting:
+    language: zh_cn
+
+aifuli:
+  web:
+    admin-api:
+      prefix: /admin-api
+      controller: "**.interfaceapi.admin.**"
+  info:
+    version: 1.0.0
+    base-package: com.aifuli.module.supplychain
+  security:
+    # HMAC Filter 先于 Spring Security 验签且失败关闭；这里只移除登录 token 前置要求。
+    # OpenAPI 元数据必须免登录，否则网关 doc.html 聚合 supply-chain-server 会 401。
+    # 设计见 docs/superpowers/specs/2026-08-23-project-app-auth-design.md#9-测试门禁
+    permit-all-urls:
+      - /rpc-api/supply-chain/instore/channel-command/*
+      - /rpc-api/supply-chain/instore/channel-member/*
+      - /rpc-api/supply-chain/instore/buyer-entry/*
+      - /rpc-api/supply-chain/buyer/instore/payment/*
+      - /v3/api-docs
+      - /v3/api-docs/**
+      - /webjars/**
+      - /swagger-ui
+      - /swagger-ui/**
+      - /admin-api/supply-chain/v3/api-docs
+      - /admin-api/supply-chain/v3/api-docs/**
+  supply-chain:
+    enabled: true
+    auth:
+      enabled: ${AIFULI_SUPPLY_CHAIN_AUTH_ENABLED:true}
+      timestamp-skew-minutes: ${AIFULI_SUPPLY_CHAIN_AUTH_TIMESTAMP_SKEW_MINUTES:5}
+      nonce-retention-hours: ${AIFULI_SUPPLY_CHAIN_AUTH_NONCE_RETENTION_HOURS:1}
+      nonce-cleanup-interval: ${AIFULI_SUPPLY_CHAIN_AUTH_NONCE_CLEANUP_INTERVAL:PT1H}
+      max-request-body-bytes: ${AIFULI_SUPPLY_CHAIN_AUTH_MAX_REQUEST_BODY_BYTES:1048576}
+    openapi:
+      enabled: ${AIFULI_SUPPLY_CHAIN_OPENAPI_ENABLED:false}
+    cashier:
+      # 测试/生产环境由 Nacos 注入商城域名，禁止在仓库写死环境地址。
+      h5-base-url: ""
+      h5-path: /h5/tbsg-cashier.html
+    timer:
+      enabled: true
+      scan-interval: 800ms
+      batch-size: 32
+      lease-duration: 30s
+      renew-interval: 10s
+      worker-pool-size: 8
+      backoff-base: 5s
+      backoff-max: 10m
+    outbox:
+      enabled: true
+      scan-interval: 800ms
+      batch-size: 32
+      lease-duration: 30s
+      renew-interval: 10s
+      worker-pool-size: 8
+      backoff-base: 5s
+      backoff-max: 10m
+    instore:
+      home:
+        # 过渡默认旅通商品组；正式态改为 appId 绑定。详见 docs/superpowers/specs/2026-08-22-instore-project-member-entry-design.md#41-api-层
+        company-code: L0000A
+  swagger:
+    title: 供应链中台
+    description: 提供供应链中台管理、采购商 RPC 与供应商回调接口
+    version: ${aifuli.info.version}
+
+debug: false

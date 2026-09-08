@@ -1,0 +1,2 @@
+com.aifuli.framework.quartz.config.AifuliXxlJobAutoConfiguration
+com.aifuli.framework.quartz.config.AifuliAsyncAutoConfiguration

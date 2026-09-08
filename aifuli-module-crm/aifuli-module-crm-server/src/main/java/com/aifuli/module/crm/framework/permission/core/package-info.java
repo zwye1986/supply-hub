@@ -1,0 +1,1 @@
+package com.aifuli.module.crm.framework.permission.core;

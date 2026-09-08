@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ele.me Mock H5（支付闭环）</title>
+    <style>
+        body { margin: 0; padding: 16px; background: #f5f7fa; color: #1f2937;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+        .card { max-width: 960px; margin: 0 auto 16px; padding: 16px; background: #fff;
+            border-radius: 12px; box-shadow: 0 2px 10px rgba(15, 23, 42, 0.08); }
+        h1 { margin: 0 0 8px; font-size: 22px; }
+        h2 { margin: 0 0 12px; font-size: 18px; }
+        .hint { color: #64748b; font-size: 13px; line-height: 1.6; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+        label { display: block; margin-bottom: 6px; font-size: 13px; color: #475569; }
+        input, textarea { box-sizing: border-box; width: 100%; padding: 9px 10px;
+            border: 1px solid #cbd5e1; border-radius: 8px; font-size: 14px; }
+        textarea { min-height: 72px; resize: vertical; }
+        .buttons { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
+        button { border: 0; border-radius: 8px; padding: 10px 14px; background: #1677ff;
+            color: #fff; cursor: pointer; font-size: 14px; }
+        button.secondary { background: #334155; }
+        pre { overflow: auto; margin: 0; padding: 12px; background: #0f172a; color: #dbeafe;
+            border-radius: 8px; line-height: 1.5; white-space: pre-wrap; word-break: break-all; }
+        a { color: #1677ff; }
+    </style>
+</head>
+<body>
+<div class="card">
+    <h1>淘宝闪购 Mock 支付闭环</h1>
+    <div class="hint">
+        先走采购商 O2O 入口拿到 channelUserId（填入 uid），再点「发起支付」。
+        签名在服务端完成；私钥不进浏览器。
+    </div>
+</div>
+<div class="card">
+    <h2>订单参数</h2>
+    <div class="grid">
+        <div><label>uid（= 中台 channelUserId）</label><input id="uid"></div>
+        <div><label>transactionId</label><input id="transactionId"></div>
+        <div><label>payAmount（分）</label><input id="payAmount" type="number" min="1" value="19600"></div>
+        <div><label>subject</label><input id="subject" value="Mock Ele.me 淘宝闪购订单"></div>
+        <div><label>body</label><input id="body" value="mock-eleme-page"></div>
+    </div>
+    <div style="margin-top: 12px;">
+        <label>extendParams（JSON，可选）</label>
+        <textarea id="extendParams"></textarea>
+    </div>
+    <div class="buttons">
+        <button onclick="callMock('pay')">发起支付 pay</button>
+        <button class="secondary" onclick="callMock('queryPay')">查询支付 queryPay</button>
+    </div>
+</div>
+<div class="card">
+    <h2>结果</h2>
+    <div id="redirectBox" class="hint" style="margin-bottom: 10px;"></div>
+    <pre id="result">等待操作...</pre>
+</div>
+<script>
+    const contextPath = window.location.pathname.split('/mock-eleme/')[0];
+    const apiBase = `${window.location.origin}${contextPath}/tbsg/mock-eleme`;
+    document.getElementById('transactionId').value = `MOCK_PAY_${Date.now()}`;
+    document.getElementById('extendParams').value = JSON.stringify({ orderId: `MOCK_ORDER_${Date.now()}` });
+
+    async function callMock(action) {
+        writeResult(`请求 ${action} 中...`);
+        document.getElementById('redirectBox').textContent = '';
+        try {
+            const response = await fetch(`${apiBase}/${action}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json;charset=UTF-8' },
+                body: JSON.stringify({
+                    transactionId: value('transactionId'),
+                    payAmount: numberValue('payAmount'),
+                    subject: value('subject'),
+                    body: value('body'),
+                    uid: value('uid'),
+                    extendParams: value('extendParams')
+                })
+            });
+            const data = await response.json();
+            if (data.redirectLocation) {
+                renderRedirect(data.redirectLocation);
+            }
+            writeResult(JSON.stringify(data, null, 2));
+        } catch (error) {
+            writeResult(`请求失败：${error.message}`);
+        }
+    }
+    function value(id) { return document.getElementById(id).value.trim(); }
+    function numberValue(id) { const raw = value(id); return raw ? Number(raw) : null; }
+    function renderRedirect(url) {
+        const box = document.getElementById('redirectBox');
+        box.textContent = '收银台跳转：';
+        const link = document.createElement('a');
+        link.href = url; link.target = '_blank'; link.rel = 'noreferrer'; link.textContent = url;
+        box.appendChild(link);
+    }
+    function writeResult(content) { document.getElementById('result').textContent = content; }
+</script>
+</body>
+</html>

@@ -1,0 +1,781 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>大润发渠道接入 - 部署与联调检查清单</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --card-bg: #161b22;
+    --border: #30363d;
+    --accent: #58a6ff;
+    --green: #3fb950;
+    --yellow: #d29922;
+    --red: #f85149;
+    --text: #e6edf3;
+    --text-dim: #8b949e;
+    --done: #238636;
+    --pending: #b08800;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "SF Pro Text", "Helvetica Neue", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.7;
+    padding: 24px;
+  }
+  .header {
+    max-width: 920px;
+    margin: 0 auto 32px;
+  }
+  .header h1 {
+    font-size: 28px;
+    font-weight: 700;
+    margin-bottom: 8px;
+  }
+  .header .meta {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    font-size: 13px;
+    color: var(--text-dim);
+  }
+  .header .meta span {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    padding: 4px 12px;
+    border-radius: 6px;
+  }
+  .progress-bar {
+    max-width: 920px;
+    margin: 0 auto 24px;
+    height: 6px;
+    background: var(--border);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .progress-fill {
+    height: 100%;
+    width: 55%;
+    background: linear-gradient(90deg, var(--green), var(--yellow));
+    border-radius: 3px;
+    transition: width 0.4s ease;
+  }
+  .progress-label {
+    max-width: 920px;
+    margin: 0 auto 32px;
+    font-size: 13px;
+    color: var(--text-dim);
+    display: flex;
+    justify-content: space-between;
+  }
+  .progress-label .nums { font-weight: 700; color: var(--text); }
+
+  .section {
+    max-width: 920px;
+    margin: 0 auto 32px;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+  .section-header {
+    padding: 16px 24px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    cursor: pointer;
+    user-select: none;
+  }
+  .section-header h2 {
+    font-size: 17px;
+    font-weight: 600;
+    flex: 1;
+  }
+  .section-header .badge {
+    font-size: 12px;
+    padding: 2px 10px;
+    border-radius: 12px;
+    font-weight: 600;
+  }
+  .badge-done { background: rgba(63,185,80,0.15); color: var(--green); border: 1px solid rgba(63,185,80,0.3); }
+  .badge-pending { background: rgba(210,153,34,0.15); color: var(--yellow); border: 1px solid rgba(210,153,34,0.3); }
+  .section-header .chevron {
+    color: var(--text-dim);
+    font-size: 14px;
+    transition: transform 0.2s;
+  }
+  .section.collapsed .chevron { transform: rotate(-90deg); }
+  .section-body {
+    padding: 0;
+  }
+  .section.collapsed .section-body { display: none; }
+
+  .checklist { list-style: none; }
+  .checklist li {
+    padding: 12px 24px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    transition: background 0.15s;
+  }
+  .checklist li:last-child { border-bottom: none; }
+  .checklist li:hover { background: rgba(255,255,255,0.02); }
+  .checklist .checkbox {
+    width: 20px; height: 20px;
+    border: 2px solid var(--border);
+    border-radius: 5px;
+    flex-shrink: 0;
+    margin-top: 2px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 13px;
+    transition: all 0.2s;
+  }
+  .checklist .checkbox.checked {
+    background: var(--done);
+    border-color: var(--done);
+    color: #fff;
+  }
+  .checklist .item-content { flex: 1; }
+  .checklist .item-title {
+    font-size: 14px;
+    font-weight: 600;
+    margin-bottom: 2px;
+  }
+  .checklist .item-title.done { color: var(--text-dim); text-decoration: line-through; }
+  .checklist .item-desc {
+    font-size: 13px;
+    color: var(--text-dim);
+    margin-bottom: 4px;
+  }
+  .checklist .item-cmd {
+    font-family: "SF Mono", "Fira Code", monospace;
+    font-size: 12px;
+    background: #010409;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 12px;
+    overflow-x: auto;
+    white-space: pre;
+    margin-top: 6px;
+    color: #79c0ff;
+  }
+  .checklist .item-note {
+    font-size: 12px;
+    color: var(--yellow);
+    margin-top: 4px;
+    font-style: italic;
+  }
+  .checklist .item-tag {
+    display: inline-block;
+    font-size: 11px;
+    padding: 1px 8px;
+    border-radius: 10px;
+    margin-left: 8px;
+    font-weight: 600;
+    vertical-align: middle;
+  }
+  .tag-critical { background: rgba(248,81,73,0.15); color: var(--red); }
+  .tag-important { background: rgba(210,153,34,0.15); color: var(--yellow); }
+  .tag-verify { background: rgba(88,166,255,0.15); color: var(--accent); }
+
+  .summary-box {
+    max-width: 920px;
+    margin: 0 auto 32px;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+  }
+  .stat-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+    text-align: center;
+  }
+  .stat-card .num { font-size: 28px; font-weight: 800; }
+  .stat-card .label { font-size: 12px; color: var(--text-dim); margin-top: 4px; }
+  .stat-done .num { color: var(--green); }
+  .stat-pending .num { color: var(--yellow); }
+  .stat-total .num { color: var(--accent); }
+  .stat-block .num { color: var(--red); }
+
+  .footer {
+    max-width: 920px;
+    margin: 0 auto;
+    text-align: center;
+    font-size: 12px;
+    color: var(--text-dim);
+    padding: 16px;
+  }
+  .footer a { color: var(--accent); text-decoration: none; }
+
+  @media (max-width: 640px) {
+    .summary-box { grid-template-columns: repeat(2, 1fr); }
+    .checklist .item-cmd { font-size: 11px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>大润发渠道接入 — 部署与联调检查清单</h1>
+  <div class="meta">
+    <span>分支: dev-0812-sc</span>
+    <span>Codex 会话: 01a031a6</span>
+    <span>最后更新: 2026-08-24</span>
+    <span>镜像: aifuli/supply-chain-server:ec7528a</span>
+  </div>
+</div>
+
+<div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+<div class="progress-label">
+  <span>整体进度</span>
+  <span class="nums"><span id="doneCount">15</span> / <span id="totalCount">34</span> 项完成</span>
+</div>
+
+<div class="summary-box">
+  <div class="stat-card stat-done"><div class="num" id="statDone">15</div><div class="label">已完成</div></div>
+  <div class="stat-card stat-pending"><div class="num" id="statPending">13</div><div class="label">待部署</div></div>
+  <div class="stat-card stat-total"><div class="num">6</div><div class="label">待联调</div></div>
+  <div class="stat-card stat-block"><div class="num" id="statBlock">0</div><div class="label">阻断项</div></div>
+</div>
+
+<!-- Phase 1: 已完成 -->
+<div class="section" data-section="done">
+  <div class="section-header" onclick="toggleSection(this)">
+    <h2>阶段一：代码实现与测试（已完成）</h2>
+    <span class="badge badge-done">15/15 完成</span>
+    <span class="chevron">▼</span>
+  </div>
+  <div class="section-body">
+    <ul class="checklist">
+      <li>
+        <div class="checkbox checked" onclick="toggleCheck(this)">&#10003;</div>
+        <div class="item-content">
+          <div class="item-title done">旅通 HTTP 适配器实现</div>
+          <div class="item-desc">RtmartEntryUrlHttpAdapter — RSA 签名、表单 POST、jumpUrl 解析、脱敏日志</div>
+        </div>
+      </li>
+      <li>
+        <div class="checkbox checked" onclick="toggleCheck(this)">&#10003;</div>
+        <div class="item-content">
+          <div class="item-title done">异常安全因果链加固</div>
+          <div class="item-desc">RtmartSafeCause 递归复制 + 深度/宽度保护 + DAG 全局节点预算</div>
+        </div>
+      </li>
+      <li>
+        <div class="checkbox checked" onclick="toggleCheck(this)">&#10003;</div>
+        <div class="item-content">
+          <div class="item-title done">base URL 端口严格限制 (1..65535)</div>
+          <div class="item-desc">启动校验拒绝非法端口，防止 SSRF</div>
+        </div>
+      </li>
+      <li>
+        <div class="checkbox checked" onclick="toggleCheck(this)">&#10003;</div>
+        <div class="item-content">
+          <div class="item-title done">Docker 镜像设计 (Dockerfile)</div>
+          <div class="item-desc">eclipse-temurin:21-jre, UID 10001, 端口 58190, bash HEALTHCHECK</div>
+        </div>
+      </li>
+      <li>
+        <div class="checkbox checked" onclick="toggleCheck(this)">&#10003;</div>
+        <div class="item-content">
+          <div class="item-title done">docker-compose.yml 编排</div>
+          <div class="item-desc">host network, pull_policy: never, no-new-privileges, 日志轮转</div>
+        </div>
+      </li>
+      <li>
+        <div class="checkbox checked" onclick="toggleCheck(this)">&#10003;</div>
+        <div class="item-content">
+          <div class="item-title done">.env.example 环境变量模板</div>
+          <div class="item-desc">私网 Nacos/RDS 端点占位符, VERIFY_IDENTITY TLS, 旅通机密占位</div>
+        </div>
+      </li>
+      <li>
+        <div class="checkbox checked" onclick="toggleCheck(this)">&#10003;</div>
+        <div class="item-content">
+          <div class="item-title done">Nacos 配置文件 supply-chain-server-test.yaml</div>
+          <div class="item-desc">测试 namespace = supply-chain-test, group = test</div>
+        </div>
+      </li>
+      <li>
+        <div class="checkbox checked" onclick="toggleCheck(this)">&#10003;</div>
+        <div class="item-content">
+          <div class="item-title done">详细设计文档提交</div>
+          <div class="item-desc">ee795b2 — 2026-08-24-rtmart-entry-adapter-pro143-deployment-design.md</div>
+        </div>
+      </li>
+      <li>
+        <div class="checkbox checked" onclick="toggleCheck(this)">&#10003;</div>
+        <div class="item-content">
+          <div class="item-title done">全量单测 509/509 通过</div>
+        </div>
+      </li>
+      <li>
+        <div class="checkbox checked" onclick="toggleCheck(this)">&#10003;</div>
+        <div class="item-content">
+          <div class="item-title done">旅通 Failsafe 契约测试 27/27 通过</div>
+        </div>
+      </li>
+      <li>
+        <div class="checkbox checked" onclick="toggleCheck(this)">&#10003;</div>
+        <div class="item-content">
+          <div class="item-title done">RSA 签名器测试 30/30 通过</div>
+        </div>
+      </li>
+      <li>
+        <div class="checkbox checked" onclick="toggleCheck(this)">&#10003;</div>
+        <div class="item-content">
+          <div class="item-title done">集成测试 21/21 通过 (Testcontainers MySQL 8.4)</div>
+        </div>
+      </li>
+      <li>
+        <div class="checkbox checked" onclick="toggleCheck(this)">&#10003;</div>
+        <div class="item-content">
+          <div class="item-title done">Compose 静态解析通过</div>
+          <div class="item-desc">SUPPLY_CHAIN_ENV_FILE=.env.example docker compose config --quiet</div>
+        </div>
+      </li>
+      <li>
+        <div class="checkbox checked" onclick="toggleCheck(this)">&#10003;</div>
+        <div class="item-content">
+          <div class="item-title done">代码审查 Standards + Spec 双轴通过</div>
+        </div>
+      </li>
+      <li>
+        <div class="checkbox checked" onclick="toggleCheck(this)">&#10003;</div>
+        <div class="item-content">
+          <div class="item-title done">集成测试文档同步更新</div>
+          <div class="item-desc">docs/集成测试.md — 部署模板、联调步骤、排障</div>
+        </div>
+      </li>
+    </ul>
+  </div>
+</div>
+
+<!-- Phase 2: pro143 部署 -->
+<div class="section" data-section="deploy">
+  <div class="section-header" onclick="toggleSection(this)">
+    <h2>阶段二：pro143 环境部署（待执行）</h2>
+    <span class="badge badge-pending">0/13 待完成</span>
+    <span class="chevron">▼</span>
+  </div>
+  <div class="section-body">
+    <ul class="checklist">
+
+      <li>
+        <div class="checkbox" onclick="toggleCheck(this)"></div>
+        <div class="item-content">
+          <div class="item-title">确认 Docker Desktop 运行且 buildx 可用<span class="item-tag tag-critical">阻断</span></div>
+          <div class="item-desc">当前 Docker 29.7.2 已运行；需确认 buildx 支持 linux/amd64 交叉构建</div>
+          <div class="item-cmd">docker buildx ls
+docker buildx inspect --bootstrap</div>
+        </div>
+      </li>
+
+      <li>
+        <div class="checkbox" onclick="toggleCheck(this)"></div>
+        <div class="item-content">
+          <div class="item-title">发布前门禁：全量单测 + 契约测试<span class="item-tag tag-critical">阻断</span></div>
+          <div class="item-desc">构建镜像前必须确认全量测试通过，不跳过供应链模块测试</div>
+          <div class="item-cmd">JAVA_HOME="$JDK21" mvn -o -pl aifuli-module-supply-chain/aifuli-module-supply-chain-server clean test
+JAVA_HOME="$JDK21" mvn -o -pl aifuli-module-supply-chain/aifuli-module-supply-chain-server \
+  -Psupply-chain-integration \
+  -Dtest=NoSuchTestClass -Dsurefire.failIfNoSpecifiedTests=false \
+  -Dit.test=RtmartEntryUrlHttpAdapterContractTest -Dfailsafe.failIfNoSpecifiedTests=false verify</div>
+        </div>
+      </li>
+
+      <li>
+        <div class="checkbox" onclick="toggleCheck(this)"></div>
+        <div class="item-content">
+          <div class="item-title">构建 JAR 包（含 -am 依赖链）</div>
+          <div class="item-desc">不跳过测试，保留供应链门禁</div>
+          <div class="item-cmd">JAVA_HOME="$JDK21" mvn -o -pl aifuli-module-supply-chain/aifuli-module-supply-chain-server -am package</div>
+        </div>
+      </li>
+
+      <li>
+        <div class="checkbox" onclick="toggleCheck(this)"></div>
+        <div class="item-content">
+          <div class="item-title">构建 linux/amd64 Docker 镜像<span class="item-tag tag-important">关键</span></div>
+          <div class="item-desc">本地 macOS arm64 必须用 buildx 交叉构建；镜像标签用 Git SHA</div>
+          <div class="item-cmd">SUPPLY_CHAIN_GIT_SHA="$(git rev-parse --short=12 HEAD)"
+SUPPLY_CHAIN_IMAGE="aifuli/supply-chain-server:${SUPPLY_CHAIN_GIT_SHA}"
+docker buildx build --platform linux/amd64 --load \
+  --tag "$SUPPLY_CHAIN_IMAGE" \
+  --file aifuli-module-supply-chain/aifuli-module-supply-chain-server/Dockerfile \
+  aifuli-module-supply-chain/aifuli-module-supply-chain-server</div>
+        </div>
+      </li>
+
+      <li>
+        <div class="checkbox" onclick="toggleCheck(this)"></div>
+        <div class="item-content">
+          <div class="item-title">校验镜像架构与运行身份</div>
+          <div class="item-cmd">docker image inspect "$SUPPLY_CHAIN_IMAGE" --format '{{.Os}}/{{.Architecture}} user={{.Config.User}}'
+# 预期: linux/amd64 user=10001:10001</div>
+        </div>
+      </li>
+
+      <li>
+        <div class="checkbox" onclick="toggleCheck(this)"></div>
+        <div class="item-content">
+          <div class="item-title">打包镜像并传输到 pro143</div>
+          <div class="item-desc">部署目录: /data/aifuli-test/supply-chain/</div>
+          <div class="item-cmd">docker save "$SUPPLY_CHAIN_IMAGE" | gzip > "/tmp/supply-chain-server-${SUPPLY_CHAIN_GIT_SHA}.tar.gz"
+scp "/tmp/supply-chain-server-${SUPPLY_CHAIN_GIT_SHA}.tar.gz" \
+  script/deploy/supply-chain-test/docker-compose.yml \
+  script/deploy/supply-chain-test/supply-chain-server-test.yaml \
+  root@&lt;pro143-vpc-host&gt;:/data/aifuli-test/supply-chain/</div>
+        </div>
+      </li>
+
+      <li>
+        <div class="checkbox" onclick="toggleCheck(this)"></div>
+        <div class="item-content">
+          <div class="item-title">pro143 创建 .env 文件（root:root 0600）<span class="item-tag tag-critical">阻断</span></div>
+          <div class="item-desc">填入真实值：Nacos 私网地址/凭据、RDS 私网地址/凭据、旅通 app_key 和 RSA 私钥（单行 PKCS#8 Base64）</div>
+          <div class="item-note">app_key=1G23d45P6, company_code=X0000A（company_code 不固定在 .env 中，由项目配置传入）</div>
+        </div>
+      </li>
+
+      <li>
+        <div class="checkbox" onclick="toggleCheck(this)"></div>
+        <div class="item-content">
+          <div class="item-title">Nacos 创建 supply-chain-test namespace 配置<span class="item-tag tag-important">关键</span></div>
+          <div class="item-desc">namespace=supply-chain-test, group=test, Data ID=supply-chain-server-test.yaml</div>
+          <div class="item-note">Config/Discovery 均用此 namespace+group；Discovery 注册地址 = 172.19.64.105:58190</div>
+        </div>
+      </li>
+
+      <li>
+        <div class="checkbox" onclick="toggleCheck(this)"></div>
+        <div class="item-content">
+          <div class="item-title">确认 RDS 私网可达且 TLS CA 信任链有效<span class="item-tag tag-important">关键</span></div>
+          <div class="item-desc">JDBC sslMode=VERIFY_IDENTITY；证书校验失败时修 CA/主机名，不得降级为 useSSL=false</div>
+          <div class="item-note">RDS 实测 MySQL 8.0.36，自动化基线为 8.4 — 仅允许一个实例迁移</div>
+        </div>
+      </li>
+
+      <li>
+        <div class="checkbox" onclick="toggleCheck(this)"></div>
+        <div class="item-content">
+          <div class="item-title">pro143 加载镜像并启动 Compose<span class="item-tag tag-critical">阻断</span></div>
+          <div class="item-desc">必须在受控 root shell 执行（.env 权限 0600 root:root）</div>
+          <div class="item-cmd">ssh root@&lt;pro143-vpc-host&gt; '
+  set -eu
+  cd /data/aifuli-test/supply-chain
+  gzip -dc "supply-chain-server-'$SUPPLY_CHAIN_GIT_SHA'.tar.gz" | docker load
+  SUPPLY_CHAIN_ENV_FILE=.env docker compose --env-file .env -f docker-compose.yml config --quiet
+  SUPPLY_CHAIN_ENV_FILE=.env docker compose --env-file .env -f docker-compose.yml up -d
+'</div>
+        </div>
+      </li>
+
+      <li>
+        <div class="checkbox" onclick="toggleCheck(this)"></div>
+        <div class="item-content">
+          <div class="item-title">验证 Liquibase 19 个 changeSet 空库迁移完成<span class="item-tag tag-verify">验证</span></div>
+          <div class="item-desc">空库首次迁移必须全部成功后才可继续</div>
+          <div class="item-cmd">docker logs supply-chain-server-test 2>&1 | grep -i "liquibase"
+# 确认 19 个 changeSet 全部 EXECUTED</div>
+        </div>
+      </li>
+
+      <li>
+        <div class="checkbox" onclick="toggleCheck(this)"></div>
+        <div class="item-content">
+          <div class="item-title">验证服务注册到 Nacos (172.19.64.105:58190)<span class="item-tag tag-verify">验证</span></div>
+          <div class="item-desc">在 Nacos 控制台 supply-chain-test namespace 确认实例已注册</div>
+        </div>
+      </li>
+
+      <li>
+        <div class="checkbox" onclick="toggleCheck(this)"></div>
+        <div class="item-content">
+          <div class="item-title">验证容器健康状态与 JVM 监听端口</div>
+          <div class="item-cmd">docker inspect --format '{{.State.Health.Status}}' supply-chain-server-test
+# 预期: healthy
+docker exec supply-chain-server-test bash -c '&lt;/dev/tcp/127.0.0.1/58190' &amp;&amp; echo "PORT OK"</div>
+        </div>
+      </li>
+
+    </ul>
+  </div>
+</div>
+
+<!-- Phase 3: HOME 联调 -->
+<div class="section" data-section="home">
+  <div class="section-header" onclick="toggleSection(this)">
+    <h2>阶段三：HOME 首次联调验证（待执行）</h2>
+    <span class="badge badge-pending">0/6 待完成</span>
+    <span class="chevron">▼</span>
+  </div>
+  <div class="section-body">
+    <ul class="checklist">
+
+      <li>
+        <div class="checkbox" onclick="toggleCheck(this)"></div>
+        <div class="item-content">
+          <div class="item-title">准备前置数据：ACTIVE 项目 + MEMBER_PROFILE 档案 + RT_MART 商户绑定<span class="item-tag tag-critical">阻断</span></div>
+          <div class="item-desc">采购项目 ACTIVE，项目档案 ACTIVE 且当前版本 PUBLISHED，版本能力含 MEMBER_PROFILE，RT_MART 渠道有当前启用的商户绑定（company_code）</div>
+          <div class="item-cmd">-- SQL 验证
+SELECT p.id, p.status, v.id AS version_id, c.capability_code, c.status
+FROM sc_buyer_project p
+JOIN sc_buyer_integration_profile f ON f.project_id = p.id
+JOIN sc_buyer_integration_profile_version v ON v.id = f.current_version_id
+JOIN sc_buyer_integration_capability c ON c.profile_version_id = v.id
+WHERE c.capability_code = 'MEMBER_PROFILE';</div>
+        </div>
+      </li>
+
+      <li>
+        <div class="checkbox" onclick="toggleCheck(this)"></div>
+        <div class="item-content">
+          <div class="item-title">发起 HOME 入口 RPC，验证返回 jumpUrl<span class="item-tag tag-important">关键</span></div>
+          <div class="item-desc">以签名 RPC 发起，buyerUserId 必须按不透明 String 传递，禁止解析为 Long。旅通返回 code=E0000 + result=success + 合法 HTTPS jumpUrl 才算通过</div>
+          <div class="item-note">完整 jumpUrl 不得打印、存储或复制；只核对 sc_instore_entry_credential 的 token SHA-256 摘要</div>
+        </div>
+      </li>
+
+      <li>
+        <div class="checkbox" onclick="toggleCheck(this)"></div>
+        <div class="item-content">
+          <div class="item-title">验证 token 消费与隔离</div>
+          <div class="item-desc">重复使用同一 token 确认返回已消费；同时签发的另一枚 token 仍可正常使用</div>
+          <div class="item-cmd">-- SQL: 验证 USED 凭证
+SELECT purpose, status, project_id, member_profile_version_id, company_code
+FROM sc_instore_entry_credential WHERE status = 20;</div>
+        </div>
+      </li>
+
+      <li>
+        <div class="checkbox" onclick="toggleCheck(this)"></div>
+        <div class="item-content">
+          <div class="item-title">验证入口 URL 外呼失败 → 凭证撤销</div>
+          <div class="item-desc">外呼超时/失败时凭证按签发版本撤销为 REVOKED；调用方重新申请获得新 token，旧 token claim 返回 INSTORE_CREDENTIAL_REVOKED</div>
+          <div class="item-cmd">-- SQL: 验证 REVOKED 凭证
+SELECT status, revoked_at, revoke_reason
+FROM sc_instore_entry_credential WHERE status = 40;</div>
+        </div>
+      </li>
+
+      <li>
+        <div class="checkbox" onclick="toggleCheck(this)"></div>
+        <div class="item-content">
+          <div class="item-title">验证跨项目隔离 (P1/P2 共享 externalTenantId)</div>
+          <div class="item-desc">P1/P2 各自签发与消费互不串扰，稳定绑定按项目独立</div>
+          <div class="item-cmd">-- SQL: 验证项目隔离
+SELECT project_id, COUNT(*) FROM sc_instore_entry_credential
+WHERE status = 20 GROUP BY project_id;
+
+SELECT project_id, COUNT(*) FROM sc_instore_channel_user_binding
+WHERE buyer_user_id = '&lt;user&gt;' GROUP BY project_id;</div>
+        </div>
+      </li>
+
+      <li>
+        <div class="checkbox" onclick="toggleCheck(this)"></div>
+        <div class="item-content">
+          <div class="item-title">记录实际联调结果到集成测试文档</div>
+          <div class="item-desc">在 docs/集成测试.md 追加实际执行记录：旅通返回码、jumpUrl 验证结果、changeSet 版本、容器状态。不得把模板当作已部署证据</div>
+        </div>
+      </li>
+
+    </ul>
+  </div>
+</div>
+
+<!-- Phase 4: 后续全链路 -->
+<div class="section collapsed" data-section="full">
+  <div class="section-header" onclick="toggleSection(this)">
+    <h2>阶段四：全链路联调（HOME 通过后）</h2>
+    <span class="badge badge-pending">0/9 待完成</span>
+    <span class="chevron">▼</span>
+  </div>
+  <div class="section-body">
+    <ul class="checklist">
+
+      <li>
+        <div class="checkbox" onclick="toggleCheck(this)"></div>
+        <div class="item-content">
+          <div class="item-title">DETAIL 入口：orderNo 维度组装旅通详情 URL</div>
+          <div class="item-desc">调用方只提交 orderNo，中台从订单头固化快照取 tradeId/companyCode；不接受调用方提交企业组参数</div>
+        </div>
+      </li>
+
+      <li>
+        <div class="checkbox" onclick="toggleCheck(this)"></div>
+        <div class="item-content">
+          <div class="item-title">建单 → SaaS 收银台创建支付单 → 取得 cashierUrl/outTradeNo</div>
+          <div class="item-desc">以项目 P1 的应用身份和用户建单，确认订单头固化 P1 与 CASHIER 档案版本</div>
+        </div>
+      </li>
+
+      <li>
+        <div class="checkbox" onclick="toggleCheck(this)"></div>
+        <div class="item-content">
+          <div class="item-title">支付回调优先 + 权威查询兜底</div>
+          <div class="item-desc">支付成功后查询接口③，确认旅通状态为成功，供应链主订单和供应商订单均成功</div>
+        </div>
+      </li>
+
+      <li>
+        <div class="checkbox" onclick="toggleCheck(this)"></div>
+        <div class="item-content">
+          <div class="item-title">部分退款 → 按原 refundCaseNo 查询收敛</div>
+          <div class="item-desc">发起部分退款并轮询接口⑥，采购商收银台确认成功后核对用户退款、账户余额、账本和售后状态</div>
+        </div>
+      </li>
+
+      <li>
+        <div class="checkbox" onclick="toggleCheck(this)"></div>
+        <div class="item-content">
+          <div class="item-title">已支付取消：有退款拒绝，无退款走全额</div>
+          <div class="item-desc">已存在部分退款后调用已支付取消，确认拒绝；无任何退款的新订单调用取消，确认走全额退款</div>
+        </div>
+      </li>
+
+      <li>
+        <div class="checkbox" onclick="toggleCheck(this)"></div>
+        <div class="item-content">
+          <div class="item-title">停止 SaaS 支付回调 → POS 触发接口③查询收敛</div>
+          <div class="item-desc">恢复回调并与 Timer 并发重放，确认没有重复扣账</div>
+        </div>
+      </li>
+
+      <li>
+        <div class="checkbox" onclick="toggleCheck(this)"></div>
+        <div class="item-content">
+          <div class="item-title">停止 SaaS 退款回调 → 接口⑥按原 refundCaseNo 查询收敛</div>
+          <div class="item-desc">重放回调，确认没有重复返还账户</div>
+        </div>
+      </li>
+
+      <li>
+        <div class="checkbox" onclick="toggleCheck(this)"></div>
+        <div class="item-content">
+          <div class="item-title">跨项目重放：P2 重放 P1 交易号必须失败</div>
+          <div class="item-desc">P1/P2 可共享 externalTenantId，但会员和订单不能合并</div>
+        </div>
+      </li>
+
+      <li>
+        <div class="checkbox" onclick="toggleCheck(this)"></div>
+        <div class="item-content">
+          <div class="item-title">全链路通过后更新集成测试文档为最终状态</div>
+          <div class="item-desc">补充实际测试数量（当前 Signer 30, 全量 509）、实际部署版本和容器状态</div>
+        </div>
+      </li>
+
+    </ul>
+  </div>
+</div>
+
+<!-- Risk & Blockers -->
+<div class="section" data-section="risk">
+  <div class="section-header" onclick="toggleSection(this)">
+    <h2>风险与注意事项</h2>
+    <span class="chevron">▼</span>
+  </div>
+  <div class="section-body">
+    <ul class="checklist">
+      <li>
+        <div class="checkbox checked" onclick="toggleCheck(this)" style="background:var(--done);border-color:var(--done);color:#fff;">&#10003;</div>
+        <div class="item-content">
+          <div class="item-title done">公网 Nacos / useSSL=false 已修复</div>
+          <div class="item-desc">已改私网端点 + VERIFY_IDENTITY TLS（d49ef84 提交）</div>
+        </div>
+      </li>
+      <li>
+        <div class="checkbox checked" onclick="toggleCheck(this)" style="background:var(--done);border-color:var(--done);color:#fff;">&#10003;</div>
+        <div class="item-content">
+          <div class="item-title done">-DskipTests 违规已修复</div>
+          <div class="item-desc">部署模板已移除 -DskipTests，保留 clean test + 契约测试门禁</div>
+        </div>
+      </li>
+      <li>
+        <div class="checkbox checked" onclick="toggleCheck(this)" style="background:var(--done);border-color:var(--done);color:#fff;">&#10003;</div>
+        <div class="item-content">
+          <div class="item-title done">异常因果链丢失已修复</div>
+          <div class="item-desc">RtmartSafeCause 保留 cause 类型/栈帧/嵌套结构，不泄密</div>
+        </div>
+      </li>
+      <li>
+        <div class="checkbox" onclick="toggleCheck(this)"></div>
+        <div class="item-content">
+          <div class="item-title">Docker Desktop daemon 历史不可用 — 现已恢复<span class="item-tag tag-important">注意</span></div>
+          <div class="item-desc">Codex 会话期间 daemon 未运行导致镜像未实际构建。当前 Docker 29.7.2 已恢复，需重新执行构建</div>
+        </div>
+      </li>
+      <li>
+        <div class="checkbox" onclick="toggleCheck(this)"></div>
+        <div class="item-content">
+          <div class="item-title">RDS MySQL 8.0.36 vs 测试基线 8.4 差异<span class="item-tag tag-important">注意</span></div>
+          <div class="item-desc">首次仅允许一个实例迁移，空库必须完成 19 个 changeSet 后才可继续</div>
+        </div>
+      </li>
+      <li>
+        <div class="checkbox" onclick="toggleCheck(this)"></div>
+        <div class="item-content">
+          <div class="item-title">旅通响应契约可能变更<span class="item-tag tag-verify">观察</span></div>
+          <div class="item-desc">旅通尚未提供完整的错误码文档。当前适配器按 code/result/jumpUrl 解析，收到正式契约后只修改适配器解析和契约测试</div>
+        </div>
+      </li>
+    </ul>
+  </div>
+</div>
+
+<div class="footer">
+  <p>生成自 Codex 会话 <code>01a031a6-0eae-7b40-b519-47959172d63d</code> · 分支 <code>dev-0812-sc</code> · 设计文档 <code>2026-08-24-rtmart-entry-adapter-pro143-deployment-design.md</code></p>
+</div>
+
+<script>
+function toggleSection(header) {
+  header.parentElement.classList.toggle('collapsed');
+}
+
+function toggleCheck(cb) {
+  event.stopPropagation();
+  cb.classList.toggle('checked');
+  if (cb.classList.contains('checked')) {
+    cb.innerHTML = '&#10003;';
+    cb.style.background = 'var(--done)';
+    cb.style.borderColor = 'var(--done)';
+    cb.style.color = '#fff';
+  } else {
+    cb.innerHTML = '';
+    cb.style.background = '';
+    cb.style.borderColor = '';
+    cb.style.color = '';
+  }
+  updateProgress();
+}
+
+function updateProgress() {
+  const all = document.querySelectorAll('.checkbox');
+  const checked = document.querySelectorAll('.checkbox.checked');
+  const total = all.length;
+  const done = checked.length;
+  const pct = Math.round((done / total) * 100);
+  document.getElementById('progressFill').style.width = pct + '%';
+  document.getElementById('doneCount').textContent = done;
+  document.getElementById('totalCount').textContent = total;
+  document.getElementById('statDone').textContent = done;
+  document.getElementById('statPending').textContent = total - done;
+}
+
+updateProgress();
+</script>
+
+</body>
+</html>

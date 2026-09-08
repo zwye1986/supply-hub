@@ -1,0 +1,11 @@
+# 本地开发直接连接 application.yaml 中由 MOVIE_* 环境变量指定的基础设施。
+# 设计：docs/电影子系统与中台履约详细设计.md#51-工程初始化落地约定2026-09-07
+spring:
+  cloud:
+    nacos:
+      config:
+        enabled: false
+        import-check:
+          enabled: false
+      discovery:
+        enabled: false

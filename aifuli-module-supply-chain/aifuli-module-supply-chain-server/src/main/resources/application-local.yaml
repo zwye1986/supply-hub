@@ -1,0 +1,33 @@
+spring:
+  cloud:
+    nacos:
+      discovery:
+        enabled: false
+      config:
+        enabled: false
+
+springdoc:
+  api-docs:
+    enabled: true
+  swagger-ui:
+    enabled: true
+
+knife4j:
+  enable: true
+
+aifuli:
+  supply-chain:
+    auth:
+      # 本地开发/自动化测试专用固定主密钥；生产必须通过环境变量注入，禁止沿用本值。
+      master-key: ${AIFULI_SUPPLY_CHAIN_AUTH_MASTER_KEY:MDEyMzQ1Njc4OWFiY2RlZmdoaWprbG1ub3BxcnN0dXY=}
+    openapi:
+      enabled: true
+
+# 渠道服务 CHANNEL_NOTIFY 投递：local 联调启用 RPC，指向本地渠道服务
+tbsg:
+  channel:
+    rpc:
+      enabled: true
+    notify-base-url: http://127.0.0.1:48400/taobaoh5
+    http-connect-timeout-seconds: 5
+    http-request-timeout-seconds: 10

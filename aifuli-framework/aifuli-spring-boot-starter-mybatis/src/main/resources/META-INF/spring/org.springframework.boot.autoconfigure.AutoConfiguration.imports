@@ -1,0 +1,3 @@
+com.aifuli.framework.datasource.config.AifuliDataSourceAutoConfiguration
+com.aifuli.framework.mybatis.config.AifuliMybatisAutoConfiguration
+com.aifuli.framework.translate.config.AifuliTranslateAutoConfiguration

@@ -1,0 +1,162 @@
+version: '3'
+services:
+  aifuli-gateway:
+    image: aifuli-gateway
+    container_name: aifuli-gateway
+    environment:
+      - TZ=Asia/Shanghai # 配置程序默认时区为上海（中国标准时间）
+      - JAVA_TOOL_OPTIONS=-javaagent:/data/skywalking/skywalking-agent/skywalking-agent.jar # 配置skywalking
+      - SW_AGENT_NAME=aifuli-gateway
+      - SW_AGENT_TRACE_IGNORE_PATH=Redisson/PING,/actuator/**,/admin/**
+      - SW_AGENT_COLLECTOR_BACKEND_SERVICES=[YOUR_SKYWALKING_ADDR] # 请替换 your.skywalking.addr 为你的 skywalking 地址
+      - SPRING_PROFILES_ACTIVE=test # 指定程序运行环境
+      - SPRING_CLOUD_NACOS_CONFIG_SERVER_ADDR=[YOUR_NACOS_ADDR] # 配置中心地址
+      - SPRING_CLOUD_NACOS_CONFIG_NAMESPACE=[YOUR_NAMESPACE] # 命名空间
+      - SPRING_CLOUD_NACOS_SERVER_ADDR=[YOUR_NACOS_ADDR]  # 注册中心地址
+      - SPRING_CLOUD_NACOS_DISCOVERY_NAMESPACE=[YOUR_NAMESPACE] # 命名空间
+    volumes:
+      - /docker/aifuli-cloud/logs:/root/logs/
+      - /data/skywalking/skywalking-agent:/data/skywalking/skywalking-agent
+    restart: always
+    network_mode: host # 以主机网络环境运行
+  aifuli-system:
+    image: aifuli-module-system-biz
+    container_name: aifuli-system
+    environment:
+      - TZ=Asia/Shanghai # 配置程序默认时区为上海（中国标准时间）
+      - JAVA_TOOL_OPTIONS=-javaagent:/data/skywalking/skywalking-agent/skywalking-agent.jar # 配置skywalking
+      - SW_AGENT_NAME=aifuli-gateway
+      - SW_AGENT_TRACE_IGNORE_PATH=Redisson/PING,/actuator/**,/admin/**
+      - SW_AGENT_COLLECTOR_BACKEND_SERVICES=[YOUR_SKYWALKING_ADDR] # 请替换 your.skywalking.addr 为你的 skywalking 地址
+      - SPRING_PROFILES_ACTIVE=test # 指定程序运行环境
+      - SPRING_CLOUD_NACOS_CONFIG_SERVER_ADDR=[YOUR_NACOS_ADDR] # 配置中心地址
+      - SPRING_CLOUD_NACOS_CONFIG_NAMESPACE=[YOUR_NAMESPACE] # 命名空间
+      - SPRING_CLOUD_NACOS_SERVER_ADDR=[YOUR_NACOS_ADDR]  # 注册中心地址
+      - SPRING_CLOUD_NACOS_DISCOVERY_NAMESPACE=[YOUR_NAMESPACE] # 命名空间
+    volumes:
+      - /docker/aifuli-cloud/logs:/root/logs/
+      - /data/skywalking/skywalking-agent:/data/skywalking/skywalking-agent
+    healthcheck:
+      test: [ "CMD","curl","-f","http://localhost:58081" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    restart: always
+    network_mode: host
+  aifuli-infra:
+    image: aifuli-module-infra-biz
+    container_name: aifuli-infra
+    environment:
+      - TZ=Asia/Shanghai # 配置程序默认时区为上海（中国标准时间）
+      - JAVA_TOOL_OPTIONS=-javaagent:/data/skywalking/skywalking-agent/skywalking-agent.jar # 配置skywalking
+      - SW_AGENT_NAME=aifuli-gateway
+      - SW_AGENT_TRACE_IGNORE_PATH=Redisson/PING,/actuator/**,/admin/**
+      - SW_AGENT_COLLECTOR_BACKEND_SERVICES=[YOUR_SKYWALKING_ADDR] # 请替换 your.skywalking.addr 为你的 skywalking 地址
+      - SPRING_PROFILES_ACTIVE=test # 指定程序运行环境
+      - SPRING_CLOUD_NACOS_CONFIG_SERVER_ADDR=[YOUR_NACOS_ADDR] # 配置中心地址
+      - SPRING_CLOUD_NACOS_CONFIG_NAMESPACE=[YOUR_NAMESPACE] # 命名空间
+      - SPRING_CLOUD_NACOS_SERVER_ADDR=[YOUR_NACOS_ADDR]  # 注册中心地址
+      - SPRING_CLOUD_NACOS_DISCOVERY_NAMESPACE=[YOUR_NAMESPACE] # 命名空间
+    volumes:
+      - /docker/aifuli-cloud/logs:/root/logs/
+      - /data/skywalking/skywalking-agent:/data/skywalking/skywalking-agent
+    restart: always
+    network_mode: host
+    healthcheck:
+      test: [ "CMD","curl","-f","http://localhost:58082" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    depends_on:
+      aifuli-system:
+        condition: service_healthy
+  aifuli-report:
+    image: aifuli-module-report-biz
+    container_name: aifuli-report
+    environment:
+      - TZ=Asia/Shanghai # 配置程序默认时区为上海（中国标准时间）
+      - JAVA_TOOL_OPTIONS=-javaagent:/data/skywalking/skywalking-agent/skywalking-agent.jar # 配置skywalking
+      - SW_AGENT_NAME=aifuli-gateway
+      - SW_AGENT_TRACE_IGNORE_PATH=Redisson/PING,/actuator/**,/admin/**
+      - SW_AGENT_COLLECTOR_BACKEND_SERVICES=[YOUR_SKYWALKING_ADDR] # 请替换 your.skywalking.addr 为你的 skywalking 地址
+      - SPRING_PROFILES_ACTIVE=test # 指定程序运行环境
+      - SPRING_CLOUD_NACOS_CONFIG_SERVER_ADDR=[YOUR_NACOS_ADDR] # 配置中心地址
+      - SPRING_CLOUD_NACOS_CONFIG_NAMESPACE=[YOUR_NAMESPACE] # 命名空间
+      - SPRING_CLOUD_NACOS_SERVER_ADDR=[YOUR_NACOS_ADDR]  # 注册中心地址
+      - SPRING_CLOUD_NACOS_DISCOVERY_NAMESPACE=[YOUR_NAMESPACE] # 命名空间
+    volumes:
+      - /docker/aifuli-cloud/logs:/root/logs/
+      - /data/skywalking/skywalking-agent:/data/skywalking/skywalking-agent
+    restart: always
+    network_mode: host
+    depends_on:
+      aifuli-infra:
+        condition: service_healthy
+  aifuli-bpm:
+    image: aifuli-module-bpm-biz
+    container_name: aifuli-bpm
+    environment:
+      - TZ=Asia/Shanghai # 配置程序默认时区为上海（中国标准时间）
+      - JAVA_TOOL_OPTIONS=-javaagent:/data/skywalking/skywalking-agent/skywalking-agent.jar # 配置skywalking
+      - SW_AGENT_NAME=aifuli-gateway
+      - SW_AGENT_TRACE_IGNORE_PATH=Redisson/PING,/actuator/**,/admin/**
+      - SW_AGENT_COLLECTOR_BACKEND_SERVICES=[YOUR_SKYWALKING_ADDR] # 请替换 your.skywalking.addr 为你的 skywalking 地址
+      - SPRING_PROFILES_ACTIVE=test # 指定程序运行环境
+      - SPRING_CLOUD_NACOS_CONFIG_SERVER_ADDR=[YOUR_NACOS_ADDR] # 配置中心地址
+      - SPRING_CLOUD_NACOS_CONFIG_NAMESPACE=[YOUR_NAMESPACE] # 命名空间
+      - SPRING_CLOUD_NACOS_SERVER_ADDR=[YOUR_NACOS_ADDR]  # 注册中心地址
+      - SPRING_CLOUD_NACOS_DISCOVERY_NAMESPACE=[YOUR_NAMESPACE] # 命名空间
+    volumes:
+      - /docker/aifuli-cloud/logs:/root/logs/
+      - /data/skywalking/skywalking-agent:/data/skywalking/skywalking-agent
+    restart: always
+    network_mode: host
+    depends_on:
+      aifuli-infra:
+        condition: service_healthy
+  aifuli-pay:
+    image: aifuli-module-pay-biz
+    container_name: aifuli-pay
+    environment:
+      - TZ=Asia/Shanghai # 配置程序默认时区为上海（中国标准时间）
+      - JAVA_TOOL_OPTIONS=-javaagent:/data/skywalking/skywalking-agent/skywalking-agent.jar # 配置skywalking
+      - SW_AGENT_NAME=aifuli-gateway
+      - SW_AGENT_TRACE_IGNORE_PATH=Redisson/PING,/actuator/**,/admin/**
+      - SW_AGENT_COLLECTOR_BACKEND_SERVICES=[YOUR_SKYWALKING_ADDR] # 请替换 your.skywalking.addr 为你的 skywalking 地址
+      - SPRING_PROFILES_ACTIVE=test # 指定程序运行环境
+      - SPRING_CLOUD_NACOS_CONFIG_SERVER_ADDR=[YOUR_NACOS_ADDR] # 配置中心地址
+      - SPRING_CLOUD_NACOS_CONFIG_NAMESPACE=[YOUR_NAMESPACE] # 命名空间
+      - SPRING_CLOUD_NACOS_SERVER_ADDR=[YOUR_NACOS_ADDR]  # 注册中心地址
+      - SPRING_CLOUD_NACOS_DISCOVERY_NAMESPACE=[YOUR_NAMESPACE] # 命名空间
+    volumes:
+      - /docker/aifuli-cloud/logs:/root/logs/
+      - /data/skywalking/skywalking-agent:/data/skywalking/skywalking-agent
+    restart: always
+    network_mode: host
+    depends_on:
+      aifuli-infra:
+        condition: service_healthy
+  aifuli-mp:
+    image: aifuli-module-mp-biz
+    container_name: aifuli-mp
+    environment:
+      - TZ=Asia/Shanghai # 配置程序默认时区为上海（中国标准时间）
+      - JAVA_TOOL_OPTIONS=-javaagent:/data/skywalking/skywalking-agent/skywalking-agent.jar # 配置skywalking
+      - SW_AGENT_NAME=aifuli-gateway
+      - SW_AGENT_TRACE_IGNORE_PATH=Redisson/PING,/actuator/**,/admin/**
+      - SW_AGENT_COLLECTOR_BACKEND_SERVICES=[YOUR_SKYWALKING_ADDR] # 请替换 your.skywalking.addr 为你的 skywalking 地址
+      - SPRING_PROFILES_ACTIVE=test # 指定程序运行环境
+      - SPRING_CLOUD_NACOS_CONFIG_SERVER_ADDR=[YOUR_NACOS_ADDR] # 配置中心地址
+      - SPRING_CLOUD_NACOS_CONFIG_NAMESPACE=[YOUR_NAMESPACE] # 命名空间
+      - SPRING_CLOUD_NACOS_SERVER_ADDR=[YOUR_NACOS_ADDR]  # 注册中心地址
+      - SPRING_CLOUD_NACOS_DISCOVERY_NAMESPACE=[YOUR_NAMESPACE] # 命名空间
+    volumes:
+      - /docker/aifuli-cloud/logs:/root/logs/
+      - /data/skywalking/skywalking-agent:/data/skywalking/skywalking-agent
+    restart: always
+    network_mode: host
+    depends_on:
+      aifuli-infra:
+        condition: service_healthy

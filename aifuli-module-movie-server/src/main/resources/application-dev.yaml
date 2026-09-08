@@ -1,0 +1,21 @@
+# 启用 dev 环境后加载电影专属 Nacos 配置，仓库不保存任何真实连接凭证。
+spring:
+  config:
+    import:
+      - optional:nacos:${spring.application.name}-${spring.profiles.active}.yaml
+  cloud:
+    nacos:
+      config:
+        enabled: true
+        server-addr: ${MOVIE_NACOS_SERVER_ADDR:127.0.0.1:8848}
+        namespace: ${MOVIE_NACOS_NAMESPACE:}
+        group: ${MOVIE_NACOS_GROUP:DEFAULT_GROUP}
+        username: ${MOVIE_NACOS_USERNAME:}
+        password: ${MOVIE_NACOS_PASSWORD:}
+      discovery:
+        enabled: true
+        server-addr: ${MOVIE_NACOS_SERVER_ADDR:127.0.0.1:8848}
+        namespace: ${MOVIE_NACOS_NAMESPACE:}
+        group: ${MOVIE_NACOS_GROUP:DEFAULT_GROUP}
+        username: ${MOVIE_NACOS_USERNAME:}
+        password: ${MOVIE_NACOS_PASSWORD:}
