@@ -51,8 +51,6 @@
         <podam.version>8.0.2.RELEASE</podam.version>
         <jedis-mock.version>1.1.12</jedis-mock.version>
         <mockito-inline.version>5.2.0</mockito-inline.version>
-        <!-- Bpm 工作流相关 -->
-        <flowable.version>7.2.0</flowable.version>
         <!-- 工具类相关 -->
         <anji-plus-captcha.version>1.4.0</anji-plus-captcha.version>
         <jsoup.version>1.22.2</jsoup.version>
@@ -84,8 +82,6 @@
         <awssdk.version>2.44.0</awssdk.version>
         <justauth.version>1.16.7</justauth.version>
         <justauth-starter.version>1.4.0</justauth-starter.version>
-        <jimureport.version>2.3.4</jimureport.version>
-        <jimubi.version>2.3.2</jimubi.version>
         <weixin-java.version>4.8.2-20260501.180637</weixin-java.version>
         <bouncycastle.version>1.80</bouncycastle.version>
         <alipay-sdk-java.version>4.40.806.ALL</alipay-sdk-java.version>
@@ -219,7 +215,6 @@
                 <version>${druid.version}</version>
             </dependency>
             <dependency>
-                <!-- 注意：必须声明，避免 flowable 和 mybatis-plus 引入的 mybatis 版本不一致！！！ -->
                 <groupId>org.mybatis</groupId>
                 <artifactId>mybatis</artifactId>
                 <version>${mybatis.version}</version>
@@ -471,19 +466,6 @@
                 <artifactId>podam</artifactId>
                 <version>${podam.version}</version>
             </dependency>
-
-            <!-- 工作流相关 -->
-            <dependency>
-                <groupId>org.flowable</groupId>
-                <artifactId>flowable-spring-boot-starter-process</artifactId>
-                <version>${flowable.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>org.flowable</groupId>
-                <artifactId>flowable-spring-boot-starter-actuator</artifactId>
-                <version>${flowable.version}</version>
-            </dependency>
-            <!-- 工作流相关结束 -->
 
             <!-- 工具类相关 -->
             <dependency>
@@ -743,27 +725,6 @@
                 <version>${weixin-java.version}</version>
             </dependency>
 
-            <!-- 积木报表-->
-            <dependency>
-                <groupId>org.jeecgframework.jimureport</groupId>
-                <artifactId>jimureport-spring-boot3-starter</artifactId>
-                <version>${jimureport.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>org.jeecgframework.jimureport</groupId>
-                <artifactId>jimubi-spring-boot3-starter</artifactId>
-                <version>${jimubi.version}</version>
-                <exclusions>
-                    <exclusion>
-                        <groupId>com.github.jsqlparser</groupId>
-                        <artifactId>jsqlparser</artifactId>
-                    </exclusion>
-                    <exclusion>
-                        <groupId>cn.hutool</groupId>
-                        <artifactId>hutool-core</artifactId>
-                    </exclusion>
-                </exclusions>
-            </dependency>
         </dependencies>
     </dependencyManagement>
 

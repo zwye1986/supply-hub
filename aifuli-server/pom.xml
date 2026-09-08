@@ -39,39 +39,6 @@
 <!--            <version>${revision}</version>-->
 <!--        </dependency>-->
 
-        <!-- 数据报表。默认注释，保证编译速度 -->
-<!--        <dependency>-->
-<!--            <groupId>com.aifuli</groupId>-->
-<!--            <artifactId>aifuli-module-report-server</artifactId>-->
-<!--            <version>${revision}</version>-->
-<!--        </dependency>-->
-        <!-- 工作流。默认注释，保证编译速度 -->
-<!--        <dependency>-->
-<!--            <groupId>com.aifuli</groupId>-->
-<!--            <artifactId>aifuli-module-bpm-server</artifactId>-->
-<!--            <version>${revision}</version>-->
-<!--        </dependency>-->
-        <!-- 微信公众号模块。默认注释，保证编译速度 -->
-<!--        <dependency>-->
-<!--            <groupId>com.aifuli</groupId>-->
-<!--            <artifactId>aifuli-module-mp-server</artifactId>-->
-<!--            <version>${revision}</version>-->
-<!--        </dependency>-->
-
-        <!-- CRM 相关模块。默认注释，保证编译速度 -->
-<!--        <dependency>-->
-<!--            <groupId>com.aifuli</groupId>-->
-<!--            <artifactId>aifuli-module-crm-server</artifactId>-->
-<!--            <version>${revision}</version>-->
-<!--        </dependency>-->
-
-        <!-- IM 即时通讯模块 -->
-<!--        <dependency>-->
-<!--            <groupId>com.aifuli</groupId>-->
-<!--            <artifactId>aifuli-module-im-server</artifactId>-->
-<!--            <version>${revision}</version>-->
-<!--        </dependency>-->
-
         <!-- spring boot 配置所需依赖 -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

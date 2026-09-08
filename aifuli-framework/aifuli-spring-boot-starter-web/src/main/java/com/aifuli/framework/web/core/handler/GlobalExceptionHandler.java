@@ -393,49 +393,19 @@ public class GlobalExceptionHandler {
         if (!message.contains("doesn't exist")) {
             return null;
         }
-        // 1. 数据报表
-        if (message.contains("report_")) {
-            log.error("[报表模块 aifuli-module-report - 表结构未导入][参考 https://cloud.iocoder.cn/report/ 开启]");
-            return CommonResult.error(NOT_IMPLEMENTED.getCode(),
-                    "[报表模块 aifuli-module-report - 表结构未导入][参考 https://cloud.iocoder.cn/report/ 开启]");
-        }
-        // 2. 工作流
-        if (message.contains("bpm_")) {
-            log.error("[工作流模块 aifuli-module-bpm - 表结构未导入][参考 https://cloud.iocoder.cn/bpm/ 开启]");
-            return CommonResult.error(NOT_IMPLEMENTED.getCode(),
-                    "[工作流模块 aifuli-module-bpm - 表结构未导入][参考 https://cloud.iocoder.cn/bpm/ 开启]");
-        }
-        // 3. 微信公众号
-        if (message.contains("mp_")) {
-            log.error("[微信公众号 aifuli-module-mp - 表结构未导入][参考 https://cloud.iocoder.cn/mp/build/ 开启]");
-            return CommonResult.error(NOT_IMPLEMENTED.getCode(),
-                    "[微信公众号 aifuli-module-mp - 表结构未导入][参考 https://cloud.iocoder.cn/mp/build/ 开启]");
-        }
-        // 4. 商城系统
+        // 1. 商城系统
         if (StrUtil.containsAny(message, "product_", "promotion_", "trade_")) {
             log.error("[商城系统 aifuli-module-mall - 已禁用][参考 https://cloud.iocoder.cn/mall/build/ 开启]");
             return CommonResult.error(NOT_IMPLEMENTED.getCode(),
                     "[商城系统 aifuli-module-mall - 已禁用][参考 https://cloud.iocoder.cn/mall/build/ 开启]");
         }
-        // 5. ERP 系统
+        // 2. ERP 系统
         if (message.contains("erp_")) {
             log.error("[ERP 系统 aifuli-module-erp - 表结构未导入][参考 https://cloud.iocoder.cn/erp/build/ 开启]");
             return CommonResult.error(NOT_IMPLEMENTED.getCode(),
                     "[ERP 系统 aifuli-module-erp - 表结构未导入][参考 https://cloud.iocoder.cn/erp/build/ 开启]");
         }
-        // 6. CRM 系统
-        if (message.contains("crm_")) {
-            log.error("[CRM 系统 aifuli-module-crm - 表结构未导入][参考 https://cloud.iocoder.cn/crm/build/ 开启]");
-            return CommonResult.error(NOT_IMPLEMENTED.getCode(),
-                    "[CRM 系统 aifuli-module-crm - 表结构未导入][参考 https://cloud.iocoder.cn/crm/build/ 开启]");
-        }
-        // 7. IM 即时通讯
-        if (message.contains("im_")) {
-            log.error("[IM 即时通讯 aifuli-module-im - 表结构未导入][参考 https://cloud.iocoder.cn/im/build/ 开启]");
-            return CommonResult.error(NOT_IMPLEMENTED.getCode(),
-                    "[IM 即时通讯 aifuli-module-im - 表结构未导入][参考 https://cloud.iocoder.cn/im/build/ 开启]");
-        }
-        // 8. 支付平台
+        // 3. 支付平台
         if (message.contains("pay_")) {
             log.error("[支付模块 aifuli-module-pay - 表结构未导入][参考 https://cloud.iocoder.cn/pay/build/ 开启]");
             return CommonResult.error(NOT_IMPLEMENTED.getCode(),

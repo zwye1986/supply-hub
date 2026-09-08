@@ -1,5 +1,8 @@
 # novo-mall-pro 新增服务对比说明
 
+> 本文保留源项目差异分析的历史口径，不代表当前仓库仍包含下列全部模块。当前模块边界以
+> `docs/superpowers/specs/2026-09-08-remove-unused-modules-design.md` 为准。
+
 ## 对比口径
 
 本文只对比 `D:\Jierongjingfu-project\novo-mall-pro` 相比 `D:\Jierongjingfu-project\novo-mall` 新增了哪些标准服务。
@@ -49,12 +52,12 @@
 
 ### 3. 新增 IM 模块
 
-当前项目新增 `aifuli-module-im`，采用标准 `api + server` 结构：
+源项目新增 `aifuli-module-im`，采用标准 `api + server` 结构：
 
 - `aifuli-module-im-api`
 - `aifuli-module-im-server`
 
-该模块在旧项目中不存在。
+该模块在旧项目中不存在，当前仓库已按后续裁剪设计移除。
 
 ### 4. 新增 IOT 模块
 

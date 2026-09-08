@@ -301,6 +301,9 @@ EOF
 
 ### Task 4: 删除 pay / erp / mall 模块并改根 POM
 
+> 2026-09-08 更新：本节中保留 `bpm/report/mp/crm/im` 的决策已被
+> `docs/superpowers/specs/2026-09-08-remove-unused-modules-design.md` 替代；当前仓库将同时移除这五个模块。
+
 **Files:**
 - Delete: `aifuli-module-pay/`、`aifuli-module-erp/`、`aifuli-module-mall/`（含 trade-api，不再提升为根模块）
 - Modify: `pom.xml` 第 21、24、26 行
@@ -325,11 +328,6 @@ git rm -r aifuli-module-pay aifuli-module-erp aifuli-module-mall
         <module>aifuli-module-system</module>
         <module>aifuli-module-infra</module>
         <module>aifuli-module-member</module>
-        <module>aifuli-module-bpm</module>
-        <module>aifuli-module-report</module>
-        <module>aifuli-module-mp</module>
-        <module>aifuli-module-crm</module>
-        <module>aifuli-module-im</module>
         <module>aifuli-module-supply-chain</module>
         <!-- 电影专业子系统：契约与独立应用直接位于仓库根目录 -->
         <module>aifuli-module-movie-api</module>
@@ -337,11 +335,12 @@ git rm -r aifuli-module-pay aifuli-module-erp aifuli-module-mall
     </modules>
 ```
 
-保留 bpm/report/mp/crm/im。不要删 `sql/mysql/movie/mall/`。
+不要删 `sql/mysql/movie/mall/`。`bpm/report/mp/crm/im` 的后续移除范围以
+`docs/superpowers/specs/2026-09-08-remove-unused-modules-design.md` 为准。
 
 - [ ] **Step 3: 清理 aifuli-server 注释依赖**
 
-删除 `aifuli-server/pom.xml` 中整段「支付服务」「商城相关模块」「ERP 相关模块」注释掉的 `<dependency>`（`aifuli-module-pay-server`、`product-server`、`promotion-server`、`trade-server`、`statistics-server`、`erp-server`）。保留 system/infra 与已注释的 member/report/bpm/mp/crm/im。
+删除 `aifuli-server/pom.xml` 中整段「支付服务」「商城相关模块」「ERP 相关模块」注释掉的 `<dependency>`（`aifuli-module-pay-server`、`product-server`、`promotion-server`、`trade-server`、`statistics-server`、`erp-server`）。保留 system/infra 与已注释的 member；`report/bpm/mp/crm/im` 按后续移除设计清理。
 
 - [ ] **Step 4: 跑契约测试看目录/POM 断言**
 

@@ -17,11 +17,6 @@
         <module>aifuli-module-system</module>
         <module>aifuli-module-infra</module>
         <module>aifuli-module-member</module>
-        <module>aifuli-module-bpm</module>
-        <module>aifuli-module-report</module>
-        <module>aifuli-module-mp</module>
-        <module>aifuli-module-crm</module>
-        <module>aifuli-module-im</module>
         <module>aifuli-module-supply-chain</module>
         <!-- 电影专业子系统：契约与独立应用直接位于仓库根目录 -->
         <module>aifuli-module-movie-api</module>

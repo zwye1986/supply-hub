@@ -31,20 +31,10 @@ public class BannerApplicationRunner implements ApplicationRunner {
                     "https://cloud.iocoder.cn",
                     "https://t.zsxq.com/02Yf6M7Qn");
 
-            // 数据报表
-            System.out.println("[报表模块 aifuli-module-report 教程][参考 https://cloud.iocoder.cn/report/ 开启]");
-            // 工作流
-            System.out.println("[工作流模块 aifuli-module-bpm 教程][参考 https://cloud.iocoder.cn/bpm/ 开启]");
             // 商城系统
             System.out.println("[商城系统 aifuli-module-mall 教程][参考 https://cloud.iocoder.cn/mall/build/ 开启]");
             // ERP 系统
             System.out.println("[ERP 系统 aifuli-module-erp - 教程][参考 https://cloud.iocoder.cn/erp/build/ 开启]");
-            // CRM 系统
-            System.out.println("[CRM 系统 aifuli-module-crm - 教程][参考 https://cloud.iocoder.cn/crm/build/ 开启]");
-            // IM 即时通讯
-            System.out.println("[IM 即时通讯 aifuli-module-im - 教程][参考 https://cloud.iocoder.cn/im/build/ 开启]");
-            // 微信公众号
-            System.out.println("[微信公众号 aifuli-module-mp 教程][参考 https://cloud.iocoder.cn/mp/build/ 开启]");
             // 支付平台
             System.out.println("[支付系统 aifuli-module-pay - 教程][参考 https://doc.iocoder.cn/pay/build/ 开启]");
         });

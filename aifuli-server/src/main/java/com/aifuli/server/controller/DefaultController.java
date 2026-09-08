@@ -12,25 +12,12 @@ import static com.aifuli.framework.common.exception.enums.GlobalErrorCodeConstan
 
 /**
  * 默认 Controller，解决部分 module 未开启时的 404 提示。
- * 例如说，/bpm/** 路径，工作流
  *
  * @author 芋道源码
  */
 @RestController
 @Slf4j
 public class DefaultController {
-
-    @RequestMapping("/admin-api/bpm/**")
-    public CommonResult<Boolean> bpm404() {
-        return CommonResult.error(NOT_IMPLEMENTED.getCode(),
-                "[工作流模块 aifuli-module-bpm - 已禁用][参考 https://doc.iocoder.cn/bpm/ 开启]");
-    }
-
-    @RequestMapping("/admin-api/mp/**")
-    public CommonResult<Boolean> mp404() {
-        return CommonResult.error(NOT_IMPLEMENTED.getCode(),
-                "[微信公众号 aifuli-module-mp - 已禁用][参考 https://doc.iocoder.cn/mp/build/ 开启]");
-    }
 
     @RequestMapping(value = { "/admin-api/product/**", // 商品中心
             "/admin-api/trade/**", // 交易中心
@@ -44,24 +31,6 @@ public class DefaultController {
     public CommonResult<Boolean> erp404() {
         return CommonResult.error(NOT_IMPLEMENTED.getCode(),
                 "[ERP 模块 aifuli-module-erp - 已禁用][参考 https://doc.iocoder.cn/erp/build/ 开启]");
-    }
-
-    @RequestMapping("/admin-api/crm/**")
-    public CommonResult<Boolean> crm404() {
-        return CommonResult.error(NOT_IMPLEMENTED.getCode(),
-                "[CRM 模块 aifuli-module-crm - 已禁用][参考 https://doc.iocoder.cn/crm/build/ 开启]");
-    }
-
-    @RequestMapping(value = { "/admin-api/im/**"})
-    public CommonResult<Boolean> im404() {
-        return CommonResult.error(NOT_IMPLEMENTED.getCode(),
-                "[IM 即时通讯 aifuli-module-im - 已禁用][参考 https://doc.iocoder.cn/im/build/ 开启]");
-    }
-
-    @RequestMapping(value = { "/admin-api/report/**"})
-    public CommonResult<Boolean> report404() {
-        return CommonResult.error(NOT_IMPLEMENTED.getCode(),
-                "[报表模块 aifuli-module-report - 已禁用][参考 https://doc.iocoder.cn/report/ 开启]");
     }
 
     @RequestMapping(value = { "/admin-api/pay/**"})

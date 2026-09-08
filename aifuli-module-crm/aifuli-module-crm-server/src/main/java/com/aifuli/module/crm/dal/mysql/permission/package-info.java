@@ -1,1 +1,0 @@
-package com.aifuli.module.crm.dal.mysql.permission;

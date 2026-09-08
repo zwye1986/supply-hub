@@ -90,38 +90,6 @@ spring:
               uri: grayLb://member-server
               predicates: # 断言，作为开放接口路由的匹配条件
                 - Path=/app-api/open/mall/v1/**
-            ## bpm-server 服务
-            - id: bpm-admin-api # 路由的编号
-              uri: grayLb://bpm-server
-              predicates: # 断言，作为路由的匹配条件，对应 RouteDefinition 数组
-                - Path=/admin-api/bpm/**
-              filters:
-                  - RewritePath=/admin-api/bpm/v3/api-docs, /v3/api-docs
-            ## report-server 服务
-            - id: report-admin-api # 路由的编号
-              uri: grayLb://report-server
-              predicates: # 断言，作为路由的匹配条件，对应 RouteDefinition 数组
-                - Path=/admin-api/report/**
-              filters:
-                - RewritePath=/admin-api/report/v3/api-docs, /v3/api-docs
-            - id: report-jimu # 路由的编号（积木报表）
-              uri: grayLb://report-server
-              predicates: # 断言，作为路由的匹配条件，对应 RouteDefinition 数组
-                - Path=/jmreport/**, /drag/**, /jimubi/**
-            ## mp-server 服务
-            - id: mp-admin-api # 路由的编号
-              uri: grayLb://mp-server
-              predicates: # 断言，作为路由的匹配条件，对应 RouteDefinition 数组
-                - Path=/admin-api/mp/**
-              filters:
-                - RewritePath=/admin-api/mp/v3/api-docs, /v3/api-docs
-            ## crm-server 服务
-            - id: crm-admin-api # 路由的编号
-              uri: grayLb://crm-server
-              predicates: # 断言，作为路由的匹配条件，对应 RouteDefinition 数组
-                - Path=/admin-api/crm/**
-              filters:
-                - RewritePath=/admin-api/crm/v3/api-docs, /v3/api-docs # 配置，保证转发到 /v3/api-docs
             ## ai-server 服务
             - id: ai-admin-api # 路由的编号
               uri: grayLb://ai-server
@@ -154,13 +122,6 @@ spring:
                 - Path=/admin-api/wms/**
               filters:
                 - RewritePath=/admin-api/wms/v3/api-docs, /v3/api-docs # 配置，保证转发到 /v3/api-docs
-            ## im-server 服务
-            - id: im-admin-api # 路由的编号
-              uri: grayLb://im-server
-              predicates: # 断言，作为路由的匹配条件，对应 RouteDefinition 数组
-                - Path=/admin-api/im/**
-              filters:
-                - RewritePath=/admin-api/im/v3/api-docs, /v3/api-docs # 配置，保证转发到 /v3/api-docs
             ## supply-chain-server：默认 Nacos grayLb；supplyhub 用 AIFULI_GATEWAY_SUPPLY_CHAIN_URI 指向本机 58190。
             ## 设计见 docs/superpowers/specs/2026-09-04-supplyhub-test-docker-compose-design.md#7-gateway-与供应链静态路由
             - id: supply-chain-admin-api
@@ -202,15 +163,6 @@ knife4j:
       - name: supply-chain-server
         service-name: supply-chain-server
         url: /admin-api/supply-chain/v3/api-docs
-      - name: bpm-server
-        service-name: bpm-server
-        url: /admin-api/bpm/v3/api-docs
-      - name: mp-server
-        service-name: mp-server
-        url: /admin-api/mp/v3/api-docs
-      - name: crm-server
-        service-name: crm-server
-        url: /admin-api/crm/v3/api-docs
       - name: ai-server
         service-name: ai-server
         url: /admin-api/ai/v3/api-docs
@@ -223,9 +175,6 @@ knife4j:
       - name: wms-server
         service-name: wms-server
         url: /admin-api/wms/v3/api-docs
-      - name: im-server
-        service-name: im-server
-        url: /admin-api/im/v3/api-docs
       - name: supply-chain-server
         service-name: supply-chain-server
         url: /admin-api/supply-chain/v3/api-docs
