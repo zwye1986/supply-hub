@@ -38,7 +38,6 @@ import java.util.Set;
 import static com.aifuli.framework.common.pojo.CommonResult.success;
 import static com.aifuli.framework.common.util.collection.CollectionUtils.convertSet;
 import static com.aifuli.framework.security.core.util.SecurityFrameworkUtils.getLoginUserId;
-import static com.aifuli.module.system.enums.permission.MenuApplicationCodeConstants.MALL_ADMIN;
 
 @Tag(name = "管理后台 - 认证")
 @RestController
@@ -94,7 +93,8 @@ public class AuthController {
     @Operation(summary = "获取登录用户的权限信息")
     @DataPermission(enable = false) // 忽略数据权限，避免因为过滤，导致无法查询用户。类似：https://t.zsxq.com/LHnrp
     public CommonResult<AuthPermissionInfoRespVO> getPermissionInfo(
-            @RequestParam(value = "applicationCode", defaultValue = MALL_ADMIN) String applicationCode) {
+            @Parameter(description = "管理端应用标识；省略时聚合全部应用菜单")
+            @RequestParam(value = "applicationCode", required = false) String applicationCode) {
         log.info("[getPermissionInfo][用户({}) 获取管理端应用({})权限菜单]", getLoginUserId(), applicationCode);
         // 1.1 获得用户信息
         AdminUserDO user = userService.getUser(getLoginUserId());

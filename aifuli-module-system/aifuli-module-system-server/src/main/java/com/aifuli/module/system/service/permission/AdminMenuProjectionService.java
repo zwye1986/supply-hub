@@ -27,8 +27,9 @@ import static com.aifuli.module.system.enums.permission.MenuApplicationCodeConst
 /**
  * 登录用户菜单的应用投影服务。
  *
- * <p>角色菜单仍是全局授权事实，本服务只为指定管理端应用生成权限数组和动态路由。补齐父目录
- * 不会扩大真实权限，供应链旧 {@code supply-chain:admin} 则按已确认的超集语义展开整棵菜单。
+ * <p>角色菜单仍是全局授权事实。本服务在指定管理端应用时生成隔离的权限与动态路由，未指定时
+ * 聚合全部应用；补齐父目录不会扩大真实权限，供应链旧 {@code supply-chain:admin} 则按已确认的
+ * 超集语义展开供应链整棵菜单。
  * 设计见 {@code docs/superpowers/specs/2026-09-03-supply-chain-admin-rbac-design.md#81-应用隔离模型}。</p>
  */
 @Service
@@ -38,15 +39,15 @@ public class AdminMenuProjectionService {
     private MenuService menuService;
 
     /**
-     * 按应用投影登录用户的权限与路由菜单。
+     * 按应用投影登录用户的权限与路由菜单；应用标识为空时聚合全部应用。
      *
      * @param grantedMenuIds 角色实际授予的菜单编号
-     * @param applicationCode 管理端应用标识
+     * @param applicationCode 管理端应用标识；{@code null} 表示全部应用
      * @param superAdmin 是否 yudao 超管
      * @return 权限与路由菜单；返回集合均为新实例
      */
     public Projection project(Collection<Long> grantedMenuIds, String applicationCode, boolean superAdmin) {
-        if (!ALL.contains(applicationCode)) {
+        if (applicationCode != null && !ALL.contains(applicationCode)) {
             throw exception(MENU_APPLICATION_CODE_INVALID);
         }
 
@@ -60,32 +61,39 @@ public class AdminMenuProjectionService {
                 .toList();
         Set<String> globalPermissions = toPermissionSet(grantedMenus);
 
-        List<MenuDO> applicationMenus = enabledMenus.stream()
+        List<MenuDO> applicationMenus = applicationCode == null ? enabledMenus : enabledMenus.stream()
                 .filter(menu -> Objects.equals(applicationCode, menu.getApplicationCode()))
                 .toList();
-        boolean applicationAdmin = superAdmin || isSupplyChainAdmin(applicationCode, globalPermissions);
-        if (applicationAdmin) {
-            return new Projection(toPermissionSet(applicationMenus), toRouteMenus(applicationMenus));
-        }
-
         List<MenuDO> grantedApplicationMenus = grantedMenus.stream()
-                .filter(menu -> Objects.equals(applicationCode, menu.getApplicationCode()))
+                .filter(menu -> applicationCode == null
+                        || Objects.equals(applicationCode, menu.getApplicationCode()))
                 .toList();
-        Set<Long> routeMenuIds = grantedApplicationMenus.stream()
+
+        // 超管展开查询范围内的全部菜单；旧 supply-chain:admin 只展开供应链应用，避免越权到商城应用。
+        Set<Long> projectedMenuIds = grantedApplicationMenus.stream()
+                .map(MenuDO::getId)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        if (superAdmin) {
+            projectedMenuIds.addAll(applicationMenus.stream().map(MenuDO::getId).toList());
+        } else if (globalPermissions.contains(SUPPLY_CHAIN_ADMIN_PERMISSION)) {
+            applicationMenus.stream()
+                    .filter(menu -> SUPPLY_CHAIN_ADMIN.equals(menu.getApplicationCode()))
+                    .map(MenuDO::getId)
+                    .forEach(projectedMenuIds::add);
+        }
+        List<MenuDO> projectedMenus = applicationMenus.stream()
+                .filter(menu -> projectedMenuIds.contains(menu.getId()))
+                .toList();
+        Set<Long> routeMenuIds = projectedMenus.stream()
                 .filter(AdminMenuProjectionService::isRouteMenu)
                 .map(MenuDO::getId)
                 .collect(Collectors.toCollection(LinkedHashSet::new));
-        addAncestorMenuIds(routeMenuIds, enabledMenuMap, applicationCode);
+        addAncestorMenuIds(routeMenuIds, enabledMenuMap);
         List<MenuDO> routeMenus = applicationMenus.stream()
                 .filter(menu -> routeMenuIds.contains(menu.getId()))
                 .filter(AdminMenuProjectionService::isRouteMenu)
                 .toList();
-        return new Projection(toPermissionSet(grantedApplicationMenus), new ArrayList<>(routeMenus));
-    }
-
-    private static boolean isSupplyChainAdmin(String applicationCode, Set<String> globalPermissions) {
-        return SUPPLY_CHAIN_ADMIN.equals(applicationCode)
-                && globalPermissions.contains(SUPPLY_CHAIN_ADMIN_PERMISSION);
+        return new Projection(toPermissionSet(projectedMenus), new ArrayList<>(routeMenus));
     }
 
     private static boolean isRouteMenu(MenuDO menu) {
@@ -99,17 +107,11 @@ public class AdminMenuProjectionService {
                 .collect(Collectors.toCollection(LinkedHashSet::new));
     }
 
-    private static List<MenuDO> toRouteMenus(Collection<MenuDO> menus) {
-        return menus.stream()
-                .filter(AdminMenuProjectionService::isRouteMenu)
-                .collect(Collectors.toCollection(ArrayList::new));
-    }
-
-    private static void addAncestorMenuIds(Set<Long> routeMenuIds, Map<Long, MenuDO> menuMap,
-                                           String applicationCode) {
+    private static void addAncestorMenuIds(Set<Long> routeMenuIds, Map<Long, MenuDO> menuMap) {
         List<Long> seeds = new ArrayList<>(routeMenuIds);
         for (Long menuId : seeds) {
             MenuDO current = menuMap.get(menuId);
+            String applicationCode = current == null ? null : current.getApplicationCode();
             while (current != null && !ID_ROOT.equals(current.getParentId())) {
                 MenuDO parent = menuMap.get(current.getParentId());
                 if (parent == null || !Objects.equals(applicationCode, parent.getApplicationCode())) {

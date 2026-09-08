@@ -166,14 +166,14 @@ C 的详细设计至少必须拆成两类能力：
 | `mall-admin` | 现有商城管理端菜单；历史数据迁移后的默认值 |
 | `supply-chain-admin` | 独立站点 `supplychainhubweb` 的菜单 |
 
-`GET /system/auth/get-permission-info` 增加可选查询参数 `applicationCode`：省略时按 `mall-admin` 处理，保持现有商城后台兼容；`supplychainhubweb` 必须显式传 `supply-chain-admin`。未知值返回参数错误，禁止回退成全量菜单。应用标识来自前端，只是 UI 投影条件，不参与 `@PreAuthorize`，伪造它不能获得未授予的角色权限。
+`GET /system/auth/get-permission-info` 增加可选查询参数 `applicationCode`：省略时合并返回用户在全部管理端应用下已授权的菜单与权限；传值时只投影指定应用。当前合法值为 `mall-admin`、`supply-chain-admin`，未知非空值返回参数错误。需要应用隔离的前端应显式传自己的应用标识；省略参数是跨应用聚合查询，不参与 `@PreAuthorize`，也不能获得角色未授予的接口权限。
 
 权限信息必须拆开计算“已授予权限”与“用于路由的菜单”，不能继续让一个会被修改的 `menuList` 同时承担两者：
 
 1. 从角色菜单关系得到完整菜单集合，先计算真实 `grantedPermissions`。
-2. 按 `application_code` 过滤 DIR/PAGE；普通细权限用户自动补齐获准页面的祖先目录，但补祖先只用于组成路由树，不把祖先的 permission 加进 `grantedPermissions`。
-3. 供应链根目录的 permission 固定为 `supply-chain:admin`。若真实 `grantedPermissions` 含该值，或用户是 yudao 超管，则返回 `supply-chain-admin` 下全部启用 DIR/PAGE，并向前端权限集合补入该应用全部按钮权限，保证 `admin` 的超集语义对菜单和按钮同时成立。
-4. 返回的权限数组只包含该应用已授予的权限及上一步的超集展开，不把其它应用权限泄露给当前站点；后端 `PermissionCommonApi` 仍按完整角色权限独立判定。
+2. 传入 `applicationCode` 时按 `application_code` 过滤；省略时保留全部应用。普通细权限用户自动补齐获准页面在同一应用内的祖先目录，但补祖先只用于组成路由树，不把祖先的 permission 加进 `grantedPermissions`。
+3. 供应链根目录的 permission 固定为 `supply-chain:admin`。若真实 `grantedPermissions` 含该值，则在查询范围包含 `supply-chain-admin` 时展开其全部启用 DIR/PAGE 和按钮权限；用户是 yudao 超管时，展开当前查询范围内全部应用的启用菜单与权限。
+4. 显式应用查询的权限数组只包含该应用已授予的权限及上一步的超集展开；省略参数时合并全部应用的对应结果。后端 `PermissionCommonApi` 仍按完整角色权限独立判定。
 
 菜单管理、角色分配用的管理接口仍可查看全部应用菜单，并增加可选 `applicationCode` 筛选；不得让登录态的应用投影过滤掉角色管理员需要配置的供应链菜单。`MenuDO`、保存/响应 VO、Mapper 查询和缓存键/失效规则同步覆盖该字段。
 
@@ -220,13 +220,13 @@ C 的详细设计至少必须拆成两类能力：
 
 - HTTP 方法 → 权限动作对照（§5）与「合作商品 PATCH 走 update」断言。
 - SKU 查询组合权限：无资源 code、单资源 code、多资源 code、`admin` 超集。
-- 应用菜单过滤：省略应用为 `mall-admin`；供应链应用不返回商城页面；商城应用不返回供应链页面；未知应用返回参数错误，不回退全量。
+- 应用菜单过滤：省略应用合并返回全部应用的已授权菜单；供应链应用不返回商城页面；商城应用不返回供应链页面；未知非空应用返回参数错误。
 - 旧 `supply-chain:admin` 角色无需复制子树关系即可获得供应链目录、页面和按钮；普通细权限角色能补齐目录但不会因此获得 `admin`；重复执行 SQL 不产生重复菜单或角色关系。
 
 `*ContractTest`：使用已启用 Spring Method Security 的测试上下文和 stub `PermissionCommonApi`，不得只反射注解文本：
 
 - 仅 `supply-chain:admin` 与仅对应细权限都能通过；无权限、错资源权限返回 `403`。
-- `get-permission-info` 的 `applicationCode` 请求/响应契约、默认兼容值和菜单组件字段稳定。
+- `get-permission-info` 的 `applicationCode` 请求/响应契约、省略参数的跨应用聚合语义和菜单组件字段稳定。
 - 权限信息响应中的权限数组同时支持未来前端按 `admin` 与细权限 OR 语义消费。
 
 不要求本切片拉起真实 `system-server` 与供应链服务组成全自动环境，但真实联调必须写入 `docs/集成测试.md`：

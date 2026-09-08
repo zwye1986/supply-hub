@@ -20,7 +20,7 @@
 
 ## 2. 不要做
 
-- 不要改商城后台工程；`applicationCode` 省略时后端仍当 `mall-admin`，商城站点不要传 `supply-chain-admin`。
+- `applicationCode` 省略时后端会聚合全部应用菜单；任何只消费单一应用菜单的前端都应显式传自己的应用标识。
 - 不要为迁就现有 `/scm/**` 再做后端适配层。
 - 不要关掉 `USE_SUPPLIER_MOCK` / `USE_DISTRIBUTOR_MOCK`（当前均为 `true`）。关 mock 是独立任务，清单见前端 API 设计第 11 章后半。
 - 不要自己往 `system_menu` 插菜单；测试库已有 17 条（2 目录 + 3 页面 + 12 按钮）。
@@ -33,7 +33,7 @@
 
 | 点 | 现状 | 问题 |
 | --- | --- | --- |
-| 权限信息 | `src/api/login/index.ts` 的 `getInfo()` 请求 `/system/auth/get-permission-info`，**不带** `applicationCode` | 后端默认 `mall-admin`，不会返回供应链菜单 |
+| 权限信息 | `src/api/login/index.ts` 的 `getInfo()` 请求 `/system/auth/get-permission-info`，**不带** `applicationCode` | 后端会返回全部应用菜单；若本站点只允许供应链路由，应显式过滤到 `supply-chain-admin` |
 | 动态路由 | `src/store/modules/user.ts` 把 `userInfo.menus` 写入 `ROLE_ROUTERS`；`src/store/modules/permission.ts` 用 `generateRoute` 注册 | 机制可用，但目前拿到的是商城菜单 |
 | 静态三页 | `src/router/modules/remaining.ts` 末尾无条件挂了 `/supplier` 下供应商、分销商、项目 | 任何登录用户都能进这三页 |
 | 按钮 | 供应链三个页面**没有** `v-hasPermi`；仓库其它模块已有该指令 | 仅 query 的账号仍能点新增/暂停 |
@@ -52,7 +52,7 @@ Authorization: Bearer <token>
 tenant-id: 1
 ```
 
-- **必须**显式传 `applicationCode=supply-chain-admin`。省略 = 商城菜单。
+- 本站点若只展示供应链路由，必须显式传 `applicationCode=supply-chain-admin`；省略参数会聚合返回全部应用菜单。
 - 合法值只有 `mall-admin`、`supply-chain-admin`。其它值业务码 `1002001007`（管理端应用标识不合法），不会回退成全量菜单。
 - 未登录：业务码 `401`。
 - 应用标识只过滤菜单投影，伪造它拿不到未授予的接口权限。

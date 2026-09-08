@@ -94,6 +94,44 @@ class AdminMenuProjectionServiceTest {
     }
 
     @Test
+    void shouldExpandSuperAdminToAllApplicationsWhenApplicationCodeOmitted() {
+        AdminMenuProjectionService.Projection result = projectionService.project(Set.of(), null, true);
+
+        assertTrue(result.permissions().containsAll(Set.of(
+                SUPPLY_CHAIN_ADMIN_PERMISSION,
+                "supply-chain:supplier:query",
+                "supply-chain:supplier:create",
+                "supply-chain:buyer:query")));
+        assertEquals(Set.of(1L, 2L, 3L, 5L),
+                result.routeMenus().stream().map(MenuDO::getId).collect(Collectors.toSet()));
+    }
+
+    @Test
+    void shouldProjectGrantedMenusAcrossApplicationsWhenApplicationCodeOmitted() {
+        AdminMenuProjectionService.Projection result = projectionService.project(
+                Set.of(1L, 3L, 4L), null, false);
+
+        assertEquals(Set.of("supply-chain:supplier:query", "supply-chain:supplier:create"),
+                result.permissions());
+        assertEquals(Set.of(1L, 2L, 3L),
+                result.routeMenus().stream().map(MenuDO::getId).collect(Collectors.toSet()));
+        assertFalse(result.permissions().contains(SUPPLY_CHAIN_ADMIN_PERMISSION));
+    }
+
+    @Test
+    void shouldExpandLegacyAdminOnlyWithinSupplyChainWhenApplicationCodeOmitted() {
+        AdminMenuProjectionService.Projection result = projectionService.project(Set.of(6L), null, false);
+
+        assertTrue(result.permissions().containsAll(Set.of(
+                SUPPLY_CHAIN_ADMIN_PERMISSION,
+                "supply-chain:supplier:query",
+                "supply-chain:supplier:create",
+                "supply-chain:buyer:query")));
+        assertEquals(Set.of(2L, 3L, 5L),
+                result.routeMenus().stream().map(MenuDO::getId).collect(Collectors.toSet()));
+    }
+
+    @Test
     void shouldNotReturnSupplyChainMenusForMallApplication() {
         AdminMenuProjectionService.Projection result = projectionService.project(
                 Set.of(1L, 3L, 4L), MALL_ADMIN, false);
