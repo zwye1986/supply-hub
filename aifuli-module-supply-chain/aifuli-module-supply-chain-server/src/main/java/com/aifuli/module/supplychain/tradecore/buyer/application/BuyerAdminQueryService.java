@@ -12,14 +12,20 @@ import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerCoopera
 import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerDO;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerFileRefDO;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerIntegrationModeDO;
+import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerProductDO;
+import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerProjectDO;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerCategoryScopeMapper;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerContactMapper;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerCooperationModeMapper;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerFileRefMapper;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerIntegrationModeMapper;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerMapper;
+import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerProductMapper;
+import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerProjectMapper;
+import com.aifuli.module.supplychain.tradecore.buyer.domain.BuyerProjectStatus;
 import com.aifuli.module.supplychain.tradecore.buyer.domain.BuyerScopeKind;
 import com.aifuli.module.supplychain.tradecore.buyer.domain.BuyerStatus;
+import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.RequiredArgsConstructor;
@@ -30,9 +36,11 @@ import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import static com.aifuli.framework.common.exception.util.ServiceExceptionUtil.exception;
@@ -60,6 +68,8 @@ public class BuyerAdminQueryService {
     private final BuyerCategoryScopeMapper categoryScopeMapper;
     private final BuyerFileRefMapper fileRefMapper;
     private final BuyerAccountMapper accountMapper;
+    private final BuyerProjectMapper projectMapper;
+    private final BuyerProductMapper productMapper;
     private final EnvelopeCryptoPort envelopeCrypto;
 
     /**
@@ -94,11 +104,7 @@ public class BuyerAdminQueryService {
         pageParam.setPageNo(query.pageNo() == null ? DEFAULT_PAGE_NO : query.pageNo());
         pageParam.setPageSize(query.pageSize() == null ? DEFAULT_PAGE_SIZE : query.pageSize());
         PageResult<BuyerDO> page = buyerMapper.selectPage(pageParam, wrapper);
-        List<BuyerListItem> items = new ArrayList<>();
-        for (BuyerDO buyer : page.getList()) {
-            items.add(toListItem(buyer));
-        }
-        return new PageResult<>(items, page.getTotal());
+        return new PageResult<>(toListItems(page.getList()), page.getTotal());
     }
 
     public List<SimpleBuyerItem> listSimple(String buyerName, String buyerCode) {
@@ -304,29 +310,83 @@ public class BuyerAdminQueryService {
         return byMode;
     }
 
-    private BuyerListItem toListItem(BuyerDO buyer) {
-        LinkedHashSet<String> sellableCategories = new LinkedHashSet<>();
-        for (BuyerCategoryScopeDO scope : categoryScopeMapper.selectByBuyerId(buyer.getId())) {
-            if (BuyerScopeKind.SELLABLE.name().equals(scope.getScopeKind()) && scope.getScopeCode() != null) {
-                sellableCategories.add(scope.getScopeCode());
+    /**
+     * 一次批量装配当页分销商的范围、项目、分销商品和联系人，避免列表字段扩展形成 N+1 查询。
+     * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#62-列表与档案}。
+     */
+    private List<BuyerListItem> toListItems(List<BuyerDO> buyers) {
+        if (buyers.isEmpty()) {
+            return List.of();
+        }
+        List<Long> buyerIds = buyers.stream().map(BuyerDO::getId).toList();
+        Map<Long, LinkedHashSet<String>> sellableCategories = new HashMap<>();
+        Map<Long, LinkedHashSet<String>> productTypes = new HashMap<>();
+        for (BuyerCategoryScopeDO scope : categoryScopeMapper.selectList(
+                new LambdaQueryWrapper<BuyerCategoryScopeDO>()
+                        .in(BuyerCategoryScopeDO::getBuyerId, buyerIds)
+                        .orderByAsc(BuyerCategoryScopeDO::getId))) {
+            if (scope.getScopeCode() == null) {
+                continue;
+            }
+            if (BuyerScopeKind.SELLABLE.name().equals(scope.getScopeKind())) {
+                sellableCategories.computeIfAbsent(scope.getBuyerId(), ignored -> new LinkedHashSet<>())
+                        .add(scope.getScopeCode());
+            } else if (BuyerScopeKind.PRODUCT_TYPE.name().equals(scope.getScopeKind())) {
+                productTypes.computeIfAbsent(scope.getBuyerId(), ignored -> new LinkedHashSet<>())
+                        .add(scope.getScopeCode());
             }
         }
-        List<String> cooperationModes = cooperationModeMapper.selectByBuyerId(buyer.getId()).stream()
-                .map(BuyerCooperationModeDO::getCooperationMode)
-                .toList();
-        List<BuyerContactDO> contacts = contactMapper.selectByBuyerId(buyer.getId());
-        BuyerContactDO primary = contacts.isEmpty() ? null : contacts.getFirst();
-        return new BuyerListItem(
-                buyer.getId(),
-                buyer.getBuyerCode(),
-                buyer.getBuyerName(),
-                buyer.getDistributionLevel() == null ? null : buyer.getDistributionLevel().intValue(),
-                BuyerStatus.fromCode(buyer.getStatus()).name(),
-                buyer.getUpdatedAt(),
-                new ArrayList<>(sellableCategories),
-                cooperationModes,
-                primary == null ? null : primary.getContactName(),
-                primary == null ? null : maskMobile(primary.getContactMobile()));
+
+        Map<Long, List<String>> cooperationModes = new HashMap<>();
+        for (BuyerCooperationModeDO mode : cooperationModeMapper.selectList(
+                new LambdaQueryWrapper<BuyerCooperationModeDO>()
+                        .in(BuyerCooperationModeDO::getBuyerId, buyerIds)
+                        .orderByAsc(BuyerCooperationModeDO::getId))) {
+            cooperationModes.computeIfAbsent(mode.getBuyerId(), ignored -> new ArrayList<>())
+                    .add(mode.getCooperationMode());
+        }
+
+        Map<Long, BuyerContactDO> primaryContacts = new HashMap<>();
+        for (BuyerContactDO contact : contactMapper.selectList(new LambdaQueryWrapper<BuyerContactDO>()
+                .in(BuyerContactDO::getBuyerId, buyerIds)
+                .orderByAsc(BuyerContactDO::getBuyerId, BuyerContactDO::getSortNo))) {
+            primaryContacts.putIfAbsent(contact.getBuyerId(), contact);
+        }
+
+        Map<Long, Long> projectCounts = new HashMap<>();
+        projectMapper.selectList(new LambdaQueryWrapper<BuyerProjectDO>()
+                        .select(BuyerProjectDO::getBuyerId)
+                        .in(BuyerProjectDO::getBuyerId, buyerIds)
+                        .ne(BuyerProjectDO::getStatus, BuyerProjectStatus.ARCHIVED.getCode()))
+                .forEach(project -> projectCounts.merge(project.getBuyerId(), 1L, Long::sum));
+
+        Map<Long, Long> skuCounts = new HashMap<>();
+        productMapper.selectList(new LambdaQueryWrapper<BuyerProductDO>()
+                        .select(BuyerProductDO::getBuyerId)
+                        .in(BuyerProductDO::getBuyerId, buyerIds)
+                        .eq(BuyerProductDO::getStatus, CatalogEntityStatus.ACTIVE.getCode()))
+                .forEach(product -> skuCounts.merge(product.getBuyerId(), 1L, Long::sum));
+
+        List<BuyerListItem> items = new ArrayList<>(buyers.size());
+        for (BuyerDO buyer : buyers) {
+            BuyerContactDO primary = primaryContacts.get(buyer.getId());
+            items.add(new BuyerListItem(
+                    buyer.getId(),
+                    buyer.getBuyerCode(),
+                    buyer.getBuyerName(),
+                    buyer.getDistributionLevel() == null ? null : buyer.getDistributionLevel().intValue(),
+                    BuyerStatus.fromCode(buyer.getStatus()).name(),
+                    buyer.getUpdatedAt(),
+                    new ArrayList<>(sellableCategories.getOrDefault(buyer.getId(), new LinkedHashSet<>())),
+                    new ArrayList<>(productTypes.getOrDefault(buyer.getId(), new LinkedHashSet<>())),
+                    cooperationModes.getOrDefault(buyer.getId(), List.of()),
+                    projectCounts.getOrDefault(buyer.getId(), 0L),
+                    skuCounts.getOrDefault(buyer.getId(), 0L),
+                    buyer.getCooperationStartedAt(),
+                    primary == null ? null : primary.getContactName(),
+                    primary == null ? null : maskMobile(primary.getContactMobile())));
+        }
+        return items;
     }
 
     private static String firstVersion(BuyerDO buyer) {
@@ -437,7 +497,11 @@ public class BuyerAdminQueryService {
             @Schema(description = "管理状态：ACTIVE / SUSPENDED / BLACKLIST") String status,
             @Schema(description = "最后修改时间，Asia/Shanghai") LocalDateTime updatedAt,
             @Schema(description = "可售品类") List<String> sellableCategories,
+            @Schema(description = "商品类型") List<String> productTypes,
             @Schema(description = "合作模式") List<String> cooperationModes,
+            @Schema(description = "未归档关联项目数") long projectCount,
+            @Schema(description = "有效分销SKU商品数") long skuCount,
+            @Schema(description = "合作时间，取档案合作开始时间，Asia/Shanghai") LocalDateTime cooperationTime,
             String primaryContactName, String primaryContactMobile) {
     }
 

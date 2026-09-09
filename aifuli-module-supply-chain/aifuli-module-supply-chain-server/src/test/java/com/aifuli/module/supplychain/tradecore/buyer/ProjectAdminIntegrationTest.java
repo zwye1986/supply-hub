@@ -100,6 +100,7 @@ class ProjectAdminIntegrationTest {
     void projectSkuRequiresBuyerProductAndFreezeIgnoresLaterL2() {
         try (ConfigurableApplicationContext context = applicationContext()) {
             BuyerAdminCommandService buyers = context.getBean(BuyerAdminCommandService.class);
+            BuyerAdminQueryService buyerQueries = context.getBean(BuyerAdminQueryService.class);
             BuyerProductCommandService products = context.getBean(BuyerProductCommandService.class);
             ProjectAdminCommandService projects = context.getBean(ProjectAdminCommandService.class);
             ProjectListingCommandService listings = context.getBean(ProjectListingCommandService.class);
@@ -122,6 +123,17 @@ class ProjectAdminIntegrationTest {
                     LocalDate.of(2026, 9, 1), LocalDate.of(2026, 12, 31),
                     null, "说明", "ACTIVE", 1L));
             assertThat(projectCode).startsWith("PRJ_");
+
+            var buyerPage = buyerQueries.page(new BuyerAdminQueryService.BuyerPageQuery(
+                    null, buyerA, List.of(), List.of(), List.of(), List.of(), null, null, 1, 20));
+            assertThat(buyerPage.getTotal()).isEqualTo(1L);
+            var buyerRow = buyerPage.getList().getFirst();
+            assertThat(buyerRow.sellableCategories()).containsExactly("MOVIE");
+            assertThat(buyerRow.productTypes()).containsExactly("MOVIE");
+            assertThat(buyerRow.projectCount()).isEqualTo(1L);
+            assertThat(buyerRow.skuCount()).isEqualTo(1L);
+            assertThat(buyerRow.cooperationTime()).isEqualTo(LocalDateTime.of(2026, 9, 1, 9, 30));
+            assertThat(buyerQueries.get(buyerA).sellableCategories()).containsExactly("MOVIE");
 
             assertThatThrownBy(() -> listings.addProducts(projectCode, List.of(
                     new ListingLine("MOVIE_200", L3AdjustMode.FOLLOW_L2, null, null)), 1L))
@@ -240,9 +252,9 @@ class ProjectAdminIntegrationTest {
         return new CreateBuyerCommand(
                 name, List.of(new ContactLine("张三", "13800138000", "a@b.c")),
                 null, 1, "ENTERPRISE", null, "MONTHLY", 7, List.of(), List.of(),
-                null, null, legalEntity, creditCode, "李四", "13900139000",
+                LocalDateTime.of(2026, 9, 1, 9, 30), null, legalEntity, creditCode, "李四", "13900139000",
                 "上海市浦东新区", "测试银行", "6222021234567890",
-                null, null, null, null, List.of(), List.of(), List.of(), List.of(),
+                null, null, null, null, List.of(), List.of(), List.of("MOVIE"), List.of("MOVIE"),
                 0L, 1L, "project-admin-it");
     }
 

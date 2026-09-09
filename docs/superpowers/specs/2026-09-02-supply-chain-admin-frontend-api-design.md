@@ -349,6 +349,15 @@ SKU 未填上限/起购量时继承供货配置。
 
 `GET /supply-chain/buyers/{buyerCode}`、`POST /supply-chain/buyers`、`PUT /supply-chain/buyers/{buyerCode}` 档案字段对齐前端分销商表单：名称、联系人、分销品类/类型（`sellableCategories[]` / `productTypes[]` 枚举名，不是类目 id）、合作模式、类型、择优倾向、结算方式/周期、对接方式、合作开始日、说明、公司/信用代码/法人/地址/银行/证件、期初 `openingBalanceCents`（创建一次，允许 0）。字典见专文 §3。
 
+分页列表行除基础档案字段外，还返回以下只读聚合字段：
+
+- `productTypes[]`：`sc_buyer_category_scope` 中 `scope_kind=PRODUCT_TYPE` 的商品类型枚举名；`sellableCategories[]` 继续只读取 `scope_kind=SELLABLE`，两者互相独立，禁止相互推导；
+- `projectCount`：该分销商未归档项目数，`ARCHIVED` 项目不计入；
+- `skuCount`：该分销商状态为有效的分销商品数，已移除分销商品不计入；
+- `cooperationTime`：列表展示用合作时间，与档案 `cooperationStartedAt` 取同一 `sc_buyer.cooperation_started_at` 值。
+
+分页聚合必须按当页 Buyer 集合批量读取，禁止为每行追加项目数、SKU 数等 N+1 查询。详情的 `sellableCategories[]` / `productTypes[]` 只返回已经保存的独立范围行；历史记录缺少 `SELLABLE` 行时返回空数组，由前端按新字段重新保存或由有明确业务映射的数据修复任务补齐，后端不得根据商品类型猜测分销品类。
+
 期初写入既有采购商唯一账本，禁止写入供应商结算账户。管理端创建不要求前端传 evidence 文件；服务端使用受控 `entry_key=ADMIN_OPENING:{buyerId}:CNY`（或等价不可伪造键）走一次性开户。已存在账户再带余额 → 与供应商相同语义的已开户错误。编辑页余额只读。
 
 `PATCH /supply-chain/buyers/{buyerCode}` `{ "status": "SUSPENDED"|"ACTIVE"|"BLACKLIST" }`。批量：`PATCH /supply-chain/buyers` `{ buyerCodes, status }`（暂停/恢复）。

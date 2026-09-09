@@ -1,5 +1,7 @@
 package com.aifuli.module.supplychain.interfaceapi.admin;
 
+import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerAdminQueryService.BuyerListItem;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.junit.jupiter.api.Test;
@@ -13,6 +15,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -69,6 +72,19 @@ class BuyerAdminRestContractTest {
         }
         assertThat(invoiceGet).isTrue();
         assertThat(invoicePut).isTrue();
+    }
+
+    @Test
+    void listJsonExposesFrontendAggregationFields() {
+        ObjectMapper mapper = new ObjectMapper();
+        Set<String> propertyNames = mapper.getSerializationConfig()
+                .introspect(mapper.constructType(BuyerListItem.class))
+                .findProperties().stream()
+                .map(property -> property.getName())
+                .collect(Collectors.toSet());
+
+        assertThat(propertyNames).contains(
+                "sellableCategories", "productTypes", "projectCount", "skuCount", "cooperationTime");
     }
 
     private static boolean hasHttpMapping(Method method) {
