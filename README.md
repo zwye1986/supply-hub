@@ -36,6 +36,85 @@
 
 可参考 [《迁移文档》](https://cloud.iocoder.cn/migrate-module/) ，只需要 5-10 分钟，即可将【完整版】按需迁移到【精简版】
 
+## pro143 测试环境发布
+
+### 前置条件
+
+- 本机安装 JDK 21、Maven、Docker Desktop（含 Buildx）、`ssh` 和 `scp`。
+- 本机 SSH 配置中已存在可登录 `root@8.133.164.143` 的 `pro143` 别名；如需覆盖，可设置环境变量
+  `SUPPLYHUB_DOCKER_HOST`。
+- 启动 Docker Desktop，并在仓库根目录执行发布命令。
+- 两个脚本都会把当前工作区的未提交修改打入镜像，镜像标签使用当前 HEAD 的短 commit hash；正式发布前建议先提交代码，
+  确保镜像可追溯。
+- 发布脚本的 Maven 打包使用 `-DskipTests`，自动化测试应在发布前独立执行。
+
+### supplyhub 基础服务
+
+`script/deploy/supplyhub-test/deploy-pro143.sh` 用于构建 `linux/amd64` 镜像并发布 pro143 的 supplyhub Docker
+Compose 服务。脚本支持单独发布一个服务，也支持一次发布全部服务：
+
+```bash
+cd /path/to/supply-hub
+
+# 单独发布
+bash script/deploy/supplyhub-test/deploy-pro143.sh gateway
+bash script/deploy/supplyhub-test/deploy-pro143.sh system
+bash script/deploy/supplyhub-test/deploy-pro143.sh infra
+bash script/deploy/supplyhub-test/deploy-pro143.sh member
+
+# 发布上述全部服务；不传参数时也默认 all
+bash script/deploy/supplyhub-test/deploy-pro143.sh all
+```
+
+| 参数 | Maven 模块 | pro143 容器 |
+|---|---|---|
+| `gateway` | `aifuli-gateway` | `supplyhub-gateway` |
+| `system` | `aifuli-module-system/aifuli-module-system-server` | `supplyhub-system` |
+| `infra` | `aifuli-module-infra/aifuli-module-infra-server` | `supplyhub-infra` |
+| `member` | `aifuli-module-member/aifuli-module-member-server` | `supplyhub-member` |
+
+指定单个服务时，脚本只更新该服务的镜像标签并执行对应 Compose 服务，不重启供应链中台。当前 supplyhub 测试栈不包含
+`pay`、`erp`、`mall` 和 `statistics`。
+
+### 供应链中台
+
+`aifuli-module-supply-chain/scripts/deploy-pro143.sh` 只发布供应链中台：构建
+`aifuli-module-supply-chain-server`，生成 `aifuli/supply-chain-server:<commit>-amd64` 镜像并更新
+`supply-chain-server-test` 容器，不发布或重启 supplyhub 基础服务。
+
+```bash
+cd /path/to/supply-hub
+
+# 发布当前工作区（包含未提交修改）
+bash aifuli-module-supply-chain/scripts/deploy-pro143.sh
+
+# 发布指定提交；脚本会先执行 git checkout，请仅在工作区干净时使用
+bash aifuli-module-supply-chain/scripts/deploy-pro143.sh <commit-hash>
+```
+
+若同一批改动同时包含 system-server 的 Liquibase、字典、菜单或权限变更，推荐先发布 system-server，再发布供应链中台：
+
+```bash
+bash script/deploy/supplyhub-test/deploy-pro143.sh system
+bash aifuli-module-supply-chain/scripts/deploy-pro143.sh
+```
+
+### 发布后检查
+
+```bash
+ssh pro143 '
+docker ps \
+  --filter name=supplyhub- \
+  --filter name=supply-chain-server-test \
+  --format "table {{.Names}}\t{{.Image}}\t{{.Status}}"
+'
+
+ssh pro143 'docker logs --since 10m --tail 150 <container-name> 2>&1'
+```
+
+发布成功时，目标容器应显示为 `healthy`。供应链中台部署目录为 `/data/aifuli-test/supply-chain`，supplyhub 基础服务
+部署目录为 `/data/aifuli-test/supplyhub`；服务器 `.env` 包含敏感配置，不得提交或在终端输出其完整内容。
+
 ## 🐯 平台简介
 
 **芋道**，以开发者为中心，打造中国第一流的快速开发平台，全部开源，个人与企业可 100% 免费使用。

@@ -395,7 +395,7 @@ public class SupplierAdminController {
     @Data
     @Schema(description = "开票信息保存")
     public static class InvoiceSaveReqVO {
-        @Schema(description = "抬头类型：ENTERPRISE企业，PERSONAL个人")
+        @Schema(description = "抬头类型：ENTERPRISE企业，PERSONAL个人；字典 supply_chain_invoice_title_type")
         private String titleType;
         @Size(max = 256)
         @Schema(description = "开票抬头")

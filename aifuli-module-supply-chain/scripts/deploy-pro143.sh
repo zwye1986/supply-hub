@@ -26,13 +26,14 @@ if [[ -n "${JAVA_HOME:-}" ]]; then
 fi
 
 # ─── 配置 ────────────────────────────────────────────────────────────────────
-REMOTE_HOST="${SUPPLYHUB_DOCKER_HOST:-root@8.133.164.143}"
+REMOTE_HOST="${SUPPLYHUB_DOCKER_HOST:-pro143}"
 REMOTE_DIR="/data/aifuli-test/supply-chain"
 IMAGE_NAME="aifuli/supply-chain-server"
 MONOREPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 SERVER_MODULE="aifuli-module-supply-chain/aifuli-module-supply-chain-server"
 DOCKERFILE_DIR="${MONOREPO_ROOT}/${SERVER_MODULE}"
-HEALTH_WAIT_SECONDS=90
+HEALTH_WAIT_SECONDS=180
+SSH_OPTS=(-o ServerAliveInterval=15 -o ServerAliveCountMax=60)
 # ─────────────────────────────────────────────────────────────────────────────
 
 # 颜色输出
@@ -96,13 +97,13 @@ LOCAL_SIZE=$(du -h "${LOCAL_TARBALL}" | cut -f1)
 log "本地镜像包: ${LOCAL_TARBALL} (${LOCAL_SIZE})"
 
 log "正在传输到 pro143..."
-scp "${LOCAL_TARBALL}" "${REMOTE_HOST}:${REMOTE_TARBALL}"
+scp "${SSH_OPTS[@]}" "${LOCAL_TARBALL}" "${REMOTE_HOST}:${REMOTE_TARBALL}"
 log "传输完成"
 echo ""
 
 # ─── Step 4: 远程加载镜像并更新 .env ────────────────────────────────────────
 log "Step 4/6: 远程加载镜像并更新 .env"
-ssh "${REMOTE_HOST}" bash -s <<REMOTE_SCRIPT
+ssh "${SSH_OPTS[@]}" "${REMOTE_HOST}" bash -s <<REMOTE_SCRIPT
 set -euo pipefail
 cd "${REMOTE_DIR}"
 
@@ -130,7 +131,7 @@ echo ""
 
 # ─── Step 5: 重启容器 ────────────────────────────────────────────────────────
 log "Step 5/6: 重启容器"
-ssh "${REMOTE_HOST}" "cd ${REMOTE_DIR} && docker compose down && docker compose up -d"
+ssh "${SSH_OPTS[@]}" "${REMOTE_HOST}" "cd ${REMOTE_DIR} && docker compose down && docker compose up -d"
 log "容器已重启"
 echo ""
 
@@ -138,7 +139,7 @@ echo ""
 log "Step 6/6: 等待容器健康 (最长 ${HEALTH_WAIT_SECONDS}s)"
 ELAPSED=0
 while [[ ${ELAPSED} -lt ${HEALTH_WAIT_SECONDS} ]]; do
-    STATUS=$(ssh "${REMOTE_HOST}" "docker inspect --format='{{.State.Health.Status}}' supply-chain-server-test 2>/dev/null" || echo "not-found")
+    STATUS=$(ssh "${SSH_OPTS[@]}" "${REMOTE_HOST}" "docker inspect --format='{{.State.Health.Status}}' supply-chain-server-test 2>/dev/null" || echo "not-found")
     if [[ "${STATUS}" == "healthy" ]]; then
         log "容器已健康运行!"
         break
@@ -152,13 +153,13 @@ echo ""
 if [[ "${STATUS}" != "healthy" ]]; then
     warn "容器在 ${HEALTH_WAIT_SECONDS}s 内未达到 healthy 状态 (当前: ${STATUS})"
     log "查看最近日志:"
-    ssh "${REMOTE_HOST}" "docker logs --tail 30 supply-chain-server-test 2>&1"
+    ssh "${SSH_OPTS[@]}" "${REMOTE_HOST}" "docker logs --tail 30 supply-chain-server-test 2>&1"
     exit 1
 fi
 
 # 打印最终状态
 log "最终状态:"
-ssh "${REMOTE_HOST}" "docker ps --filter name=supply-chain-server-test --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}'"
+ssh "${SSH_OPTS[@]}" "${REMOTE_HOST}" "docker ps --filter name=supply-chain-server-test --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}'"
 echo ""
 
 # 清理本地临时文件

@@ -159,7 +159,7 @@ public class SupplierInvoiceService {
             @Schema(description = "供应商开票信息内部主键") Long id,
             @Schema(description = "是否已有开票行") boolean persisted,
             @Schema(description = "供应商永久业务编码") String supplierCode,
-            @Schema(description = "抬头类型：ENTERPRISE企业，PERSONAL个人") String titleType,
+            @Schema(description = "抬头类型：ENTERPRISE企业，PERSONAL个人；字典 supply_chain_invoice_title_type") String titleType,
             @Schema(description = "开票抬头") String invoiceTitle,
             @Schema(description = "统一社会信用代码") String socialCreditCode,
             @Schema(description = "电话") String phone,
