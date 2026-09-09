@@ -207,15 +207,16 @@ pro197 Nginx 为 `/usr/local/nginx/sbin/nginx -c /usr/local/nginx/conf/nginx.con
 
 ## 10. 发布流程
 
-脚本：`script/deploy/supplyhub-test/deploy-pro143.sh`（本机执行，SSH `root@8.133.164.143`）。
+脚本：`script/deploy/supplyhub-test/deploy-pro143.sh`（本机执行，默认 SSH `pro143`，支持环境变量 `SUPPLYHUB_DOCKER_HOST` 覆盖）。
+用法：`./deploy-pro143.sh [all|system|gateway|infra|member]`，默认全量 4 服务；指定单服务时仅打包、构建、上传并重启目标服务。
 
-1. `git rev-parse --short HEAD` 作为统一镜像标签。
-2. `mvn -pl` 列出 4 个 server 模块（gateway、system、infra、member）`-am package -DskipTests`。
-3. 在各模块目录 `docker buildx build --platform linux/amd64 --load`。
-4. `docker save` 4 个标签，gzip 后 scp 到 `/data/aifuli-test/supplyhub/`，远程 `docker load`。
-5. 远程不覆盖已有 `.env` 密钥；仅当 `.env` 不存在时从 example 复制并失败提示人工填写。
-6. `docker compose -p supplyhub-test --env-file .env up -d`（更新镜像标签：`.env` 里 `IMAGE_TAG` 或每个 `*_IMAGE=`）。
-7. 轮询 gateway 59080 `/dev/tcp` 与 `docker compose ps`，超时打 gateway 日志。
+1. `git rev-parse --short HEAD` 作为镜像标签。
+2. `mvn -pl` 列出目标 server 模块（全量时为 gateway、system、infra、member）`-am package -DskipTests`。
+3. 在目标模块目录 `docker buildx build --platform linux/amd64 --load`。
+4. `docker save` 镜像标签，gzip 后 scp 到 `/data/aifuli-test/supplyhub/`，远程 `docker load`。
+5. 远程不覆盖已有 `.env` 密钥；仅当 `.env` 不存在时从 example 复制并填充配置；若已有 `.env` 则仅增量更新构建过的服务镜像标签。
+6. `docker compose -p supplyhub-test --env-file .env up -d [services...]`。
+7. 轮询目标容器与 gateway 59080 `/dev/tcp` 与 `docker compose ps`，超时打日志。
 8. 不重启、不 `compose down` 供应链项目 `supply-chain-test`。
 
 pro197 站点为一次性（或少次）安装：scp conf、`nginx -t`、向 master 发 reload（用绝对路径 sbin）。改后端镜像不需要 reload Nginx。

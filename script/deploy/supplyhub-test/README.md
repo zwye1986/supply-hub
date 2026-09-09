@@ -12,10 +12,13 @@
 
 ```bash
 export JAVA_HOME=/Library/Java/JavaVirtualMachines/jdk-21.jdk/Contents/Home
+# 全量发布四服务
 bash script/deploy/supplyhub-test/deploy-pro143.sh
+# 或仅发布单个服务（如 system）
+bash script/deploy/supplyhub-test/deploy-pro143.sh system
 ```
 
-首次会把 `.env.example` 拷到服务器；脚本用本机 `application-test.yaml` 的 Nacos 地址/账号写入服务器 `.env`（0600），**不会**把 `.env` 提交 Git。
+首次会把 `.env.example` 拷到服务器；脚本用本机 `application-test.yaml` 的 Nacos 地址/账号写入服务器 `.env`（0600），**不会**把 `.env` 提交 Git。脚本默认 SSH 连接别名 `pro143`（可通过 `SUPPLYHUB_DOCKER_HOST` 覆盖）。
 
 不要对供应链目录执行 `docker compose down`。
 
