@@ -362,6 +362,11 @@ SKU 未填上限/起购量时继承供货配置。
 
 `PATCH /supply-chain/buyers/{buyerCode}` `{ "status": "SUSPENDED"|"ACTIVE"|"BLACKLIST" }`。批量：`PATCH /supply-chain/buyers` `{ buyerCodes, status }`（暂停/恢复）。
 
+OpenAPI 请求模型必须保持资源语义唯一：分销商批量状态请求模型命名为
+`BuyerBatchStatusReqVO`，供应商批量状态请求模型命名为 `SupplierBatchStatusReqVO`，禁止使用会在
+Springdoc `components.schemas` 中冲突的通用简单类名。生成契约必须分别展示 `buyerCodes` 与
+`supplierCodes`，不得让两个接口引用同一请求 schema。
+
 `GET /supply-chain/buyers/{buyerCode}/children`：下级列表（只读子资源）。
 
 `GET /supply-chain/projects?buyerCode=`：该分销商的项目（不要再单独做 `GET /buyers/{code}/projects`，避免两套列表）。

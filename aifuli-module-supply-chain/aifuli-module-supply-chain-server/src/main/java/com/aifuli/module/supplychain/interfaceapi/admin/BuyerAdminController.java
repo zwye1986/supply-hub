@@ -182,7 +182,7 @@ public class BuyerAdminController {
     @PreAuthorize(BUYER_UPDATE_STATUS_EXPRESSION)
     @Operation(summary = "批量暂停或恢复分销商",
             description = "body.status 仅允许 ACTIVE / SUSPENDED，否则 BUYER_STATUS_CONFLICT。")
-    public CommonResult<Boolean> patchBatch(@Valid @RequestBody BatchStatusReqVO request) {
+    public CommonResult<Boolean> patchBatch(@Valid @RequestBody BuyerBatchStatusReqVO request) {
         BuyerStatus target = parseBuyerStatus(request.getStatus());
         if (target != BuyerStatus.ACTIVE && target != BuyerStatus.SUSPENDED) {
             throw exception(BUYER_STATUS_CONFLICT);
@@ -425,7 +425,7 @@ public class BuyerAdminController {
 
     @Data
     @Schema(description = "批量暂停或恢复")
-    public static class BatchStatusReqVO {
+    public static class BuyerBatchStatusReqVO {
         @NotEmpty
         @Schema(description = "采购商永久业务编码列表")
         private List<String> buyerCodes;

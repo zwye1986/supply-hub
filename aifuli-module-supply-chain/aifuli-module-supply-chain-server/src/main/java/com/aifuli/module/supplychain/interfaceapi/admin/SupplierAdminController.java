@@ -198,7 +198,7 @@ public class SupplierAdminController {
     @PreAuthorize(SUPPLIER_UPDATE_STATUS_EXPRESSION)
     @Operation(summary = "批量暂停或恢复供应商",
             description = "body.status 仅允许 ACTIVE / SUSPENDED，否则 SUPPLIER_STATUS_CONFLICT。")
-    public CommonResult<Boolean> patchBatch(@Valid @RequestBody BatchStatusReqVO request) {
+    public CommonResult<Boolean> patchBatch(@Valid @RequestBody SupplierBatchStatusReqVO request) {
         SupplierStatus target = parseSupplierStatus(request.resolvedTargetStatus());
         if (target != SupplierStatus.ACTIVE && target != SupplierStatus.SUSPENDED) {
             throw exception(SUPPLIER_STATUS_CONFLICT);
@@ -224,7 +224,7 @@ public class SupplierAdminController {
     @PreAuthorize(SUPPLIER_UPDATE_STATUS_EXPRESSION)
     @Operation(summary = "批量暂停或恢复",
             description = "兼容别名，新页面不要调用。请改用 PATCH 集合。优先读 status，否则 targetStatus。")
-    public CommonResult<Boolean> batchStatus(@Valid @RequestBody BatchStatusReqVO request) {
+    public CommonResult<Boolean> batchStatus(@Valid @RequestBody SupplierBatchStatusReqVO request) {
         return patchBatch(request);
     }
 
@@ -584,7 +584,7 @@ public class SupplierAdminController {
 
     @Data
     @Schema(description = "批量暂停或恢复")
-    public static class BatchStatusReqVO {
+    public static class SupplierBatchStatusReqVO {
         @NotEmpty
         @Schema(description = "供应商永久业务编码列表")
         private List<String> supplierCodes;
