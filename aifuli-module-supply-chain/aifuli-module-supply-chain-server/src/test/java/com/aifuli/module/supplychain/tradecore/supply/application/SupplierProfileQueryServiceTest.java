@@ -3,6 +3,8 @@ package com.aifuli.module.supplychain.tradecore.supply.application;
 import com.aifuli.framework.common.pojo.PageParam;
 import com.aifuli.framework.common.pojo.PageResult;
 import com.aifuli.module.supplychain.infrastructure.security.EnvelopeCryptoPort;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuDO;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierProfileQueryService.SimpleSupplierItem;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierProfileQueryService.SupplierListItem;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierProfileQueryService.SupplierPageQuery;
@@ -42,13 +44,14 @@ class SupplierProfileQueryServiceTest {
     private final SupplierSupplyScopeMapper scopeMapper = mock(SupplierSupplyScopeMapper.class);
     private final SupplierSupplyScopeModeMapper modeMapper = mock(SupplierSupplyScopeModeMapper.class);
     private final SupplierOfferMapper offerMapper = mock(SupplierOfferMapper.class);
+    private final PlatformSkuMapper platformSkuMapper = mock(PlatformSkuMapper.class);
     private SupplierProfileQueryService service;
 
     @BeforeEach
     void setUp() {
         service = new SupplierProfileQueryService(
                 supplierMapper, contactMapper, mock(SupplierDeliveryRegionMapper.class),
-                scopeMapper, modeMapper, offerMapper, mock(SupplierSettlementAccountMapper.class),
+                scopeMapper, modeMapper, offerMapper, platformSkuMapper, mock(SupplierSettlementAccountMapper.class),
                 mock(com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierFileRefMapper.class),
                 mock(com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierIntegrationModeMapper.class),
                 mock(EnvelopeCryptoPort.class));
@@ -62,6 +65,16 @@ class SupplierProfileQueryServiceTest {
 
         assertThat(SupplierProfileQueryService.countLiveSkus(List.of(skuA1, skuA2, skuB1)))
                 .isEqualTo(3L);
+    }
+
+    @Test
+    void countsDetailCooperativeProductsByDistinctSpu() {
+        List<PlatformSkuDO> skus = List.of(
+                PlatformSkuDO.builder().id(11L).spuId(1L).build(),
+                PlatformSkuDO.builder().id(12L).spuId(1L).build(),
+                PlatformSkuDO.builder().id(21L).spuId(2L).build());
+
+        assertThat(SupplierProfileQueryService.countDistinctSpus(skus)).isEqualTo(2L);
     }
 
     @Test

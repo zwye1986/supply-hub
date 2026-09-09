@@ -3,6 +3,8 @@ package com.aifuli.module.supplychain.tradecore.supply.application;
 import com.aifuli.framework.common.pojo.PageParam;
 import com.aifuli.framework.common.pojo.PageResult;
 import com.aifuli.module.supplychain.infrastructure.security.EnvelopeCryptoPort;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuDO;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierContactDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierDeliveryRegionDO;
@@ -62,6 +64,7 @@ public class SupplierProfileQueryService {
     private final SupplierSupplyScopeMapper scopeMapper;
     private final SupplierSupplyScopeModeMapper modeMapper;
     private final SupplierOfferMapper offerMapper;
+    private final PlatformSkuMapper platformSkuMapper;
     private final SupplierSettlementAccountMapper settlementAccountMapper;
     private final SupplierFileRefMapper fileRefMapper;
     private final SupplierIntegrationModeMapper integrationModeMapper;
@@ -148,7 +151,7 @@ public class SupplierProfileQueryService {
         List<SupplierOfferDO> liveOffers = offerMapper.selectList(new LambdaQueryWrapper<SupplierOfferDO>()
                 .eq(SupplierOfferDO::getSupplierId, supplier.getId())
                 .ne(SupplierOfferDO::getStatus, OfferStatus.RETIRED.getCode()));
-        long skuCount = countLiveSkus(liveOffers);
+        long spuCount = countLiveSpus(liveOffers);
         SupplierSettlementAccountDO account = settlementAccountMapper.selectBySupplierId(supplier.getId());
         SupplierContactDO primary = contacts.isEmpty() ? null : contacts.get(0);
         String keyVersion = firstVersion(supplier);
@@ -190,7 +193,7 @@ public class SupplierProfileQueryService {
                 contacts.stream().map(c -> new SupplierProfileCommandService.ContactLine(
                         c.getContactName(), c.getContactMobile(), c.getContactEmail())).toList(),
                 toScopeViews(scopes),
-                skuCount,
+                spuCount,
                 scopes.size(),
                 primary == null ? null : primary.getContactName(),
                 primary == null ? null : primary.getContactMobile(),
@@ -198,11 +201,48 @@ public class SupplierProfileQueryService {
     }
 
     /**
-     * 顶栏合作商品数、列表「合作商品 SKU 数」、合作商品页「共 N 个」均为未移除 Offer 行数。
-     * 设计见 {@code docs/superpowers/specs/2026-08-28-supply-chain-prd-alignment-design.md#156-供货配置}。
+     * 列表「合作商品 SKU 数」与合作商品页「共 N 个」均为未退役 Offer 行数。
+     * 详情顶栏使用 {@link #countLiveSpus(List)} 的 SPU 去重口径。
+     * 设计见 {@code docs/superpowers/specs/2026-08-28-supply-chain-prd-alignment-design.md#156-详情--供货配置}。
      */
     static long countLiveSkus(List<SupplierOfferDO> liveOffers) {
         return liveOffers == null ? 0L : liveOffers.size();
+    }
+
+    /**
+     * 详情顶栏“合作商品数（SPU）”按未退役 Offer 关联的 {@code spu_id} 去重统计。
+     * 设计见 {@code docs/superpowers/specs/2026-08-28-supply-chain-prd-alignment-design.md#156-详情--供货配置}。
+     */
+    private long countLiveSpus(List<SupplierOfferDO> liveOffers) {
+        if (liveOffers == null || liveOffers.isEmpty()) {
+            return 0L;
+        }
+        Set<Long> skuIds = new HashSet<>();
+        for (SupplierOfferDO offer : liveOffers) {
+            if (offer.getPlatformSkuId() != null) {
+                skuIds.add(offer.getPlatformSkuId());
+            }
+        }
+        if (skuIds.isEmpty()) {
+            return 0L;
+        }
+        List<PlatformSkuDO> skus = platformSkuMapper.selectList(new LambdaQueryWrapper<PlatformSkuDO>()
+                .select(PlatformSkuDO::getSpuId)
+                .in(PlatformSkuDO::getId, skuIds));
+        return countDistinctSpus(skus);
+    }
+
+    static long countDistinctSpus(List<PlatformSkuDO> skus) {
+        if (skus == null || skus.isEmpty()) {
+            return 0L;
+        }
+        Set<Long> spuIds = new HashSet<>();
+        for (PlatformSkuDO sku : skus) {
+            if (sku.getSpuId() != null) {
+                spuIds.add(sku.getSpuId());
+            }
+        }
+        return spuIds.size();
     }
 
     /**
@@ -434,35 +474,48 @@ public class SupplierProfileQueryService {
     }
 
     /**
-     * 供应商详情。{@code skuCount} 为未移除 Offer 行数，顶栏合作商品数与列表共用该口径。
+     * 供应商详情。{@code spuCount} 为未退役 Offer 关联的平台 SPU 去重数。
      * 管理端详情按源分支契约回显明文；证件优先 file_ref，空则回退旧单列。
      * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#52-详情--新增--编辑}。
      */
+    @Schema(description = "供应商详情")
     public record SupplierDetail(
             @Schema(description = "供应商内部主键") Long id,
             @Schema(description = "供应商永久业务编码") String supplierCode,
             @Schema(description = "供应商标准名称") String supplierName,
-            @Schema(description = "合作状态：ACTIVE / SUSPENDED / BLACKLIST") String status,
-            String deliveryRegionType, List<String> deliveryRegionAdcodes,
-            boolean aftersalesSupported,
-            @Schema(description = "发货时效封闭枚举") String shippingSlaCode,
+            @Schema(description = "合作状态：ACTIVE正常、SUSPENDED暂停供货、BLACKLIST黑名单、ARCHIVED归档") String status,
+            @Schema(description = "配送区域：NATIONWIDE全国，DESIGNATED指定区域") String deliveryRegionType,
+            @Schema(description = "国标行政区划代码") List<String> deliveryRegionAdcodes,
+            @Schema(description = "是否支持售后：1是，0否") boolean aftersalesSupported,
+            @Schema(description = "发货时效：SAME_DAY、NEXT_DAY、HOURS_48、HOURS_72、CUSTOM") String shippingSlaCode,
             @Schema(description = "发货时效自定义说明，仅 CUSTOM 使用") String shippingSlaCustom,
-            @Schema(description = "结算方式封闭枚举") String settlementMethod,
-            Integer settlementCycleDays,
-            @JsonProperty("onboardAt") LocalDateTime onboardedAt, String cooperationNote,
-            String legalEntityName, String creditCode,
-            String legalPersonName, String legalPersonIdNo, String legalPersonMobile,
-            String contactAddress, String bankName, String bankAccount,
-            @Schema(description = "执照文件fileKey") List<String> licenseFileKeys,
-            @Schema(description = "资质文件fileKey") List<String> qualificationFileKeys,
-            String idFrontFileKey, String idBackFileKey,
+            @Schema(description = "结算方式：DAILY、WEEKLY、MONTHLY、QUARTERLY、PREPAID") String settlementMethod,
+            @Schema(description = "结算周期天数") Integer settlementCycleDays,
+            @JsonProperty("onboardAt") @Schema(description = "接入时间，UTC") LocalDateTime onboardedAt,
+            @Schema(description = "合作说明") String cooperationNote,
+            @Schema(description = "供应商签约法律主体名称") String legalEntityName,
+            @Schema(description = "统一社会信用代码") String creditCode,
+            @Schema(description = "法人姓名") String legalPersonName,
+            @Schema(description = "法人身份证号") String legalPersonIdNo,
+            @Schema(description = "法人手机号") String legalPersonMobile,
+            @Schema(description = "联系地址") String contactAddress,
+            @Schema(description = "开户行") String bankName,
+            @Schema(description = "开户账号") String bankAccount,
+            @Schema(description = "营业执照文件引用列表，最多5个") List<String> licenseFileKeys,
+            @Schema(description = "资质文件引用列表，最多5个") List<String> qualificationFileKeys,
+            @Schema(description = "法人身份证正面文件引用") String idFrontFileKey,
+            @Schema(description = "法人身份证反面文件引用") String idBackFileKey,
             @Schema(description = "对接方式：API、H5、MANUAL") List<String> integrationModes,
-            List<SupplierProfileCommandService.ContactLine> contacts,
-            List<SupplyScopeView> scopes, long skuCount, int scopeCount,
-            String primaryContactName, String primaryContactMobile,
-            long settlementBalanceCents) {
+            @Schema(description = "供应商运营联系人") List<SupplierProfileCommandService.ContactLine> contacts,
+            @Schema(description = "供应商可供货范围与供货规则") List<SupplyScopeView> scopes,
+            @Schema(description = "未退役 Offer 关联的平台 SPU 去重数") long spuCount,
+            @Schema(description = "供货配置数量") int scopeCount,
+            @Schema(description = "主联系人姓名") String primaryContactName,
+            @Schema(description = "主联系人手机号") String primaryContactMobile,
+            @Schema(description = "供应商预存可用额度，单位为分，只读") long settlementBalanceCents) {
 
         @JsonProperty("name")
+        @Schema(description = "供应商标准名称（supplierName 的兼容别名）", accessMode = Schema.AccessMode.READ_ONLY)
         public String name() {
             return supplierName;
         }

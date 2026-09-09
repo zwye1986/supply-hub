@@ -27,6 +27,7 @@ import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierSettleme
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierSettlementLedgerMapper;
 import com.aifuli.module.supplychain.tradecore.supply.domain.DeliveryRegionType;
 import com.aifuli.module.supplychain.tradecore.supply.domain.SupplierStatus;
+import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;
@@ -524,7 +525,15 @@ public class SupplierProfileCommandService {
         String qualificationFileKey();
     }
 
-    public record ContactLine(String name, String mobile, String email) {
+    /**
+     * 供应商运营联系人。
+     * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#52-详情--新增--编辑}。
+     */
+    @Schema(description = "供应商运营联系人")
+    public record ContactLine(
+            @Schema(description = "联系人姓名") String name,
+            @Schema(description = "联系人手机号") String mobile,
+            @Schema(description = "联系人邮箱") String email) {
     }
 
     public record CreateSupplierProfileCommand(

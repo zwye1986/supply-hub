@@ -114,8 +114,10 @@ public class SupplierAdminController {
     @GetMapping("/{supplierCode}")
     @PreAuthorize(SUPPLIER_QUERY_EXPRESSION)
     @Operation(summary = "供应商详情",
-            description = "身份用 supplierCode。敏感字段脱敏；金额单位 CNY 分。")
-    public CommonResult<SupplierDetail> get(@PathVariable String supplierCode) {
+            description = "身份用 supplierCode。档案敏感字段按管理端权限原值回显；"
+                    + "spuCount 为未退役 Offer 关联的平台 SPU 去重数；金额单位 CNY 分。")
+    public CommonResult<SupplierDetail> get(
+            @Parameter(description = "供应商永久业务编码") @PathVariable String supplierCode) {
         return success(queryService.get(supplierCode));
     }
 

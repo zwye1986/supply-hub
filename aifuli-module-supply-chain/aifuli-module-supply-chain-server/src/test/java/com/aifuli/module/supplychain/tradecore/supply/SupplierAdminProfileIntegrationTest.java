@@ -169,7 +169,7 @@ class SupplierAdminProfileIntegrationTest {
                     new DraftLine("MOVIE_200", "FIXED", 19_800L, null, null, "API_DIRECT", 50L, 1L)), 1L);
             assertThat(offerNos).hasSize(2);
             SupplierDetail afterOffers = query.get(supplierCode);
-            assertThat(afterOffers.skuCount()).isEqualTo(2L);
+            assertThat(afterOffers.spuCount()).isEqualTo(1L);
 
             assertThatThrownBy(() -> offers.createDrafts(supplierCode, List.of(
                     new DraftLine("MOVIE_100", "FIXED", 9_800L, null, null, "API_DIRECT", 100L, 1L)), 1L))
