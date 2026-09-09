@@ -115,7 +115,8 @@ public class SupplierAdminController {
     @PreAuthorize(SUPPLIER_QUERY_EXPRESSION)
     @Operation(summary = "供应商详情",
             description = "身份用 supplierCode。档案敏感字段按管理端权限原值回显；"
-                    + "spuCount 为未退役 Offer 关联的平台 SPU 去重数；金额单位 CNY 分。")
+                    + "spuCount 为未退役 Offer 关联的平台 SPU 去重数；"
+                    + "accountBalanceCents 为当前账本余额；deliveryRegions 返回行政区划编码及名称；金额单位 CNY 分。")
     public CommonResult<SupplierDetail> get(
             @Parameter(description = "供应商永久业务编码") @PathVariable String supplierCode) {
         return success(queryService.get(supplierCode));

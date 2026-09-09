@@ -16,8 +16,17 @@
 #
 set -euo pipefail
 
+if [[ -d "/Library/Java/JavaVirtualMachines/jdk-21.jdk/Contents/Home" ]]; then
+  if [[ -z "${JAVA_HOME:-}" || "${JAVA_HOME}" != *"21"* ]]; then
+    export JAVA_HOME="/Library/Java/JavaVirtualMachines/jdk-21.jdk/Contents/Home"
+  fi
+fi
+if [[ -n "${JAVA_HOME:-}" ]]; then
+  export PATH="${JAVA_HOME}/bin:${PATH}"
+fi
+
 # ─── 配置 ────────────────────────────────────────────────────────────────────
-REMOTE_HOST="root@8.133.164.143"
+REMOTE_HOST="${SUPPLYHUB_DOCKER_HOST:-root@8.133.164.143}"
 REMOTE_DIR="/data/aifuli-test/supply-chain"
 IMAGE_NAME="aifuli/supply-chain-server"
 MONOREPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -107,8 +116,8 @@ cp .env ".env.bak-$(date +%Y%m%d%H%M%S)"
 echo "[remote] 更新 .env 中的镜像标签、时间戳容差与 Nacos 命名空间"
 sed -i 's|^SUPPLY_CHAIN_IMAGE=.*|SUPPLY_CHAIN_IMAGE='"${IMAGE_TAG}"'|' .env
 sed -i 's|^AIFULI_SUPPLY_CHAIN_INSTORE_RTMART_INBOUND_TIMESTAMP_TOLERANCE_SECONDS=.*|AIFULI_SUPPLY_CHAIN_INSTORE_RTMART_INBOUND_TIMESTAMP_TOLERANCE_SECONDS=180|' .env
-sed -i 's|^SPRING_CLOUD_NACOS_CONFIG_NAMESPACE=.*|SPRING_CLOUD_NACOS_CONFIG_NAMESPACE=aifuli-mall-test|' .env
-sed -i 's|^SPRING_CLOUD_NACOS_DISCOVERY_NAMESPACE=.*|SPRING_CLOUD_NACOS_DISCOVERY_NAMESPACE=aifuli-mall-test|' .env
+sed -i 's|^SPRING_CLOUD_NACOS_CONFIG_NAMESPACE=.*|SPRING_CLOUD_NACOS_CONFIG_NAMESPACE=aifuli-supplyhub-test|' .env
+sed -i 's|^SPRING_CLOUD_NACOS_DISCOVERY_NAMESPACE=.*|SPRING_CLOUD_NACOS_DISCOVERY_NAMESPACE=aifuli-supplyhub-test|' .env
 
 echo "[remote] 当前配置:"
 grep -E 'SUPPLY_CHAIN_IMAGE|TIMESTAMP_TOLERANCE|NACOS_.*NAMESPACE' .env

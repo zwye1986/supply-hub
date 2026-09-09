@@ -114,6 +114,8 @@ class SupplierAdminProfileIntegrationTest {
 
             SupplierDetail detail = query.get(supplierCode);
             assertThat(detail.settlementBalanceCents()).isZero();
+            assertThat(detail.accountBalanceCents()).isZero();
+            assertThat(detail.deliveryRegions()).isEmpty();
             assertThat(detail.bankAccount()).isEqualTo("6222021234567890");
             assertThat(detail.legalPersonMobile()).isEqualTo("13900139000");
             assertThat(detail.id()).isEqualTo(supplier.getId());

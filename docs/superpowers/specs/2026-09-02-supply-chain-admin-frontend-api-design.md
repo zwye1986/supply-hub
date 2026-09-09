@@ -248,7 +248,7 @@
 | `code` | `supplierCode`（创建忽略，系统生成 `SPL_` 前缀，保持现实现） |
 | `contacts[].name/mobile/email` | 同左，至少一行非空（姓名+手机号） |
 | `deliveryAreaType` | `deliveryRegionType` |
-| `deliveryAreaId` | `deliveryRegionAdcodes[]`（6 位 adcode；`DESIGNATED` 至少 1 个） |
+| `deliveryAreaId` | `deliveryRegionAdcodes[]`（6 位 adcode；`DESIGNATED` 至少 1 个）；详情另回 `deliveryRegions[{adcode,name}]`，将编码与行政区划名称配对 |
 | `shippingTimeliness` | `shippingSlaCode` |
 | `shippingTimelinessCustom` | `shippingSlaCustom` |
 | `supportAfterSale` | `aftersalesSupported` |
@@ -262,9 +262,9 @@
 | `businessLicenseUrls` | `licenseFileKeys[]`（最多 5） |
 | `legalIdUrls` | `idFrontFileKey` + `idBackFileKey` |
 | `otherCertUrls` | `qualificationFileKeys[]`（最多 5） |
-| `accountBalance` | `openingBalanceCents`，**仅创建可写**（含 0）；编辑再带 → `SUPPLIER_OPENING_ALREADY_DONE`。GET 回只读 `settlementBalanceCents` |
+| `accountBalance` | `openingBalanceCents`，**仅创建可写**（含 0）；编辑再带 → `SUPPLIER_OPENING_ALREADY_DONE`。GET 回只读 `accountBalanceCents`，兼容保留同值的 `settlementBalanceCents` |
 
-详情响应还包含只读聚合字段：`spuCount` 为该供应商未退役 Offer 关联的平台 SPU 去重数，对应详情页“合作商品数（SPU）”；`scopeCount` 为供货配置行数；`primaryContactName` / `primaryContactMobile` 为主联系人；`settlementBalanceCents` 为供应商预存可用额度，单位为 CNY 分。供应商列表的 `skuCount` 仍表示未退役合作商品 SKU 数，两种口径不得混用。
+详情响应还包含只读聚合字段：`spuCount` 为该供应商未退役 Offer 关联的平台 SPU 去重数，对应详情页“合作商品数（SPU）”；`scopeCount` 为供货配置行数；`primaryContactName` / `primaryContactMobile` 为主联系人；`accountBalanceCents` 为供应商当前账本余额，单位为 CNY 分，历史字段 `settlementBalanceCents` 返回相同值；`deliveryRegions` 将每个 `deliveryRegionAdcodes` 元素映射为 `{adcode,name}`，未知编码保留 `adcode` 且 `name` 为空。供应商列表的 `skuCount` 仍表示未退役合作商品 SKU 数，两种口径不得混用。
 
 `GET /supply-chain/suppliers/{supplierCode}` 的 `SupplierDetail` 及其联系人、供货配置子项必须为每个对外 JSON 属性提供中文 OpenAPI `description`；枚举写明允许值，金额写明单位，`spuCount` 明确上述 SPU 去重统计口径，避免 Swagger/Knife4j 只显示字段名而无法判断业务语义。
 

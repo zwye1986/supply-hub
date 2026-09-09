@@ -2,6 +2,8 @@ package com.aifuli.module.supplychain.tradecore.supply.application;
 
 import com.aifuli.framework.common.pojo.PageParam;
 import com.aifuli.framework.common.pojo.PageResult;
+import com.aifuli.framework.ip.core.Area;
+import com.aifuli.framework.ip.core.utils.AreaUtils;
 import com.aifuli.module.supplychain.infrastructure.security.EnvelopeCryptoPort;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
@@ -246,6 +248,29 @@ public class SupplierProfileQueryService {
     }
 
     /**
+     * 将供应商保存的国标行政区划编码转换为带名称的详情项。未知编码仍保留，名称为空，
+     * 避免历史数据异常导致整个详情接口失败。
+     * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#52-详情--新增--编辑}。
+     */
+    static List<DeliveryRegionView> toDeliveryRegionViews(List<String> adcodes) {
+        if (adcodes == null || adcodes.isEmpty()) {
+            return List.of();
+        }
+        List<DeliveryRegionView> views = new ArrayList<>(adcodes.size());
+        for (String adcode : adcodes) {
+            Area area = hasText(adcode) && adcode.length() == 6
+                    && adcode.chars().allMatch(Character::isDigit)
+                    ? AreaUtils.getArea(Integer.valueOf(adcode)) : null;
+            // AreaUtils 同时包含短位数国家 ID；必须保持十进制字符串完全一致，避免 000001 被误认成中国。
+            if (area != null && !adcode.equals(String.valueOf(area.getId()))) {
+                area = null;
+            }
+            views.add(new DeliveryRegionView(adcode, area == null ? null : area.getName()));
+        }
+        return List.copyOf(views);
+    }
+
+    /**
      * 按可售品类和/或供货模式过滤供应商。模式过滤只读子表。
      * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#41-供货模式-supplymode}。
      */
@@ -473,6 +498,12 @@ public class SupplierProfileQueryService {
             @Schema(description = "单次最小数量") Long minQuantity) {
     }
 
+    @Schema(description = "供应商配送区域")
+    public record DeliveryRegionView(
+            @Schema(description = "国标行政区划代码") String adcode,
+            @Schema(description = "行政区划名称；历史未知编码为空") String name) {
+    }
+
     /**
      * 供应商详情。{@code spuCount} 为未退役 Offer 关联的平台 SPU 去重数。
      * 管理端详情按源分支契约回显明文；证件优先 file_ref，空则回退旧单列。
@@ -513,6 +544,18 @@ public class SupplierProfileQueryService {
             @Schema(description = "主联系人姓名") String primaryContactName,
             @Schema(description = "主联系人手机号") String primaryContactMobile,
             @Schema(description = "供应商预存可用额度，单位为分，只读") long settlementBalanceCents) {
+
+        @JsonProperty("accountBalanceCents")
+        @Schema(description = "供应商当前账本余额，单位为 CNY 分，只读", accessMode = Schema.AccessMode.READ_ONLY)
+        public long accountBalanceCents() {
+            return settlementBalanceCents;
+        }
+
+        @JsonProperty("deliveryRegions")
+        @Schema(description = "配送区域编码及对应的行政区划名称", accessMode = Schema.AccessMode.READ_ONLY)
+        public List<DeliveryRegionView> deliveryRegions() {
+            return toDeliveryRegionViews(deliveryRegionAdcodes);
+        }
 
         @JsonProperty("name")
         @Schema(description = "供应商标准名称（supplierName 的兼容别名）", accessMode = Schema.AccessMode.READ_ONLY)

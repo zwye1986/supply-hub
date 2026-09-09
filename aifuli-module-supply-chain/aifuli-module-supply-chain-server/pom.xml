@@ -32,6 +32,10 @@
             <groupId>com.aifuli</groupId>
             <artifactId>aifuli-spring-boot-starter-biz-tenant</artifactId>
         </dependency>
+        <dependency>
+            <groupId>com.aifuli</groupId>
+            <artifactId>aifuli-spring-boot-starter-biz-ip</artifactId>
+        </dependency>
 
         <dependency>
             <groupId>com.aifuli</groupId>

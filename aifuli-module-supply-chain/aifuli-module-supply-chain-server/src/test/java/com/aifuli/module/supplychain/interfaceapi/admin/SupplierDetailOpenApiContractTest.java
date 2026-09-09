@@ -1,12 +1,16 @@
 package com.aifuli.module.supplychain.interfaceapi.admin;
 
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierProfileCommandService.ContactLine;
+import com.aifuli.module.supplychain.tradecore.supply.application.SupplierProfileQueryService.DeliveryRegionView;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierProfileQueryService.SupplierDetail;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.swagger.v3.core.converter.ModelConverters;
 import io.swagger.v3.oas.models.media.Schema;
 import org.junit.jupiter.api.Test;
 
 import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -30,12 +34,40 @@ class SupplierDetailOpenApiContractTest {
         assertThat(properties.get("scopeCount").getDescription()).isEqualTo("供货配置数量");
         assertThat(properties.get("settlementBalanceCents").getDescription())
                 .isEqualTo("供应商预存可用额度，单位为分，只读");
+        assertThat(properties.get("accountBalanceCents").getDescription())
+                .isEqualTo("供应商当前账本余额，单位为 CNY 分，只读");
+        assertThat(properties.get("deliveryRegions").getDescription())
+                .isEqualTo("配送区域编码及对应的行政区划名称");
         assertThat(properties.get("onboardAt").getDescription()).isEqualTo("接入时间，UTC");
 
         properties.forEach((name, property) ->
                 assertThat(property.getDescription())
                         .as("OpenAPI description for SupplierDetail.%s", name)
                         .isNotBlank());
+    }
+
+    @Test
+    void documentsDeliveryRegionCodeAndNameForSwagger() {
+        Schema<?> schema = resolveSchema(DeliveryRegionView.class, "DeliveryRegionView");
+        Map<String, Schema> properties = schema.getProperties();
+
+        assertThat(schema.getDescription()).isEqualTo("供应商配送区域");
+        assertThat(properties.get("adcode").getDescription()).isEqualTo("国标行政区划代码");
+        assertThat(properties.get("name").getDescription()).isEqualTo("行政区划名称；历史未知编码为空");
+    }
+
+    @Test
+    void exposesCurrentBalanceAndNamedRegionsInJsonContract() {
+        ObjectMapper mapper = new ObjectMapper();
+        Set<String> propertyNames = mapper.getSerializationConfig()
+                .introspect(mapper.constructType(SupplierDetail.class))
+                .findProperties().stream()
+                .map(property -> property.getName())
+                .collect(Collectors.toSet());
+
+        assertThat(propertyNames).contains(
+                "accountBalanceCents", "settlementBalanceCents",
+                "deliveryRegionAdcodes", "deliveryRegions");
     }
 
     @Test

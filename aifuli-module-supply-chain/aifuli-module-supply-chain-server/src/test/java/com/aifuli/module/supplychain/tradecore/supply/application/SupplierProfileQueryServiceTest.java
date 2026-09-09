@@ -5,6 +5,7 @@ import com.aifuli.framework.common.pojo.PageResult;
 import com.aifuli.module.supplychain.infrastructure.security.EnvelopeCryptoPort;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
+import com.aifuli.module.supplychain.tradecore.supply.application.SupplierProfileQueryService.DeliveryRegionView;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierProfileQueryService.SimpleSupplierItem;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierProfileQueryService.SupplierListItem;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierProfileQueryService.SupplierPageQuery;
@@ -75,6 +76,15 @@ class SupplierProfileQueryServiceTest {
                 PlatformSkuDO.builder().id(21L).spuId(2L).build());
 
         assertThat(SupplierProfileQueryService.countDistinctSpus(skus)).isEqualTo(2L);
+    }
+
+    @Test
+    void resolvesDeliveryRegionAdcodeToNameAndKeepsUnknownCode() {
+        assertThat(SupplierProfileQueryService.toDeliveryRegionViews(List.of("440300", "999999", "000001")))
+                .containsExactly(
+                        new DeliveryRegionView("440300", "深圳市"),
+                        new DeliveryRegionView("999999", null),
+                        new DeliveryRegionView("000001", null));
     }
 
     @Test
