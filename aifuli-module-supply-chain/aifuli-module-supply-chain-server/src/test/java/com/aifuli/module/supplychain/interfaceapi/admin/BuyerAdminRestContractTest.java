@@ -1,9 +1,12 @@
 package com.aifuli.module.supplychain.interfaceapi.admin;
 
+import com.aifuli.module.supplychain.interfaceapi.admin.BuyerAdminController.BuyerPageResponse;
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerAdminQueryService.BuyerListItem;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.swagger.v3.core.converter.ModelConverters;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import io.swagger.v3.oas.models.media.Schema;
 import org.junit.jupiter.api.Test;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -13,7 +16,9 @@ import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 
 import java.lang.reflect.Method;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -85,6 +90,44 @@ class BuyerAdminRestContractTest {
 
         assertThat(propertyNames).contains(
                 "sellableCategories", "productTypes", "projectCount", "skuCount", "cooperationTime");
+    }
+
+    @Test
+    @SuppressWarnings("rawtypes")
+    void pageDocumentsConcreteBuyerListResponseForSwagger() {
+        Method pageMethod = Arrays.stream(BuyerAdminController.class.getDeclaredMethods())
+                .filter(method -> method.getName().equals("page"))
+                .findFirst()
+                .orElseThrow();
+        Operation operation = pageMethod.getAnnotation(Operation.class);
+        assertThat(operation.responses()).hasSize(1);
+        assertThat(operation.responses()[0].content()).hasSize(1);
+        assertThat(operation.responses()[0].content()[0].schema().implementation())
+                .isEqualTo(BuyerPageResponse.class);
+
+        Map<String, Schema> schemas = ModelConverters.getInstance().readAll(BuyerPageResponse.class);
+        Schema<?> responseSchema = schemas.get("BuyerPageResponse");
+        assertThat(responseSchema).isNotNull();
+        Schema<?> pageSchema = referencedSchema(schemas, responseSchema.getProperties().get("data"));
+        Schema<?> itemSchema = referencedSchema(schemas, pageSchema.getProperties().get("list").getItems());
+
+        assertThat(itemSchema.getProperties()).containsKeys(
+                "productTypes", "projectCount", "skuCount", "cooperationTime");
+        assertThat(itemSchema.getProperties().get("productTypes").getDescription()).isEqualTo("商品类型");
+        assertThat(itemSchema.getProperties().get("projectCount").getDescription()).isEqualTo("未归档关联项目数");
+        assertThat(itemSchema.getProperties().get("skuCount").getDescription()).isEqualTo("有效分销SKU商品数");
+        assertThat(itemSchema.getProperties().get("cooperationTime").getDescription())
+                .isEqualTo("合作时间，取档案合作开始时间，Asia/Shanghai");
+    }
+
+    @SuppressWarnings("rawtypes")
+    private static Schema<?> referencedSchema(Map<String, Schema> schemas, Schema<?> reference) {
+        assertThat(reference).isNotNull();
+        assertThat(reference.get$ref()).isNotBlank();
+        String name = reference.get$ref().substring(reference.get$ref().lastIndexOf('/') + 1);
+        Schema<?> schema = schemas.get(name);
+        assertThat(schema).as("OpenAPI schema %s", name).isNotNull();
+        return schema;
     }
 
     private static boolean hasHttpMapping(Method method) {

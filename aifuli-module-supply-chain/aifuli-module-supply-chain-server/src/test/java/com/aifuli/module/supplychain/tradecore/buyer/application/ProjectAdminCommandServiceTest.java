@@ -150,6 +150,13 @@ class ProjectAdminCommandServiceTest {
     }
 
     @Test
+    void createStoresPrdProjectType() {
+        service.create(create(BUYER_A, null, null, "POINTS_REDEMPTION"));
+
+        assertThat(stored.getProjectType()).isEqualTo("POINTS_REDEMPTION");
+    }
+
+    @Test
     void endBeforeStartRejected() {
         assertThatThrownBy(() -> service.create(cmdPeriod(
                 LocalDate.of(2026, 9, 10), LocalDate.of(2026, 9, 1))))

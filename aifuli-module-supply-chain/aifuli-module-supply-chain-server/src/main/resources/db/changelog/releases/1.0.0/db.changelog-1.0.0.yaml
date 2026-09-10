@@ -256,3 +256,13 @@ databaseChangeLog:
             encoding: UTF-8
             splitStatements: true
             stripComments: false
+  - changeSet:
+      id: 025-project-type-prd-values
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 025-project-type-prd-values.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false

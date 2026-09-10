@@ -157,7 +157,7 @@
 
 | 常量 | 库值 | 页面 |
 | --- | --- | --- |
-| `DRAFT` | 0 | 草稿 |
+| `DRAFT` | 0 | 筹备中 |
 | `ACTIVE` | 10 | 进行中 |
 | `SUSPENDED` | 20 | 已暂停 |
 | `CLOSED` | 30 | 已结束（可恢复） |
@@ -185,7 +185,29 @@
 
 **供货择优倾向** `supplyPreference`：`STABLE` / `PRICE` / `COMPREHENSIVE`。只存档案，**不改变**路由引擎（路由仍只有 `MANUAL` / `PRICE_ASC`）。
 
-**项目类型** `projectType`：`WELFARE` / `BENEFIT` / `CAMPAIGN` / `SUBSIDY` / `GROUP`。只存档案。
+**项目类型** `projectType` 以 PRD 8.3.1 为准，管理端可选值如下，只存档案：
+
+| 字典值 | 页面文案 |
+| --- | --- |
+| `HOLIDAY_BENEFIT` | 节日福利 |
+| `POINTS_REDEMPTION` | 积分兑换 |
+| `EMPLOYEE_BENEFIT` | 员工福利 |
+| `CUSTOMER_REWARD` | 客户回馈 |
+| `FLEXIBLE_BENEFIT` | 弹性福利 |
+| `OTHER` | 其他 |
+
+历史值 `WELFARE` / `BENEFIT` / `CAMPAIGN` / `SUBSIDY` / `GROUP` 仅用于兼容迁移前数据，不进入管理端字典，不作为新增或编辑页面的可选项；数据库 CHECK 在兼容窗口内同时接受新旧值，避免已有记录阻塞发布，后续数据清洗须另立有明确业务映射的迁移任务。
+
+#### 4.2.1 项目列表数据字典
+
+项目管理列表查询栏的“项目类型”“项目状态”统一读取 system 数据字典，不在页面维护私有筛选常量：
+
+| 查询字段 | 字典类型 | 字典值（标签） | 约束 |
+| --- | --- | --- | --- |
+| 项目类型 | `supply_chain_project_type` | `HOLIDAY_BENEFIT`（节日福利）、`POINTS_REDEMPTION`（积分兑换）、`EMPLOYEE_BENEFIT`（员工福利）、`CUSTOMER_REWARD`（客户回馈）、`FLEXIBLE_BENEFIT`（弹性福利）、`OTHER`（其他） | 多选；提交为 `projectType[]` |
+| 项目状态 | `supply_chain_project_status` | `DRAFT`（筹备中）、`ACTIVE`（进行中）、`CLOSED`（已结束） | 多选；提交为 `status[]` |
+
+`SUSPENDED`（已暂停）和 `ARCHIVED`（归档）仍是后端生命周期状态，但 PRD 8.3.1 未将其列为查询栏选项，因此不进入本字典。字典管理员可以调整标签、排序和展示颜色，但不得新增或修改键值；供应链后端继续以 `ProjectType` / `BuyerProjectStatus` 做封闭校验，请求线程不远程调用 system 服务。
 
 **结算方** `settlementPartyType`：只接受 `DISTRIBUTOR`。`PLATFORM` → `PROJECT_PLATFORM_SETTLEMENT_NOT_ENABLED`。
 
@@ -357,6 +379,8 @@ SKU 未填上限/起购量时继承供货配置。
 - `cooperationTime`：列表展示用合作时间，与档案 `cooperationStartedAt` 取同一 `sc_buyer.cooperation_started_at` 值。
 
 分页聚合必须按当页 Buyer 集合批量读取，禁止为每行追加项目数、SKU 数等 N+1 查询。详情的 `sellableCategories[]` / `productTypes[]` 只返回已经保存的独立范围行；历史记录缺少 `SELLABLE` 行时返回空数组，由前端按新字段重新保存或由有明确业务映射的数据修复任务补齐，后端不得根据商品类型猜测分销品类。
+
+由于同一集合接口还兼容 `view=simple` 与 `view=parent-options` 投影，Java 运行时返回类型允许保持 `CommonResult<?>`；但 OpenAPI 的默认 `200` 响应必须显式声明为 `CommonResult<PageResult<BuyerListItem>>` 对应的具体文档模型，不能退化为 `CommonResultObject`。Swagger / Knife4j 的默认分页响应必须能展开 `BuyerListItem`，并展示上述全部列表字段。
 
 期初写入既有采购商唯一账本，禁止写入供应商结算账户。管理端创建不要求前端传 evidence 文件；服务端使用受控 `entry_key=ADMIN_OPENING:{buyerId}:CNY`（或等价不可伪造键）走一次性开户。已存在账户再带余额 → 与供应商相同语义的已开户错误。编辑页余额只读。
 

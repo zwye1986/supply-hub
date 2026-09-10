@@ -14,6 +14,7 @@ import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerAdminComma
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerAdminQueryService;
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerAdminQueryService.BuyerChildItem;
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerAdminQueryService.BuyerDetail;
+import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerAdminQueryService.BuyerListItem;
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerAdminQueryService.BuyerPageQuery;
 import com.aifuli.module.supplychain.tradecore.buyer.domain.BuyerStatus;
 import com.aifuli.module.supplychain.tradecore.catalog.application.BuyerProductCommandService;
@@ -24,7 +25,9 @@ import com.aifuli.module.supplychain.tradecore.profile.domain.ClosedEnums;
 import com.aifuli.module.supplychain.tradecore.profile.domain.L2AdjustMode;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Min;
@@ -86,7 +89,9 @@ public class BuyerAdminController {
     @Operation(summary = "分页查询分销商",
             description = "筛选用 buyerName/buyerCode/distributionLevels/cooperationModes/sellableCategories/status"
                     + " 与 updatedFrom/To。view=simple 返回 {buyerCode,buyerName}[]；"
-                    + "view=parent-options 收 excludeBuyerCode、forLevel。金额单位 CNY 分。")
+                    + "view=parent-options 收 excludeBuyerCode、forLevel。金额单位 CNY 分。",
+            responses = @ApiResponse(responseCode = "200", description = "默认分销商分页响应",
+                    content = @Content(schema = @Schema(implementation = BuyerPageResponse.class))))
     public CommonResult<?> page(
             @Parameter(description = "采购商标准名称，模糊") @RequestParam(required = false) String buyerName,
             @Parameter(description = "采购商永久业务编码") @RequestParam(required = false) String buyerCode,
@@ -117,6 +122,15 @@ public class BuyerAdminController {
         return success(queryService.page(new BuyerPageQuery(
                 buyerName, buyerCode, distributionLevels, cooperationModes, sellableCategories,
                 statuses, updatedFrom, updatedTo, pageNo, pageSize)));
+    }
+
+    /**
+     * 默认分页视图的 OpenAPI 响应模型。运行时仍由 {@link #page} 兼容简易与上级下拉投影，
+     * 此模型只负责避免 Springdoc 将默认响应退化为 {@code CommonResultObject}。
+     * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#62-列表与档案}。
+     */
+    @Schema(name = "BuyerPageResponse", description = "分销商默认分页响应")
+    public static class BuyerPageResponse extends CommonResult<PageResult<BuyerListItem>> {
     }
 
     @GetMapping("/{buyerCode}")
