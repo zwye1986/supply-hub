@@ -39,6 +39,8 @@
 | a13 | 2026-09-04 最新确认：本任务只交付后端菜单能力和接口 RBAC，不修改 `supplychainhubweb` 或其它前端工程。移除 `remaining.ts` 静态路由、消费 `system_menu` 动态菜单、接入按钮权限及业务 REST 由独立前端任务/团队完成；禁止为迁就现有 `/scm/**` 请求再做适配层。 |
 | a14 | 运营后台功能权限见 `docs/superpowers/specs/2026-09-03-supply-chain-admin-rbac-design.md`。三块页面按资源拆 `query/create/update/delete/update-status`；`supply-chain:admin` 仍为超集及未拆接口兜底。本文字段与路径不变。 |
 | a15 | 供应商/分销商开票：`GET/PUT …/{code}/invoice`；无行则档案预填且不落库；保存不回写档案；开票表明文（含开户账号）。契约见 `docs/superpowers/specs/2026-09-07-供应链管理端开票信息设计.md`。 |
+| a16 | 供应商/分销商管理端列表与详情在通过对应 `query` 权限后，手机号、法人手机号、开户账号、证件 fileKey 等档案字段按原值回显；响应字段使用 `legalPersonMobile`、`bankAccount` 等业务名，不再使用 `*Masked`。库内既有信封加密不变，入口/异常/第三方调用日志仍须脱敏且禁止打印完整响应对象。 |
+| a17 | 供应商供货配置的 `minQuantity`（允许最低起订量）为预留字段：继续接收、存储和回显，只做非空及正整数校验，不参与供货范围命中、商品筛选、供货上限校验、合作商品默认值或下单校验。合作商品自己的 `minQuantity` 仍为有效字段，未填写时固定取 1，不继承供货配置预留值。 |
 
 ## 3. 总体契约
 
@@ -54,7 +56,7 @@
 | 类目树 | `/supply-chain/categories`（新建查询） |
 | 标品 SKU | `/supply-chain/products/skus`（新建查询） |
 
-鉴权见 `docs/superpowers/specs/2026-09-03-supply-chain-admin-rbac-design.md`：三块资源用 `supply-chain:{supplier|buyer|project}:{action}`，`supply-chain:admin` 为超集；未拆接口仍只认 `admin`。敏感字段（手机号、银行卡、证件 fileKey）GET 脱敏；日志同样脱敏。查询接口不得在请求线程调用供应商 Adapter。
+鉴权见 `docs/superpowers/specs/2026-09-03-supply-chain-admin-rbac-design.md`：三块资源用 `supply-chain:{supplier|buyer|project}:{action}`，`supply-chain:admin` 为超集；未拆接口仍只认 `admin`。供应商/分销商档案的手机号、法人手机号、开户账号、证件 fileKey 等字段在通过对应 `query` 权限后按原值回显，以满足编辑表单回填；日志仍须脱敏，禁止记录完整请求/响应对象。查询接口不得在请求线程调用供应商 Adapter。
 
 路径主键用业务 code：`{supplierCode}` / `{buyerCode}` / `{projectCode}`。响应同时带内部 `id`（Long PK），便于前端表格 row-key，**命令仍以 code 为准**。
 
@@ -95,7 +97,7 @@
 
 ### 3.4 文件
 
-证件/执照/资质只收基础设施文件模块的 `fileKey`（或 key 数组），不在供应链模块做 multipart。GET 回 `fileKey`（脱敏策略与现供应商档案一致）。前端上传组件出 URL 的转换在前端完成。
+证件/执照/资质只收基础设施文件模块的 `fileKey`（或 key 数组），不在供应链模块做 multipart。通过对应资源 `query` 权限后，GET 按保存原值返回 `fileKey`，供编辑页回填；前端上传组件出 URL 的转换在前端完成。fileKey 仍禁止写入日志或第三方调用报文。
 
 ### 3.5 开票与删除
 
@@ -252,7 +254,7 @@
 
 名称下拉：同一集合加 `view=simple`，返回 `{ supplierCode, supplierName }[]`（可不分页）。
 
-列表行：`id`、`supplierCode`、`supplierName`、`status`、聚合自供货配置的 `sellableCategories[]` / `productTypes[]` / `productClassifications[]` / `supplyModes[]`（均为枚举名）、`skuCount`（未退役 Offer 数）、`onboardedAt`、`updatedAt`、主联系人 `contactName`/`contactMobile`（脱敏）。
+列表行：`id`、`supplierCode`、`supplierName`、`status`、聚合自供货配置的 `sellableCategories[]` / `productTypes[]` / `productClassifications[]` / `supplyModes[]`（均为枚举名）、`skuCount`（未退役 Offer 数）、`onboardedAt`、`updatedAt`、主联系人 `contactName`/`contactMobile`（原值回显）。
 
 行操作对应：详情、编辑、暂停、恢复、移入/移出黑名单。批量暂停/恢复：`PATCH /supply-chain/suppliers` body `{ supplierCodes, status }`，`status` 仅 `SUSPENDED` 或 `ACTIVE`。
 
@@ -321,7 +323,7 @@
 - `GET /supply-chain/suppliers/{supplierCode}/supply-scopes`
 - `PUT /supply-chain/suppliers/{supplierCode}/supply-scopes` 全量替换
 
-行：`sellableCategory`、`productType`、`productClassification`、`supplyModes[]`、`maxQuantity`、`minQuantity`。三码与模式、数量缺一拦截。改配置不改已发布 Offer；收窄只阻止新关联。命中规则见字典专文。
+行：`sellableCategory`、`productType`、`productClassification`、`supplyModes[]`、`maxQuantity`、`minQuantity`。三码与模式、数量缺一拦截；`maxQuantity`、`minQuantity` 分别只校验正整数，不建立大小关系。`minQuantity` 是允许最低起订量预留字段，仅存储、回显，不参与当前业务判断。改配置不改已发布 Offer；收窄只阻止新关联。命中规则见字典专文。
 
 ### 5.5 合作商品
 
@@ -333,7 +335,7 @@
 
 行字段：平台 SPU/SKU 编码与名称、SPU 三码（`sellableCategory`/`productType`/`productClassification`）、`suggestPriceCents`、`priceMode`、`unitPriceCents`、`discountBp`（10000=100%）、`offerSupplyMode`、`maxQuantity`、`minQuantity`、`status`。`FIXED` 单价>0；`DISCOUNT` 折扣 ∈[1,10000] 且建议价>0；`REALTIME` 禁止填固定价。必须按三码整体唯一命中一条供货配置。
 
-SKU 未填上限/起购量时继承供货配置。
+SKU 未填供货上限时继承供货配置 `maxQuantity`；未填最低起购量时固定取 1。供货配置 `minQuantity` 是预留字段，不得被合作商品继承。
 
 ### 5.6 开票信息
 
@@ -356,7 +358,9 @@ SKU 未填上限/起购量时继承供货配置。
 4. 禁止指向自己或子孙（环）。
 5. 入参 `distributionLevel` 与上级深度必须一致，否则 `BUYER_PARENT_INVALID`。
 6. 已有下级时禁止把等级改得与子节点冲突（例如一级改二级却仍挂着二级子节点）。
-7. GET 下级只返回直接子节点（前端层级页只读）。
+7. GET 下级返回当前分销商的全部后代节点，包括直属下级和孙级；组织树最多三级，因此最多向下查询两层。接口返回扁平列表，不在响应中嵌套子节点，层级关系以 `distributionLevel` 表达，层级页只读。
+8. 下级列表排除 `ARCHIVED` 分销商，按 `createdAt DESC, id DESC` 全局稳定排序。查询后代时仍须沿全部结构节点向下遍历，避免归档的中间节点导致其未归档后代不可见。
+9. 历史兼容：下级查询读取到当前分销商 `distributionLevel` 为空时按一级处理，仍最多向下查询两层。该兼容只用于读取历史数据，不放宽数据库 `NOT NULL`、`1–3` 检查约束和新增/编辑校验。
 
 结算：不按树拆账、不继承上级账户。L2 按**该 Buyer 自己**的模板或 SKU 覆盖解析，不自动继承上级 L2。
 
@@ -369,7 +373,7 @@ SKU 未填上限/起购量时继承供货配置。
 - `view=simple`：名称/编号下拉 `{ buyerCode, buyerName }`
 - `view=parent-options`：`excludeBuyerCode`、`forLevel`，供「上级分销商」下拉
 
-`GET /supply-chain/buyers/{buyerCode}`、`POST /supply-chain/buyers`、`PUT /supply-chain/buyers/{buyerCode}` 档案字段对齐前端分销商表单：名称、联系人、分销品类/类型（`sellableCategories[]` / `productTypes[]` 枚举名，不是类目 id）、合作模式、类型、择优倾向、结算方式/周期、对接方式、合作开始日、说明、公司/信用代码/法人/地址/银行/证件、期初 `openingBalanceCents`（创建一次，允许 0）。字典见专文 §3。
+`GET /supply-chain/buyers/{buyerCode}`、`POST /supply-chain/buyers`、`PUT /supply-chain/buyers/{buyerCode}` 档案字段对齐前端分销商表单：名称、联系人、分销品类/类型（`sellableCategories[]` / `productTypes[]` 枚举名，不是类目 id）、合作模式、类型、择优倾向、结算方式/周期、对接方式、合作开始日、说明、公司/信用代码/法人/地址/银行/证件、期初 `openingBalanceCents`（创建一次，允许 0）。详情中的 `legalPersonMobile`、`bankAccount`、`contacts[].mobile`、`primaryContactMobile` 及证件 fileKey 均按原值回显，不提供 `legalPersonMobileMasked` / `bankAccountMasked` 字段。字典见专文 §3。
 
 分页列表行除基础档案字段外，还返回以下只读聚合字段：
 
@@ -391,7 +395,16 @@ OpenAPI 请求模型必须保持资源语义唯一：分销商批量状态请求
 Springdoc `components.schemas` 中冲突的通用简单类名。生成契约必须分别展示 `buyerCodes` 与
 `supplierCodes`，不得让两个接口引用同一请求 schema。
 
-`GET /supply-chain/buyers/{buyerCode}/children`：下级列表（只读子资源）。
+`GET /supply-chain/buyers/{buyerCode}/children`：全部下级列表（只读子资源），返回直属下级和孙级，不包含当前分销商。响应行为与字段约定如下：
+
+- 返回扁平列表，按分销商 `createdAt DESC, id DESC` 全局稳定排序，不按父节点分组；
+- 排除状态为 `ARCHIVED` 的下级，但查询后代时不因归档的中间节点中断遍历；
+- 每行返回 `buyerCode`、`buyerName`、`distributionLevel`、`cooperationModes[]`、`projectCount`、`status`、`createdAt`；
+- `projectCount` 只统计该分销商未归档项目，`ARCHIVED` 项目不计入；
+- 合作模式和项目数必须针对本次结果集批量读取，禁止逐行 N+1 查询；
+- 组织树最多三级：一级分销商最多执行直属二级、直属三级两次后代查询，二级分销商最多执行一次直属三级查询，三级分销商直接返回空列表。
+
+`sc_buyer` 应建立以 `parent_buyer_id` 为前导列并覆盖创建时间稳定排序的索引，支撑逐层后代查询。
 
 `GET /supply-chain/projects?buyerCode=`：该分销商的项目（不要再单独做 `GET /buyers/{code}/projects`，避免两套列表）。
 

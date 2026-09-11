@@ -22,15 +22,21 @@ import com.aifuli.module.supplychain.tradecore.buyer.domain.BuyerScopeKind;
 import com.aifuli.module.supplychain.tradecore.buyer.domain.BuyerStatus;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.MybatisConfiguration;
+import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
+import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -53,6 +59,10 @@ class BuyerAdminQueryServiceTest {
 
     @BeforeEach
     void setUp() {
+        TableInfoHelper.initTableInfo(
+                new MapperBuilderAssistant(new MybatisConfiguration(), ""), BuyerProjectDO.class);
+        TableInfoHelper.initTableInfo(
+                new MapperBuilderAssistant(new MybatisConfiguration(), ""), BuyerProductDO.class);
         service = new BuyerAdminQueryService(
                 buyerMapper, contactMapper, integrationModeMapper, cooperationModeMapper,
                 categoryScopeMapper, fileRefMapper, accountMapper, projectMapper, productMapper, envelopeCrypto);
@@ -103,7 +113,7 @@ class BuyerAdminQueryServiceTest {
         assertThat(row.skuCount()).isEqualTo(3L);
         assertThat(row.cooperationTime()).isEqualTo(cooperationTime);
         assertThat(row.primaryContactName()).isEqualTo("张三");
-        assertThat(row.primaryContactMobile()).isEqualTo("138****8000");
+        assertThat(row.primaryContactMobile()).isEqualTo("13800138000");
     }
 
     @Test
@@ -114,9 +124,14 @@ class BuyerAdminQueryServiceTest {
                 .buyerName("详情分销商")
                 .distributionLevel((short) 1)
                 .status(BuyerStatus.ACTIVE.getCode())
+                .legalPersonMobileCipher("13900139000".getBytes(StandardCharsets.UTF_8))
+                .bankAccountCipher("6222021234567890".getBytes(StandardCharsets.UTF_8))
+                .bankAccountKeyVersion("v1")
                 .build();
         when(buyerMapper.selectByBuyerCode("BYR_DETAIL")).thenReturn(buyer);
-        when(contactMapper.selectByBuyerId(21L)).thenReturn(List.of());
+        when(contactMapper.selectByBuyerId(21L)).thenReturn(List.of(
+                BuyerContactDO.builder().id(2L).buyerId(21L).sortNo(0)
+                        .contactName("李四").contactMobile("13700137000").contactEmail("li@example.com").build()));
         when(fileRefMapper.selectByBuyerId(21L)).thenReturn(List.of());
         when(integrationModeMapper.selectByBuyerId(21L)).thenReturn(List.of());
         when(cooperationModeMapper.selectByBuyerId(21L)).thenReturn(List.of());
@@ -125,10 +140,48 @@ class BuyerAdminQueryServiceTest {
                         .scopeKind(BuyerScopeKind.SELLABLE.name()).scopeCode("MOVIE").build(),
                 BuyerCategoryScopeDO.builder().buyerId(21L)
                         .scopeKind(BuyerScopeKind.PRODUCT_TYPE.name()).scopeCode("MOVIE").build()));
+        when(envelopeCrypto.decrypt(any(), any(), any()))
+                .thenAnswer(invocation -> invocation.getArgument(0));
 
         var detail = service.get("BYR_DETAIL");
 
         assertThat(detail.sellableCategories()).containsExactly("MOVIE");
         assertThat(detail.productTypes()).containsExactly("MOVIE");
+        assertThat(detail.legalPersonMobile()).isEqualTo("13900139000");
+        assertThat(detail.bankAccount()).isEqualTo("6222021234567890");
+        assertThat(detail.contacts()).extracting(BuyerAdminCommandService.ContactLine::mobile)
+                .containsExactly("13700137000");
+        assertThat(detail.primaryContactMobile()).isEqualTo("13700137000");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void childrenTreatsHistoricalNullDistributionLevelAsLevelOne() {
+        BuyerDO legacyRoot = BuyerDO.builder()
+                .id(30L)
+                .buyerCode("BYR_LEGACY_ROOT")
+                .buyerName("历史一级分销商")
+                .distributionLevel(null)
+                .status(BuyerStatus.ACTIVE.getCode())
+                .build();
+        BuyerDO child = BuyerDO.builder()
+                .id(31L)
+                .buyerCode("BYR_CHILD")
+                .buyerName("二级分销商")
+                .distributionLevel((short) 2)
+                .status(BuyerStatus.ACTIVE.getCode())
+                .createdAt(LocalDateTime.of(2026, 9, 11, 13, 30))
+                .build();
+        when(buyerMapper.selectByBuyerCode("BYR_LEGACY_ROOT")).thenReturn(legacyRoot);
+        when(buyerMapper.selectList(any(LambdaQueryWrapper.class)))
+                .thenReturn(List.of(child), List.of());
+        when(cooperationModeMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of());
+        when(projectMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of());
+
+        var result = service.children("BYR_LEGACY_ROOT");
+
+        assertThat(result).extracting(BuyerAdminQueryService.BuyerChildItem::buyerCode)
+                .containsExactly("BYR_CHILD");
+        verify(buyerMapper, times(2)).selectList(any(LambdaQueryWrapper.class));
     }
 }

@@ -18,11 +18,15 @@ import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerAdminQuery
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerInvoiceService;
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerInvoiceService.BuyerInvoiceView;
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerInvoiceService.SaveInvoiceCommand;
+import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerDO;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerInvoiceDO;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerProductDO;
+import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerProjectDO;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerInvoiceMapper;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerMapper;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerProductMapper;
+import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerProjectMapper;
+import com.aifuli.module.supplychain.tradecore.buyer.domain.BuyerProjectStatus;
 import com.aifuli.module.supplychain.tradecore.buyer.domain.BuyerStatus;
 import com.aifuli.module.supplychain.tradecore.catalog.application.BuyerProductCommandService;
 import com.aifuli.module.supplychain.tradecore.catalog.application.BuyerProductCommandService.ProductLine;
@@ -195,6 +199,81 @@ class BuyerAdminIntegrationTest {
     }
 
     /**
+     * 锁定分销层级页的完整后端契约：返回全部后代、穿透归档中间节点、批量聚合字段并按创建时间排序。
+     * 设计见
+     * {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#61-组织树}
+     * 与
+     * {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#62-列表与档案}。
+     */
+    @Test
+    void listsAllVisibleDescendantsWithAggregatesInCreationOrder() {
+        try (ConfigurableApplicationContext context = applicationContext()) {
+            BuyerAdminCommandService command = context.getBean(BuyerAdminCommandService.class);
+            BuyerAdminQueryService query = context.getBean(BuyerAdminQueryService.class);
+            BuyerMapper buyerMapper = context.getBean(BuyerMapper.class);
+            BuyerProjectMapper projectMapper = context.getBean(BuyerProjectMapper.class);
+
+            String root = command.create(createCommand(
+                    "层级根节点", "层级根节点有限公司", "91110000000000101X", 1, null, 0L));
+            String archivedMiddle = command.create(createCommand(
+                    "归档中间节点", "归档中间节点有限公司", "91110000000000102X",
+                    2, root, 0L));
+            String grandchild = command.create(createCommand(
+                    "可见孙级", "可见孙级有限公司", "91110000000000103X",
+                    3, archivedMiddle, 0L, List.of("DIRECT", "AGENT")));
+            String directChild = command.create(createCommand(
+                    "可见直属下级", "可见直属下级有限公司", "91110000000000104X",
+                    2, root, 0L, List.of("CHANNEL")));
+
+            LocalDateTime olderCreatedAt = LocalDateTime.of(2026, 9, 1, 9, 0);
+            LocalDateTime newerCreatedAt = LocalDateTime.of(2026, 9, 2, 9, 0);
+            BuyerDO grandchildRow = buyerMapper.selectByBuyerCode(grandchild);
+            grandchildRow.setCreatedAt(olderCreatedAt);
+            buyerMapper.updateById(grandchildRow);
+            BuyerDO directChildRow = buyerMapper.selectByBuyerCode(directChild);
+            directChildRow.setCreatedAt(newerCreatedAt);
+            buyerMapper.updateById(directChildRow);
+
+            LocalDateTime projectTime = LocalDateTime.of(2026, 9, 3, 9, 0);
+            insertProject(projectMapper, "PRJ_DESC_ACTIVE", grandchildRow.getId(),
+                    BuyerProjectStatus.ACTIVE, projectTime);
+            insertProject(projectMapper, "PRJ_DESC_ARCHIVED", grandchildRow.getId(),
+                    BuyerProjectStatus.ARCHIVED, projectTime);
+            command.changeStatus(archivedMiddle, BuyerStatus.ARCHIVED, 1L);
+
+            List<BuyerChildItem> descendants = query.children(root);
+
+            assertThat(descendants).extracting(BuyerChildItem::buyerCode)
+                    .containsExactly(directChild, grandchild);
+            BuyerChildItem direct = descendants.getFirst();
+            assertThat(direct.distributionLevel()).isEqualTo(2);
+            assertThat(direct.cooperationModes()).containsExactly("CHANNEL");
+            assertThat(direct.projectCount()).isZero();
+            assertThat(direct.createdAt()).isEqualTo(newerCreatedAt);
+            BuyerChildItem grand = descendants.get(1);
+            assertThat(grand.distributionLevel()).isEqualTo(3);
+            assertThat(grand.cooperationModes()).containsExactly("DIRECT", "AGENT");
+            assertThat(grand.projectCount()).isEqualTo(1L);
+            assertThat(grand.status()).isEqualTo(BuyerStatus.ACTIVE.name());
+            assertThat(grand.createdAt()).isEqualTo(olderCreatedAt);
+            assertThat(query.children(grandchild)).isEmpty();
+        }
+    }
+
+    private static void insertProject(BuyerProjectMapper projectMapper, String projectCode, Long buyerId,
+                                      BuyerProjectStatus status, LocalDateTime now) {
+        projectMapper.insert(BuyerProjectDO.builder()
+                .projectCode(projectCode)
+                .projectName(projectCode)
+                .buyerId(buyerId)
+                .catalogMode("MANAGED")
+                .status(status.getCode())
+                .createdAt(now)
+                .updatedAt(now)
+                .build());
+    }
+
+    /**
      * 插入 L1 后关联分销商品、写 CUSTOM 覆盖、再 FOLLOW_TEMPLATE 清空指针，模板行不动。
      * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#63-分销商品}。
      */
@@ -313,6 +392,12 @@ class BuyerAdminIntegrationTest {
 
     private static CreateBuyerCommand createCommand(String name, String legalEntity, String creditCode,
                                                     Integer level, String parentBuyerCode, Long opening) {
+        return createCommand(name, legalEntity, creditCode, level, parentBuyerCode, opening, List.of());
+    }
+
+    private static CreateBuyerCommand createCommand(String name, String legalEntity, String creditCode,
+                                                    Integer level, String parentBuyerCode, Long opening,
+                                                    List<String> cooperationModes) {
         return new CreateBuyerCommand(
                 name,
                 List.of(new ContactLine("张三", "13800138000", "a@b.c")),
@@ -322,7 +407,7 @@ class BuyerAdminIntegrationTest {
                 null,
                 "MONTHLY",
                 7,
-                List.of(),
+                cooperationModes,
                 List.of(),
                 null,
                 null,

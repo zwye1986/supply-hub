@@ -154,10 +154,11 @@ class SupplierAdminProfileIntegrationTest {
 
             seedCatalog(catalog);
             scopes.replaceAll(supplierCode, List.of(new ScopeLine(
-                    "MOVIE", "MOVIE", "MOVIE_TICKET", List.of("API_DIRECT", "H5"), 100L, 1L)), 1L);
+                    "MOVIE", "MOVIE", "MOVIE_TICKET", List.of("API_DIRECT", "H5"), 100L, 101L)), 1L);
             var savedScopes = query.listSupplyScopes(supplierCode);
             assertThat(savedScopes).hasSize(1);
             assertThat(savedScopes.getFirst().supplyModes()).containsExactly("API_DIRECT", "H5");
+            assertThat(savedScopes.getFirst().minQuantity()).isEqualTo(101L);
 
             assertThatThrownBy(() -> scopes.replaceAll(supplierCode, List.of(
                     new ScopeLine("MOVIE", "MOVIE", "MOVIE_TICKET", List.of("API_DIRECT"), 100L, 1L),

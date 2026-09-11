@@ -9,6 +9,7 @@ import com.aifuli.module.supplychain.tradecore.supply.application.SupplierProfil
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierProfileQueryService.SimpleSupplierItem;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierProfileQueryService.SupplierListItem;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierProfileQueryService.SupplierPageQuery;
+import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierContactDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierOfferDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierSupplyScopeDO;
@@ -34,7 +35,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 /**
- * 供应商列表多值筛选、简易视图与脱敏。
+ * 供应商列表多值筛选、简易视图与档案原值回显。
  *
  * <p>设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#51-列表}。</p>
  */
@@ -104,6 +105,9 @@ class SupplierProfileQueryServiceTest {
         when(supplierMapper.selectPage(any(PageParam.class), ArgumentMatchers.any()))
                 .thenReturn(new PageResult<>(List.of(batchSupplier), 1L));
         stubListItem(batchSupplier, 101L, "BATCH");
+        when(contactMapper.selectBySupplierId(1L)).thenReturn(List.of(
+                SupplierContactDO.builder().supplierId(1L).sortNo(0)
+                        .contactName("王五").contactMobile("13600136000").build()));
 
         PageResult<SupplierListItem> page = service.page(new SupplierPageQuery(
                 null, null, List.of(SupplierStatus.ACTIVE), List.of("EQUITY"), List.of("BATCH"),
@@ -117,6 +121,7 @@ class SupplierProfileQueryServiceTest {
         assertThat(row.productClassifications()).containsExactly("VIRTUAL_CARD");
         assertThat(row.supplyModes()).containsExactly("BATCH");
         assertThat(row.skuCount()).isZero();
+        assertThat(row.primaryContactMobile()).isEqualTo("13600136000");
     }
 
     @Test

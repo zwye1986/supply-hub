@@ -136,7 +136,8 @@ public class BuyerAdminController {
     @GetMapping("/{buyerCode}")
     @PreAuthorize(BUYER_QUERY_EXPRESSION)
     @Operation(summary = "分销商详情",
-            description = "身份用 buyerCode。含内部主键、脱敏字段、只读 accountBalanceCents；下级不嵌套。")
+            description = "身份用 buyerCode。档案字段在查询权限内按原值回显，含内部主键和只读 accountBalanceCents；"
+                    + "下级不嵌套，日志仍禁止记录完整敏感字段。")
     public CommonResult<BuyerDetail> get(@PathVariable String buyerCode) {
         return success(queryService.get(buyerCode));
     }
@@ -209,8 +210,8 @@ public class BuyerAdminController {
 
     @GetMapping("/{buyerCode}/children")
     @PreAuthorize(BUYER_QUERY_EXPRESSION)
-    @Operation(summary = "查询分销商直接下级",
-            description = "只返回直接子节点，不嵌套孙节点。身份用 buyerCode。")
+    @Operation(summary = "查询分销商全部下级",
+            description = "返回直属下级和孙级的扁平列表，排除归档分销商，按创建时间倒序。身份用 buyerCode。")
     public CommonResult<List<BuyerChildItem>> children(@PathVariable String buyerCode) {
         return success(queryService.children(buyerCode));
     }

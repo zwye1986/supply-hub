@@ -1,6 +1,8 @@
 package com.aifuli.module.supplychain.interfaceapi.admin;
 
 import com.aifuli.module.supplychain.interfaceapi.admin.BuyerAdminController.BuyerPageResponse;
+import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerAdminQueryService.BuyerChildItem;
+import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerAdminQueryService.BuyerDetail;
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerAdminQueryService.BuyerListItem;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.swagger.v3.core.converter.ModelConverters;
@@ -90,6 +92,34 @@ class BuyerAdminRestContractTest {
 
         assertThat(propertyNames).contains(
                 "sellableCategories", "productTypes", "projectCount", "skuCount", "cooperationTime");
+    }
+
+    @Test
+    void descendantsJsonExposesDistributionHierarchyFields() {
+        ObjectMapper mapper = new ObjectMapper();
+        Set<String> propertyNames = mapper.getSerializationConfig()
+                .introspect(mapper.constructType(BuyerChildItem.class))
+                .findProperties().stream()
+                .map(property -> property.getName())
+                .collect(Collectors.toSet());
+
+        assertThat(propertyNames).containsExactlyInAnyOrder(
+                "buyerCode", "buyerName", "distributionLevel", "cooperationModes",
+                "projectCount", "status", "createdAt");
+    }
+
+    @Test
+    void detailJsonUsesOriginalSensitiveFieldNames() {
+        ObjectMapper mapper = new ObjectMapper();
+        Set<String> propertyNames = mapper.getSerializationConfig()
+                .introspect(mapper.constructType(BuyerDetail.class))
+                .findProperties().stream()
+                .map(property -> property.getName())
+                .collect(Collectors.toSet());
+
+        assertThat(propertyNames).contains(
+                "legalPersonMobile", "bankAccount", "contacts", "primaryContactMobile");
+        assertThat(propertyNames).doesNotContain("legalPersonMobileMasked", "bankAccountMasked");
     }
 
     @Test

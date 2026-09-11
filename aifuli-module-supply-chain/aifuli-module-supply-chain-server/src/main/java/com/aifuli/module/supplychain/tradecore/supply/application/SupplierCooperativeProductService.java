@@ -58,6 +58,7 @@ public class SupplierCooperativeProductService {
     private static final String TRANSACTION_MANAGER = "supplyChainTransactionManager";
     private static final int DEFAULT_PAGE_NO = 1;
     private static final int DEFAULT_PAGE_SIZE = 20;
+    private static final long DEFAULT_OFFER_MIN_QUANTITY = 1L;
 
     private final SupplierMapper supplierMapper;
     private final SupplierSupplyScopeMapper scopeMapper;
@@ -74,7 +75,9 @@ public class SupplierCooperativeProductService {
     private final BusinessNoGenerator businessNoGenerator;
 
     /**
-     * 批量新增合作商品，状态直接 {@link OfferStatus#PUBLISHED}。数量为空时继承命中的供货配置。
+     * 批量新增合作商品，状态直接 {@link OfferStatus#PUBLISHED}。供货上限为空时继承命中的供货配置；
+     * 最低起购量为空时固定为 1，不读取供货配置中的预留字段。
+     * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#54-供货配置}。
      */
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public List<String> createPublished(String supplierCode, List<DraftLine> lines, Long operatorId) {
@@ -270,7 +273,7 @@ public class SupplierCooperativeProductService {
         SupplyMode supplyMode = SupplyMode.fromCode(line.supplyMode());
         validatePrice(priceMode, line);
         Long maxQuantity = line.maxQuantity() != null ? line.maxQuantity() : scope.getMaxQuantity();
-        Long minQuantity = line.minQuantity() != null ? line.minQuantity() : scope.getMinQuantity();
+        Long minQuantity = line.minQuantity() != null ? line.minQuantity() : DEFAULT_OFFER_MIN_QUANTITY;
         if (minQuantity == null || maxQuantity == null
                 || minQuantity < 1 || maxQuantity < minQuantity) {
             throw new IllegalArgumentException("Offer quantity is invalid");

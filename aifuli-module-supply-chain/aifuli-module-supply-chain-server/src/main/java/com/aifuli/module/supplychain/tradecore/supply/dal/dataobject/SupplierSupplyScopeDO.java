@@ -33,6 +33,7 @@ public class SupplierSupplyScopeDO {
     /** 商品分类封闭枚举，见ProductClassification */
     private String productClassification;
     private Long maxQuantity;
+    /** 允许最低起订量，预留字段；当前仅存储和回显。 */
     private Long minQuantity;
     @Version
     private Long version;

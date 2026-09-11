@@ -416,20 +416,6 @@ public class SupplierProfileQueryService {
         return legacy == null ? List.of() : List.of(legacy);
     }
 
-    static String maskMobile(String mobile) {
-        if (mobile == null || mobile.length() < 7) {
-            return mobile;
-        }
-        return mobile.substring(0, 3) + "****" + mobile.substring(mobile.length() - 4);
-    }
-
-    static String maskAccount(String account) {
-        if (account == null || account.length() < 4) {
-            return account == null ? null : "****";
-        }
-        return "****" + account.substring(account.length() - 4);
-    }
-
     private static List<Short> toStatusCodes(List<SupplierStatus> statuses) {
         if (statuses == null || statuses.isEmpty()) {
             return List.of();
@@ -479,7 +465,8 @@ public class SupplierProfileQueryService {
             @Schema(description = "合作状态：ACTIVE / SUSPENDED / BLACKLIST") String status,
             @Schema(description = "准入时间，Asia/Shanghai") LocalDateTime onboardedAt,
             @Schema(description = "最后修改时间，Asia/Shanghai") LocalDateTime updatedAt,
-            String primaryContactName, String primaryContactMobile) {
+            @Schema(description = "主联系人姓名") String primaryContactName,
+            @Schema(description = "主联系人手机号") String primaryContactMobile) {
 
         @JsonProperty("name")
         public String name() {
@@ -494,8 +481,8 @@ public class SupplierProfileQueryService {
             @Schema(description = "商品类型封闭枚举名") String productType,
             @Schema(description = "商品分类封闭枚举名") String productClassification,
             @Schema(description = "供货模式枚举名列表") List<String> supplyModes,
-            @Schema(description = "单次最大数量") Long maxQuantity,
-            @Schema(description = "单次最小数量") Long minQuantity) {
+            @Schema(description = "供货上限") Long maxQuantity,
+            @Schema(description = "允许最低起订量，预留字段") Long minQuantity) {
     }
 
     @Schema(description = "供应商配送区域")
@@ -506,7 +493,8 @@ public class SupplierProfileQueryService {
 
     /**
      * 供应商详情。{@code spuCount} 为未退役 Offer 关联的平台 SPU 去重数。
-     * 管理端详情按源分支契约回显明文；证件优先 file_ref，空则回退旧单列。
+     * 管理端详情按查询权限回显档案原值；证件优先 file_ref，空则回退旧单列。
+     * 库内信封加密与日志脱敏规则不变。
      * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#52-详情--新增--编辑}。
      */
     @Schema(description = "供应商详情")

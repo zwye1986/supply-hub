@@ -95,10 +95,12 @@ class SupplyChainLiquibaseIntegrationTest {
                 "expire_at:DATETIME:-:3:NO");
         assertThat(firstStartup.projectAuthNoncePrimaryKeyColumns())
                 .containsExactly("app_id", "nonce");
-        assertThat(firstStartup.changeSetCount()).isEqualTo(26L);
+        assertThat(firstStartup.changeSetCount()).isEqualTo(28L);
         assertThat(firstStartup.uniqueIndexes())
                 .contains("sc_instore_payment_flow.uk_sc_instore_flow_order",
                         "sc_instore_channel_user_binding.uk_sc_instore_user_binding_project");
+        assertThat(firstStartup.indexes())
+                .contains("sc_buyer.idx_sc_buyer_parent_created");
         assertThat(firstStartup.collations()).containsOnly("utf8mb4_0900_ai_ci");
         assertThat(firstStartup.importedKeys()).isEmpty();
         assertThat(firstStartup.duplicateChangeSets()).isEmpty();
@@ -244,6 +246,12 @@ class SupplyChainLiquibaseIntegrationTest {
                       AND NON_UNIQUE = 0
                     ORDER BY index_name
                     """);
+            List<String> indexes = queryStrings(connection, """
+                    SELECT DISTINCT CONCAT(LOWER(TABLE_NAME), '.', LOWER(INDEX_NAME)) AS index_name
+                    FROM information_schema.STATISTICS
+                    WHERE TABLE_SCHEMA = DATABASE()
+                    ORDER BY index_name
+                    """);
             List<String> collations = queryStrings(connection, """
                     SELECT DISTINCT TABLE_COLLATION
                     FROM information_schema.TABLES
@@ -264,6 +272,7 @@ class SupplyChainLiquibaseIntegrationTest {
             long changeSetCount = queryLong(connection, "SELECT COUNT(*) FROM DATABASECHANGELOG");
             return new DatabaseSnapshot(tableNames, columnNames,
                     projectAuthNonceColumnDefinitions, projectAuthNoncePrimaryKeyColumns, uniqueIndexes,
+                    indexes,
                     collations, importedKeys,
                     duplicateChangeSets, changeSetCount);
         }
@@ -294,6 +303,7 @@ class SupplyChainLiquibaseIntegrationTest {
             List<String> projectAuthNonceColumnDefinitions,
             List<String> projectAuthNoncePrimaryKeyColumns,
             List<String> uniqueIndexes,
+            List<String> indexes,
             List<String> collations,
             List<String> importedKeys,
             List<String> duplicateChangeSets,

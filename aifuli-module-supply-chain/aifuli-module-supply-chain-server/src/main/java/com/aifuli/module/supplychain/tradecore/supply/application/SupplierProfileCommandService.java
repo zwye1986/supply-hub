@@ -492,7 +492,7 @@ public class SupplierProfileCommandService {
 
     /**
      * 管理端日期选择器空值常序列化为 Unix 0，不能当成真实接入时间。
-     * 设计见 {@code docs/superpowers/specs/2026-08-28-supply-chain-prd-alignment-design.md#1511-管理端详情回显明文暂时关闭脱敏}。
+     * 设计见 {@code docs/superpowers/specs/2026-08-28-supply-chain-prd-alignment-design.md#1511-管理端档案原值回显}。
      */
     static LocalDateTime normalizeOnboardedAt(LocalDateTime value) {
         if (value == null || value.getYear() <= 1970) {

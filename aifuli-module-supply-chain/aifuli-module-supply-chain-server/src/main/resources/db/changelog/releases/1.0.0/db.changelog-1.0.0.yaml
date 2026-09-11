@@ -266,3 +266,23 @@ databaseChangeLog:
             encoding: UTF-8
             splitStatements: true
             stripComments: false
+  - changeSet:
+      id: 026-buyer-descendant-index
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 026-buyer-descendant-index.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 027-supplier-scope-min-quantity-reserved
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 027-supplier-scope-min-quantity-reserved.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false

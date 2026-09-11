@@ -270,7 +270,8 @@ public class SupplierAdminController {
     @PostMapping("/{supplierCode}/offers")
     @PreAuthorize(SUPPLIER_UPDATE_EXPRESSION)
     @Operation(summary = "批量新增合作商品",
-            description = "body.items 优先，兼容 lines。新增即 PUBLISHED。数量空则继承供货配置。")
+            description = "body.items 优先，兼容 lines。新增即 PUBLISHED。供货上限为空则继承供货配置；"
+                    + "最低起购量为空固定取1，不继承供货配置预留字段。")
     public CommonResult<List<String>> createOffers(@PathVariable String supplierCode,
                                                      @Valid @RequestBody OfferItemsReqVO request) {
         return success(cooperativeProductService.createPublished(supplierCode,
@@ -631,10 +632,10 @@ public class SupplierAdminController {
         @Schema(description = "供货模式枚举名列表，不可为空")
         private List<String> supplyModes;
         @NotNull @Min(1)
-        @Schema(description = "单次最大数量")
+        @Schema(description = "供货上限")
         private Long maxQuantity;
         @NotNull @Min(1)
-        @Schema(description = "单次最小数量")
+        @Schema(description = "允许最低起订量，预留字段")
         private Long minQuantity;
     }
 
@@ -695,7 +696,7 @@ public class SupplierAdminController {
         @Schema(description = "草稿供货上限，空则继承供货配置")
         private Long maxQuantity;
         @Min(1)
-        @Schema(description = "草稿最低起购量，空则继承供货配置")
+        @Schema(description = "草稿最低起购量，空则取1，不继承供货配置预留字段")
         private Long minQuantity;
     }
 }

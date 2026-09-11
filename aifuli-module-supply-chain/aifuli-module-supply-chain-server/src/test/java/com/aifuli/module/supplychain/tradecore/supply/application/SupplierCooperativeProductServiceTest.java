@@ -66,7 +66,7 @@ class SupplierCooperativeProductServiceTest {
     }
 
     @Test
-    void createInsertsPublishedNotDraft() {
+    void createUsesOneInsteadOfReservedScopeMinQuantity() {
         stubCreatePath();
         when(businessNoGenerator.next(BusinessNoPrefixes.OFR)).thenReturn("OFR_PUBLISHED1");
 
@@ -128,7 +128,7 @@ class SupplierCooperativeProductServiceTest {
         when(scopeMapper.selectBySupplierId(9L)).thenReturn(List.of(SupplierSupplyScopeDO.builder()
                 .id(101L).supplierId(9L)
                 .sellableCategory("MOVIE").productType("MOVIE").productClassification("MOVIE_TICKET")
-                .maxQuantity(100L).minQuantity(1L).build()));
+                .maxQuantity(100L).minQuantity(50L).build()));
         when(skuMapper.selectByCode("MOVIE_100")).thenReturn(PlatformSkuDO.builder()
                 .id(11L).skuCode("MOVIE_100").spuId(21L)
                 .status(CatalogEntityStatus.ACTIVE.getCode()).build());

@@ -33,7 +33,7 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
 
 /**
  * 供货配置整表替换。供货模式落在子表，一行对应多种模式；三码（可售品类/商品类型/商品分类）互相独立，
- * 不校验父子链，唯一性以供应商内三码组合判重。
+ * 不校验父子链，唯一性以供应商内三码组合判重。允许最低起订量为预留字段，仅存储和回显。
  * 设计见 {@code docs/superpowers/specs/2026-09-07-供应链管理端表单字典与标品标签设计.md#41-rest}。
  */
 @Slf4j
@@ -76,7 +76,7 @@ public class SupplierSupplyScopeService {
             List<String> modes = validatedModeCodes(line.supplyModes());
             modeCount += modes.size();
             if (line.minQuantity() == null || line.maxQuantity() == null
-                    || line.minQuantity() < 1 || line.maxQuantity() < line.minQuantity()) {
+                    || line.minQuantity() < 1 || line.maxQuantity() < 1) {
                 throw new IllegalArgumentException("Supply scope quantity is invalid");
             }
         }
@@ -155,6 +155,8 @@ public class SupplierSupplyScopeService {
 
     /**
      * 供货配置一行：三码互相独立、不校验父子链，供应商内三码组合唯一；供货模式为多选。
+     * {@code minQuantity} 为允许最低起订量预留字段，只做正整数校验，不与 {@code maxQuantity} 比较，
+     * 也不参与供货范围命中、合作商品默认值或下单校验。
      * 设计见 {@code docs/superpowers/specs/2026-09-07-供应链管理端表单字典与标品标签设计.md#41-rest}。
      */
     public record ScopeLine(String sellableCategory, String productType, String productClassification,

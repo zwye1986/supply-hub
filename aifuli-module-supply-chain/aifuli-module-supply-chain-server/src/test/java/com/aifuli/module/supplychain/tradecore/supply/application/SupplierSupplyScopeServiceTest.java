@@ -56,7 +56,7 @@ class SupplierSupplyScopeServiceTest {
     @Test
     void replaceAllWritesModeToChildTableAndDeletesChildRowsFirst() {
         service.replaceAll("SPL_A", List.of(new ScopeLine(
-                "EQUITY", "MOVIE", "MOVIE_TICKET", List.of("API_DIRECT"), 100L, 1L)), 7L);
+                "EQUITY", "MOVIE", "MOVIE_TICKET", List.of("API_DIRECT"), 1L, 100L)), 7L);
 
         InOrder order = inOrder(modeMapper, scopeMapper);
         order.verify(modeMapper).deleteByScopeIds(List.of(88L));
@@ -67,6 +67,8 @@ class SupplierSupplyScopeServiceTest {
         assertThat(scopeCaptor.getValue().getSellableCategory()).isEqualTo("EQUITY");
         assertThat(scopeCaptor.getValue().getProductType()).isEqualTo("MOVIE");
         assertThat(scopeCaptor.getValue().getProductClassification()).isEqualTo("MOVIE_TICKET");
+        assertThat(scopeCaptor.getValue().getMaxQuantity()).isEqualTo(1L);
+        assertThat(scopeCaptor.getValue().getMinQuantity()).isEqualTo(100L);
 
         ArgumentCaptor<SupplierSupplyScopeModeDO> modeCaptor =
                 ArgumentCaptor.forClass(SupplierSupplyScopeModeDO.class);
