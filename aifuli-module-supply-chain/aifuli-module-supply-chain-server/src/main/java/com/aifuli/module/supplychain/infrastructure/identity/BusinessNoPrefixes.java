@@ -73,11 +73,21 @@ public final class BusinessNoPrefixes {
     public static final String PRJ = "PRJ_";
     /** 项目商品稳定业务编码。 */
     public static final String PLT = "PLT_";
+    /** 平台 SPU 永久业务编码。 */
+    public static final String SPU = "SPU_";
+    /** 平台 SKU 永久业务编码。 */
+    public static final String SKU = "SKU_";
+    /** 平台品牌永久业务编码。 */
+    public static final String BRD = "BRD_";
+    /** 平台商品类目永久业务编码。 */
+    public static final String CAT = "CAT_";
+    /** 平台商品类型永久业务编码。 */
+    public static final String PT = "PT_";
 
     public static final Set<String> ALL = Set.of(
             LST, EVT, SC, FR, BO, FUN, RF, TMR,
             RCP, OP, FA, CASE, CRD, CON, CPR, INV, OFR,
             ACC, LED, REQ, RR, BILL, OUB, O2D, ORC, O2OP,
             IUB, IEC, ISC, IPF, IRC, IOP, ISO, SPL, SSA, SSL,
-            BYR, BPD, PRJ, PLT);
+            BYR, BPD, PRJ, PLT, SPU, SKU, BRD, CAT, PT);
 }

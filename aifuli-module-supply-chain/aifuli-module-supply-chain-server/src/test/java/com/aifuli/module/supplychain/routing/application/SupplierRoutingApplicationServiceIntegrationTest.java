@@ -42,6 +42,7 @@ import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
+import com.aifuli.module.supplychain.testsupport.ProductCenterTestConfiguration;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.testcontainers.containers.MySQLContainer;
 
@@ -389,6 +390,7 @@ class SupplierRoutingApplicationServiceIntegrationTest {
     @Configuration(proxyBeanMethods = false)
     @Import({SupplyChainDataSourceConfiguration.class, UlidGenerator.class, BusinessNoGenerator.class,
             OutboxEventRepository.class, BuyerCommandService.class, ProductCatalogCommandService.class,
+            ProductCenterTestConfiguration.class,
             RoutingPolicyPublicationService.class, SupplierRoutingApplicationService.class})
     static class TestConfiguration {
         @Bean

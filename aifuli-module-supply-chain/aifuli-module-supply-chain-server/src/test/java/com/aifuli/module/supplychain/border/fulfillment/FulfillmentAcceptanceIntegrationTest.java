@@ -70,6 +70,7 @@ import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
+import com.aifuli.module.supplychain.testsupport.ProductCenterTestConfiguration;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.testcontainers.containers.MySQLContainer;
 
@@ -490,7 +491,7 @@ class FulfillmentAcceptanceIntegrationTest {
     @Configuration(proxyBeanMethods = false)
     @Import({SupplyChainDataSourceConfiguration.class, UlidGenerator.class, BusinessNoGenerator.class,
             OutboxEventRepository.class, BuyerCommandService.class, BuyerResolver.class,
-            ProductCatalogCommandService.class, BuyerListingPublicationService.class,
+            ProductCatalogCommandService.class, ProductCenterTestConfiguration.class, BuyerListingPublicationService.class,
             BuyerAccountOpeningService.class, FundReservationService.class, AccountLedgerWriter.class,
             RoutingPolicyPublicationService.class, SupplierRoutingApplicationService.class,
             ClosedJsonSchemaValidator.class, FulfillmentTargetSchemaRegistry.class,

@@ -28,7 +28,7 @@ public class SupplierSupplyScopeDO {
     private Long supplierId;
     /** 可售品类封闭枚举，见SellableCategory */
     private String sellableCategory;
-    /** 商品类型封闭枚举，见ProductTypeTag */
+    /** 商品类型编码，由 sc_product_type 动态维护。 */
     private String productType;
     /** 商品分类封闭枚举，见ProductClassification */
     private String productClassification;

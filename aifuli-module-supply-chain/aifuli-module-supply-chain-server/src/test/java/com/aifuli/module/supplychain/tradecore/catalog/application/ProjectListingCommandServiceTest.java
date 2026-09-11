@@ -21,6 +21,7 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerProdu
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSettlementPriceDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSettlementPriceVersionDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuDO;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSpuDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProjectListingVersionDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerProductL2OverrideMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerProductL2OverrideVersionMapper;
@@ -29,6 +30,7 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerProductSet
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceVersionMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSpuMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProjectListingVersionMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
 import com.aifuli.module.supplychain.tradecore.profile.domain.L2AdjustMode;
@@ -66,6 +68,7 @@ class ProjectListingCommandServiceTest {
     private final BuyerMapper buyerMapper = mock(BuyerMapper.class);
     private final BuyerProductMapper productMapper = mock(BuyerProductMapper.class);
     private final PlatformSkuMapper skuMapper = mock(PlatformSkuMapper.class);
+    private final PlatformSpuMapper spuMapper = mock(PlatformSpuMapper.class);
     private final ProjectListingMapper listingMapper = mock(ProjectListingMapper.class);
     private final ProjectListingVersionMapper listingVersionMapper = mock(ProjectListingVersionMapper.class);
     private final PlatformSettlementPriceMapper l1Mapper = mock(PlatformSettlementPriceMapper.class);
@@ -94,13 +97,16 @@ class ProjectListingCommandServiceTest {
                 l1Mapper, l1VersionMapper, overrideMapper, overrideVersionMapper,
                 templateMapper, templateVersionMapper, businessNoGenerator, resolver);
         buyerProducts = new BuyerProductCommandService(
-                databaseClock, buyerMapper, productMapper, skuMapper, l1Mapper, l1VersionMapper,
-                overrideMapper, overrideVersionMapper, businessNoGenerator, resolver);
+                databaseClock, buyerMapper, productMapper, l1Mapper, l1VersionMapper,
+                overrideMapper, overrideVersionMapper, businessNoGenerator, resolver,
+                new ProductSellabilityService(skuMapper, spuMapper));
         when(businessNoGenerator.next(BusinessNoPrefixes.PLT)).thenReturn(LISTING_CODE);
         when(projectMapper.selectByProjectCodeForUpdate(PROJECT_CODE)).thenReturn(BuyerProjectDO.builder()
                 .id(9L).projectCode(PROJECT_CODE).buyerId(5L).build());
         when(skuMapper.selectByCode("MOVIE_100")).thenReturn(PlatformSkuDO.builder()
-                .id(11L).skuCode("MOVIE_100").status(CatalogEntityStatus.ACTIVE.getCode()).build());
+                .id(11L).spuId(101L).skuCode("MOVIE_100").status(CatalogEntityStatus.ACTIVE.getCode()).build());
+        when(spuMapper.selectById(101L)).thenReturn(PlatformSpuDO.builder()
+                .id(101L).status(CatalogEntityStatus.ACTIVE.getCode()).build());
         when(listingMapper.insert(any(ProjectListingDO.class))).thenAnswer(inv -> {
             storedListing = inv.getArgument(0);
             storedListing.setId(80L);
@@ -208,7 +214,7 @@ class ProjectListingCommandServiceTest {
         when(productMapper.selectByCodeForUpdate("BPD_1")).thenReturn(liveProduct());
         when(buyerMapper.selectByBuyerCode("BYR_A")).thenReturn(BuyerDO.builder().id(5L).buyerCode("BYR_A").build());
         when(skuMapper.selectById(11L)).thenReturn(PlatformSkuDO.builder()
-                .id(11L).skuCode("MOVIE_100").status(CatalogEntityStatus.ACTIVE.getCode()).build());
+                .id(11L).spuId(101L).skuCode("MOVIE_100").status(CatalogEntityStatus.ACTIVE.getCode()).build());
         when(overrideVersionMapper.selectByBuyerProductId(77L)).thenReturn(List.of());
         when(overrideVersionMapper.insert(any(BuyerProductL2OverrideVersionDO.class))).thenAnswer(inv -> {
             BuyerProductL2OverrideVersionDO row = inv.getArgument(0);

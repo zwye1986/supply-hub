@@ -37,6 +37,7 @@ import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
+import com.aifuli.module.supplychain.testsupport.ProductCenterTestConfiguration;
 import org.testcontainers.containers.MySQLContainer;
 
 import java.util.Base64;
@@ -341,7 +342,7 @@ class SupplierAdminProfileIntegrationTest {
 
     @Configuration(proxyBeanMethods = false)
     @Import({SupplyChainDataSourceConfiguration.class, UlidGenerator.class, BusinessNoGenerator.class,
-            AesGcmEnvelopeCrypto.class, ProductCatalogCommandService.class,
+            AesGcmEnvelopeCrypto.class, ProductCatalogCommandService.class, ProductCenterTestConfiguration.class,
             SupplierProfileCommandService.class, SupplierProfileQueryService.class,
             SupplierSupplyScopeService.class, SupplierCooperativeProductService.class})
     static class TestConfiguration {

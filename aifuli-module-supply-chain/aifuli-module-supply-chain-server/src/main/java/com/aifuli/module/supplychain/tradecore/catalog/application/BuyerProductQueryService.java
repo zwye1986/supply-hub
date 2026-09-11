@@ -246,7 +246,7 @@ public class BuyerProductQueryService {
             @Schema(description = "SPU编码") String spuCode,
             @Schema(description = "SPU名称") String spuName,
             @Schema(description = "可售品类封闭枚举名") String sellableCategory,
-            @Schema(description = "商品类型封闭枚举名") String productType,
+            @Schema(description = "动态商品类型编码") String productType,
             @Schema(description = "商品分类封闭枚举名") String productClassification,
             @Schema(description = "建议结算价，取当前L1，单位CNY分") Long suggestPriceCents,
             @Schema(description = "定价规则文案：模板 / 等于L1 / 自定义公式") String pricingRule,

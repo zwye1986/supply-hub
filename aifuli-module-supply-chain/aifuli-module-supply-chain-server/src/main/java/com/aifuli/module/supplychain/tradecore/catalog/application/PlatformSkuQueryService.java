@@ -290,7 +290,7 @@ public class PlatformSkuQueryService {
             @Schema(description = "平台SPU永久业务编码") String spuCode,
             @Schema(description = "平台SPU标准名称") String spuName,
             @Schema(description = "可售品类封闭枚举名") String sellableCategory,
-            @Schema(description = "商品类型封闭枚举名") String productType,
+            @Schema(description = "动态商品类型编码") String productType,
             @Schema(description = "商品分类封闭枚举名") String productClassification,
             @Schema(description = "L1 B端结算单价，CNY分，允许0") Long suggestPriceCents,
             @Schema(description = "C端建议价，取自平台SKU标准面值，单位CNY分") Long marketPriceCents) {

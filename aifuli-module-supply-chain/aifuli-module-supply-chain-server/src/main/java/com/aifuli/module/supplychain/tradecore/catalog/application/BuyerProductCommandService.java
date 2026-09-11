@@ -18,8 +18,6 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerProductL2O
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerProductL2OverrideVersionMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceVersionMapper;
-import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
-import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
 import com.aifuli.module.supplychain.tradecore.profile.domain.L2AdjustMode;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -53,13 +51,13 @@ public class BuyerProductCommandService {
 
     private final BuyerMapper buyerMapper;
     private final BuyerProductMapper productMapper;
-    private final PlatformSkuMapper skuMapper;
     private final PlatformSettlementPriceMapper l1Mapper;
     private final PlatformSettlementPriceVersionMapper l1VersionMapper;
     private final BuyerProductL2OverrideMapper overrideMapper;
     private final BuyerProductL2OverrideVersionMapper overrideVersionMapper;
     private final BusinessNoGenerator businessNoGenerator;
     private final SettlementPriceResolver settlementPriceResolver;
+    private final ProductSellabilityService productSellabilityService;
 
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public List<String> addProducts(String buyerCode, List<ProductLine> lines, Long operatorId) {
@@ -243,23 +241,11 @@ public class BuyerProductCommandService {
     }
 
     private PlatformSkuDO requireActiveSku(String platformSkuCode) {
-        PlatformSkuDO sku = skuMapper.selectByCode(platformSkuCode);
-        if (sku == null
-                || sku.getStatus() == null
-                || sku.getStatus() != CatalogEntityStatus.ACTIVE.getCode()) {
-            throw exception(SKU_NOT_SALEABLE);
-        }
-        return sku;
+        return productSellabilityService.requireSellableByCode(platformSkuCode).sku();
     }
 
     private PlatformSkuDO requireActiveSkuById(Long skuId) {
-        PlatformSkuDO sku = skuMapper.selectById(skuId);
-        if (sku == null
-                || sku.getStatus() == null
-                || sku.getStatus() != CatalogEntityStatus.ACTIVE.getCode()) {
-            throw exception(SKU_NOT_SALEABLE);
-        }
-        return sku;
+        return productSellabilityService.requireSellableById(skuId).sku();
     }
 
     public record ProductLine(String platformSkuCode, L2AdjustMode l2AdjustMode,

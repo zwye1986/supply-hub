@@ -392,7 +392,7 @@ public class BuyerAdminController {
         private List<String> qualificationFileKeys;
         @Schema(description = "可售品类枚举名")
         private List<String> sellableCategories;
-        @Schema(description = "商品类型枚举名")
+        @Schema(description = "动态商品类型编码")
         private List<String> productTypes;
         @Min(0)
         @Schema(description = "期初余额，单位CNY分，仅创建可写")

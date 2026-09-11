@@ -10,14 +10,11 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerCatal
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerListingAvailabilityDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerListingDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerListingVersionDO;
-import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerCatalogChangeMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerListingAvailabilityMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerListingMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerListingVersionMapper;
-import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.BuyerListingStatus;
-import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -42,7 +39,7 @@ public class BuyerListingPublicationService {
     private final BuyerListingAvailabilityMapper availabilityMapper;
     private final BuyerCatalogChangeMapper changeMapper;
     private final BuyerMapper buyerMapper;
-    private final PlatformSkuMapper skuMapper;
+    private final ProductSellabilityService productSellabilityService;
     private final OutboxEventRepository outboxRepository;
 
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
@@ -161,10 +158,7 @@ public class BuyerListingPublicationService {
         if (buyer == null || buyer.getStatus() != BuyerStatus.ACTIVE.getCode()) {
             throw new IllegalStateException("Listing buyer is not active");
         }
-        PlatformSkuDO sku = skuMapper.selectById(listing.getPlatformSkuId());
-        if (sku == null || sku.getStatus() != CatalogEntityStatus.ACTIVE.getCode()) {
-            throw new IllegalStateException("Listing platform SKU is not active");
-        }
+        productSellabilityService.requireSellableById(listing.getPlatformSkuId());
     }
 
     private BuyerListingDO requireListingForUpdate(String listingNo) {

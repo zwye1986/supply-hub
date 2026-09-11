@@ -14,11 +14,13 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerProdu
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSettlementPriceDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSettlementPriceVersionDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuDO;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSpuDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerProductL2OverrideMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerProductL2OverrideVersionMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceVersionMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSpuMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
 import com.aifuli.module.supplychain.tradecore.profile.domain.L2AdjustMode;
 import org.junit.jupiter.api.BeforeEach;
@@ -48,6 +50,7 @@ class BuyerProductCommandServiceTest {
     private final BuyerMapper buyerMapper = mock(BuyerMapper.class);
     private final BuyerProductMapper productMapper = mock(BuyerProductMapper.class);
     private final PlatformSkuMapper skuMapper = mock(PlatformSkuMapper.class);
+    private final PlatformSpuMapper spuMapper = mock(PlatformSpuMapper.class);
     private final PlatformSettlementPriceMapper l1Mapper = mock(PlatformSettlementPriceMapper.class);
     private final PlatformSettlementPriceVersionMapper l1VersionMapper =
             mock(PlatformSettlementPriceVersionMapper.class);
@@ -62,14 +65,16 @@ class BuyerProductCommandServiceTest {
     void setUp() {
         when(databaseClock.now()).thenReturn(LocalDateTime.of(2026, 9, 4, 11, 0));
         service = new BuyerProductCommandService(
-                databaseClock, buyerMapper, productMapper, skuMapper, l1Mapper, l1VersionMapper,
+                databaseClock, buyerMapper, productMapper, l1Mapper, l1VersionMapper,
                 overrideMapper, overrideVersionMapper, businessNoGenerator,
-                new SettlementPriceResolver());
+                new SettlementPriceResolver(), new ProductSellabilityService(skuMapper, spuMapper));
         when(buyerMapper.selectByBuyerCodeForUpdate("BYR_A")).thenReturn(
                 BuyerDO.builder().id(5L).buyerCode("BYR_A").build());
         when(skuMapper.selectByCode("MOVIE_100")).thenReturn(PlatformSkuDO.builder()
-                .id(11L).skuCode("MOVIE_100").faceValue(10_000L)
+                .id(11L).spuId(101L).skuCode("MOVIE_100").faceValue(10_000L)
                 .status(CatalogEntityStatus.ACTIVE.getCode()).build());
+        when(spuMapper.selectById(101L)).thenReturn(PlatformSpuDO.builder()
+                .id(101L).status(CatalogEntityStatus.ACTIVE.getCode()).build());
         when(productMapper.updateById(any(BuyerProductDO.class))).thenReturn(1);
         when(overrideMapper.updateById(any(BuyerProductL2OverrideDO.class))).thenReturn(1);
         when(overrideMapper.clearCurrentVersion(any(), any(), any())).thenReturn(1);
@@ -172,7 +177,7 @@ class BuyerProductCommandServiceTest {
         when(buyerMapper.selectByBuyerCode("BYR_A")).thenReturn(
                 BuyerDO.builder().id(5L).buyerCode("BYR_A").build());
         when(skuMapper.selectById(11L)).thenReturn(PlatformSkuDO.builder()
-                .id(11L).skuCode("MOVIE_100").faceValue(10_000L)
+                .id(11L).spuId(101L).skuCode("MOVIE_100").faceValue(10_000L)
                 .status(CatalogEntityStatus.ACTIVE.getCode()).build());
     }
 

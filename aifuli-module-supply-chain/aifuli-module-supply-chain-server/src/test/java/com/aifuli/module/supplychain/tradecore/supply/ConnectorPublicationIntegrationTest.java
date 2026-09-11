@@ -38,6 +38,7 @@ import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
+import com.aifuli.module.supplychain.testsupport.ProductCenterTestConfiguration;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.testcontainers.containers.MySQLContainer;
 
@@ -294,7 +295,7 @@ class ConnectorPublicationIntegrationTest {
 
     @Configuration(proxyBeanMethods = false)
     @Import({SupplyChainDataSourceConfiguration.class, UlidGenerator.class, BusinessNoGenerator.class,
-            OutboxEventRepository.class, ProductCatalogCommandService.class,
+            OutboxEventRepository.class, ProductCatalogCommandService.class, ProductCenterTestConfiguration.class,
             QnmGameOrderV1Metadata.class, AdapterMetadataRegistry.class,
             ClosedJsonSchemaValidator.class,
             EnvironmentCredentialProvider.class, SupplierEndpointPolicy.class,

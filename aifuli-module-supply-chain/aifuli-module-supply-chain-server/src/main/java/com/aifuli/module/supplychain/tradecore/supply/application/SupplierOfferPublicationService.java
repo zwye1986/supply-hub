@@ -11,9 +11,8 @@ import com.aifuli.module.supplychain.supplieradapter.metadata.ClosedJsonSchemaVa
 import com.aifuli.module.supplychain.supplieradapter.metadata.SupplierConnectorCapabilityDO;
 import com.aifuli.module.supplychain.supplieradapter.metadata.SupplierConnectorCapabilityMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuDO;
-import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
-import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.FulfillmentType;
+import com.aifuli.module.supplychain.tradecore.catalog.application.ProductSellabilityService;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.InventorySourceDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierConnectorDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierConnectorVersionDO;
@@ -61,7 +60,6 @@ public class SupplierOfferPublicationService {
     private static final Set<String> MULTIPLICITIES = Set.of("NONE", "SINGLE", "MULTIPLE");
 
     private final SupplierMapper supplierMapper;
-    private final PlatformSkuMapper skuMapper;
     private final SupplierConnectorMapper connectorMapper;
     private final SupplierConnectorVersionMapper connectorVersionMapper;
     private final SupplierConnectorCapabilityMapper capabilityMapper;
@@ -74,6 +72,7 @@ public class SupplierOfferPublicationService {
     private final BusinessNoGenerator businessNoGenerator;
     private final OutboxEventRepository outboxRepository;
     private final ObjectMapper objectMapper;
+    private final ProductSellabilityService productSellabilityService;
 
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public String createRemoteOnDemandInventory(CreateInventorySourceCommand command) {
@@ -130,11 +129,10 @@ public class SupplierOfferPublicationService {
             throw new IllegalStateException("Supplier offer is not publishable at the expected version");
         }
         SupplierDO supplier = supplierMapper.selectById(offer.getSupplierId());
-        PlatformSkuDO sku = skuMapper.selectById(offer.getPlatformSkuId());
-        if (supplier == null || supplier.getStatus() != SupplierStatus.ACTIVE.getCode()
-                || sku == null || sku.getStatus() != CatalogEntityStatus.ACTIVE.getCode()) {
-            throw new IllegalStateException("Offer supplier or platform SKU is not active");
+        if (supplier == null || supplier.getStatus() != SupplierStatus.ACTIVE.getCode()) {
+            throw new IllegalStateException("Offer supplier is not active");
         }
+        PlatformSkuDO sku = productSellabilityService.requireSellableById(offer.getPlatformSkuId()).sku();
 
         SupplierConnectorVersionDO connectorVersion = connectorVersionMapper.selectById(command.connectorVersionId());
         SupplierConnectorDO connector = connectorVersion == null ? null
@@ -287,11 +285,7 @@ public class SupplierOfferPublicationService {
     }
 
     private PlatformSkuDO requireActiveSku(String skuCode) {
-        PlatformSkuDO sku = skuMapper.selectByCode(skuCode);
-        if (sku == null || sku.getStatus() != CatalogEntityStatus.ACTIVE.getCode()) {
-            throw new IllegalArgumentException("Active platform SKU does not exist: " + skuCode);
-        }
-        return sku;
+        return productSellabilityService.requireSellableByCode(skuCode).sku();
     }
 
     private JsonNode parse(String json) {

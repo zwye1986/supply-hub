@@ -478,7 +478,7 @@ public class SupplierProfileQueryService {
     public record SupplyScopeView(
             @Schema(description = "供货配置内部主键") Long id,
             @Schema(description = "可售品类封闭枚举名") String sellableCategory,
-            @Schema(description = "商品类型封闭枚举名") String productType,
+            @Schema(description = "动态商品类型编码") String productType,
             @Schema(description = "商品分类封闭枚举名") String productClassification,
             @Schema(description = "供货模式枚举名列表") List<String> supplyModes,
             @Schema(description = "供货上限") Long maxQuantity,

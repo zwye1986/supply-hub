@@ -16,8 +16,15 @@ class BusinessNoPrefixesTest {
         assertThat(BusinessNoPrefixes.BPD).isEqualTo("BPD_").hasSize(4);
         assertThat(BusinessNoPrefixes.PRJ).isEqualTo("PRJ_").hasSize(4);
         assertThat(BusinessNoPrefixes.PLT).isEqualTo("PLT_").hasSize(4);
+        assertThat(BusinessNoPrefixes.SPU).isEqualTo("SPU_").hasSize(4);
+        assertThat(BusinessNoPrefixes.SKU).isEqualTo("SKU_").hasSize(4);
+        assertThat(BusinessNoPrefixes.BRD).isEqualTo("BRD_").hasSize(4);
+        assertThat(BusinessNoPrefixes.CAT).isEqualTo("CAT_").hasSize(4);
+        assertThat(BusinessNoPrefixes.PT).isEqualTo("PT_").hasSize(3);
         assertThat(BusinessNoPrefixes.ALL).contains(
                 BusinessNoPrefixes.BYR, BusinessNoPrefixes.BPD,
-                BusinessNoPrefixes.PRJ, BusinessNoPrefixes.PLT);
+                BusinessNoPrefixes.PRJ, BusinessNoPrefixes.PLT,
+                BusinessNoPrefixes.SPU, BusinessNoPrefixes.SKU, BusinessNoPrefixes.BRD,
+                BusinessNoPrefixes.CAT, BusinessNoPrefixes.PT);
     }
 }

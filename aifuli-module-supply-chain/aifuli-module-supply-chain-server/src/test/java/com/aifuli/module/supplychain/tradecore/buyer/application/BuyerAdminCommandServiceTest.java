@@ -22,6 +22,8 @@ import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerIntegrationM
 import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerMapper;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerTenantBindingMapper;
 import com.aifuli.module.supplychain.tradecore.buyer.domain.BuyerStatus;
+import com.aifuli.module.supplychain.tradecore.catalog.application.ProductTypeValidationService;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProductTypeDO;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -61,6 +63,7 @@ class BuyerAdminCommandServiceTest {
     private final EnvelopeCryptoPort envelopeCrypto = mock(EnvelopeCryptoPort.class);
     private final SupplyChainDatabaseClock databaseClock = mock(SupplyChainDatabaseClock.class);
     private final BuyerTenantBindingMapper tenantBindingMapper = mock(BuyerTenantBindingMapper.class);
+    private final ProductTypeValidationService productTypeValidationService = mock(ProductTypeValidationService.class);
     private BuyerAdminCommandService service;
 
     @BeforeEach
@@ -69,7 +72,9 @@ class BuyerAdminCommandServiceTest {
         service = new BuyerAdminCommandService(
                 databaseClock, buyerMapper, contactMapper, integrationModeMapper, cooperationModeMapper,
                 categoryScopeMapper, fileRefMapper, accountOpeningService,
-                businessNoGenerator, envelopeCrypto);
+                businessNoGenerator, envelopeCrypto, productTypeValidationService);
+        when(productTypeValidationService.requireActiveForUpdate(any())).thenAnswer(invocation ->
+                ProductTypeDO.builder().typeCode(invocation.getArgument(0)).status((short) 10).build());
         when(envelopeCrypto.encrypt(any(), any())).thenReturn(new EncryptedPayload(new byte[]{1}, "test-v1"));
         when(buyerMapper.updateById(any(BuyerDO.class))).thenReturn(1);
     }

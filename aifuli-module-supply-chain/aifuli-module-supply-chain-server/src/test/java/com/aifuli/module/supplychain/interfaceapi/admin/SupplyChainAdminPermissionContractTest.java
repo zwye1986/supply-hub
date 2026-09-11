@@ -25,6 +25,26 @@ import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminP
 import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.SUPPLIER_QUERY_EXPRESSION;
 import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.SUPPLIER_UPDATE_EXPRESSION;
 import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.SUPPLIER_UPDATE_STATUS_EXPRESSION;
+import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.PRODUCT_QUERY_EXPRESSION;
+import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.PRODUCT_CREATE_EXPRESSION;
+import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.PRODUCT_UPDATE_EXPRESSION;
+import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.PRODUCT_DELETE_EXPRESSION;
+import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.PRODUCT_UPDATE_STATUS_EXPRESSION;
+import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.CATEGORY_QUERY_EXPRESSION;
+import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.CATEGORY_CREATE_EXPRESSION;
+import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.CATEGORY_UPDATE_EXPRESSION;
+import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.CATEGORY_DELETE_EXPRESSION;
+import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.CATEGORY_UPDATE_STATUS_EXPRESSION;
+import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.BRAND_QUERY_EXPRESSION;
+import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.BRAND_CREATE_EXPRESSION;
+import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.BRAND_UPDATE_EXPRESSION;
+import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.BRAND_DELETE_EXPRESSION;
+import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.BRAND_UPDATE_STATUS_EXPRESSION;
+import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.PRODUCT_TYPE_QUERY_EXPRESSION;
+import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.PRODUCT_TYPE_CREATE_EXPRESSION;
+import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.PRODUCT_TYPE_UPDATE_EXPRESSION;
+import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.PRODUCT_TYPE_DELETE_EXPRESSION;
+import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.PRODUCT_TYPE_UPDATE_STATUS_EXPRESSION;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -91,8 +111,33 @@ class SupplyChainAdminPermissionContractTest {
 
     @Test
     void sharedReadEndpointsUseCompositeRules() {
-        assertMethodPermissions(CategoryAdminController.class, Map.of("tree", READ_OPTIONS_EXPRESSION));
+        assertMethodPermissions(CategoryAdminController.class, Map.ofEntries(
+                Map.entry("tree", READ_OPTIONS_EXPRESSION),
+                Map.entry("managementTree", CATEGORY_QUERY_EXPRESSION),
+                Map.entry("detail", CATEGORY_QUERY_EXPRESSION),
+                Map.entry("create", CATEGORY_CREATE_EXPRESSION),
+                Map.entry("update", CATEGORY_UPDATE_EXPRESSION),
+                Map.entry("status", CATEGORY_UPDATE_STATUS_EXPRESSION),
+                Map.entry("delete", CATEGORY_DELETE_EXPRESSION)));
         assertMethodPermissions(PlatformSkuAdminController.class, Map.of("page", PLATFORM_SKU_QUERY_EXPRESSION));
+    }
+
+    @Test
+    void productCenterMethodsUseFineGrainedPermissionsWithAdminFallback() {
+        assertMethodPermissions(ProductAdminController.class, Map.ofEntries(
+                Map.entry("page", PRODUCT_QUERY_EXPRESSION), Map.entry("detail", PRODUCT_QUERY_EXPRESSION),
+                Map.entry("create", PRODUCT_CREATE_EXPRESSION), Map.entry("update", PRODUCT_UPDATE_EXPRESSION),
+                Map.entry("changeSpuStatus", PRODUCT_UPDATE_STATUS_EXPRESSION),
+                Map.entry("changeSkuStatus", PRODUCT_UPDATE_STATUS_EXPRESSION),
+                Map.entry("deleteSpu", PRODUCT_DELETE_EXPRESSION), Map.entry("deleteSku", PRODUCT_DELETE_EXPRESSION)));
+        assertMethodPermissions(BrandAdminController.class, Map.ofEntries(
+                Map.entry("page", BRAND_QUERY_EXPRESSION), Map.entry("detail", BRAND_QUERY_EXPRESSION),
+                Map.entry("create", BRAND_CREATE_EXPRESSION), Map.entry("update", BRAND_UPDATE_EXPRESSION),
+                Map.entry("status", BRAND_UPDATE_STATUS_EXPRESSION), Map.entry("delete", BRAND_DELETE_EXPRESSION)));
+        assertMethodPermissions(ProductTypeAdminController.class, Map.ofEntries(
+                Map.entry("page", PRODUCT_TYPE_QUERY_EXPRESSION), Map.entry("detail", PRODUCT_TYPE_QUERY_EXPRESSION),
+                Map.entry("create", PRODUCT_TYPE_CREATE_EXPRESSION), Map.entry("update", PRODUCT_TYPE_UPDATE_EXPRESSION),
+                Map.entry("status", PRODUCT_TYPE_UPDATE_STATUS_EXPRESSION), Map.entry("delete", PRODUCT_TYPE_DELETE_EXPRESSION)));
     }
 
     @Test

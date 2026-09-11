@@ -259,7 +259,7 @@ public class SupplierAdminController {
     public CommonResult<PageResult<OfferListItem>> listOffers(
             @PathVariable String supplierCode,
             @Parameter(description = "可售品类枚举名") @RequestParam(required = false) String sellableCategory,
-            @Parameter(description = "商品类型枚举名") @RequestParam(required = false) String productType,
+            @Parameter(description = "动态商品类型编码") @RequestParam(required = false) String productType,
             @Parameter(description = "商品分类枚举名") @RequestParam(required = false) String productClassification,
             @Parameter(description = "页码，默认1") @RequestParam(required = false) Integer pageNo,
             @Parameter(description = "每页条数，默认20") @RequestParam(required = false) Integer pageSize) {
@@ -623,7 +623,7 @@ public class SupplierAdminController {
         @Schema(description = "可售品类枚举名")
         private String sellableCategory;
         @NotBlank
-        @Schema(description = "商品类型枚举名")
+        @Schema(description = "动态商品类型编码")
         private String productType;
         @NotBlank
         @Schema(description = "商品分类枚举名")

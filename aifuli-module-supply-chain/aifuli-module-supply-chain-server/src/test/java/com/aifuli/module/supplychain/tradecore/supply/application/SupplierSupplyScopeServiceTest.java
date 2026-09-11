@@ -2,6 +2,8 @@ package com.aifuli.module.supplychain.tradecore.supply.application;
 
 import com.aifuli.framework.common.exception.ServiceException;
 import com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock;
+import com.aifuli.module.supplychain.tradecore.catalog.application.ProductTypeValidationService;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProductTypeDO;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierSupplyScopeService.ScopeLine;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierSupplyScopeDO;
@@ -37,11 +39,15 @@ class SupplierSupplyScopeServiceTest {
     private final SupplierMapper supplierMapper = mock(SupplierMapper.class);
     private final SupplierSupplyScopeMapper scopeMapper = mock(SupplierSupplyScopeMapper.class);
     private final SupplierSupplyScopeModeMapper modeMapper = mock(SupplierSupplyScopeModeMapper.class);
+    private final ProductTypeValidationService productTypeValidationService = mock(ProductTypeValidationService.class);
     private SupplierSupplyScopeService service;
 
     @BeforeEach
     void setUp() {
-        service = new SupplierSupplyScopeService(databaseClock, supplierMapper, scopeMapper, modeMapper);
+        service = new SupplierSupplyScopeService(databaseClock, supplierMapper, scopeMapper, modeMapper,
+                productTypeValidationService);
+        when(productTypeValidationService.requireActiveForUpdate(any())).thenAnswer(invocation ->
+                ProductTypeDO.builder().typeCode(invocation.getArgument(0)).status((short) 10).build());
         when(databaseClock.now()).thenReturn(LocalDateTime.of(2026, 9, 4, 19, 0));
         when(supplierMapper.selectByCodeForUpdate("SPL_A")).thenReturn(
                 SupplierDO.builder().id(9L).supplierCode("SPL_A").build());

@@ -90,6 +90,38 @@ public interface SupplyChainErrorCodeConstants {
     ErrorCode BUYER_CREDIT_CODE_DUPLICATE = error(1_050_001_074, "公司名称+统一社会信用代码联合重复");
     ErrorCode PROJECT_PERIOD_INVALID = error(1_050_001_075, "项目结束日早于开始日");
     ErrorCode INVOICE_FIELD_INVALID = error(1_050_001_076, "开票信息字段不完整或与抬头类型冲突");
+    ErrorCode BRAND_NOT_FOUND = error(1_050_001_077, "商品品牌不存在");
+    ErrorCode CATEGORY_NOT_FOUND = error(1_050_001_078, "商品分类不存在");
+    ErrorCode PLATFORM_SPU_NOT_FOUND = error(1_050_001_079, "平台 SPU 不存在");
+    ErrorCode PLATFORM_SKU_NOT_FOUND = error(1_050_001_080, "平台 SKU 不存在");
+    ErrorCode PRODUCT_TYPE_NOT_FOUND = error(1_050_001_081, "商品类型不存在");
+    ErrorCode PRODUCT_TYPE_INACTIVE = error(1_050_001_082, "商品类型未启用");
+    ErrorCode PRODUCT_TYPE_DUPLICATE = error(1_050_001_083, "商品类型编码或名称已存在");
+    ErrorCode PRODUCT_TYPE_HAS_PRODUCTS = error(1_050_001_084, "商品类型仍有关联商品，禁止删除");
+    ErrorCode BRAND_NAME_DUPLICATE = error(1_050_001_085, "品牌名称已存在");
+    ErrorCode BRAND_HAS_PRODUCTS = error(1_050_001_086, "品牌仍有关联商品，禁止删除");
+    ErrorCode CATEGORY_NAME_DUPLICATE_UNDER_SAME_PARENT =
+            error(1_050_001_087, "分类名称在同一父级下已存在");
+    ErrorCode CATEGORY_HAS_CHILDREN = error(1_050_001_088, "分类仍有有效子分类，禁止删除");
+    ErrorCode CATEGORY_HAS_PRODUCTS = error(1_050_001_089, "分类仍有关联商品，禁止删除");
+    ErrorCode CATEGORY_PARENT_INVALID = error(1_050_001_090, "分类父级无效或形成循环");
+    ErrorCode PRODUCT_CANNOT_DELETE_HAS_SUPPLIER_OFFER =
+            error(1_050_001_091, "商品仍有关联供应商报价，禁止删除");
+    ErrorCode PRODUCT_CANNOT_DELETE_HAS_BUYER_LISTING =
+            error(1_050_001_092, "商品仍有关联采购商上架单，禁止删除");
+    ErrorCode PRODUCT_CANNOT_DELETE_HAS_BUYER_PRODUCT =
+            error(1_050_001_093, "商品仍有关联分销商品，禁止删除");
+    ErrorCode PRODUCT_CANNOT_DELETE_HAS_PROJECT_LISTING =
+            error(1_050_001_094, "商品仍有关联项目商品，禁止删除");
+    ErrorCode PRODUCT_SCHEMA_INVALID = error(1_050_001_095, "商品履约 Schema 配置不合法");
+    ErrorCode PRODUCT_STATUS_INVALID = error(1_050_001_096, "商品中心实体状态迁移不合法");
+    ErrorCode PRODUCT_CONCURRENT_UPDATE = error(1_050_001_097, "商品中心实体已被并发修改");
+    ErrorCode PRODUCT_DELIVERY_TYPE_INVALID = error(1_050_001_098, "商品配送履约模式不合法");
+    ErrorCode PRODUCT_QUANTITY_RANGE_INVALID = error(1_050_001_099, "商品起购量与限购量区间不合法");
+    ErrorCode PRODUCT_SKU_REQUIRED = error(1_050_001_100, "平台商品至少需要挂载一个 SKU");
+    ErrorCode PRODUCT_SKU_CODE_DUPLICATE = error(1_050_001_101, "同一次请求内 SKU 编码重复");
+    ErrorCode PRODUCT_SKU_FIELD_INVALID = error(1_050_001_102, "SKU 名称、履约模式或价格字段不合法");
+    ErrorCode PRODUCT_CURRENCY_INVALID = error(1_050_001_103, "平台 SKU 币种仅支持 CNY");
 
     /** 订单详情不可用只作为成功响应中的详情标记，不作为 CommonResult 失败码。 */
     String DETAIL_UNAVAILABLE = "DETAIL_UNAVAILABLE";
@@ -170,7 +202,34 @@ public interface SupplyChainErrorCodeConstants {
             entry(PLATFORM_SETTLEMENT_PRICE_MISSING, RetryDirective.DO_NOT_RETRY),
             entry(BUYER_CREDIT_CODE_DUPLICATE, RetryDirective.DO_NOT_RETRY),
             entry(PROJECT_PERIOD_INVALID, RetryDirective.DO_NOT_RETRY),
-            entry(INVOICE_FIELD_INVALID, RetryDirective.DO_NOT_RETRY));
+            entry(INVOICE_FIELD_INVALID, RetryDirective.DO_NOT_RETRY),
+            entry(BRAND_NOT_FOUND, RetryDirective.DO_NOT_RETRY),
+            entry(CATEGORY_NOT_FOUND, RetryDirective.DO_NOT_RETRY),
+            entry(PLATFORM_SPU_NOT_FOUND, RetryDirective.DO_NOT_RETRY),
+            entry(PLATFORM_SKU_NOT_FOUND, RetryDirective.DO_NOT_RETRY),
+            entry(PRODUCT_TYPE_NOT_FOUND, RetryDirective.DO_NOT_RETRY),
+            entry(PRODUCT_TYPE_INACTIVE, RetryDirective.RETRY_SAME_KEY_AFTER_CONDITION_CHANGE),
+            entry(PRODUCT_TYPE_DUPLICATE, RetryDirective.DO_NOT_RETRY),
+            entry(PRODUCT_TYPE_HAS_PRODUCTS, RetryDirective.RETRY_SAME_KEY_AFTER_CONDITION_CHANGE),
+            entry(BRAND_NAME_DUPLICATE, RetryDirective.DO_NOT_RETRY),
+            entry(BRAND_HAS_PRODUCTS, RetryDirective.RETRY_SAME_KEY_AFTER_CONDITION_CHANGE),
+            entry(CATEGORY_NAME_DUPLICATE_UNDER_SAME_PARENT, RetryDirective.DO_NOT_RETRY),
+            entry(CATEGORY_HAS_CHILDREN, RetryDirective.RETRY_SAME_KEY_AFTER_CONDITION_CHANGE),
+            entry(CATEGORY_HAS_PRODUCTS, RetryDirective.RETRY_SAME_KEY_AFTER_CONDITION_CHANGE),
+            entry(CATEGORY_PARENT_INVALID, RetryDirective.DO_NOT_RETRY),
+            entry(PRODUCT_CANNOT_DELETE_HAS_SUPPLIER_OFFER, RetryDirective.RETRY_SAME_KEY_AFTER_CONDITION_CHANGE),
+            entry(PRODUCT_CANNOT_DELETE_HAS_BUYER_LISTING, RetryDirective.RETRY_SAME_KEY_AFTER_CONDITION_CHANGE),
+            entry(PRODUCT_CANNOT_DELETE_HAS_BUYER_PRODUCT, RetryDirective.RETRY_SAME_KEY_AFTER_CONDITION_CHANGE),
+            entry(PRODUCT_CANNOT_DELETE_HAS_PROJECT_LISTING, RetryDirective.RETRY_SAME_KEY_AFTER_CONDITION_CHANGE),
+            entry(PRODUCT_SCHEMA_INVALID, RetryDirective.DO_NOT_RETRY),
+            entry(PRODUCT_STATUS_INVALID, RetryDirective.RETRY_SAME_KEY_AFTER_CONDITION_CHANGE),
+            entry(PRODUCT_CONCURRENT_UPDATE, RetryDirective.RETRY_SAME_KEY),
+            entry(PRODUCT_DELIVERY_TYPE_INVALID, RetryDirective.DO_NOT_RETRY),
+            entry(PRODUCT_QUANTITY_RANGE_INVALID, RetryDirective.DO_NOT_RETRY),
+            entry(PRODUCT_SKU_REQUIRED, RetryDirective.DO_NOT_RETRY),
+            entry(PRODUCT_SKU_CODE_DUPLICATE, RetryDirective.DO_NOT_RETRY),
+            entry(PRODUCT_SKU_FIELD_INVALID, RetryDirective.DO_NOT_RETRY),
+            entry(PRODUCT_CURRENCY_INVALID, RetryDirective.DO_NOT_RETRY));
 
     static RetryDirective retryDirective(int errorCode) {
         return RETRY_DIRECTIVES.getOrDefault(errorCode, RetryDirective.DO_NOT_RETRY);

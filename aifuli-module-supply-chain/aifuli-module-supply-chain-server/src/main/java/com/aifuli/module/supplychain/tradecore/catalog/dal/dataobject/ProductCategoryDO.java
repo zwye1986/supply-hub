@@ -24,6 +24,8 @@ public class ProductCategoryDO {
     private Long parentId;
     private Short categoryLevel;
     private Integer sort;
+    /** 前端展示可见性: 1-显示, 0-隐藏 */
+    private Short visible;
     private Short status;
     @Version
     private Long version;

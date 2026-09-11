@@ -9,4 +9,8 @@ public interface ProductCategoryMapper extends BaseMapperX<ProductCategoryDO> {
     default ProductCategoryDO selectByCode(String code) {
         return selectOne(ProductCategoryDO::getCategoryCode, code);
     }
+
+    default ProductCategoryDO selectByCodeForUpdate(String code) {
+        return selectOneForUpdate(ProductCategoryDO::getCategoryCode, code);
+    }
 }

@@ -172,3 +172,75 @@ SET menu.name = actions.name, menu.type = 3, menu.sort = actions.sort,
     menu.component_name = NULL, menu.status = 0, menu.visible = b'1', menu.keep_alive = b'1',
     menu.always_show = b'1', menu.updater = @sc_creator, menu.update_time = NOW()
 WHERE BINARY menu.application_code = BINARY @sc_app AND menu.deleted = b'0';
+
+-- 商品中心目录及四个管理页面。电影、点餐等商品类型共用平台商品页面，不建立专属菜单。
+INSERT INTO system_menu
+    (application_code, name, permission, type, sort, parent_id, path, icon, component, component_name,
+     status, visible, keep_alive, always_show, creator, create_time, updater, update_time, deleted)
+SELECT @sc_app, '商品中心', '', 1, 3, @sc_root_id, 'product-center', 'ep:goods-filled', NULL,
+       'SupplierProductCenter', 0, b'1', b'1', b'1', @sc_creator, NOW(), @sc_creator, NOW(), b'0'
+WHERE NOT EXISTS (
+    SELECT 1 FROM system_menu WHERE BINARY application_code = BINARY @sc_app
+      AND parent_id = @sc_root_id AND path = 'product-center' AND deleted = b'0'
+);
+
+SET @sc_product_center_id = (
+    SELECT MIN(id) FROM system_menu WHERE BINARY application_code = BINARY @sc_app
+      AND parent_id = @sc_root_id AND path = 'product-center' AND deleted = b'0'
+);
+
+INSERT INTO system_menu
+    (application_code, name, permission, type, sort, parent_id, path, icon, component, component_name,
+     status, visible, keep_alive, always_show, creator, create_time, updater, update_time, deleted)
+SELECT @sc_app, pages.name, pages.permission, 2, pages.sort, @sc_product_center_id, pages.path,
+       pages.icon, pages.component, pages.component_name, 0, b'1', b'1', b'1',
+       @sc_creator, NOW(), @sc_creator, NOW(), b'0'
+FROM (
+    SELECT '平台商品' name, 'supply-chain:product:query' permission, 1 sort, 'products' path,
+           'ep:shopping-bag' icon, 'supplier/product-center/product/index' component,
+           'SupplierPlatformProduct' component_name
+    UNION ALL SELECT '商品分类', 'supply-chain:category:query', 2, 'categories', 'ep:menu',
+           'supplier/product-center/category/index', 'SupplierProductCategory'
+    UNION ALL SELECT '商品品牌', 'supply-chain:brand:query', 3, 'brands', 'ep:price-tag',
+           'supplier/product-center/brand/index', 'SupplierProductBrand'
+    UNION ALL SELECT '商品类型', 'supply-chain:product-type:query', 4, 'product-types', 'ep:grid',
+           'supplier/product-center/product-type/index', 'SupplierProductType'
+) pages
+WHERE NOT EXISTS (
+    SELECT 1 FROM system_menu existing WHERE BINARY existing.application_code = BINARY @sc_app
+      AND BINARY existing.permission = BINARY pages.permission AND existing.deleted = b'0'
+);
+
+SET @sc_product_page_id = (SELECT MIN(id) FROM system_menu WHERE BINARY application_code = BINARY @sc_app AND permission = 'supply-chain:product:query' AND deleted = b'0');
+SET @sc_category_page_id = (SELECT MIN(id) FROM system_menu WHERE BINARY application_code = BINARY @sc_app AND permission = 'supply-chain:category:query' AND deleted = b'0');
+SET @sc_brand_page_id = (SELECT MIN(id) FROM system_menu WHERE BINARY application_code = BINARY @sc_app AND permission = 'supply-chain:brand:query' AND deleted = b'0');
+SET @sc_product_type_page_id = (SELECT MIN(id) FROM system_menu WHERE BINARY application_code = BINARY @sc_app AND permission = 'supply-chain:product-type:query' AND deleted = b'0');
+
+-- 商品中心动作权限。查询权限由 PAGE 行承载。
+INSERT INTO system_menu
+    (application_code, name, permission, type, sort, parent_id, path, icon, component, component_name,
+     status, visible, keep_alive, always_show, creator, create_time, updater, update_time, deleted)
+SELECT @sc_app, actions.name, actions.permission, 3, actions.sort, actions.parent_id, '', '', '', NULL,
+       0, b'1', b'1', b'1', @sc_creator, NOW(), @sc_creator, NOW(), b'0'
+FROM (
+    SELECT '商品新增' name, 'supply-chain:product:create' permission, 1 sort, @sc_product_page_id parent_id
+    UNION ALL SELECT '商品修改', 'supply-chain:product:update', 2, @sc_product_page_id
+    UNION ALL SELECT '商品状态变更', 'supply-chain:product:update-status', 3, @sc_product_page_id
+    UNION ALL SELECT '商品删除', 'supply-chain:product:delete', 4, @sc_product_page_id
+    UNION ALL SELECT '分类新增', 'supply-chain:category:create', 1, @sc_category_page_id
+    UNION ALL SELECT '分类修改', 'supply-chain:category:update', 2, @sc_category_page_id
+    UNION ALL SELECT '分类状态变更', 'supply-chain:category:update-status', 3, @sc_category_page_id
+    UNION ALL SELECT '分类删除', 'supply-chain:category:delete', 4, @sc_category_page_id
+    UNION ALL SELECT '品牌新增', 'supply-chain:brand:create', 1, @sc_brand_page_id
+    UNION ALL SELECT '品牌修改', 'supply-chain:brand:update', 2, @sc_brand_page_id
+    UNION ALL SELECT '品牌状态变更', 'supply-chain:brand:update-status', 3, @sc_brand_page_id
+    UNION ALL SELECT '品牌删除', 'supply-chain:brand:delete', 4, @sc_brand_page_id
+    UNION ALL SELECT '类型新增', 'supply-chain:product-type:create', 1, @sc_product_type_page_id
+    UNION ALL SELECT '类型修改', 'supply-chain:product-type:update', 2, @sc_product_type_page_id
+    UNION ALL SELECT '类型状态变更', 'supply-chain:product-type:update-status', 3, @sc_product_type_page_id
+    UNION ALL SELECT '类型删除', 'supply-chain:product-type:delete', 4, @sc_product_type_page_id
+) actions
+WHERE NOT EXISTS (
+    SELECT 1 FROM system_menu existing WHERE BINARY existing.application_code = BINARY @sc_app
+      AND BINARY existing.permission = BINARY actions.permission AND existing.deleted = b'0'
+);

@@ -46,6 +46,14 @@ class FulfillmentTargetSchemaRegistryTest {
     }
 
     @Test
+    void validatesSupportedSchemaWithoutRequiringRuntimeValues() {
+        assertThatCode(() -> registry.requireSupportedSchema("DIRECT_RECHARGE_TARGET", 1))
+                .doesNotThrowAnyException();
+        assertThatThrownBy(() -> registry.requireSupportedSchema("DIRECT_RECHARGE_TARGET", 2))
+                .isInstanceOf(FulfillmentTargetSchemaRegistry.InvalidTargetException.class);
+    }
+
+    @Test
     void rejectsSupplierPrivateOrUrlKeys() {
         Map<String, String> values = new LinkedHashMap<>();
         values.put(FulfillmentTargetFields.ACCOUNT_TYPE, FulfillmentTargetFields.ACCOUNT_TYPE_MOBILE);

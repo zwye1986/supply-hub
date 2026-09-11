@@ -24,6 +24,14 @@ public class PlatformSkuDO {
     private String skuName;
     private String fulfillmentType;
     private Long faceValue;
+    /** 市场划线价/吊牌价，单位为分 */
+    private Long marketPrice;
+    /** 建议零售价/销售建议价，单位为分 */
+    private Long suggestedSalePrice;
+    /** SKU单次最小起购数量 */
+    private Long minQuantity;
+    /** SKU单次最大限购数量 */
+    private Long maxQuantity;
     private String currency;
     private String targetSchemaCode;
     private Integer targetSchemaVersion;

@@ -29,7 +29,7 @@ public class BuyerCategoryScopeDO {
     private Long buyerId;
     /** 范围维度：SELLABLE可售品类 PRODUCT_TYPE商品类型，见BuyerScopeKind */
     private String scopeKind;
-    /** 对应枚举名，见SellableCategory/ProductTypeTag */
+    /** 范围编码：可售品类仍使用 SellableCategory；商品类型从 sc_product_type 动态取值。 */
     private String scopeCode;
     /** 创建时间，Asia/Shanghai */
     private LocalDateTime createdAt;

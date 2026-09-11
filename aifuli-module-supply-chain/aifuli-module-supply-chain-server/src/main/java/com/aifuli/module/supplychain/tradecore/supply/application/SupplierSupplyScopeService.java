@@ -3,9 +3,9 @@ package com.aifuli.module.supplychain.tradecore.supply.application;
 import com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock;
 
 import com.aifuli.framework.common.exception.ServiceException;
+import com.aifuli.module.supplychain.tradecore.catalog.application.ProductTypeValidationService;
 import com.aifuli.module.supplychain.tradecore.profile.domain.ClosedEnums;
 import com.aifuli.module.supplychain.tradecore.profile.domain.ProductClassification;
-import com.aifuli.module.supplychain.tradecore.profile.domain.ProductTypeTag;
 import com.aifuli.module.supplychain.tradecore.profile.domain.SellableCategory;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierSupplyScopeDO;
@@ -23,7 +23,9 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import static com.aifuli.framework.common.exception.util.ServiceExceptionUtil.exception;
@@ -48,6 +50,7 @@ public class SupplierSupplyScopeService {
     private final SupplierMapper supplierMapper;
     private final SupplierSupplyScopeMapper scopeMapper;
     private final SupplierSupplyScopeModeMapper modeMapper;
+    private final ProductTypeValidationService productTypeValidationService;
 
     /**
      * 全量替换供应商供货配置。无 FK，必须先按现有 scope id 删除模式子表再删主表。
@@ -63,10 +66,12 @@ public class SupplierSupplyScopeService {
         }
         Set<String> triples = new HashSet<>();
         List<ScopeLine> normalized = lines == null ? List.of() : lines;
+        Map<String, String> normalizedProductTypes = new HashMap<>();
         int modeCount = 0;
         for (ScopeLine line : normalized) {
             String sellableCategory = ClosedEnums.parseRequired(SellableCategory.class, line.sellableCategory()).name();
-            String productType = ClosedEnums.parseRequired(ProductTypeTag.class, line.productType()).name();
+            String productType = normalizedProductTypes.computeIfAbsent(line.productType(),
+                    code -> productTypeValidationService.requireActiveForUpdate(code).getTypeCode());
             String productClassification =
                     ClosedEnums.parseRequired(ProductClassification.class, line.productClassification()).name();
             String key = sellableCategory + ":" + productType + ":" + productClassification;
@@ -94,7 +99,7 @@ public class SupplierSupplyScopeService {
                 SupplierSupplyScopeDO scope = SupplierSupplyScopeDO.builder()
                         .supplierId(supplier.getId())
                         .sellableCategory(ClosedEnums.parseRequired(SellableCategory.class, line.sellableCategory()).name())
-                        .productType(ClosedEnums.parseRequired(ProductTypeTag.class, line.productType()).name())
+                        .productType(normalizedProductTypes.get(line.productType()))
                         .productClassification(
                                 ClosedEnums.parseRequired(ProductClassification.class, line.productClassification()).name())
                         .maxQuantity(line.maxQuantity())

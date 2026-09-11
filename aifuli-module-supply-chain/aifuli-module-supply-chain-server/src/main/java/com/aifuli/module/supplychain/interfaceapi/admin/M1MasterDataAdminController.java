@@ -63,7 +63,9 @@ public class M1MasterDataAdminController {
     }
 
     @PostMapping("/brands")
-    @Operation(summary = "创建平台品牌草稿")
+    @Deprecated
+    @Operation(summary = "创建平台品牌草稿（兼容接口）", deprecated = true,
+            description = "请迁移至 POST /supply-chain/brands；本接口委托同一品牌服务。")
     public CommonResult<String> createBrand(@Valid @RequestBody CreateBrandReqVO request) {
         return success(catalogCommandService.createBrand(new ProductCatalogCommandService.CreateBrandCommand(
                 request.getBrandCode(), request.getBrandName(), request.getEnglishName(),
@@ -71,7 +73,9 @@ public class M1MasterDataAdminController {
     }
 
     @PostMapping("/categories")
-    @Operation(summary = "创建平台商品类目草稿")
+    @Deprecated
+    @Operation(summary = "创建平台商品类目草稿（兼容接口）", deprecated = true,
+            description = "请迁移至 POST /supply-chain/categories；本接口委托同一分类服务。")
     public CommonResult<String> createCategory(@Valid @RequestBody CreateCategoryReqVO request) {
         return success(catalogCommandService.createCategory(new ProductCatalogCommandService.CreateCategoryCommand(
                 request.getCategoryCode(), request.getCategoryName(), request.getParentCategoryCode(),
@@ -79,7 +83,9 @@ public class M1MasterDataAdminController {
     }
 
     @PostMapping("/spus")
-    @Operation(summary = "创建平台标准商品 SPU 草稿")
+    @Deprecated
+    @Operation(summary = "创建平台标准商品 SPU 草稿（兼容接口）", deprecated = true,
+            description = "请迁移至 POST /supply-chain/products/spus。")
     public CommonResult<String> createSpu(@Valid @RequestBody CreateSpuReqVO request) {
         return success(catalogCommandService.createSpu(new ProductCatalogCommandService.CreateSpuCommand(
                 request.getSpuCode(), request.getBrandCode(), request.getPrimaryCategoryCode(),
@@ -89,7 +95,9 @@ public class M1MasterDataAdminController {
     }
 
     @PostMapping("/skus")
-    @Operation(summary = "创建平台标准商品 SKU 草稿")
+    @Deprecated
+    @Operation(summary = "创建平台标准商品 SKU 草稿（兼容接口）", deprecated = true,
+            description = "请迁移至 POST /supply-chain/products/spus 复合创建。")
     public CommonResult<String> createSku(@Valid @RequestBody CreateSkuReqVO request) {
         return success(catalogCommandService.createSku(new ProductCatalogCommandService.CreateSkuCommand(
                 request.getSkuCode(), request.getSpuCode(), request.getSkuName(), request.getFulfillmentType(),
@@ -98,7 +106,9 @@ public class M1MasterDataAdminController {
     }
 
     @PutMapping("/catalog-entities/status")
-    @Operation(summary = "变更品牌、类目、SPU 或 SKU 的管理状态")
+    @Deprecated
+    @Operation(summary = "变更品牌、类目、SPU 或 SKU 的管理状态（兼容接口）", deprecated = true,
+            description = "请迁移至各商品中心资源的 /{code}/status 端点。")
     public CommonResult<Boolean> changeCatalogEntityStatus(
             @Valid @RequestBody ChangeCatalogEntityStatusReqVO request) {
         CatalogEntityStatus status = CatalogEntityStatus.valueOf(request.getTargetStatus());
@@ -216,7 +226,7 @@ public class M1MasterDataAdminController {
         private String primaryCategoryCode;
         @NotBlank @Schema(description = "可售品类枚举名，供货命中用", example = "MOVIE")
         private String sellableCategory;
-        @NotBlank @Schema(description = "商品类型枚举名，供货命中用", example = "MOVIE")
+        @NotBlank @Schema(description = "动态商品类型编码，供货命中用", example = "MOVIE")
         private String productType;
         @NotBlank @Schema(description = "商品分类枚举名，供货命中用", example = "MOVIE_TICKET")
         private String productClassification;

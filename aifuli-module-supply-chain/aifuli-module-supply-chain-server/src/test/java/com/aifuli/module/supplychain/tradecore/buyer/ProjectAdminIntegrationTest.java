@@ -49,6 +49,7 @@ import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
+import com.aifuli.module.supplychain.testsupport.ProductCenterTestConfiguration;
 import org.testcontainers.containers.MySQLContainer;
 
 import java.time.LocalDate;
@@ -290,7 +291,7 @@ class ProjectAdminIntegrationTest {
 
     @Configuration(proxyBeanMethods = false)
     @Import({SupplyChainDataSourceConfiguration.class, UlidGenerator.class, BusinessNoGenerator.class,
-            AesGcmEnvelopeCrypto.class, ProductCatalogCommandService.class,
+            AesGcmEnvelopeCrypto.class, ProductCatalogCommandService.class, ProductCenterTestConfiguration.class,
             SettlementPriceResolver.class,
             BuyerAccountOpeningService.class, AccountLedgerWriter.class,
             BuyerAdminCommandService.class, BuyerAdminQueryService.class,

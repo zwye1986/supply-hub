@@ -31,6 +31,30 @@ public final class SupplyChainAdminPermissions {
     public static final String PROJECT_DELETE = "supply-chain:project:delete";
     public static final String PROJECT_UPDATE_STATUS = "supply-chain:project:update-status";
 
+    public static final String PRODUCT_QUERY = "supply-chain:product:query";
+    public static final String PRODUCT_CREATE = "supply-chain:product:create";
+    public static final String PRODUCT_UPDATE = "supply-chain:product:update";
+    public static final String PRODUCT_DELETE = "supply-chain:product:delete";
+    public static final String PRODUCT_UPDATE_STATUS = "supply-chain:product:update-status";
+
+    public static final String CATEGORY_QUERY = "supply-chain:category:query";
+    public static final String CATEGORY_CREATE = "supply-chain:category:create";
+    public static final String CATEGORY_UPDATE = "supply-chain:category:update";
+    public static final String CATEGORY_DELETE = "supply-chain:category:delete";
+    public static final String CATEGORY_UPDATE_STATUS = "supply-chain:category:update-status";
+
+    public static final String BRAND_QUERY = "supply-chain:brand:query";
+    public static final String BRAND_CREATE = "supply-chain:brand:create";
+    public static final String BRAND_UPDATE = "supply-chain:brand:update";
+    public static final String BRAND_DELETE = "supply-chain:brand:delete";
+    public static final String BRAND_UPDATE_STATUS = "supply-chain:brand:update-status";
+
+    public static final String PRODUCT_TYPE_QUERY = "supply-chain:product-type:query";
+    public static final String PRODUCT_TYPE_CREATE = "supply-chain:product-type:create";
+    public static final String PRODUCT_TYPE_UPDATE = "supply-chain:product-type:update";
+    public static final String PRODUCT_TYPE_DELETE = "supply-chain:product-type:delete";
+    public static final String PRODUCT_TYPE_UPDATE_STATUS = "supply-chain:product-type:update-status";
+
     public static final String ADMIN_EXPRESSION = "@ss.hasPermission('" + ADMIN + "')";
     public static final String SUPPLIER_QUERY_EXPRESSION =
             "@ss.hasAnyPermissions('" + ADMIN + "', '" + SUPPLIER_QUERY + "')";
@@ -65,6 +89,47 @@ public final class SupplyChainAdminPermissions {
     public static final String PROJECT_UPDATE_STATUS_EXPRESSION =
             "@ss.hasAnyPermissions('" + ADMIN + "', '" + PROJECT_UPDATE_STATUS + "')";
 
+    public static final String PRODUCT_QUERY_EXPRESSION =
+            "@ss.hasAnyPermissions('" + ADMIN + "', '" + PRODUCT_QUERY + "')";
+    public static final String PRODUCT_CREATE_EXPRESSION =
+            "@ss.hasAnyPermissions('" + ADMIN + "', '" + PRODUCT_CREATE + "')";
+    public static final String PRODUCT_UPDATE_EXPRESSION =
+            "@ss.hasAnyPermissions('" + ADMIN + "', '" + PRODUCT_UPDATE + "')";
+    public static final String PRODUCT_DELETE_EXPRESSION =
+            "@ss.hasAnyPermissions('" + ADMIN + "', '" + PRODUCT_DELETE + "')";
+    public static final String PRODUCT_UPDATE_STATUS_EXPRESSION =
+            "@ss.hasAnyPermissions('" + ADMIN + "', '" + PRODUCT_UPDATE_STATUS + "')";
+    public static final String CATEGORY_QUERY_EXPRESSION =
+            "@ss.hasAnyPermissions('" + ADMIN + "', '" + CATEGORY_QUERY + "')";
+    public static final String CATEGORY_CREATE_EXPRESSION =
+            "@ss.hasAnyPermissions('" + ADMIN + "', '" + CATEGORY_CREATE + "')";
+    public static final String CATEGORY_UPDATE_EXPRESSION =
+            "@ss.hasAnyPermissions('" + ADMIN + "', '" + CATEGORY_UPDATE + "')";
+    public static final String CATEGORY_DELETE_EXPRESSION =
+            "@ss.hasAnyPermissions('" + ADMIN + "', '" + CATEGORY_DELETE + "')";
+    public static final String CATEGORY_UPDATE_STATUS_EXPRESSION =
+            "@ss.hasAnyPermissions('" + ADMIN + "', '" + CATEGORY_UPDATE_STATUS + "')";
+    public static final String BRAND_QUERY_EXPRESSION =
+            "@ss.hasAnyPermissions('" + ADMIN + "', '" + BRAND_QUERY + "')";
+    public static final String BRAND_CREATE_EXPRESSION =
+            "@ss.hasAnyPermissions('" + ADMIN + "', '" + BRAND_CREATE + "')";
+    public static final String BRAND_UPDATE_EXPRESSION =
+            "@ss.hasAnyPermissions('" + ADMIN + "', '" + BRAND_UPDATE + "')";
+    public static final String BRAND_DELETE_EXPRESSION =
+            "@ss.hasAnyPermissions('" + ADMIN + "', '" + BRAND_DELETE + "')";
+    public static final String BRAND_UPDATE_STATUS_EXPRESSION =
+            "@ss.hasAnyPermissions('" + ADMIN + "', '" + BRAND_UPDATE_STATUS + "')";
+    public static final String PRODUCT_TYPE_QUERY_EXPRESSION =
+            "@ss.hasAnyPermissions('" + ADMIN + "', '" + PRODUCT_TYPE_QUERY + "')";
+    public static final String PRODUCT_TYPE_CREATE_EXPRESSION =
+            "@ss.hasAnyPermissions('" + ADMIN + "', '" + PRODUCT_TYPE_CREATE + "')";
+    public static final String PRODUCT_TYPE_UPDATE_EXPRESSION =
+            "@ss.hasAnyPermissions('" + ADMIN + "', '" + PRODUCT_TYPE_UPDATE + "')";
+    public static final String PRODUCT_TYPE_DELETE_EXPRESSION =
+            "@ss.hasAnyPermissions('" + ADMIN + "', '" + PRODUCT_TYPE_DELETE + "')";
+    public static final String PRODUCT_TYPE_UPDATE_STATUS_EXPRESSION =
+            "@ss.hasAnyPermissions('" + ADMIN + "', '" + PRODUCT_TYPE_UPDATE_STATUS + "')";
+
     public static final String READ_OPTIONS_EXPRESSION =
             "@ss.hasAnyPermissions('" + ADMIN + "', '" + SUPPLIER_QUERY + "', '"
                     + BUYER_QUERY + "', '" + PROJECT_QUERY + "')";
@@ -73,4 +138,5 @@ public final class SupplyChainAdminPermissions {
 
     private SupplyChainAdminPermissions() {
     }
+
 }

@@ -9,4 +9,8 @@ public interface PlatformSpuMapper extends BaseMapperX<PlatformSpuDO> {
     default PlatformSpuDO selectByCode(String code) {
         return selectOne(PlatformSpuDO::getSpuCode, code);
     }
+
+    default PlatformSpuDO selectByCodeForUpdate(String code) {
+        return selectOneForUpdate(PlatformSpuDO::getSpuCode, code);
+    }
 }

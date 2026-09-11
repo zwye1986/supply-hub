@@ -2,16 +2,19 @@ package com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject;
 
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableName;
 import com.baomidou.mybatisplus.annotation.Version;
+import com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
-@TableName("sc_platform_spu")
+@TableName(value = "sc_platform_spu", autoResultMap = true)
 @Data
 @Builder
 @NoArgsConstructor
@@ -25,15 +28,29 @@ public class PlatformSpuDO {
     private Long primaryCategoryId;
     /** 可售品类封闭枚举，见SellableCategory，供货命中用 */
     private String sellableCategory;
-    /** 商品类型封闭枚举，见ProductTypeTag，供货命中用 */
+    /** 启用商品类型编码，来源sc_product_type，供货命中用 */
     private String productType;
     /** 商品分类封闭枚举，见ProductClassification，供货命中用 */
     private String productClassification;
+    /** 辅助/扩展分类ID列表(JSON数组) */
+    @TableField(typeHandler = JacksonTypeHandler.class)
+    private List<Long> secondaryCategoryIds;
     private String spuName;
     private String subtitle;
     private String coverUrl;
+    /** 商品轮播图地址列表(JSON数组) */
+    @TableField(typeHandler = JacksonTypeHandler.class)
+    private List<String> sliderImageUrls;
     private String useInstruction;
+    /** 商品富文本详情与图文介绍 */
+    private String description;
     private Short status;
+    /** 配送履约模式：VIRTUAL虚拟发货, EXPRESS物流快递, PICKUP自提核销 */
+    private String deliveryType;
+    /** SPU默认单次最低起购量 */
+    private Long minQuantity;
+    /** SPU默认单次最高限购量 */
+    private Long maxQuantity;
     @Version
     private Long version;
     private Long createdBy;

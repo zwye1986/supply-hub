@@ -11,7 +11,7 @@ import java.util.Arrays;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * 类目管理端 OpenAPI 契约：必须有 Tag/Operation，且无 /invoice、无 /tree。
+ * 类目管理端 OpenAPI 契约：必须有 Tag/Operation，保留集合 GET 并仅新增 management-tree。
  * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#36-openapiswagger}。
  */
 class CategoryAdminContractTest {
@@ -29,11 +29,11 @@ class CategoryAdminContractTest {
             GetMappingAlias paths = GetMappingAlias.from(method);
             if (paths != null) {
                 assertThat(method.getAnnotation(Operation.class)).isNotNull();
-                assertThat(paths.paths()).noneMatch(path -> path.contains("invoice") || path.contains("tree"));
+                assertThat(paths.paths()).noneMatch(path -> path.contains("invoice") || path.equals("/tree"));
             } else if (mapping != null) {
                 assertThat(method.getAnnotation(Operation.class)).isNotNull();
                 assertThat(Arrays.asList(mapping.value()))
-                        .noneMatch(path -> path.contains("invoice") || path.contains("tree"));
+                        .noneMatch(path -> path.contains("invoice") || path.equals("/tree"));
             }
         }
     }

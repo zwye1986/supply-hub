@@ -19,16 +19,27 @@ public final class FulfillmentTargetSchemaRegistry {
             FulfillmentTargetFields.ACCOUNT_TYPE_MOBILE,
             FulfillmentTargetFields.ACCOUNT_TYPE_EXTERNAL_ACCOUNT);
 
-    public void validate(String schemaCode, int schemaVersion, Map<String, String> values) {
-        if (schemaVersion != 1 || values == null) {
+    /**
+     * 校验商品主数据引用的 Schema 编码与版本，不校验订单运行时字段值。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线}。
+     */
+    public void requireSupportedSchema(String schemaCode, int schemaVersion) {
+        if (schemaVersion != 1 || schemaCode == null || schemaCode.isBlank()) {
             throw new InvalidTargetException();
         }
-        FulfillmentTargetSchemaCode schema;
         try {
-            schema = FulfillmentTargetSchemaCode.valueOf(schemaCode);
+            FulfillmentTargetSchemaCode.valueOf(schemaCode);
         } catch (IllegalArgumentException exception) {
             throw new InvalidTargetException();
         }
+    }
+
+    public void validate(String schemaCode, int schemaVersion, Map<String, String> values) {
+        requireSupportedSchema(schemaCode, schemaVersion);
+        if (values == null) {
+            throw new InvalidTargetException();
+        }
+        FulfillmentTargetSchemaCode schema = FulfillmentTargetSchemaCode.valueOf(schemaCode);
         switch (schema) {
             case DIRECT_RECHARGE_TARGET, ACCOUNT_BOUND_BENEFIT_TARGET -> {
                 requireExactKeys(values, Set.of(

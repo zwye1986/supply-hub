@@ -25,11 +25,11 @@ import com.aifuli.module.supplychain.tradecore.buyer.domain.BuyerHierarchy;
 import com.aifuli.module.supplychain.tradecore.buyer.domain.BuyerHierarchy.ParentRef;
 import com.aifuli.module.supplychain.tradecore.buyer.domain.BuyerScopeKind;
 import com.aifuli.module.supplychain.tradecore.buyer.domain.BuyerStatus;
+import com.aifuli.module.supplychain.tradecore.catalog.application.ProductTypeValidationService;
 import com.aifuli.module.supplychain.tradecore.profile.domain.ClosedEnums;
 import com.aifuli.module.supplychain.tradecore.profile.domain.CooperationMode;
 import com.aifuli.module.supplychain.tradecore.profile.domain.DistributorType;
 import com.aifuli.module.supplychain.tradecore.profile.domain.IntegrationMode;
-import com.aifuli.module.supplychain.tradecore.profile.domain.ProductTypeTag;
 import com.aifuli.module.supplychain.tradecore.profile.domain.SellableCategory;
 import com.aifuli.module.supplychain.tradecore.profile.domain.SettlementMethod;
 import com.aifuli.module.supplychain.tradecore.profile.domain.SupplyPreference;
@@ -86,6 +86,7 @@ public class BuyerAdminCommandService {
     private final BuyerAccountOpeningService accountOpeningService;
     private final BusinessNoGenerator businessNoGenerator;
     private final EnvelopeCryptoPort envelopeCrypto;
+    private final ProductTypeValidationService productTypeValidationService;
 
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public String create(CreateBuyerCommand command) {
@@ -382,7 +383,25 @@ public class BuyerAdminCommandService {
                                        LocalDateTime now) {
         categoryScopeMapper.deleteByBuyerId(buyerId);
         insertCategoryScopes(buyerId, BuyerScopeKind.SELLABLE, SellableCategory.class, sellableCategories, now);
-        insertCategoryScopes(buyerId, BuyerScopeKind.PRODUCT_TYPE, ProductTypeTag.class, productTypes, now);
+        insertProductTypeScopes(buyerId, productTypes, now);
+    }
+
+    private void insertProductTypeScopes(Long buyerId, List<String> productTypes, LocalDateTime now) {
+        if (productTypes == null) {
+            return;
+        }
+        LinkedHashSet<String> unique = new LinkedHashSet<>();
+        for (String productType : productTypes) {
+            unique.add(productTypeValidationService.requireActiveForUpdate(productType).getTypeCode());
+        }
+        for (String code : unique) {
+            categoryScopeMapper.insert(BuyerCategoryScopeDO.builder()
+                    .buyerId(buyerId)
+                    .scopeKind(BuyerScopeKind.PRODUCT_TYPE.name())
+                    .scopeCode(code)
+                    .createdAt(now)
+                    .build());
+        }
     }
 
     private <E extends Enum<E>> void insertCategoryScopes(Long buyerId, BuyerScopeKind kind, Class<E> enumType,

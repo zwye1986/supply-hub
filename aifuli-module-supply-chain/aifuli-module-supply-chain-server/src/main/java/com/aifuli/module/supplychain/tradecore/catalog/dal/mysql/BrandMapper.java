@@ -9,4 +9,8 @@ public interface BrandMapper extends BaseMapperX<BrandDO> {
     default BrandDO selectByCode(String code) {
         return selectOne(BrandDO::getBrandCode, code);
     }
+
+    default BrandDO selectByCodeForUpdate(String code) {
+        return selectOneForUpdate(BrandDO::getBrandCode, code);
+    }
 }

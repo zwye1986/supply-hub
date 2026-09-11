@@ -50,10 +50,10 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSk
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerListingAvailabilityMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerListingMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerListingVersionMapper;
-import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.BuyerListingStatus;
-import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.ListingAvailability;
+import com.aifuli.module.supplychain.tradecore.catalog.application.ProductSellabilityService;
+import com.aifuli.framework.common.exception.ServiceException;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -104,7 +104,7 @@ public class FulfillmentAcceptanceLifecycle {
     private final BuyerListingMapper listingMapper;
     private final BuyerListingVersionMapper listingVersionMapper;
     private final BuyerListingAvailabilityMapper listingAvailabilityMapper;
-    private final PlatformSkuMapper skuMapper;
+    private final ProductSellabilityService productSellabilityService;
     private final SupplierRoutingApplicationService routingService;
     private final FundReservationService fundReservationService;
     private final OutboxEventRepository outboxRepository;
@@ -361,8 +361,14 @@ public class FulfillmentAcceptanceLifecycle {
             throw rejection(command.receiptIdHint(), version.getId(), AcceptanceReceiptStatus.REJECTED_RETRYABLE,
                     AcceptanceRejectionCode.INVENTORY_INSUFFICIENT);
         }
-        PlatformSkuDO sku = skuMapper.selectById(listing.getPlatformSkuId());
-        if (sku == null || sku.getStatus() != CatalogEntityStatus.ACTIVE.getCode()) {
+        PlatformSkuDO sku;
+        try {
+            sku = productSellabilityService.requireSellableById(listing.getPlatformSkuId()).sku();
+        } catch (ServiceException notSellable) {
+            // 设计要求把不可售统一转为 SKU_NOT_SALEABLE 回执而非 HTTP 500，但必须保留原始错误码作为因果，
+            // 见 docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#31-spu-与-sku-状态解耦与有效可售计算
+            log.warn("平台 SKU 不可售，受理转拒绝回执 listingId={} platformSkuId={} errorCode={}",
+                    listing.getId(), listing.getPlatformSkuId(), notSellable.getCode(), notSellable);
             throw rejection(command.receiptIdHint(), version.getId(), AcceptanceReceiptStatus.REJECTED_RETRYABLE,
                     AcceptanceRejectionCode.SKU_NOT_SALEABLE);
         }
