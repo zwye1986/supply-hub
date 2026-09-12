@@ -25,7 +25,7 @@ public class BuyerProductL2OverrideDO {
     /** 分销商品主键 */
     @TableId(type = IdType.INPUT)
     private Long buyerProductId;
-    /** 当前手工覆盖版本，空表示跟模板 */
+    /** 当前手工覆盖版本，空表示继承当前 L1 */
     private Long currentVersionId;
     /** 乐观锁版本号 */
     @Version

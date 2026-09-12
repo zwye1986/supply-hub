@@ -29,10 +29,10 @@ PRD 来源：飞书文档本地导出
 
 | 编号 | 决策 |
 | --- | --- |
-| s1 | 场景加价模板（电影快/慢充、点餐品牌、H5 渠道、城市级）**本期不做**。不新建 `tradecore.pricing`，不建模板表。 |
+| s1 | 场景加价模板（电影快/慢充、点餐品牌、H5 渠道、城市级）**本期不做**。不新建 `tradecore.pricing`，不新增模板表。`021-admin-frontend-alignment.sql` 已发布的 `sc_buyer_product_settlement_price*` 历史预留表保留但停用，不参与本期价格读写。 |
 | s2 | 中台**同时管理** C 端销售价与 B 端分销价（结算价）。销售价不交给商城私自改算。 |
 | s3 | 销售价来源 = 平台 SKU `suggested_sale_price`（及商品行内调价）。无区域差、服务费、品牌差。利润阈值自动下架本期不做。 |
-| s4 | `L2AdjustMode.FOLLOW_TEMPLATE` **不表示存在模板表**。真实语义：清除该 SKU 的手工 L2 覆盖，结算价回退到 L1。枚举名历史遗留，实现时必须在枚举与管理端 OpenAPI 写明。 |
+| s4 | `L2AdjustMode.FOLLOW_TEMPLATE` **不表示运行时存在模板层**。真实语义：清除该 SKU 的手工 L2 覆盖，结算价回退到 L1。枚举名历史遗留，实现时必须在枚举与管理端 OpenAPI 写明；运行时不得查询历史预留模板表。 |
 | s5 | 平台售后新建 `border.aftersale` 聚合。不得把运营售后单写进 `sc_o2o_refund_case` / `sc_instore_refund_case`（渠道协议回执）。 |
 | s6 | 本期售后轻量：类型仅 `REFUND_ONLY` / `OTHER`；状态 `待平台审核 → 待分销商处理 → 已完成 / 已拒绝 / 已撤销`。不建邮寄、供应商确认收货、用户确认收货、上门取件、退货地址、包裹表。 |
 | s7 | 实物履约（京东/唯品会 Adapter、包裹、发货、退货退款物流）**本期不做**。只做虚拟卡券/直充 + 已有 O2O/到店。 |
@@ -107,13 +107,13 @@ SKU `market_price` 仍是划线价，不是结算价，也不是本期对外「�
 
 ### 5.2 L2 与 `FOLLOW_TEMPLATE`
 
-无模板发布事务。L2 只可能来自：
+无模板发布事务。021 已发布的模板价预留表为保持 Liquibase checksum 稳定而保留，但应用服务不得读取、写入或把其中历史值作为 L2。L2 只可能来自：
 
 - 缺省：无手工覆盖 → 解析时等同 L1。
 - `EQUAL_L1`：粘性覆盖，值 = 当时 L1 结算分。
 - `CUSTOM`：手填覆盖。
 
-`FOLLOW_TEMPLATE`：把覆盖指针清掉，之后再解析即为 L1。`BuyerProductCommandService` 现有行为已是「只清指针、不碰模板表」，本期保持该行为，只补文档与注释，禁止再去找模板行。
+`FOLLOW_TEMPLATE`：把覆盖指针清掉，之后再解析即为 L1。`BuyerProductCommandService` 保持「只清指针、不碰模板表」；查询与项目发布同样禁止读取模板行。历史预留表即使存在数据，也不得改变有效 L2 或项目冻结价。
 
 与 `docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md` a5「L2 默认来自加价模板」冲突时，以本节为准。
 

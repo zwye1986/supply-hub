@@ -190,6 +190,16 @@ class SupplyChainModuleArchitectureTest {
             .should().dependOnClassesThat()
             .resideInAnyPackage("..tradecore.ledger..", "..tradecore.account.dal..");
 
+    /**
+     * 021 已发布的模板 L2 表只作数据库兼容预留；本期目录应用服务不得重新依赖其 DO 或 Mapper，
+     * 有效结算价固定按 L3 &gt; 手工 L2 &gt; L1 解析。设计见
+     * {@code docs/superpowers/specs/2026-09-12-supply-chain-prd-scope-alignment-design.md#52-l2-与-follow_template}。
+     */
+    static final ArchRule catalog_application_does_not_use_disabled_l2_template = noClasses()
+            .that().resideInAPackage("..tradecore.catalog.application..")
+            .should().dependOnClassesThat()
+            .haveSimpleNameStartingWith("BuyerProductSettlementPrice");
+
     /** 认证包外不得直接引用包级上下文对象，避免业务层绕过限定 scope 的访问器。 */
     static final ArchRule only_auth_package_touches_project_auth_context = noClasses()
             .that().resideOutsideOfPackage("..infrastructure.auth..")
@@ -310,6 +320,11 @@ class SupplyChainModuleArchitectureTest {
     @Test
     void catalogPricingDoesNotWriteLedger() {
         catalog_pricing_does_not_write_ledger.check(importedClasses);
+    }
+
+    @Test
+    void catalogApplicationDoesNotUseDisabledL2Template() {
+        catalog_application_does_not_use_disabled_l2_template.check(importedClasses);
     }
 
     @Test

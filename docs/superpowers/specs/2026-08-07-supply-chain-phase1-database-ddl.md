@@ -2,7 +2,7 @@
 
 > 采购商项目化目标表与约束见[《供应链中台采购商主体与采购项目详细设计》](./2026-08-21-supply-chain-buyer-project-design.md#12-模块边界与目标数据模型)。本文记录一期既有 DDL 基线，不再代表 Buyer/Listing/集成/订单身份的最终目标模型。
 >
-> PRD 范围修订：本期数据库交付边界以[《供应链中台 PRD 一期范围对齐》](./2026-09-12-supply-chain-prd-scope-alignment-design.md)为准。加价模板、四级路由配置组、`PRICE_ASC` 与场景路由应用服务本期不落库或启用；平台轻量售后须另立详细设计和前向 Liquibase 变更集。本文不回改已发布 SQL。
+> PRD 范围修订：本期数据库交付边界以[《供应链中台 PRD 一期范围对齐》](./2026-09-12-supply-chain-prd-scope-alignment-design.md)为准。`021` 已发布的 `sc_buyer_product_settlement_price*` 模板价预留表为保持 checksum 稳定而保留，但应用层停用且不得参与价格读写；不再新增加价模板、四级路由配置组、`PRICE_ASC` 或场景路由应用服务。平台轻量售后须另立详细设计和前向 Liquibase 变更集。本文不回改已发布 SQL。
 
 ## 1. 文档定位
 

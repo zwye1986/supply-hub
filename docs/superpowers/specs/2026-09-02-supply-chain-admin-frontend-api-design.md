@@ -28,7 +28,7 @@
 | a2 | 领域内核不动：金额 CNY 分、路径身份用业务 code。开票见 `docs/superpowers/specs/2026-09-07-供应链管理端开票信息设计.md`。前端关 mock 后改 URL/字段对齐后端（由前端仓库完成，见 a13）。 |
 | a3 | 扩展现有 `/admin-api/supply-chain/{resource}`，不新建 `/scm` 适配层，不废弃已落地的 `/suppliers`。 |
 | a4 | 分销商组织树真实落库（一级/二级/三级、上级、下级）。树不参与拆账；只有项目所属 Buyer 与中台一本账结算。组织等级 ≠ 结算价 L1/L2/L3。 |
-| a5 | L2 无手工覆盖时继承 L1（`FOLLOW_TEMPLATE` 只清覆盖，**本期无模板表**，见 09-12 s4）。分销商品新增/改价可按 SKU 覆盖，覆盖后该 SKU 的 L2 以手填为准。页面文案「按分销价=销售建议价」对接为 `EQUAL_L1`（粘性覆盖，值=当前 L1 **B 端结算分**，不是 C 端 `marketPrice`）；「自定义」对接 `CUSTOM`。未传 `l2AdjustMode` 时后端仍默认 `FOLLOW_TEMPLATE`。 |
+| a5 | L2 无手工覆盖时继承 L1（`FOLLOW_TEMPLATE` 只清覆盖，**本期无运行时模板层**，021 历史预留表停用，见 09-12 s4）。分销商品新增/改价可按 SKU 覆盖，覆盖后该 SKU 的 L2 以手填为准。页面文案「按分销价=销售建议价」对接为 `EQUAL_L1`（粘性覆盖，值=当前 L1 **B 端结算分**，不是 C 端 `marketPrice`）；「自定义」对接 `CUSTOM`。未传 `l2AdjustMode` 时后端仍默认 `FOLLOW_TEMPLATE`。 |
 | a6 | 供货模式扩展为 5 种；发货时效 / 结算方式 / 对接方式可落库。可售品类 / 商品类型 / 商品分类为三级独立封闭枚举（system 字典），不是类目树 id；SPU 打同一套三码并按三码整体命中供货配置。清单与命中规则见 `docs/superpowers/specs/2026-09-07-供应链管理端表单字典与标品标签设计.md`。 |
 | a7 | 合作商品新增即 `PUBLISHED`（上架）。下架=`SUSPENDED`，移除=`RETIRED`。 |
 | a8 | 项目「已结束」=`CLOSED`，可恢复为进行中或已暂停。`ARCHIVED` 仍不可逆，本批页面不暴露。 |
@@ -419,7 +419,7 @@ Springdoc `components.schemas` 中冲突的通用简单类名。生成契约必�
 - `PATCH /supply-chain/buyers/{buyerCode}/products/{buyerProductCode}` 改价（写/清 L2 覆盖，body 含 `l2AdjustMode` 等）
 - `DELETE /supply-chain/buyers/{buyerCode}/products/{buyerProductCode}` 逻辑移除（不再出现在列表；已发布项目目录不回放删除，新项目不得再选）
 
-列表列：SPU/SKU、SPU 三码、`suggestPriceCents`（L1）、`pricingRule`（文案：模板 / 等于L1 / 自定义公式）、`distPriceCents`（有效 L2）、`projectPriceCents`（若恰有一个项目 L3 则给出，否则空）、`finalPriceCents`（按 L3>L2>L1 对该行展示，项目价取「任意覆盖」时以 `projectPriceCovered` + `projectNames[]` 说明）、`priceSource`（`L1`/`L2`/`L3`）、`projectPriceCovered`。
+列表列：SPU/SKU、SPU 三码、`suggestPriceCents`（L1）、`pricingRule`（文案：继承L1 / 等于L1 / 自定义公式）、`distPriceCents`（有效 L2；无手工覆盖时等于当前 L1）、`projectPriceCents`（若恰有一个项目 L3 则给出，否则空）、`finalPriceCents`（按 L3>L2>L1 对该行展示，项目价取「任意覆盖」时以 `projectPriceCovered` + `projectNames[]` 说明）、`priceSource`（`L1`/`L2`/`L3`）、`projectPriceCovered`。
 
 `displayThresholdPercent` 可存（利润空间低于该百分比时 C 端隐藏的配置），**本轮不实现 C 端隐藏消费**，只落库。
 

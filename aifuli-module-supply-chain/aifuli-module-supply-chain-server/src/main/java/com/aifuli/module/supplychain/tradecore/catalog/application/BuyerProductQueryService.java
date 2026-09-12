@@ -16,8 +16,6 @@ import com.aifuli.module.supplychain.tradecore.buyer.domain.ProjectListingStatus
 import com.aifuli.module.supplychain.tradecore.catalog.application.SettlementPriceResolver.ResolvedPrice;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerProductL2OverrideDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerProductL2OverrideVersionDO;
-import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerProductSettlementPriceDO;
-import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerProductSettlementPriceVersionDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSettlementPriceDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSettlementPriceVersionDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuDO;
@@ -25,8 +23,6 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSp
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProjectListingVersionDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerProductL2OverrideMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerProductL2OverrideVersionMapper;
-import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerProductSettlementPriceMapper;
-import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerProductSettlementPriceVersionMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceVersionMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
@@ -63,7 +59,7 @@ public class BuyerProductQueryService {
     private static final int DEFAULT_PAGE_SIZE = 20;
     private static final String PRICING_RULE_EQUAL_L1 = "等于L1";
     private static final String PRICING_RULE_CUSTOM = "自定义公式";
-    private static final String PRICING_RULE_TEMPLATE = "模板";
+    private static final String PRICING_RULE_INHERIT_L1 = "继承L1";
 
     private final BuyerMapper buyerMapper;
     private final BuyerProductMapper productMapper;
@@ -73,8 +69,6 @@ public class BuyerProductQueryService {
     private final PlatformSettlementPriceVersionMapper l1VersionMapper;
     private final BuyerProductL2OverrideMapper overrideMapper;
     private final BuyerProductL2OverrideVersionMapper overrideVersionMapper;
-    private final BuyerProductSettlementPriceMapper templateMapper;
-    private final BuyerProductSettlementPriceVersionMapper templateVersionMapper;
     private final ProjectListingMapper listingMapper;
     private final ProjectListingVersionMapper listingVersionMapper;
     private final BuyerProjectMapper projectMapper;
@@ -110,11 +104,10 @@ public class BuyerProductQueryService {
         Long l1Cents = sku == null ? null : loadL1Cents(sku.getId());
         BuyerProductL2OverrideVersionDO overrideVersion = loadOverrideVersion(product.getId());
         Long overrideCents = overrideVersion == null ? null : overrideVersion.getResolvedUnitPriceCents();
-        Long templateCents = loadTemplateCents(product.getId());
-        Long distPriceCents = overrideCents != null ? overrideCents : templateCents;
+        Long distPriceCents = overrideCents != null ? overrideCents : l1Cents;
         ProjectPriceView projectView = projectPriceView(product.getId());
         Long l3ForResolve = projectView.l3ForResolve();
-        ResolvedPrice resolved = resolveQuietly(l3ForResolve, overrideCents, templateCents, l1Cents);
+        ResolvedPrice resolved = resolveQuietly(l3ForResolve, overrideCents, l1Cents);
         return new BuyerProductListItem(
                 product.getBuyerProductCode(),
                 sku == null ? null : sku.getSkuCode(),
@@ -135,9 +128,9 @@ public class BuyerProductQueryService {
                 product.getDisplayThresholdPercent());
     }
 
-    private ResolvedPrice resolveQuietly(Long l3Cents, Long overrideCents, Long templateCents, Long l1Cents) {
+    private ResolvedPrice resolveQuietly(Long l3Cents, Long overrideCents, Long l1Cents) {
         try {
-            return settlementPriceResolver.resolve(l3Cents, overrideCents, templateCents, l1Cents);
+            return settlementPriceResolver.resolve(l3Cents, overrideCents, l1Cents);
         } catch (ServiceException ex) {
             if (Objects.equals(ex.getCode(), PLATFORM_SETTLEMENT_PRICE_MISSING.getCode())) {
                 return null;
@@ -153,7 +146,7 @@ public class BuyerProductQueryService {
         if (overrideVersion != null && L2AdjustMode.CUSTOM.name().equals(overrideVersion.getAdjustMode())) {
             return PRICING_RULE_CUSTOM;
         }
-        return PRICING_RULE_TEMPLATE;
+        return PRICING_RULE_INHERIT_L1;
     }
 
     /**
@@ -210,15 +203,6 @@ public class BuyerProductQueryService {
         return overrideVersionMapper.selectById(identity.getCurrentVersionId());
     }
 
-    private Long loadTemplateCents(Long buyerProductId) {
-        BuyerProductSettlementPriceDO identity = templateMapper.selectByBuyerProductId(buyerProductId);
-        if (identity == null || identity.getCurrentVersionId() == null) {
-            return null;
-        }
-        BuyerProductSettlementPriceVersionDO version = templateVersionMapper.selectById(identity.getCurrentVersionId());
-        return version == null ? null : version.getUnitPriceCents();
-    }
-
     private Long loadL1Cents(Long skuId) {
         PlatformSettlementPriceDO identity = l1Mapper.selectById(skuId);
         if (identity == null || identity.getCurrentVersionId() == null) {
@@ -249,8 +233,8 @@ public class BuyerProductQueryService {
             @Schema(description = "动态商品类型编码") String productType,
             @Schema(description = "商品分类封闭枚举名") String productClassification,
             @Schema(description = "建议结算价，取当前L1，单位CNY分") Long suggestPriceCents,
-            @Schema(description = "定价规则文案：模板 / 等于L1 / 自定义公式") String pricingRule,
-            @Schema(description = "有效L2，单位CNY分") Long distPriceCents,
+            @Schema(description = "定价规则文案：继承L1 / 等于L1 / 自定义公式") String pricingRule,
+            @Schema(description = "有效L2，单位CNY分；无手工覆盖时等于当前L1") Long distPriceCents,
             @Schema(description = "恰有一个未移除项目listing时的当前版本单价，单位CNY分") Long projectPriceCents,
             @Schema(description = "按L3>L2>L1解析的有效B端结算价，单位CNY分") Long finalPriceCents,
             @Schema(description = "价格来源层级：L1 / L2 / L3") String priceSource,

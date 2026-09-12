@@ -219,7 +219,7 @@ public class BuyerAdminController {
     @GetMapping("/{buyerCode}/products")
     @PreAuthorize(BUYER_QUERY_EXPRESSION)
     @Operation(summary = "分页查询分销商品",
-            description = "只返回未移除行。金额单位 CNY 分；pricingRule 为模板/等于L1/自定义公式。")
+            description = "只返回未移除行。金额单位 CNY 分；pricingRule 为继承L1/等于L1/自定义公式。")
     public CommonResult<PageResult<BuyerProductListItem>> pageProducts(
             @PathVariable String buyerCode,
             @Parameter(description = "页码，从 1 开始") @RequestParam(required = false) Integer pageNo,
@@ -230,7 +230,7 @@ public class BuyerAdminController {
     @PostMapping("/{buyerCode}/products")
     @PreAuthorize(BUYER_UPDATE_EXPRESSION)
     @Operation(summary = "从标品关联分销商品",
-            description = "默认 l2AdjustMode=FOLLOW_TEMPLATE。编号 BPD_。已移除同行复活而非插入。金额单位 CNY 分。")
+            description = "默认 l2AdjustMode=FOLLOW_TEMPLATE，其语义为无手工覆盖时继承L1，不读取模板价。编号 BPD_。已移除同行复活而非插入。金额单位 CNY 分。")
     public CommonResult<List<String>> addProducts(@PathVariable String buyerCode,
                                                     @Valid @RequestBody AddBuyerProductsReqVO request) {
         List<ProductLine> lines = request.getItems().stream()
@@ -242,7 +242,7 @@ public class BuyerAdminController {
     @PatchMapping("/{buyerCode}/products/{buyerProductCode}")
     @PreAuthorize(BUYER_UPDATE_EXPRESSION)
     @Operation(summary = "改分销商品L2覆盖",
-            description = "FOLLOW_TEMPLATE 清手工覆盖；EQUAL_L1/CUSTOM 无 L1 拒绝。金额单位 CNY 分。")
+            description = "FOLLOW_TEMPLATE 清手工覆盖并继承L1，不读取模板价；EQUAL_L1/CUSTOM 无 L1 拒绝。金额单位 CNY 分。")
     public CommonResult<Boolean> patchProduct(@PathVariable String buyerCode,
                                               @PathVariable String buyerProductCode,
                                               @Valid @RequestBody PatchBuyerProductReqVO request) {
@@ -463,7 +463,7 @@ public class BuyerAdminController {
         @NotBlank
         @Schema(description = "平台SKU编码")
         private String platformSkuCode;
-        @Schema(description = "L2调价方式：FOLLOW_TEMPLATE / EQUAL_L1 / CUSTOM，默认 FOLLOW_TEMPLATE")
+        @Schema(description = "L2调价方式：FOLLOW_TEMPLATE（清手工覆盖并继承L1，不读取模板价）/ EQUAL_L1 / CUSTOM，默认 FOLLOW_TEMPLATE")
         private String l2AdjustMode;
         @Schema(description = "CUSTOM时的整数百分比，100等于L1")
         private Integer percent;
@@ -477,7 +477,7 @@ public class BuyerAdminController {
     @Schema(description = "改分销商品L2覆盖")
     public static class PatchBuyerProductReqVO {
         @NotBlank
-        @Schema(description = "L2调价方式：FOLLOW_TEMPLATE / EQUAL_L1 / CUSTOM")
+        @Schema(description = "L2调价方式：FOLLOW_TEMPLATE（清手工覆盖并继承L1，不读取模板价）/ EQUAL_L1 / CUSTOM")
         private String l2AdjustMode;
         @Schema(description = "CUSTOM时的整数百分比，100等于L1")
         private Integer percent;

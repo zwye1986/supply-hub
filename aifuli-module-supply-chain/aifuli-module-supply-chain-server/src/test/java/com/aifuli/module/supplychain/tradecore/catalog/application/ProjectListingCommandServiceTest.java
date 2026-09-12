@@ -25,8 +25,6 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSp
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProjectListingVersionDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerProductL2OverrideMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerProductL2OverrideVersionMapper;
-import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerProductSettlementPriceMapper;
-import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerProductSettlementPriceVersionMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceVersionMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
@@ -77,10 +75,6 @@ class ProjectListingCommandServiceTest {
     private final BuyerProductL2OverrideMapper overrideMapper = mock(BuyerProductL2OverrideMapper.class);
     private final BuyerProductL2OverrideVersionMapper overrideVersionMapper =
             mock(BuyerProductL2OverrideVersionMapper.class);
-    private final BuyerProductSettlementPriceMapper templateMapper =
-            mock(BuyerProductSettlementPriceMapper.class);
-    private final BuyerProductSettlementPriceVersionMapper templateVersionMapper =
-            mock(BuyerProductSettlementPriceVersionMapper.class);
     private final BusinessNoGenerator businessNoGenerator = mock(BusinessNoGenerator.class);
     private final SupplyChainDatabaseClock databaseClock = mock(SupplyChainDatabaseClock.class);
     private ProjectListingCommandService service;
@@ -95,7 +89,7 @@ class ProjectListingCommandServiceTest {
         service = new ProjectListingCommandService(
                 databaseClock, projectMapper, buyerMapper, productMapper, skuMapper, listingMapper, listingVersionMapper,
                 l1Mapper, l1VersionMapper, overrideMapper, overrideVersionMapper,
-                templateMapper, templateVersionMapper, businessNoGenerator, resolver);
+                businessNoGenerator, resolver);
         buyerProducts = new BuyerProductCommandService(
                 databaseClock, buyerMapper, productMapper, l1Mapper, l1VersionMapper,
                 overrideMapper, overrideVersionMapper, businessNoGenerator, resolver,
@@ -151,7 +145,6 @@ class ProjectListingCommandServiceTest {
         stubLiveBuyerProduct();
         stubL1(L1_CENTS);
         when(overrideMapper.selectByBuyerProductId(77L)).thenReturn(null);
-        when(templateMapper.selectByBuyerProductId(77L)).thenReturn(null);
 
         List<String> codes = service.addProducts(PROJECT_CODE, List.of(follow("MOVIE_100")), 1L);
 
@@ -176,7 +169,6 @@ class ProjectListingCommandServiceTest {
         stubLiveBuyerProduct();
         stubL1(L1_CENTS);
         when(overrideMapper.selectByBuyerProductId(77L)).thenReturn(null);
-        when(templateMapper.selectByBuyerProductId(77L)).thenReturn(null);
         service.addProducts(PROJECT_CODE, List.of(follow("MOVIE_100")), 1L);
         long frozenV1 = version1.getBuyerSettlementUnitPrice();
         storedListing.setListingCode(LISTING_CODE);
@@ -209,7 +201,6 @@ class ProjectListingCommandServiceTest {
         stubLiveBuyerProduct();
         stubL1(L1_CENTS);
         when(overrideMapper.selectByBuyerProductId(77L)).thenReturn(null);
-        when(templateMapper.selectByBuyerProductId(77L)).thenReturn(null);
         service.addProducts(PROJECT_CODE, List.of(follow("MOVIE_100")), 1L);
         when(productMapper.selectByCodeForUpdate("BPD_1")).thenReturn(liveProduct());
         when(buyerMapper.selectByBuyerCode("BYR_A")).thenReturn(BuyerDO.builder().id(5L).buyerCode("BYR_A").build());
@@ -233,7 +224,6 @@ class ProjectListingCommandServiceTest {
         stubLiveBuyerProduct();
         when(l1Mapper.selectById(11L)).thenReturn(null);
         when(overrideMapper.selectByBuyerProductId(77L)).thenReturn(null);
-        when(templateMapper.selectByBuyerProductId(77L)).thenReturn(null);
         assertThatThrownBy(() -> service.addProducts(PROJECT_CODE, List.of(follow("MOVIE_100")), 1L))
                 .isInstanceOf(ServiceException.class)
                 .extracting(ex -> ((ServiceException) ex).getCode())

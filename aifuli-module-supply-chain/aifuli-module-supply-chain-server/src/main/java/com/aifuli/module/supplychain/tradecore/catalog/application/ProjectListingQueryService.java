@@ -11,16 +11,12 @@ import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.ProjectListingMap
 import com.aifuli.module.supplychain.tradecore.buyer.domain.ProjectListingStatus;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerProductL2OverrideDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerProductL2OverrideVersionDO;
-import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerProductSettlementPriceDO;
-import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerProductSettlementPriceVersionDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSettlementPriceDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSettlementPriceVersionDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProjectListingVersionDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerProductL2OverrideMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerProductL2OverrideVersionMapper;
-import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerProductSettlementPriceMapper;
-import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerProductSettlementPriceVersionMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceVersionMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
@@ -59,8 +55,6 @@ public class ProjectListingQueryService {
     private final PlatformSettlementPriceVersionMapper l1VersionMapper;
     private final BuyerProductL2OverrideMapper overrideMapper;
     private final BuyerProductL2OverrideVersionMapper overrideVersionMapper;
-    private final BuyerProductSettlementPriceMapper templateMapper;
-    private final BuyerProductSettlementPriceVersionMapper templateVersionMapper;
 
     /**
      * 分页未移除项目商品。按更新时间倒序。
@@ -93,8 +87,7 @@ public class ProjectListingQueryService {
                 ? null : skuMapper.selectById(product.getPlatformSkuId());
         Long suggestPriceCents = sku == null ? null : loadL1Cents(sku.getId());
         Long overrideCents = product == null ? null : loadOverrideCents(product.getId());
-        Long templateCents = product == null ? null : loadTemplateCents(product.getId());
-        Long distPriceCents = overrideCents != null ? overrideCents : templateCents;
+        Long distPriceCents = overrideCents != null ? overrideCents : suggestPriceCents;
         ProjectListingVersionDO frozen = listing.getCurrentVersionId() == null
                 ? null : listingVersionMapper.selectById(listing.getCurrentVersionId());
         Long finalPriceCents = frozen == null ? null : frozen.getBuyerSettlementUnitPrice();
@@ -129,15 +122,6 @@ public class ProjectListingQueryService {
         return version == null ? null : version.getResolvedUnitPriceCents();
     }
 
-    private Long loadTemplateCents(Long buyerProductId) {
-        BuyerProductSettlementPriceDO identity = templateMapper.selectByBuyerProductId(buyerProductId);
-        if (identity == null || identity.getCurrentVersionId() == null) {
-            return null;
-        }
-        BuyerProductSettlementPriceVersionDO version = templateVersionMapper.selectById(identity.getCurrentVersionId());
-        return version == null ? null : version.getUnitPriceCents();
-    }
-
     /**
      * 项目商品列表行。金额单位 CNY 分。
      * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#72-项目商品}。
@@ -147,7 +131,7 @@ public class ProjectListingQueryService {
             @Schema(description = "平台SKU编码") String platformSkuCode,
             @Schema(description = "SKU名称") String skuName,
             @Schema(description = "建议结算价，取当前L1，单位CNY分") Long suggestPriceCents,
-            @Schema(description = "当前有效L2，单位CNY分") Long distPriceCents,
+            @Schema(description = "当前有效L2，单位CNY分；无手工覆盖时等于当前L1") Long distPriceCents,
             @Schema(description = "当前版本为L3时的冻结单价，单位CNY分") Long projectPriceCents,
             @Schema(description = "当前冻结版本单价，单位CNY分") Long finalPriceCents,
             @Schema(description = "冻结版本结算层级：L1 / L2 / L3") String priceSource,

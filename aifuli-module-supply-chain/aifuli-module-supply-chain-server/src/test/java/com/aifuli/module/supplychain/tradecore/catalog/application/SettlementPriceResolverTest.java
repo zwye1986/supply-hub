@@ -16,16 +16,14 @@ class SettlementPriceResolverTest {
     private final SettlementPriceResolver resolver = new SettlementPriceResolver();
 
     @Test
-    void prefersL3ThenManualL2ThenTemplateL2ThenL1() {
-        assertThat(resolver.resolve(30L, 20L, 15L, 10L))
+    void prefersL3ThenManualL2ThenL1() {
+        assertThat(resolver.resolve(30L, 20L, 10L))
                 .isEqualTo(new SettlementPriceResolver.ResolvedPrice(30L, PriceSource.L3));
-        assertThat(resolver.resolve(null, 20L, 15L, 10L))
+        assertThat(resolver.resolve(null, 20L, 10L))
                 .isEqualTo(new SettlementPriceResolver.ResolvedPrice(20L, PriceSource.L2));
-        assertThat(resolver.resolve(null, null, 15L, 10L))
-                .isEqualTo(new SettlementPriceResolver.ResolvedPrice(15L, PriceSource.L2));
-        assertThat(resolver.resolve(null, null, null, 10L))
+        assertThat(resolver.resolve(null, null, 10L))
                 .isEqualTo(new SettlementPriceResolver.ResolvedPrice(10L, PriceSource.L1));
-        assertThatThrownBy(() -> resolver.resolve(null, null, null, null))
+        assertThatThrownBy(() -> resolver.resolve(null, null, null))
                 .isInstanceOf(ServiceException.class)
                 .extracting(ex -> ((ServiceException) ex).getCode())
                 .isEqualTo(PLATFORM_SETTLEMENT_PRICE_MISSING.getCode());

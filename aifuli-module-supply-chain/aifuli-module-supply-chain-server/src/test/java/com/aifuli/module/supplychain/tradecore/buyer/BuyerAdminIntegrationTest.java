@@ -36,12 +36,15 @@ import com.aifuli.module.supplychain.tradecore.catalog.application.ProductCatalo
 import com.aifuli.module.supplychain.tradecore.catalog.application.SettlementPriceResolver;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerProductL2OverrideDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerProductL2OverrideVersionDO;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerProductSettlementPriceDO;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerProductSettlementPriceVersionDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSettlementPriceDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSettlementPriceVersionDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerProductL2OverrideMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerProductL2OverrideVersionMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerProductSettlementPriceMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerProductSettlementPriceVersionMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceVersionMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
@@ -74,7 +77,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * 分销商管理端建档期初、组织树，以及分销商品手工 L2 覆盖（不碰模板行）。
+ * 分销商管理端建档期初、组织树，以及分销商品手工 L2 覆盖；历史模板价预留行不得参与解析。
  * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#61-组织树}
  * 与 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#63-分销商品}。
  */
@@ -86,6 +89,7 @@ class BuyerAdminIntegrationTest {
             .withPassword("supply_chain");
 
     private static final long L1_CENTS = 800L;
+    private static final long LEGACY_TEMPLATE_CENTS = 650L;
     private static final int CUSTOM_PERCENT = 110;
     private static final long CUSTOM_RESOLVED_CENTS = 880L;
     private static final String EXTERNAL_JDBC_URL = System.getProperty("supply-chain.test.jdbc-url");
@@ -195,7 +199,7 @@ class BuyerAdminIntegrationTest {
             command.changeStatus(l1, BuyerStatus.BLACKLIST, 1L);
             command.changeStatus(l1, BuyerStatus.ACTIVE, 1L);
 
-            addsProductAndOverridesL2WithoutTouchingTemplateRow(context, l1);
+            addsProductAndIgnoresLegacyTemplatePrice(context, l1);
         }
     }
 
@@ -275,10 +279,11 @@ class BuyerAdminIntegrationTest {
     }
 
     /**
-     * 插入 L1 后关联分销商品、写 CUSTOM 覆盖、再 FOLLOW_TEMPLATE 清空指针，模板行不动。
-     * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#63-分销商品}。
+     * 插入 L1 和历史模板预留行后关联分销商品、写 CUSTOM 覆盖、再 FOLLOW_TEMPLATE 清空指针。
+     * 查询与冻结均须忽略历史模板行并回退 L1。
+     * 设计见 {@code docs/superpowers/specs/2026-09-12-supply-chain-prd-scope-alignment-design.md#52-l2-与-follow_template}。
      */
-    private static void addsProductAndOverridesL2WithoutTouchingTemplateRow(
+    private static void addsProductAndIgnoresLegacyTemplatePrice(
             ConfigurableApplicationContext context, String buyerCode) {
         seedCatalog(context.getBean(ProductCatalogCommandService.class));
         PlatformSkuMapper skuMapper = context.getBean(PlatformSkuMapper.class);
@@ -291,6 +296,8 @@ class BuyerAdminIntegrationTest {
                 context.getBean(BuyerProductL2OverrideVersionMapper.class);
         BuyerProductSettlementPriceMapper templateMapper =
                 context.getBean(BuyerProductSettlementPriceMapper.class);
+        BuyerProductSettlementPriceVersionMapper templateVersionMapper =
+                context.getBean(BuyerProductSettlementPriceVersionMapper.class);
         BuyerProductCommandService products = context.getBean(BuyerProductCommandService.class);
         BuyerProductQueryService productQuery = context.getBean(BuyerProductQueryService.class);
 
@@ -321,16 +328,30 @@ class BuyerAdminIntegrationTest {
         assertThat(buyerProductCode).startsWith("BPD_");
 
         BuyerProductDO product = productMapper.selectByCode(buyerProductCode);
-        assertThat(templateMapper.selectByBuyerProductId(product.getId())).isNull();
+        BuyerProductSettlementPriceVersionDO legacyTemplateVersion = BuyerProductSettlementPriceVersionDO.builder()
+                .buyerProductId(product.getId())
+                .versionNo(1)
+                .unitPriceCents(LEGACY_TEMPLATE_CENTS)
+                .currency(Money.CURRENCY_CNY)
+                .publishedAt(now)
+                .createdAt(now)
+                .build();
+        templateVersionMapper.insert(legacyTemplateVersion);
+        templateMapper.insert(BuyerProductSettlementPriceDO.builder()
+                .buyerProductId(product.getId())
+                .currentVersionId(legacyTemplateVersion.getId())
+                .version(0L)
+                .updatedAt(now)
+                .build());
         var listed = productQuery.page(buyerCode, 1, 20).getList();
         assertThat(listed).extracting(BuyerProductListItem::buyerProductCode).containsExactly(buyerProductCode);
         assertThat(listed.getFirst().sellableCategory()).isEqualTo("MOVIE");
         assertThat(listed.getFirst().productType()).isEqualTo("MOVIE");
         assertThat(listed.getFirst().productClassification()).isEqualTo("MOVIE_TICKET");
         assertThat(listed.getFirst().suggestPriceCents()).isEqualTo(L1_CENTS);
-        assertThat(listed.getFirst().distPriceCents()).isNull();
+        assertThat(listed.getFirst().distPriceCents()).isEqualTo(L1_CENTS);
         assertThat(listed.getFirst().finalPriceCents()).isEqualTo(L1_CENTS);
-        assertThat(listed.getFirst().pricingRule()).isEqualTo("模板");
+        assertThat(listed.getFirst().pricingRule()).isEqualTo("继承L1");
         assertThat(listed.getFirst().displayThresholdPercent()).isEqualTo(5);
 
         products.patchL2(buyerCode, buyerProductCode, L2AdjustMode.CUSTOM, CUSTOM_PERCENT, 0L, 5, 1L);
@@ -341,7 +362,8 @@ class BuyerAdminIntegrationTest {
                 overrideVersionMapper.selectById(override.getCurrentVersionId());
         assertThat(version.getAdjustMode()).isEqualTo(L2AdjustMode.CUSTOM.name());
         assertThat(version.getResolvedUnitPriceCents()).isEqualTo(CUSTOM_RESOLVED_CENTS);
-        assertThat(templateMapper.selectByBuyerProductId(product.getId())).isNull();
+        assertThat(templateMapper.selectByBuyerProductId(product.getId()).getCurrentVersionId())
+                .isEqualTo(legacyTemplateVersion.getId());
 
         var afterCustom = productQuery.page(buyerCode, 1, 20).getList().getFirst();
         assertThat(afterCustom.distPriceCents()).isEqualTo(CUSTOM_RESOLVED_CENTS);
@@ -351,7 +373,12 @@ class BuyerAdminIntegrationTest {
         products.patchL2(buyerCode, buyerProductCode, L2AdjustMode.FOLLOW_TEMPLATE, null, null, 5, 1L);
         BuyerProductL2OverrideDO cleared = overrideMapper.selectByBuyerProductId(product.getId());
         assertThat(cleared.getCurrentVersionId()).isNull();
-        assertThat(templateMapper.selectByBuyerProductId(product.getId())).isNull();
+        var afterFollowTemplate = productQuery.page(buyerCode, 1, 20).getList().getFirst();
+        assertThat(afterFollowTemplate.distPriceCents()).isEqualTo(L1_CENTS);
+        assertThat(afterFollowTemplate.finalPriceCents()).isEqualTo(L1_CENTS);
+        assertThat(afterFollowTemplate.pricingRule()).isEqualTo("继承L1");
+        assertThat(templateMapper.selectByBuyerProductId(product.getId()).getCurrentVersionId())
+                .isEqualTo(legacyTemplateVersion.getId());
     }
 
     private static void seedCatalog(ProductCatalogCommandService catalog) {

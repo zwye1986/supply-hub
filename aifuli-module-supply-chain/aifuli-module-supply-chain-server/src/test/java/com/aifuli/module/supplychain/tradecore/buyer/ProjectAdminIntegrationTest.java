@@ -155,6 +155,11 @@ class ProjectAdminIntegrationTest {
             assertThat(version1.getSettlementPriceLevel()).isEqualTo(PriceSource.L1.name());
             assertThat(version1.getPriceSource()).isEqualTo(ListingPriceSource.INHERITED.name());
             assertThat(version1.getVersionNo()).isEqualTo(1);
+            var initialListingPage = listingQuery.page(projectCode, 1, 20).getList();
+            assertThat(initialListingPage).hasSize(1);
+            assertThat(initialListingPage.getFirst().distPriceCents()).isEqualTo(L1_CENTS);
+            assertThat(initialListingPage.getFirst().finalPriceCents()).isEqualTo(L1_CENTS);
+            assertThat(initialListingPage.getFirst().priceSource()).isEqualTo(PriceSource.L1.name());
             Long version1Id = version1.getId();
 
             products.patchL2(buyerA, buyerProductCodes.getFirst(), L2AdjustMode.CUSTOM,

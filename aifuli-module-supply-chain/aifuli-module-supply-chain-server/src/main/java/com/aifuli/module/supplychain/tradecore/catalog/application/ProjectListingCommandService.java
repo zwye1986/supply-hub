@@ -18,16 +18,12 @@ import com.aifuli.module.supplychain.tradecore.buyer.domain.ProjectListingStatus
 import com.aifuli.module.supplychain.tradecore.catalog.application.SettlementPriceResolver.ResolvedPrice;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerProductL2OverrideDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerProductL2OverrideVersionDO;
-import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerProductSettlementPriceDO;
-import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerProductSettlementPriceVersionDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSettlementPriceDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSettlementPriceVersionDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProjectListingVersionDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerProductL2OverrideMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerProductL2OverrideVersionMapper;
-import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerProductSettlementPriceMapper;
-import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerProductSettlementPriceVersionMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceVersionMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
@@ -74,8 +70,6 @@ public class ProjectListingCommandService {
     private final PlatformSettlementPriceVersionMapper l1VersionMapper;
     private final BuyerProductL2OverrideMapper overrideMapper;
     private final BuyerProductL2OverrideVersionMapper overrideVersionMapper;
-    private final BuyerProductSettlementPriceMapper templateMapper;
-    private final BuyerProductSettlementPriceVersionMapper templateVersionMapper;
     private final BusinessNoGenerator businessNoGenerator;
     private final SettlementPriceResolver settlementPriceResolver;
 
@@ -205,10 +199,9 @@ public class ProjectListingCommandService {
     private FrozenPrice freeze(BuyerProductDO product, L3AdjustMode mode, Integer percent, Long amountCents) {
         Long l1 = loadL1Cents(product.getPlatformSkuId());
         Long l2Override = loadOverrideCents(product.getId());
-        Long l2Template = loadTemplateCents(product.getId());
         if (mode == L3AdjustMode.FOLLOW_L2) {
             settlementPriceResolver.applyL3(mode, l1 == null ? 0L : l1, percent, amountCents);
-            ResolvedPrice resolved = settlementPriceResolver.resolve(null, l2Override, l2Template, l1);
+            ResolvedPrice resolved = settlementPriceResolver.resolve(null, l2Override, l1);
             return new FrozenPrice(resolved.unitPriceCents(), resolved.source(), ListingPriceSource.INHERITED);
         }
         if (l1 == null) {
@@ -273,15 +266,6 @@ public class ProjectListingCommandService {
         }
         BuyerProductL2OverrideVersionDO version = overrideVersionMapper.selectById(identity.getCurrentVersionId());
         return version == null ? null : version.getResolvedUnitPriceCents();
-    }
-
-    private Long loadTemplateCents(Long buyerProductId) {
-        BuyerProductSettlementPriceDO identity = templateMapper.selectByBuyerProductId(buyerProductId);
-        if (identity == null || identity.getCurrentVersionId() == null) {
-            return null;
-        }
-        BuyerProductSettlementPriceVersionDO version = templateVersionMapper.selectById(identity.getCurrentVersionId());
-        return version == null ? null : version.getUnitPriceCents();
     }
 
     private record FrozenPrice(long unitPriceCents, PriceSource level, ListingPriceSource listingSource) {

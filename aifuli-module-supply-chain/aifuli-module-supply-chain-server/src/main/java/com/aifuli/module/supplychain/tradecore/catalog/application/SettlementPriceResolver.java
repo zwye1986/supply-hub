@@ -11,10 +11,10 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PLATFORM_SETTLEMENT_PRICE_MISSING;
 
 /**
- * 管理端有效 B 端结算价解析。有效价顺序为 L3 &gt; 手工 L2 &gt; 模板 L2 &gt; L1；
+ * 管理端有效 B 端结算价解析。有效价顺序为 L3 &gt; 手工 L2 &gt; L1；
  * {@code EQUAL_L1} 取 L1 的 B 端结算分而非 C 端市场价；{@code FOLLOW_TEMPLATE}/{@code FOLLOW_L2}
- * 返回 null 表示清除覆盖或不写 L3。下单回源当前行不得在本函数之外完成。
- * 设计见 docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#8-定价解析本批管理端
+ * 返回 null 表示清除覆盖或不写 L3。历史模板价预留表不得参与解析。
+ * 设计见 docs/superpowers/specs/2026-09-12-supply-chain-prd-scope-alignment-design.md#5-销售价与分销价无模板
  */
 @Component
 public class SettlementPriceResolver {
@@ -26,18 +26,15 @@ public class SettlementPriceResolver {
     }
 
     /**
-     * 按 L3、手工 L2、模板 L2、L1 顺序取第一个非空价；L1=0 视为已定价而非缺失。
-     * 四级皆空时抛 {@code PLATFORM_SETTLEMENT_PRICE_MISSING}。
+     * 按 L3、手工 L2、L1 顺序取第一个非空价；L1=0 视为已定价而非缺失。
+     * 三级皆空时抛 {@code PLATFORM_SETTLEMENT_PRICE_MISSING}。
      */
-    public ResolvedPrice resolve(Long l3Cents, Long l2OverrideCents, Long l2TemplateCents, Long l1Cents) {
+    public ResolvedPrice resolve(Long l3Cents, Long l2OverrideCents, Long l1Cents) {
         if (l3Cents != null) {
             return new ResolvedPrice(l3Cents, PriceSource.L3);
         }
         if (l2OverrideCents != null) {
             return new ResolvedPrice(l2OverrideCents, PriceSource.L2);
-        }
-        if (l2TemplateCents != null) {
-            return new ResolvedPrice(l2TemplateCents, PriceSource.L2);
         }
         if (l1Cents != null) {
             return new ResolvedPrice(l1Cents, PriceSource.L1);
@@ -46,7 +43,8 @@ public class SettlementPriceResolver {
     }
 
     /**
-     * 按 L2 调价方式计算覆盖金额。{@code FOLLOW_TEMPLATE} 返回 null 表示清除覆盖。
+     * 按 L2 调价方式计算覆盖金额。{@code FOLLOW_TEMPLATE} 返回 null 表示清除覆盖并继承 L1，
+     * 不表示读取模板价格。
      * {@code EQUAL_L1}/{@code CUSTOM} 结果必须 &gt;0，否则 {@code L2_OVERRIDE_INVALID}。
      */
     public Long applyL2(L2AdjustMode mode, long l1Cents, Integer percent, Long amountCents) {
