@@ -20,6 +20,10 @@ aifuli:
     auth:
       # 本地开发/自动化测试专用固定主密钥；生产必须通过环境变量注入，禁止沿用本值。
       master-key: ${AIFULI_SUPPLY_CHAIN_AUTH_MASTER_KEY:MDEyMzQ1Njc4OWFiY2RlZmdoaWprbG1ub3BxcnN0dXY=}
+    security:
+      key-version: local-v1
+      envelope-key-base64: ${AIFULI_SUPPLY_CHAIN_ENVELOPE_KEY:MDEyMzQ1Njc4OWFiY2RlZmdoaWprbG1ub3BxcnN0dXY=}
+      fingerprint-key-base64: ${AIFULI_SUPPLY_CHAIN_FINGERPRINT_KEY:MDEyMzQ1Njc4OWFiY2RlZmdoaWprbG1ub3BxcnN0dXY=}
     openapi:
       enabled: true
 

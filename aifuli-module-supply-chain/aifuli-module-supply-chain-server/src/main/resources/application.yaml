@@ -30,6 +30,8 @@ knife4j:
 
 aifuli:
   web:
+    admin-ui:
+      url: http://127.0.0.1:58190 # Admin UI 访问地址
     admin-api:
       prefix: /admin-api
       controller: "**.interfaceapi.admin.**"
