@@ -124,7 +124,7 @@ SET name = '项目管理', type = 2, sort = 2, parent_id = @sc_distribution_id, 
     always_show = b'1', updater = @sc_creator, update_time = NOW()
 WHERE id = @sc_project_page_id;
 
--- 三个页面各自的动作按钮。页面 query 权限已经记录在 PAGE 行中。
+-- 供应商、分销商、项目三个页面各自的动作按钮。页面 query 权限已经记录在 PAGE 行中。
 INSERT INTO system_menu
     (application_code, name, permission, type, sort, parent_id, path, icon, component, component_name,
      status, visible, keep_alive, always_show, creator, create_time, updater, update_time, deleted)
@@ -172,6 +172,32 @@ SET menu.name = actions.name, menu.type = 3, menu.sort = actions.sort,
     menu.component_name = NULL, menu.status = 0, menu.visible = b'1', menu.keep_alive = b'1',
     menu.always_show = b'1', menu.updater = @sc_creator, menu.update_time = NOW()
 WHERE BINARY menu.application_code = BINARY @sc_app AND menu.deleted = b'0';
+
+-- 平台订单只读页面；查询权限由 PAGE 行承载，本期不登记写按钮。
+INSERT INTO system_menu
+    (application_code, name, permission, type, sort, parent_id, path, icon, component, component_name,
+     status, visible, keep_alive, always_show, creator, create_time, updater, update_time, deleted)
+SELECT @sc_app, '订单管理', 'supply-chain:order:query', 2, 4, @sc_root_id, 'orders', 'ep:list',
+       'supplier/order/index', 'SupplyChainOrder', 0, b'1', b'1', b'1',
+       @sc_creator, NOW(), @sc_creator, NOW(), b'0'
+WHERE NOT EXISTS (
+    SELECT 1 FROM system_menu
+    WHERE BINARY application_code = BINARY @sc_app
+      AND BINARY permission = BINARY 'supply-chain:order:query' AND deleted = b'0'
+);
+
+SET @sc_order_page_id = (
+    SELECT MIN(id) FROM system_menu
+    WHERE BINARY application_code = BINARY @sc_app
+      AND BINARY permission = BINARY 'supply-chain:order:query' AND deleted = b'0'
+);
+
+UPDATE system_menu
+SET name = '订单管理', type = 2, sort = 4, parent_id = @sc_root_id, path = 'orders',
+    icon = 'ep:list', component = 'supplier/order/index', component_name = 'SupplyChainOrder',
+    status = 0, visible = b'1', keep_alive = b'1', always_show = b'1',
+    updater = @sc_creator, update_time = NOW()
+WHERE id = @sc_order_page_id;
 
 -- 商品中心目录及四个管理页面。电影、点餐等商品类型共用平台商品页面，不建立专属菜单。
 INSERT INTO system_menu

@@ -7,6 +7,7 @@ import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import org.apache.ibatis.annotations.Mapper;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 /**
  * 到店购支付流水 Mapper。
@@ -44,6 +45,13 @@ public interface InstorePaymentFlowMapper extends BaseMapperX<InstorePaymentFlow
     default InstorePaymentFlowDO selectByInstoreOrder(Long instoreOrderId) {
         return selectOne(new LambdaQueryWrapper<InstorePaymentFlowDO>()
                 .eq(InstorePaymentFlowDO::getInstoreOrderId, instoreOrderId));
+    }
+
+    /** 按渠道订单头查询全部支付流水，管理端详情固定按流水序号升序。 */
+    default List<InstorePaymentFlowDO> selectListByInstoreOrder(Long instoreOrderId) {
+        return selectList(new LambdaQueryWrapper<InstorePaymentFlowDO>()
+                .eq(InstorePaymentFlowDO::getInstoreOrderId, instoreOrderId)
+                .orderByAsc(InstorePaymentFlowDO::getFlowSequence));
     }
 
     /** CAS 推进支付状态与资金冻结引用，用于抢占收银台。 */

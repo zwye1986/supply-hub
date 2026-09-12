@@ -55,6 +55,8 @@ public final class SupplyChainAdminPermissions {
     public static final String PRODUCT_TYPE_DELETE = "supply-chain:product-type:delete";
     public static final String PRODUCT_TYPE_UPDATE_STATUS = "supply-chain:product-type:update-status";
 
+    public static final String ORDER_QUERY = "supply-chain:order:query";
+
     public static final String ADMIN_EXPRESSION = "@ss.hasPermission('" + ADMIN + "')";
     public static final String SUPPLIER_QUERY_EXPRESSION =
             "@ss.hasAnyPermissions('" + ADMIN + "', '" + SUPPLIER_QUERY + "')";
@@ -129,6 +131,8 @@ public final class SupplyChainAdminPermissions {
             "@ss.hasAnyPermissions('" + ADMIN + "', '" + PRODUCT_TYPE_DELETE + "')";
     public static final String PRODUCT_TYPE_UPDATE_STATUS_EXPRESSION =
             "@ss.hasAnyPermissions('" + ADMIN + "', '" + PRODUCT_TYPE_UPDATE_STATUS + "')";
+    public static final String ORDER_QUERY_EXPRESSION =
+            "@ss.hasAnyPermissions('" + ADMIN + "', '" + ORDER_QUERY + "')";
 
     public static final String READ_OPTIONS_EXPRESSION =
             "@ss.hasAnyPermissions('" + ADMIN + "', '" + SUPPLIER_QUERY + "', '"

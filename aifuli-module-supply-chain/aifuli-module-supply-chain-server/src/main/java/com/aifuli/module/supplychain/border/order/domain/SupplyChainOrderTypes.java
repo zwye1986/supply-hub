@@ -11,11 +11,11 @@ public final class SupplyChainOrderTypes {
     }
 
     /** 订单类型：标准商品履约。 */
-    public static final String ORDER_TYPE_CARD = "CARD";
+    public static final String ORDER_TYPE_CARD = SupplyChainOrderType.CARD.name();
     /** 订单类型：O2O 渠道场景（ele.me/盒马配送）。 */
-    public static final String ORDER_TYPE_O2O = "O2O";
+    public static final String ORDER_TYPE_O2O = SupplyChainOrderType.O2O.name();
     /** 订单类型：到店购渠道场景（大润发/旅通到店扫码购）。 */
-    public static final String ORDER_TYPE_INSTORE = "INSTORE";
+    public static final String ORDER_TYPE_INSTORE = SupplyChainOrderType.INSTORE.name();
     /** 场景详情类型：标准履约请求。 */
     public static final String DETAIL_TYPE_FULFILLMENT = "FULFILLMENT";
     /** 场景详情类型：O2O 渠道详情。 */

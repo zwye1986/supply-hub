@@ -122,6 +122,8 @@ public interface SupplyChainErrorCodeConstants {
     ErrorCode PRODUCT_SKU_CODE_DUPLICATE = error(1_050_001_101, "同一次请求内 SKU 编码重复");
     ErrorCode PRODUCT_SKU_FIELD_INVALID = error(1_050_001_102, "SKU 名称、履约模式或价格字段不合法");
     ErrorCode PRODUCT_CURRENCY_INVALID = error(1_050_001_103, "平台 SKU 币种仅支持 CNY");
+    ErrorCode SUPPLY_CHAIN_ORDER_NOT_FOUND = error(1_050_001_104, "供应链总订单不存在");
+    ErrorCode ORDER_QUERY_TIME_RANGE_INVALID = error(1_050_001_105, "订单受理时间区间不合法");
 
     /** 订单详情不可用只作为成功响应中的详情标记，不作为 CommonResult 失败码。 */
     String DETAIL_UNAVAILABLE = "DETAIL_UNAVAILABLE";
@@ -229,7 +231,9 @@ public interface SupplyChainErrorCodeConstants {
             entry(PRODUCT_SKU_REQUIRED, RetryDirective.DO_NOT_RETRY),
             entry(PRODUCT_SKU_CODE_DUPLICATE, RetryDirective.DO_NOT_RETRY),
             entry(PRODUCT_SKU_FIELD_INVALID, RetryDirective.DO_NOT_RETRY),
-            entry(PRODUCT_CURRENCY_INVALID, RetryDirective.DO_NOT_RETRY));
+            entry(PRODUCT_CURRENCY_INVALID, RetryDirective.DO_NOT_RETRY),
+            entry(SUPPLY_CHAIN_ORDER_NOT_FOUND, RetryDirective.DO_NOT_RETRY),
+            entry(ORDER_QUERY_TIME_RANGE_INVALID, RetryDirective.DO_NOT_RETRY));
 
     static RetryDirective retryDirective(int errorCode) {
         return RETRY_DIRECTIVES.getOrDefault(errorCode, RetryDirective.DO_NOT_RETRY);

@@ -4,6 +4,7 @@ import com.aifuli.framework.common.biz.system.permission.PermissionCommonApi;
 import com.aifuli.framework.security.core.LoginUser;
 import com.aifuli.framework.security.core.service.SecurityFrameworkService;
 import com.aifuli.framework.security.core.service.SecurityFrameworkServiceImpl;
+import com.aifuli.module.supplychain.border.order.application.OrderAdminQueryService;
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerAdminCommandService;
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerAdminQueryService;
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerInvoiceService;
@@ -38,6 +39,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import static com.aifuli.framework.common.pojo.CommonResult.success;
 import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.ADMIN;
 import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.BUYER_QUERY;
+import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.ORDER_QUERY;
 import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.SUPPLIER_QUERY;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -68,6 +70,8 @@ class SupplyChainAdminMethodSecurityContractTest {
     private BuyerAdminController buyerController;
     @Resource
     private PlatformSkuAdminController platformSkuController;
+    @Resource
+    private OrderAdminController orderController;
 
     @BeforeEach
     void setUp() {
@@ -89,6 +93,7 @@ class SupplyChainAdminMethodSecurityContractTest {
         assertThat(AopUtils.isAopProxy(supplierController)).isTrue();
         assertThat(AopUtils.isAopProxy(buyerController)).isTrue();
         assertThat(AopUtils.isAopProxy(platformSkuController)).isTrue();
+        assertThat(AopUtils.isAopProxy(orderController)).isTrue();
     }
 
     @Test
@@ -172,6 +177,24 @@ class SupplyChainAdminMethodSecurityContractTest {
                 .isInstanceOf(AccessDeniedException.class);
     }
 
+    @Test
+    void orderQueryCanReadOrders() {
+        grant(ORDER_QUERY);
+        assertThatCode(this::queryOrders).doesNotThrowAnyException();
+    }
+
+    @Test
+    void legacyAdminCanReadOrders() {
+        grant(ADMIN);
+        assertThatCode(this::queryOrders).doesNotThrowAnyException();
+    }
+
+    @Test
+    void wrongPermissionCannotReadOrders() {
+        grant(BUYER_QUERY);
+        assertThatThrownBy(this::queryOrders).isInstanceOf(AccessDeniedException.class);
+    }
+
     private void querySuppliers() {
         supplierController.page(null, null, null, null, null,
                 null, null, null, null, null);
@@ -190,6 +213,11 @@ class SupplyChainAdminMethodSecurityContractTest {
     private void queryPlatformSkus(String supplierCode, String buyerCode) {
         platformSkuController.page(null, null, null, null,
                 supplierCode, buyerCode, null, null, null);
+    }
+
+    private void queryOrders() {
+        orderController.page(null, null, null, null, null, null, null, null,
+                null, null, 1, 20);
     }
 
     private static void grant(String... permissions) {
@@ -253,6 +281,11 @@ class SupplyChainAdminMethodSecurityContractTest {
         @Bean
         PlatformSkuAdminController platformSkuAdminController() {
             return new PlatformSkuAdminController(mock(PlatformSkuQueryService.class));
+        }
+
+        @Bean
+        OrderAdminController orderAdminController() {
+            return new OrderAdminController(mock(OrderAdminQueryService.class));
         }
     }
 }

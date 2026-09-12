@@ -30,4 +30,13 @@ public enum O2OChannelFulfillmentStatus {
     private final short code;
     /** 中文名称，与 DDL COMMENT 一致。 */
     private final String chineseName;
+
+    public static O2OChannelFulfillmentStatus fromCode(short code) {
+        for (O2OChannelFulfillmentStatus status : values()) {
+            if (status.code == code) {
+                return status;
+            }
+        }
+        throw new IllegalArgumentException("Unknown O2O channel fulfillment status: " + code);
+    }
 }

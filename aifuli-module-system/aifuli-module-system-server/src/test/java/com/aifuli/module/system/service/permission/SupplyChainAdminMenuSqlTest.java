@@ -47,9 +47,11 @@ class SupplyChainAdminMenuSqlTest {
         assertTrue(menuSql.contains("supply-chain:supplier:query"));
         assertTrue(menuSql.contains("supply-chain:buyer:query"));
         assertTrue(menuSql.contains("supply-chain:project:query"));
+        assertTrue(menuSql.contains("supply-chain:order:query"));
         assertTrue(menuSql.contains("supplier/manage/index"));
         assertTrue(menuSql.contains("supplier/distribution/distributor/index"));
         assertTrue(menuSql.contains("supplier/distribution/project/index"));
+        assertTrue(menuSql.contains("supplier/order/index"));
     }
 
     @Test

@@ -45,6 +45,7 @@ import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminP
 import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.PRODUCT_TYPE_UPDATE_EXPRESSION;
 import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.PRODUCT_TYPE_DELETE_EXPRESSION;
 import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.PRODUCT_TYPE_UPDATE_STATUS_EXPRESSION;
+import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.ORDER_QUERY_EXPRESSION;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -138,6 +139,14 @@ class SupplyChainAdminPermissionContractTest {
                 Map.entry("page", PRODUCT_TYPE_QUERY_EXPRESSION), Map.entry("detail", PRODUCT_TYPE_QUERY_EXPRESSION),
                 Map.entry("create", PRODUCT_TYPE_CREATE_EXPRESSION), Map.entry("update", PRODUCT_TYPE_UPDATE_EXPRESSION),
                 Map.entry("status", PRODUCT_TYPE_UPDATE_STATUS_EXPRESSION), Map.entry("delete", PRODUCT_TYPE_DELETE_EXPRESSION)));
+    }
+
+    @Test
+    void orderReadMethodsUseOrderQueryPermissionWithAdminFallback() {
+        assertMethodPermissions(OrderAdminController.class, Map.of(
+                "page", ORDER_QUERY_EXPRESSION,
+                "get", ORDER_QUERY_EXPRESSION));
+        assertThat(ORDER_QUERY_EXPRESSION).contains("supply-chain:admin", "supply-chain:order:query");
     }
 
     @Test

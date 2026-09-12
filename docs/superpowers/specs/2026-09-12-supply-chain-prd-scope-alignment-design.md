@@ -67,14 +67,14 @@ O2O / INSTORE 的 B 端冻结金额继续 `buyerSettlementAmount = channelPayAmo
 - 供应商 / 分销商 / 项目档案与管理端 REST（含开票、供货配置、合作商品、分销商品、项目商品）。
 - 商品中心：SPU/SKU、分类树、品牌、动态 `sc_product_type`。
 - 三级结算价数据骨架与手工 L2/L3 覆盖。
+- `FOLLOW_TEMPLATE` 已统一为清手工覆盖并回退 L1，应用层禁止读取历史模板价预留表。
 - 标准商品受理、资金冻结、下单后静态路由（仅卡券/直充等已接入履约类型）。
 - O2O（淘宝闪购）与 INSTORE（大润发）固定商户链路：入口、建单、资金、渠道退款 Case。
+- 平台订单管理端只读列表/类型化详情（虚拟 + O2O/到店安全字段；不接包裹与履约资产），详见 `docs/superpowers/specs/2026-09-12-supply-chain-order-admin-readonly-design.md`。
 
 待建设（本文锁定边界，实施另立变更集）：
 
 - `border.aftersale` 轻量售后头表 + 商品行 + 状态日志 + 管理端列表/详情/审核命令。
-- 平台订单管理端只读列表/详情（虚拟 + O2O/到店字段；不接包裹）。
-- `FOLLOW_TEMPLATE` 枚举与 OpenAPI 注释与 s4 对齐（不改运行语义）。
 
 ### 4.2 本期明确不做
 
@@ -229,7 +229,7 @@ PRD 11.2 要求数据权限与多租户隔离。中台 `sc_*` 无 `tenant_id`。
 
 1. 本文 + CONTEXT 词汇（本次）。
 2. `FOLLOW_TEMPLATE` 注释与管理端 Schema 文案与 s4 对齐。
-3. 平台订单管理端只读查询（虚拟 + O2O/到店）。
+3. 平台订单管理端只读查询（虚拟 + O2O/到店；已按 `2026-09-12-supply-chain-order-admin-readonly-design.md` 落地）。
 4. `border.aftersale` 表结构、状态机单测、管理端审核 REST、资金 Port 协同。
 5. 商品/供应商/分销/项目相对 PRD 的剩余交互缺口（仍以 09-02 / 09-11 字段为准），不改分层。
 

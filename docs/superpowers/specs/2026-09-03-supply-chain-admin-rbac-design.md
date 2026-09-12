@@ -8,7 +8,7 @@
 
 管理端 REST 字段、状态机、路径仍以
 `docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md`
-为准。本文替换该文 §3.1 的单一 `supply-chain:admin` 方案，并补充 `system_menu` 应用隔离及 `supplychainhubweb` 动态菜单设计：三块页面资源改为细权限，未拆接口仍用 `supply-chain:admin`。
+为准。本文替换该文 §3.1 的单一 `supply-chain:admin` 方案，并补充 `system_menu` 应用隔离及 `supplychainhubweb` 动态菜单设计：已登记页面资源改为细权限，未拆接口仍用 `supply-chain:admin`。
 
 与 `docs/superpowers/specs/2026-08-07-supply-chain-phase1-detailed-design.md#37-事务恢复与权限规则`
 中的 Facade `scope`（如 `CATALOG_READ`、`FULFILLMENT_EXCEPTION_RESOLVE`）不是同一套东西：那是采购商/渠道/系统身份的机器能力；本文是 `system-server` 管理端用户的 yudao 权限标识。禁止把 Facade scope 写成 `supply-chain:…` 或反过来。
@@ -23,10 +23,10 @@
 | r2 | 账号复用 `system-server` 用户 / 角色 / 菜单 / token。中台库不建运营用户表、不发登录态。 |
 | r3 | 独立站点 `supplychainhubweb`；与商城后台同一账号、同一 token、同一套角色权限。菜单按应用隔离：商城后台为 `mall-admin`，供应链中台为 `supply-chain-admin`。应用标识只决定菜单投影，不作为后端授权凭证。 |
 | r4 | **本轮落地 B**：按资源拆功能权限，数据全量。**最终目标 C**：再按供应商/分销商/项目 code 做数据范围。范围不编进权限字符串，不用 yudao 部门数据权限，不在 `sc_*` 上套框架 `@DataPermission`。 |
-| r5 | 本轮权限目录只覆盖前端已有三块：供应商、分销商、项目。类目树 / 标品 SKU 下拉只读。账户、路由、连接器、`/supplier-config`、`/master-data` 等未拆接口仍只认 `supply-chain:admin`。 |
+| r5 | 权限目录覆盖供应商、分销商、项目、商品中心与订单只读查询。类目树 / 标品 SKU 下拉只读。账户、路由、连接器、`/supplier-config`、`/master-data` 等未拆接口仍只认 `supply-chain:admin`。订单权限增量见 `docs/superpowers/specs/2026-09-12-supply-chain-order-admin-readonly-design.md`。 |
 | r6 | 动作：`query` / `create` / `update` / `delete` / `update-status`。`delete` 只表示逻辑移除子资源（合作商品 / 分销商品 / 项目商品），禁止物理删主体。`update-status` 只对**主体**状态机。 |
 | r7 | 子资源跟主体走：供货配置、合作商品、分销商品、项目商品、开票不单开权限资源。合作商品上架/下架走 `supplier:update`，不是 `update-status`。开票契约见 `docs/superpowers/specs/2026-09-07-供应链管理端开票信息设计.md`。 |
-| r8 | `supply-chain:admin` 本轮仍是三块细权限的超集（`hasAnyPermissions(admin, 细权限)`），避免现网只勾了旧权限的账号突然 403。yudao 超管角色走框架放行。 |
+| r8 | `supply-chain:admin` 仍是所有供应链细权限的超集（`hasAnyPermissions(admin, 细权限)`），避免现网只勾了旧权限的账号突然 403。yudao 超管角色走框架放行。 |
 | r9 | 本任务不修改 `supplychainhubweb` 或其它前端工程，只交付其所需的 `system_menu` 应用隔离、权限信息接口和按钮权限数据。删除 `remaining.ts` 静态挂载、动态注册路由及接入 `v-hasPermi`（或等价指令）由独立前端任务/团队完成。 |
 | r10 | `system_menu` 增加 `application_code`，既有菜单迁移为 `mall-admin`，供应链目录/页面/按钮写 `supply-chain-admin`。菜单结构与权限登记到 **system-server 的库**，使用可重复 SQL；禁止中台 Liquibase 写 `system_menu`。本轮不预置「商务/运营」等业务角色。 |
 | r11 | 供应商/分销商档案 GET 在通过对应 `query` 权限后按原值回显手机号、开户账号和证件 fileKey，不另设「看明文」权限；本轮仍不增加导出能力。库内加密、履约资产访问控制与所有日志脱敏规则不变。 |
@@ -70,7 +70,8 @@
 | `supply-chain:project:update` | 改档案；项目商品发布/改 L3 |
 | `supply-chain:project:delete` | 逻辑移除项目商品 |
 | `supply-chain:project:update-status` | 主体进行中/暂停/已结束 |
-| `supply-chain:admin` | 未拆接口兜底；并作为三块细权限的超集 |
+| `supply-chain:order:query` | 平台订单列表与类型化详情，只读 |
+| `supply-chain:admin` | 未拆接口兜底；并作为全部细权限的超集 |
 
 不单开 `catalog:query`。`GET /supply-chain/categories` 在调用方持有三块任一 `query` 或 `supply-chain:admin` 时通过。
 
@@ -130,7 +131,11 @@
 
 仅这四个：`BuyerAccountAdminController`、`RoutingPolicyAdminController`、`SupplierConfigurationAdminController`、`M1MasterDataAdminController`。保持只校验 `supply-chain:admin`（超管仍放行）。旧 `/master-data/buyers` 等路径不改走细权限，避免两套入口语义分叉。
 
-本期 `interfaceapi.admin` 一共 9 个 Controller：上述 4 个未拆，加上 `SupplierAdminController`、`BuyerAdminController`、`ProjectAdminController`、`CategoryAdminController`、`PlatformSkuAdminController`。新增 AdminController 必须先改本文再挂注解，禁止默认一把 `admin` 而不登记。
+### 5.6 `OrderAdminController` `/supply-chain/orders`
+
+`GET /` 与 `GET /{orderNo}` 均使用 `order:query`，并保留 `supply-chain:admin` 超集；本期没有订单写接口。详细契约见 `docs/superpowers/specs/2026-09-12-supply-chain-order-admin-readonly-design.md`。
+
+当前 `interfaceapi.admin` 一共 13 个 AdminController：上述 4 个未拆，其余资源均使用本文登记的细权限与 `admin` 超集。新增 AdminController 必须先改本文再挂注解，禁止默认一把 `admin` 而不登记。
 
 ## 6. 错误与日志
 
@@ -179,15 +184,16 @@ C 的详细设计至少必须拆成两类能力：
 
 ### 8.2 供应链菜单树
 
-在 system 库登记根目录「供应链中台」及三个页面菜单、按钮，全部标记 `application_code=supply-chain-admin`。根目录 permission 为 `supply-chain:admin`；页面菜单的 permission 为对应 `*:query`；按钮挂 create / update / delete / update-status。组件 path 必须能被 `supplychainhubweb` 的动态组件解析器加载：
+在 system 库登记根目录「供应链中台」及资源页面菜单、按钮，全部标记 `application_code=supply-chain-admin`。根目录 permission 为 `supply-chain:admin`；页面菜单的 permission 为对应 `*:query`；有写能力的页面再挂 create / update / delete / update-status，订单页只登记查询 PAGE。组件 path 必须能被 `supplychainhubweb` 的动态组件解析器加载：
 
 | 页面 | 路由 |
 | --- | --- |
 | 供应商管理 | `/supplier/manage` |
 | 分销商管理 | `/supplier/distribution/distributor` |
 | 项目管理 | `/supplier/distribution/project` |
+| 订单管理 | `/supplier/orders` |
 
-独立前端任务应删除 `supplychainhubweb` 的 `src/router/modules/remaining.ts` 中上述三页无条件静态挂载；登录后调用带应用标识的权限信息接口，将返回的页面菜单交给现有动态路由加载机制。无 `*:query` 且无 `supply-chain:admin` 时，该页不应出现在侧栏且路由不注册；直接输入 URL 应进入统一无权限/404 页面，不能退回静态路由。本任务不实施或构建验证这些前端改动。
+独立前端任务应删除 `supplychainhubweb` 的 `src/router/modules/remaining.ts` 中供应商、分销商、项目三页的无条件静态挂载，并为订单页补齐对应组件；登录后调用带应用标识的权限信息接口，将返回的页面菜单交给现有动态路由加载机制。无 `*:query` 且无 `supply-chain:admin` 时，该页不应出现在侧栏且路由不注册；直接输入 URL 应进入统一无权限/404 页面，不能退回静态路由。本任务不实施或构建验证这些前端改动。
 
 独立前端任务应让页面按钮按资源使用 `v-hasPermi` 或该仓库等价指令。每个按钮的允许集合必须同时包含 `supply-chain:admin` 和对应细权限，保持 r8；只有 UI 隐藏不算安全控制，接口仍必须由 §5 的 `@PreAuthorize` 拒绝。
 
@@ -231,7 +237,7 @@ C 的详细设计至少必须拆成两类能力：
 
 不要求本切片拉起真实 `system-server` 与供应链服务组成全自动环境，但真实联调必须写入 `docs/集成测试.md`：
 
-- 仅 `supply-chain:admin`：三块接口仍成功（r8）。
+- 仅 `supply-chain:admin`：供应商、分销商、项目资源接口与订单只读接口仍全部成功（r8）。
 - 仅 `supplier:query`：供应商 GET 成功，供应商 PATCH 状态 `403`，分销商 GET `403`。
 - 未登录：业务 `401`。
 - 已登录无任何供应链权限：`403`。
