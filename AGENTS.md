@@ -1,10 +1,12 @@
-# 商城聚合服务约束
+# 仓库服务形态约束
 
-- `product`、`promotion`、`trade` 已由 `MallServerApplication` 合并为同一进程、同一个 Spring 容器，默认不要视为三个独立微服务。
-- 排查 Bean、Feign、组件扫描和配置问题时，必须同时检查三个模块及 `mall-server`，避免基于单个模块配置误判。
-- 三个模块之间优先使用本地 Spring Bean，不要新增 Feign、RPC 或 HTTP 自调用。
-- `member`、`pay`、`system` 等仍是外部服务；其 Feign API 应由实际消费模块显式注册。
-- 修改启动、RPC、事务、缓存或安全配置时，必须评估聚合服务的整体影响。
+- 本仓由 mall-pro 拆分而来，`mall`（含 `product`、`promotion`、`trade`）、`pay`、`erp` 模块已删除，仓库内不存在 `MallServerApplication`。不要沿用「商城三模块聚合为同一进程」的旧假设排查问题。拆仓范围见 `docs/superpowers/specs/2026-09-07-supply-hub-repo-split-design.md`。
+- 可独立启动的进程共 8 个：`GatewayServerApplication`、`AifuliServerApplication`（仅聚合 system + infra，member 依赖已注释）、`SystemServerApplication`、`InfraServerApplication`、`MemberServerApplication`、`SupplyChainServerApplication`、`TaobaoFlashChannelApplication`、`MovieServerApplication`。
+- `aifuli-module-supply-chain-server` 是独立进程：独立数据源 `supplyChainDataSource`、独立事务管理器 `supplyChainTransactionManager`、独立库（表名统一 `sc_*` 前缀，表间无物理外键）。供应链代码不得访问 `system_*`、`member_*` 等其它模块的表；管理端菜单与数据字典由 `script/deploy` 下的部署 SQL 写入 system 库。
+- 供应链出站调用走显式注册的 Feign：当前只注册会员的 `MemberProfileResolveApi`、`MemberSsoTokenApi`（`framework/rpc/config/RpcConfiguration`）。新增外部服务依赖必须显式注册，不得依赖包扫描隐式引入。
+- 淘宝闪购渠道 `aifuli-channel-taobao-flash-server` 与电影 `aifuli-module-movie-server` 各自是独立进程与独立库，不得并入供应链容器。
+- 供应链模块边界由 `SupplyChainModuleArchitectureTest` 以 ArchUnit 强制（Facade 不得依赖 `..dal..`、`routing.domain` 不得依赖 Spring/MyBatis、`border` 不得访问账户与账本 `dal`、管理端每个 HTTP 映射必须有 `@PreAuthorize` 等）。调整分层或依赖方向前先读该测试。
+- 修改启动、RPC、事务、缓存或安全配置时，必须评估对应进程的整体影响，并确认是否触发上述架构约束测试。
 
 # 开发规范（Cursor / Codex / ChatGPT 共用）
 
