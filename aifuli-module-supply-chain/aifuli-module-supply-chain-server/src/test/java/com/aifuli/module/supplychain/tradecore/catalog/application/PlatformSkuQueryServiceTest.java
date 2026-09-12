@@ -59,14 +59,15 @@ class PlatformSkuQueryServiceTest {
     }
 
     @Test
-    void filtersByKeywordAndOmitsSuggestPriceWhenL1Missing() {
+    void filtersByKeywordAndProjectsSuggestedSalePriceInsteadOfFaceOrMarketPrice() {
         PlatformSpuDO spu = PlatformSpuDO.builder()
                 .id(8L).spuCode("MOVIE_TICKET").spuName("电影票")
                 .sellableCategory("MOVIE").productType("MOVIE").productClassification("MOVIE_TICKET")
                 .status(CatalogEntityStatus.ACTIVE.getCode()).build();
         PlatformSkuDO sku = PlatformSkuDO.builder()
                 .id(11L).skuCode("MOVIE_100").spuId(8L).skuName("电影票 100")
-                .faceValue(10_000L).status(CatalogEntityStatus.ACTIVE.getCode())
+                .faceValue(10_000L).marketPrice(12_000L).suggestedSalePrice(11_000L)
+                .status(CatalogEntityStatus.ACTIVE.getCode())
                 .createdAt(LocalDateTime.of(2026, 9, 2, 12, 0)).build();
         when(spuMapper.selectList(any())).thenReturn(List.of(spu));
         when(skuMapper.selectPage(any(PageParam.class), ArgumentMatchers.any()))
@@ -81,7 +82,7 @@ class PlatformSkuQueryServiceTest {
         PlatformSkuQueryService.SkuListItem row = page.getList().getFirst();
         assertThat(row.skuName()).isEqualTo("电影票 100");
         assertThat(row.suggestPriceCents()).isNull();
-        assertThat(row.marketPriceCents()).isEqualTo(10_000L);
+        assertThat(row.marketPriceCents()).isEqualTo(11_000L);
         assertThat(row.sellableCategory()).isEqualTo("MOVIE");
         assertThat(row.productClassification()).isEqualTo("MOVIE_TICKET");
     }

@@ -11,6 +11,7 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BrandMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSpuMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;
@@ -212,8 +213,16 @@ public class BrandAdminService {
     public record UpdateCommand(String brandName, String englishName, String logoUrl, Integer sort, Long operatorId) {
     }
 
-    public record BrandView(String brandCode, String brandName, String englishName, String logoUrl,
-                            Integer sort, Short status, long productCount,
-                            LocalDateTime createdAt, LocalDateTime updatedAt) {
+    /** 商品品牌管理端投影；字段语义与 {@code sc_brand} DDL COMMENT 一致。 */
+    public record BrandView(
+            @Schema(description = "平台品牌永久业务编码") String brandCode,
+            @Schema(description = "品牌名称") String brandName,
+            @Schema(description = "品牌英文名称") String englishName,
+            @Schema(description = "品牌Logo地址") String logoUrl,
+            @Schema(description = "品牌展示排序值") Integer sort,
+            @Schema(description = "品牌管理状态：0草稿，10启用，20停用，90已归档") Short status,
+            @Schema(description = "引用该品牌的未归档SPU数量") long productCount,
+            @Schema(description = "品牌创建时间，Asia/Shanghai") LocalDateTime createdAt,
+            @Schema(description = "品牌最后更新时间，Asia/Shanghai") LocalDateTime updatedAt) {
     }
 }

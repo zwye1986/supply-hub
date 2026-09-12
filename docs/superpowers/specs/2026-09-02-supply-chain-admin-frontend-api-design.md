@@ -242,7 +242,7 @@
 - `buyerCode`：只返回该分销商**尚未**关联的平台 SKU（新增分销商品）。
 - `projectCode`：只返回该项目所属分销商**已有** `BuyerProduct`、且项目目录尚未未退役关联的 SKU（新增项目商品）。缺少 `BuyerProduct` 的标品不得出现。
 
-金额字段：`suggestPriceCents`（L1 结算口径）、`marketPriceCents`（C 端建议价，若无则空）。点餐/电影 L1 可为 0。
+金额字段：`suggestPriceCents`（L1 结算口径）、`marketPriceCents`（兼容既有 JSON 字段名；C 端建议价，实际取 `sc_platform_sku.suggested_sale_price`，若无则空）。`marketPriceCents` 不得取履约面值 `face_value` 或市场划线价 `market_price`；销售价来源以 09-12 范围对齐 §5 为准。点餐/电影 L1 可为 0。
 
 ## 5. 供应商
 

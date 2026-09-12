@@ -241,7 +241,7 @@ public class PlatformSkuQueryService {
                 spu == null ? null : spu.getProductType(),
                 spu == null ? null : spu.getProductClassification(),
                 resolveSuggestPriceCents(sku.getId()),
-                sku.getFaceValue());
+                sku.getSuggestedSalePrice());
     }
 
     /**
@@ -280,8 +280,11 @@ public class PlatformSkuQueryService {
     }
 
     /**
-     * 标品 SKU 列表行。金额注释与 DDL COMMENT 对齐：面值为 C 端建议价，L1 为 B 端结算单价；
+     * 标品 SKU 列表行。金额注释与 DDL COMMENT 对齐：销售建议价为 C 端建议价，L1 为 B 端结算单价；
      * 三码直接来自 SPU，未打码的历史 SPU 三个字段均为 null。
+     * 兼容字段 {@code marketPriceCents} 的值取 {@code sc_platform_sku.suggested_sale_price}，
+     * 不得回退到履约面值或市场划线价。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线} d15。
      */
     public record SkuListItem(
             @Schema(description = "平台SKU内部主键") Long id,
@@ -293,6 +296,6 @@ public class PlatformSkuQueryService {
             @Schema(description = "动态商品类型编码") String productType,
             @Schema(description = "商品分类封闭枚举名") String productClassification,
             @Schema(description = "L1 B端结算单价，CNY分，允许0") Long suggestPriceCents,
-            @Schema(description = "C端建议价，取自平台SKU标准面值，单位CNY分") Long marketPriceCents) {
+            @Schema(description = "兼容字段名；C端建议价，取自平台SKU销售建议价，单位CNY分") Long marketPriceCents) {
     }
 }

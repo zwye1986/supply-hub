@@ -13,6 +13,7 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProductCategory
 import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.ProductCenterTab;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -179,23 +180,64 @@ public class ProductCatalogQueryService {
                                Short status, Integer pageNo, Integer pageSize) {
     }
 
-    public record SpuListItem(String spuCode, String spuName, String brandName, String categoryName,
-                              String sellableCategory, String productType, String productClassification,
-                              String coverUrl, Short status, int skuCount, Long minSuggestedPrice,
-                              Long maxSuggestedPrice, LocalDateTime createdAt) {
+    /** 平台商品分页行；字段语义与商品中心 DDL COMMENT 及 §4.1.1 契约一致。 */
+    public record SpuListItem(
+            @Schema(description = "平台SPU永久业务编码") String spuCode,
+            @Schema(description = "平台SPU标准名称") String spuName,
+            @Schema(description = "品牌名称") String brandName,
+            @Schema(description = "主分类名称") String categoryName,
+            @Schema(description = "可售品类封闭枚举名") String sellableCategory,
+            @Schema(description = "动态商品类型编码") String productType,
+            @Schema(description = "商品分类封闭枚举名") String productClassification,
+            @Schema(description = "商品封面图地址") String coverUrl,
+            @Schema(description = "SPU管理状态：0草稿，10启用，20停用") Short status,
+            @Schema(description = "该SPU下未归档SKU数量") int skuCount,
+            @Schema(description = "有效可售SKU中的最低销售建议价，单位CNY分") Long minSuggestedPrice,
+            @Schema(description = "有效可售SKU中的最高销售建议价，单位CNY分") Long maxSuggestedPrice,
+            @Schema(description = "SPU创建时间，Asia/Shanghai") LocalDateTime createdAt) {
     }
 
-    public record SpuDetail(String spuCode, String spuName, String subtitle, Long brandId, String brandName,
-                            Long primaryCategoryId, String primaryCategoryName, List<Long> secondaryCategoryIds,
-                            String sellableCategory, String productType, String productClassification,
-                            String coverUrl, List<String> sliderImageUrls, String useInstruction, String description,
-                            String deliveryType, Long minQuantity, Long maxQuantity, Short status,
-                            List<SkuDetail> skus, LocalDateTime createdAt, LocalDateTime updatedAt) {
+    /** 平台商品详情。 */
+    public record SpuDetail(
+            @Schema(description = "平台SPU永久业务编码") String spuCode,
+            @Schema(description = "平台SPU标准名称") String spuName,
+            @Schema(description = "平台SPU副标题") String subtitle,
+            @Schema(description = "品牌内部主键") Long brandId,
+            @Schema(description = "品牌名称") String brandName,
+            @Schema(description = "主分类内部主键") Long primaryCategoryId,
+            @Schema(description = "主分类名称") String primaryCategoryName,
+            @Schema(description = "辅助或扩展分类内部主键列表") List<Long> secondaryCategoryIds,
+            @Schema(description = "可售品类封闭枚举名") String sellableCategory,
+            @Schema(description = "动态商品类型编码") String productType,
+            @Schema(description = "商品分类封闭枚举名") String productClassification,
+            @Schema(description = "商品封面图地址") String coverUrl,
+            @Schema(description = "商品轮播图地址列表") List<String> sliderImageUrls,
+            @Schema(description = "商品使用说明") String useInstruction,
+            @Schema(description = "商品富文本详情与图文介绍") String description,
+            @Schema(description = "配送履约模式：VIRTUAL虚拟发货，EXPRESS物流快递，PICKUP自提核销") String deliveryType,
+            @Schema(description = "SPU默认单次最低起购量") Long minQuantity,
+            @Schema(description = "SPU默认单次最高限购量") Long maxQuantity,
+            @Schema(description = "SPU管理状态：0草稿，10启用，20停用") Short status,
+            @Schema(description = "该SPU下未归档SKU详情") List<SkuDetail> skus,
+            @Schema(description = "SPU创建时间，Asia/Shanghai") LocalDateTime createdAt,
+            @Schema(description = "SPU最后更新时间，Asia/Shanghai") LocalDateTime updatedAt) {
     }
 
-    public record SkuDetail(String skuCode, String skuName, String fulfillmentType, Long faceValue,
-                            Long marketPrice, Long suggestedSalePrice, Long minQuantity, Long maxQuantity,
-                            String targetSchemaCode, Integer targetSchemaVersion, String resultSchemaCode,
-                            Integer resultSchemaVersion, Short status, boolean effectiveSellable) {
+    /** 平台SKU详情。 */
+    public record SkuDetail(
+            @Schema(description = "平台SKU永久业务编码") String skuCode,
+            @Schema(description = "平台SKU标准名称") String skuName,
+            @Schema(description = "履约方式封闭枚举名") String fulfillmentType,
+            @Schema(description = "商品标准面值，单位CNY分") Long faceValue,
+            @Schema(description = "市场划线价或吊牌价，单位CNY分") Long marketPrice,
+            @Schema(description = "建议零售价或销售建议价，单位CNY分") Long suggestedSalePrice,
+            @Schema(description = "SKU单次最小起购数量") Long minQuantity,
+            @Schema(description = "SKU单次最大限购数量") Long maxQuantity,
+            @Schema(description = "履约目标封闭Schema编码") String targetSchemaCode,
+            @Schema(description = "履约目标Schema版本") Integer targetSchemaVersion,
+            @Schema(description = "履约结果封闭Schema编码") String resultSchemaCode,
+            @Schema(description = "履约结果Schema版本") Integer resultSchemaVersion,
+            @Schema(description = "SKU管理状态：0草稿，10启用，20停用") Short status,
+            @Schema(description = "SPU与SKU均启用时为true") boolean effectiveSellable) {
     }
 }

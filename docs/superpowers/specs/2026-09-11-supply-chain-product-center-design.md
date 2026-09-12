@@ -22,6 +22,7 @@
 | **d12** | **详细 Swagger/OpenAPI 文档标准** | 所有管理端 Controller、方法、Query/Path 参数、Request/Response VO 必须提供完整的 OpenAPI/Swagger 3 注解（`@Tag`、`@Operation`、`@Parameter`、`@Schema`）。VO 字段描述必须与 DDL `COMMENT` 严格一致，参数注明枚举取值、单位（CNY分）、示例值与必填约束，并在操作描述中注明前置条件与错误码映射。 | 严格落实规范 |
 | **d13** | **权限兼容与菜单授权闭环** | 新增细粒度权限必须集中定义在 `SupplyChainAdminPermissions`，方法表达式统一使用 `hasAnyPermissions('supply-chain:admin', '<细权限>')`，保持旧管理员权限为超集；同步维护供应链菜单 SQL 与权限契约测试，使细权限可实际分配。 | 防止旧管理员升级后 403 |
 | **d14** | **类目选项接口向后兼容** | 保留 `GET /supply-chain/categories` 只返回启用类目树的既有契约；新增 `GET /supply-chain/categories/management-tree` 返回包含草稿、停用节点及管理字段的全量树，避免存量下拉组件把不可用类目重新选入业务表单。 | 防止类目选项接口行为回归 |
+| **d15** | **标品选品池销售价投影** | `GET /supply-chain/products/skus` 为兼容 09-02 前端契约继续返回字段名 `marketPriceCents`，但该字段的业务值固定取 `sc_platform_sku.suggested_sale_price`；不得再取 `face_value` 或 `market_price`。`face_value` 是履约面值，`market_price` 是市场划线价，二者都不是 09-12 锁定的 C 端建议售价来源。 | 修复商品中心扩展字段落地后选品池仍沿用旧面值的偏差 |
 
 ---
 
@@ -358,6 +359,7 @@ PRD 8.4.1 的列表 Tab 支持从 `GET /supply-chain/product-types` 动态拉取
    - 当传入 `buyerCode` 时，只返回 `effectiveSellable == true` 且该分销商尚未关联平台 SKU（未加入 `sc_buyer_product`）的记录。
 4. **项目目录一致性**：
    - 当传入 `projectCode` 时，只返回所属分销商已有关联分销商品（`sc_buyer_product`）、且该项目尚未关联（未加入 `sc_project_listing`）的 SKU。
+   - 选品池响应中的 `marketPriceCents` 是兼容字段名，值必须来自 `PlatformSkuDO.suggestedSalePrice`；测试数据应让 `faceValue`、`marketPrice`、`suggestedSalePrice` 三者不同，防止再次混用。
 5. **状态与删除拦截闭环**：
    - 平台 SPU/SKU 被停用时，外部选品池立即过滤不可选；供应商报价创建/发布、分销商品加入、采购商上架发布以及履约受理均通过 `ProductSellabilityService` 拒绝继续流转。
    - 只要有任意未归档的 `SupplierOffer`、`BuyerProduct`、`ProjectListing` 或 `BuyerListing` 引用，严禁删除。

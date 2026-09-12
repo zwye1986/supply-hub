@@ -11,6 +11,7 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSpuMapp
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProductTypeMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;
@@ -197,7 +198,15 @@ public class ProductTypeAdminService {
     public record UpdateCommand(String typeName, Integer sort, String remark, Long operatorId) {
     }
 
-    public record ProductTypeView(String typeCode, String typeName, Integer sort, Short status, String remark,
-                                  long productCount, LocalDateTime createdAt, LocalDateTime updatedAt) {
+    /** 商品类型管理端投影；字段语义与 {@code sc_product_type} DDL COMMENT 一致。 */
+    public record ProductTypeView(
+            @Schema(description = "商品类型业务编码") String typeCode,
+            @Schema(description = "商品类型名称") String typeName,
+            @Schema(description = "展示排序值，越小越靠前") Integer sort,
+            @Schema(description = "管理状态：10启用，20停用，90已归档") Short status,
+            @Schema(description = "类型备注与说明") String remark,
+            @Schema(description = "引用该类型的未归档SPU数量") long productCount,
+            @Schema(description = "类型创建时间，Asia/Shanghai") LocalDateTime createdAt,
+            @Schema(description = "类型最后更新时间，Asia/Shanghai") LocalDateTime updatedAt) {
     }
 }
