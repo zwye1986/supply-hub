@@ -8,9 +8,9 @@ import com.aifuli.module.supplychain.tradecore.catalog.application.ProductCatalo
 import com.aifuli.module.supplychain.tradecore.catalog.application.ProductCatalogQueryService.SpuListItem;
 import com.aifuli.module.supplychain.tradecore.catalog.application.ProductTypeAdminService.ProductTypeView;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
+import io.swagger.v3.core.converter.ModelConverters;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
-import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -21,6 +21,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 
 import java.lang.reflect.Method;
 import java.util.Arrays;
+import java.util.Map;
 
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_STATUS_INVALID;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -183,14 +184,22 @@ class ProductCenterContractTest {
                 });
     }
 
+    @SuppressWarnings("rawtypes")
     private static void assertRecordComponentsDocumented(Class<?> recordType) {
         assertThat(recordType.isRecord()).isTrue();
-        Arrays.stream(recordType.getRecordComponents()).forEach(component -> {
-            Schema schema = component.getAccessor().getAnnotation(Schema.class);
-            assertThat(schema)
-                    .as("%s.%s 缺少 @Schema", recordType.getSimpleName(), component.getName())
-                    .isNotNull();
-            assertThat(schema.description()).isNotBlank();
+        Map<String, io.swagger.v3.oas.models.media.Schema> schemas =
+                ModelConverters.getInstance().readAll(recordType);
+        io.swagger.v3.oas.models.media.Schema<?> schema = schemas.get(recordType.getSimpleName());
+        assertThat(schema).as("未生成 OpenAPI schema %s", recordType.getSimpleName()).isNotNull();
+        Map<String, io.swagger.v3.oas.models.media.Schema> properties = schema.getProperties();
+        String[] componentNames = Arrays.stream(recordType.getRecordComponents())
+                .map(component -> component.getName())
+                .toArray(String[]::new);
+        assertThat(properties.keySet()).containsExactlyInAnyOrder(componentNames);
+        properties.forEach((name, property) -> {
+            assertThat(property.getDescription())
+                    .as("OpenAPI schema %s.%s 缺少字段说明", recordType.getSimpleName(), name)
+                    .isNotBlank();
         });
     }
 }

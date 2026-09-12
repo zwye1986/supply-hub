@@ -1,9 +1,9 @@
 package com.aifuli.module.supplychain.interfaceapi.admin;
 
 import com.aifuli.module.supplychain.tradecore.catalog.application.CategoryQueryService.CategoryDetail;
+import io.swagger.v3.core.converter.ModelConverters;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
-import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 
 import java.lang.reflect.Method;
 import java.util.Arrays;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -44,6 +45,7 @@ class CategoryAdminContractTest {
 
     /** 分类详情只能返回稳定只读 DTO，且所有 Path 参数及 DTO 字段都有 OpenAPI 语义。 */
     @Test
+    @SuppressWarnings("rawtypes")
     void categoryDetailUsesDocumentedReadModel() throws NoSuchMethodException {
         Method detail = CategoryAdminController.class.getMethod("detail", String.class);
         assertThat(detail.getGenericReturnType().getTypeName())
@@ -53,10 +55,18 @@ class CategoryAdminContractTest {
         assertThat(Arrays.stream(CategoryDetail.class.getRecordComponents()).map(component -> component.getName()))
                 .containsExactly("categoryCode", "categoryName", "parentId", "categoryLevel", "sort", "visible",
                         "status", "createdAt", "updatedAt");
-        Arrays.stream(CategoryDetail.class.getRecordComponents()).forEach(component -> {
-            Schema schema = component.getAccessor().getAnnotation(Schema.class);
-            assertThat(schema).as("CategoryDetail.%s 缺少 @Schema", component.getName()).isNotNull();
-            assertThat(schema.description()).isNotBlank();
+        Map<String, io.swagger.v3.oas.models.media.Schema> schemas =
+                ModelConverters.getInstance().readAll(CategoryDetail.class);
+        io.swagger.v3.oas.models.media.Schema<?> categorySchema = schemas.get("CategoryDetail");
+        assertThat(categorySchema).as("未生成 CategoryDetail OpenAPI schema").isNotNull();
+        Map<String, io.swagger.v3.oas.models.media.Schema> properties = categorySchema.getProperties();
+        assertThat(properties.keySet()).containsExactlyInAnyOrder(
+                "categoryCode", "categoryName", "parentId", "categoryLevel", "sort", "visible", "status",
+                "createdAt", "updatedAt");
+        properties.forEach((name, property) -> {
+            assertThat(property.getDescription())
+                    .as("OpenAPI schema CategoryDetail.%s 缺少字段说明", name)
+                    .isNotBlank();
         });
 
         Arrays.stream(CategoryAdminController.class.getDeclaredMethods())

@@ -1,9 +1,9 @@
 package com.aifuli.module.supplychain.interfaceapi.admin;
 
 import com.aifuli.module.supplychain.tradecore.catalog.application.PlatformSkuQueryService.SkuListItem;
+import io.swagger.v3.core.converter.ModelConverters;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
-import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 
 import java.lang.reflect.Method;
 import java.util.Arrays;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -44,6 +45,7 @@ class PlatformSkuAdminContractTest {
 
     /** 标品池筛选参数与列表字段必须具备可读的 OpenAPI 描述。 */
     @Test
+    @SuppressWarnings("rawtypes")
     void documentsFiltersAndListItemFields() {
         Arrays.stream(PlatformSkuAdminController.class.getDeclaredMethods())
                 .flatMap(method -> Arrays.stream(method.getParameters()))
@@ -54,10 +56,18 @@ class PlatformSkuAdminContractTest {
                     assertThat(document.description()).isNotBlank();
                 });
 
-        Arrays.stream(SkuListItem.class.getRecordComponents()).forEach(component -> {
-            Schema schema = component.getAccessor().getAnnotation(Schema.class);
-            assertThat(schema).as("SkuListItem.%s 缺少 @Schema", component.getName()).isNotNull();
-            assertThat(schema.description()).isNotBlank();
+        Map<String, io.swagger.v3.oas.models.media.Schema> schemas =
+                ModelConverters.getInstance().readAll(SkuListItem.class);
+        io.swagger.v3.oas.models.media.Schema<?> skuSchema = schemas.get("SkuListItem");
+        assertThat(skuSchema).as("未生成 SkuListItem OpenAPI schema").isNotNull();
+        Map<String, io.swagger.v3.oas.models.media.Schema> properties = skuSchema.getProperties();
+        assertThat(properties.keySet()).containsExactlyInAnyOrder(
+                "id", "skuCode", "skuName", "spuCode", "spuName", "sellableCategory", "productType",
+                "productClassification", "suggestPriceCents", "marketPriceCents");
+        properties.forEach((name, property) -> {
+            assertThat(property.getDescription())
+                    .as("OpenAPI schema SkuListItem.%s 缺少字段说明", name)
+                    .isNotBlank();
         });
     }
 

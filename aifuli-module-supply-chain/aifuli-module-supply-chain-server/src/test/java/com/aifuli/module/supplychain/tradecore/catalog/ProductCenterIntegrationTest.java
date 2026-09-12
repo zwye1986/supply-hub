@@ -4,14 +4,25 @@ import com.aifuli.module.supplychain.infrastructure.configuration.SupplyChainDat
 import com.aifuli.module.supplychain.infrastructure.identity.BusinessNoGenerator;
 import com.aifuli.module.supplychain.infrastructure.identity.UlidGenerator;
 import com.aifuli.module.supplychain.testsupport.ProductCenterTestConfiguration;
+import com.aifuli.module.supplychain.tradecore.account.domain.Money;
 import com.aifuli.module.supplychain.tradecore.catalog.application.BrandAdminService;
 import com.aifuli.module.supplychain.tradecore.catalog.application.CategoryCommandService;
+import com.aifuli.module.supplychain.tradecore.catalog.application.CategoryQueryService;
+import com.aifuli.module.supplychain.tradecore.catalog.application.PlatformSkuQueryService;
+import com.aifuli.module.supplychain.tradecore.catalog.application.PlatformSkuQueryService.SkuPageQuery;
 import com.aifuli.module.supplychain.tradecore.catalog.application.ProductCatalogCommandService;
 import com.aifuli.module.supplychain.tradecore.catalog.application.ProductCatalogCommandService.SaveSkuLine;
 import com.aifuli.module.supplychain.tradecore.catalog.application.ProductCatalogCommandService.SaveSpuCommand;
 import com.aifuli.module.supplychain.tradecore.catalog.application.ProductCatalogQueryService;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSettlementPriceDO;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSettlementPriceVersionDO;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BrandMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceVersionMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -24,9 +35,12 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
 import org.testcontainers.containers.MySQLContainer;
 
+import java.time.LocalDateTime;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -59,13 +73,20 @@ class ProductCenterIntegrationTest {
     }
 
     @Test
-    void createsCompositeProductAndPreservesIndependentSkuStatusAcrossSpuSwitches() {
+    void persistsCompositeProductAndReadsStableManagementProjections() {
         try (ConfigurableApplicationContext context = applicationContext()) {
             BrandAdminService brandService = context.getBean(BrandAdminService.class);
             CategoryCommandService categoryService = context.getBean(CategoryCommandService.class);
+            CategoryQueryService categoryQueryService = context.getBean(CategoryQueryService.class);
             ProductCatalogCommandService commandService = context.getBean(ProductCatalogCommandService.class);
             ProductCatalogQueryService queryService = context.getBean(ProductCatalogQueryService.class);
+            PlatformSkuQueryService platformSkuQueryService = context.getBean(PlatformSkuQueryService.class);
             BrandMapper brandMapper = context.getBean(BrandMapper.class);
+            PlatformSkuMapper skuMapper = context.getBean(PlatformSkuMapper.class);
+            PlatformSettlementPriceMapper priceMapper = context.getBean(PlatformSettlementPriceMapper.class);
+            PlatformSettlementPriceVersionMapper priceVersionMapper =
+                    context.getBean(PlatformSettlementPriceVersionMapper.class);
+            ObjectMapper objectMapper = context.getBean(ObjectMapper.class);
 
             String brandCode = brandService.create(new BrandAdminService.CreateCommand(
                     "PC_BRAND", "商品中心测试品牌", null, null, 0,
@@ -76,14 +97,52 @@ class ProductCenterIntegrationTest {
             Long brandId = brandMapper.selectByCode(brandCode).getId();
             Long categoryId = categoryService.detail(categoryCode).getId();
 
+            CategoryQueryService.CategoryDetail categoryDetail = categoryQueryService.detail(categoryCode);
+            assertThat(categoryDetail.categoryCode()).isEqualTo(categoryCode);
+            assertThat(categoryDetail.categoryName()).isEqualTo("商品中心测试分类");
+            JsonNode categoryJson = objectMapper.valueToTree(categoryDetail);
+            Set<String> categoryFields = new HashSet<>();
+            categoryJson.fieldNames().forEachRemaining(categoryFields::add);
+            assertThat(categoryFields).containsExactlyInAnyOrder(
+                    "categoryCode", "categoryName", "parentId", "categoryLevel", "sort", "visible", "status",
+                    "createdAt", "updatedAt");
+            assertThat(categoryFields).doesNotContain("id", "version", "createdBy", "updatedBy");
+
             String spuCode = commandService.createProduct(new SaveSpuCommand(
                     "PC_SPU", "商品中心虚拟直充", "复合保存回归", brandId, categoryId, List.of(),
                     "EQUITY", "EQUITY_PRODUCT", "VIRTUAL_CARD", null, List.of(), "测试说明",
                     "测试详情", "VIRTUAL", 1L, 100L, CatalogEntityStatus.ACTIVE.getCode(),
                     List.of(new SaveSkuLine("PC_SKU_100", "商品中心直充100元", "DIRECT_RECHARGE",
-                            10_000L, 10_000L, 9_900L, 1L, 10L,
+                            10_000L, 12_000L, 9_900L, 1L, 10L,
                             "DIRECT_RECHARGE_TARGET", 1, "DIRECT_RECHARGE_RESULT", 1,
                             CatalogEntityStatus.ACTIVE.getCode())), 1L));
+
+            PlatformSkuDO platformSku = skuMapper.selectByCode("PC_SKU_100");
+            assertThat(platformSku.getFaceValue()).isEqualTo(10_000L);
+            assertThat(platformSku.getMarketPrice()).isEqualTo(12_000L);
+            assertThat(platformSku.getSuggestedSalePrice()).isEqualTo(9_900L);
+            LocalDateTime now = LocalDateTime.now();
+            PlatformSettlementPriceVersionDO priceVersion = PlatformSettlementPriceVersionDO.builder()
+                    .platformSkuId(platformSku.getId())
+                    .versionNo(1)
+                    .unitPriceCents(8_800L)
+                    .currency(Money.CURRENCY_CNY)
+                    .publishedBy(1L)
+                    .publishedAt(now)
+                    .createdAt(now)
+                    .build();
+            priceVersionMapper.insert(priceVersion);
+            priceMapper.insert(PlatformSettlementPriceDO.builder()
+                    .platformSkuId(platformSku.getId())
+                    .currentVersionId(priceVersion.getId())
+                    .version(0L)
+                    .updatedAt(now)
+                    .build());
+
+            PlatformSkuQueryService.SkuListItem skuListItem = platformSkuQueryService.page(new SkuPageQuery(
+                    "商品中心直充100元", null, null, null, null, null, null, 1, 20)).getList().getFirst();
+            assertThat(skuListItem.suggestPriceCents()).isEqualTo(8_800L);
+            assertThat(skuListItem.marketPriceCents()).isEqualTo(9_900L);
 
             ProductCatalogQueryService.SpuDetail created = queryService.detail(spuCode);
             assertThat(created.skus()).singleElement().satisfies(sku -> {
@@ -134,7 +193,8 @@ class ProductCenterIntegrationTest {
 
     @Configuration(proxyBeanMethods = false)
     @Import({SupplyChainDataSourceConfiguration.class, UlidGenerator.class, BusinessNoGenerator.class,
-            ProductCatalogCommandService.class, ProductCatalogQueryService.class,
+            ProductCatalogCommandService.class, ProductCatalogQueryService.class, CategoryQueryService.class,
+            PlatformSkuQueryService.class,
             ProductCenterTestConfiguration.class})
     static class TestConfiguration {
         @Bean

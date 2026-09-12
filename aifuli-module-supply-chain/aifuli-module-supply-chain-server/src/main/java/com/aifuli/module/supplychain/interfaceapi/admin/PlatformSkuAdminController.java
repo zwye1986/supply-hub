@@ -41,7 +41,7 @@ public class PlatformSkuAdminController {
                     + "projectCode 只返回所属分销商已有分销商品且项目目录尚未关联的 SKU。"
                     + "不要调用 /page。")
     public CommonResult<PageResult<SkuListItem>> page(
-            @Parameter(description = "SKU编码、SKU名称或SPU名称模糊搜索", example = "话费")
+            @Parameter(description = "SKU名称或SPU名称模糊搜索", example = "话费")
             @RequestParam(required = false) String keyword,
             @Parameter(description = "可售品类编码", example = "EQUITY")
             @RequestParam(required = false) String sellableCategory,

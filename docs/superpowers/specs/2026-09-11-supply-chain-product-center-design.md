@@ -368,3 +368,11 @@ PRD 8.4.1 的列表 Tab 支持从 `GET /supply-chain/product-types` 动态拉取
    - `ProductTypeValidationService` 是 `productType` 准入的唯一入口；`ProductCatalogCommandService`、`SupplierSupplyScopeService`、`BuyerAdminCommandService` 及兼容接口不得再调用 `ClosedEnums.parseRequired(ProductTypeTag.class, ...)`。
    - 新增业务关系时，`ProductTypeValidationService.requireActiveForUpdate(typeCode)` 与类型停用操作必须锁定同一 `sc_product_type` 行，避免“校验通过后并发停用”导致新关系引用已停用类型。
    - 停用类型后禁止新增 SPU 或新增供销范围；历史 SPU 与历史范围保留可读，但不得用于新增关系。重新启用后恢复可选。
+
+## 6. 测试策略
+
+1. `ProductCenterIntegrationTest` 必须在真实 MySQL 8.4 与 Liquibase 完整表结构上覆盖 SPU/SKU 复合创建、状态独立性、分类详情投影及标品池价格读取，不得用 H2 或 Mock Mapper 代替。
+2. 标品池价格用例必须让 `face_value`、`market_price`、`suggested_sale_price` 与当前 L1 四个金额彼此不同，并断言 `suggestPriceCents` 取 L1、兼容字段 `marketPriceCents` 取 `suggested_sale_price`。
+3. 分类详情用例必须通过 `CategoryQueryService` 读取真实数据，并按实际 Jackson 序列化属性验证响应仅包含 d16 锁定的九个业务字段，不得出现 `id`、`version`、`createdBy`、`updatedBy`。
+4. 商品中心契约测试除检查源码注解外，还必须通过 Swagger `ModelConverters` 验证最终生成的 Schema 属性及中文说明，避免注解存在但 Knife4j 模型不可见。
+5. 集成与契约门禁统一通过 Maven profile `supply-chain-integration` 执行；本批不修改 DDL，Liquibase 只验证现有变更集可在空库完整执行。
