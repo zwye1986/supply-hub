@@ -82,7 +82,8 @@ public class ProductAdminController {
     @GetMapping("/spus/{spuCode}")
     @PreAuthorize(PRODUCT_QUERY_EXPRESSION)
     @Operation(summary = "查询平台 SPU 与 SKU 详情")
-    public CommonResult<SpuDetail> detail(@PathVariable String spuCode) {
+    public CommonResult<SpuDetail> detail(
+            @Parameter(description = "平台SPU永久业务编码", example = "SPU_01ABC") @PathVariable String spuCode) {
         return success(queryService.detail(spuCode));
     }
 
@@ -96,7 +97,9 @@ public class ProductAdminController {
     @PutMapping("/spus/{spuCode}")
     @PreAuthorize(PRODUCT_UPDATE_EXPRESSION)
     @Operation(summary = "复合更新 SPU 与 SKU", description = "按 SKU 编码新增、更新；遗漏且无有效引用的 SKU 自动停用。")
-    public CommonResult<Boolean> update(@PathVariable String spuCode, @Valid @RequestBody SpuSaveReqVO request) {
+    public CommonResult<Boolean> update(
+            @Parameter(description = "平台SPU永久业务编码", example = "SPU_01ABC") @PathVariable String spuCode,
+            @Valid @RequestBody SpuSaveReqVO request) {
         commandService.updateProduct(spuCode, toCommand(request));
         return success(true);
     }
@@ -104,8 +107,10 @@ public class ProductAdminController {
     @PutMapping("/spus/{spuCode}/status")
     @PreAuthorize(PRODUCT_UPDATE_STATUS_EXPRESSION)
     @Operation(summary = "变更 SPU 状态", description = "SPU 与 SKU 状态独立，SPU 下架不改写 SKU 状态。")
-    public CommonResult<Boolean> changeSpuStatus(@PathVariable String spuCode,
-                                                  @Valid @RequestBody CatalogStatusSwitchReqVO request) {
+    public CommonResult<Boolean> changeSpuStatus(
+            @Parameter(description = "平台SPU永久业务编码", example = "SPU_01ABC")
+            @PathVariable String spuCode,
+            @Valid @RequestBody CatalogStatusSwitchReqVO request) {
         commandService.changeSpuStatus(spuCode, request.requireSwitchTarget(), getLoginUserId());
         return success(true);
     }
@@ -113,7 +118,8 @@ public class ProductAdminController {
     @DeleteMapping("/spus/{spuCode}")
     @PreAuthorize(PRODUCT_DELETE_EXPRESSION)
     @Operation(summary = "逻辑删除 SPU", description = "报价、分销商品、采购商上架或项目商品存在有效引用时拒绝。")
-    public CommonResult<Boolean> deleteSpu(@PathVariable String spuCode) {
+    public CommonResult<Boolean> deleteSpu(
+            @Parameter(description = "平台SPU永久业务编码", example = "SPU_01ABC") @PathVariable String spuCode) {
         commandService.deleteSpu(spuCode, getLoginUserId());
         return success(true);
     }
@@ -121,8 +127,10 @@ public class ProductAdminController {
     @PutMapping("/skus/{skuCode}/status")
     @PreAuthorize(PRODUCT_UPDATE_STATUS_EXPRESSION)
     @Operation(summary = "变更单个 SKU 状态")
-    public CommonResult<Boolean> changeSkuStatus(@PathVariable String skuCode,
-                                                  @Valid @RequestBody CatalogStatusSwitchReqVO request) {
+    public CommonResult<Boolean> changeSkuStatus(
+            @Parameter(description = "平台SKU永久业务编码", example = "SKU_01ABC")
+            @PathVariable String skuCode,
+            @Valid @RequestBody CatalogStatusSwitchReqVO request) {
         commandService.changeSkuStatus(skuCode, request.requireSwitchTarget(), getLoginUserId());
         return success(true);
     }
@@ -130,7 +138,8 @@ public class ProductAdminController {
     @DeleteMapping("/skus/{skuCode}")
     @PreAuthorize(PRODUCT_DELETE_EXPRESSION)
     @Operation(summary = "逻辑删除单个 SKU", description = "先执行四类有效业务引用校验。")
-    public CommonResult<Boolean> deleteSku(@PathVariable String skuCode) {
+    public CommonResult<Boolean> deleteSku(
+            @Parameter(description = "平台SKU永久业务编码", example = "SKU_01ABC") @PathVariable String skuCode) {
         commandService.deleteSku(skuCode, getLoginUserId());
         return success(true);
     }

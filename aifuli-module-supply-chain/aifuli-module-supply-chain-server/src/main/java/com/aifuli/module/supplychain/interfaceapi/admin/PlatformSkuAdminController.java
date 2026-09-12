@@ -6,6 +6,7 @@ import com.aifuli.module.supplychain.tradecore.catalog.application.PlatformSkuQu
 import com.aifuli.module.supplychain.tradecore.catalog.application.PlatformSkuQueryService.SkuListItem;
 import com.aifuli.module.supplychain.tradecore.catalog.application.PlatformSkuQueryService.SkuPageQuery;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -40,14 +41,23 @@ public class PlatformSkuAdminController {
                     + "projectCode 只返回所属分销商已有分销商品且项目目录尚未关联的 SKU。"
                     + "不要调用 /page。")
     public CommonResult<PageResult<SkuListItem>> page(
+            @Parameter(description = "SKU编码、SKU名称或SPU名称模糊搜索", example = "话费")
             @RequestParam(required = false) String keyword,
+            @Parameter(description = "可售品类编码", example = "EQUITY")
             @RequestParam(required = false) String sellableCategory,
+            @Parameter(description = "商品类型编码，取值来自商品类型表", example = "EQUITY_PRODUCT")
             @RequestParam(required = false) String productType,
+            @Parameter(description = "商品分类编码", example = "VIRTUAL_CARD")
             @RequestParam(required = false) String productClassification,
+            @Parameter(description = "供应商编码；筛选可新增报价的SKU", example = "SUP_01ABC")
             @RequestParam(required = false) String supplierCode,
+            @Parameter(description = "分销商编码；筛选尚未关联的SKU", example = "BUYER_01ABC")
             @RequestParam(required = false) String buyerCode,
+            @Parameter(description = "项目编码；筛选项目目录尚未关联的SKU", example = "PRJ_01ABC")
             @RequestParam(required = false) String projectCode,
+            @Parameter(description = "页码，从1开始", example = "1")
             @RequestParam(required = false) Integer pageNo,
+            @Parameter(description = "每页条数，默认20", example = "20")
             @RequestParam(required = false) Integer pageSize) {
         return success(queryService.page(new SkuPageQuery(
                 keyword, sellableCategory, productType, productClassification,

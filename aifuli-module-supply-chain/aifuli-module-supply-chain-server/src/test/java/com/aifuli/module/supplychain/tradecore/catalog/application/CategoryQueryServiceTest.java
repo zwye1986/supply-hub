@@ -1,5 +1,6 @@
 package com.aifuli.module.supplychain.tradecore.catalog.application;
 
+import com.aifuli.framework.common.exception.ServiceException;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProductCategoryDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSpuMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProductCategoryMapper;
@@ -7,9 +8,12 @@ import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatu
 import com.aifuli.module.supplychain.tradecore.catalog.domain.CategoryVisibility;
 import org.junit.jupiter.api.Test;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.CATEGORY_NOT_FOUND;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -86,6 +90,46 @@ class CategoryQueryServiceTest {
         List<CategoryQueryService.ManagementCategoryNode> roots = service.managementTree();
 
         assertThat(roots).isEmpty();
+    }
+
+    /** 分类详情只映射管理端所需的稳定业务字段，不透传持久化对象的版本与操作人信息。 */
+    @Test
+    void detailMapsStableReadModel() {
+        LocalDateTime createdAt = LocalDateTime.of(2026, 9, 11, 10, 0);
+        LocalDateTime updatedAt = LocalDateTime.of(2026, 9, 12, 11, 30);
+        ProductCategoryDO row = category(7L, 1L, (short) 3, CategoryVisibility.VISIBLE,
+                "CAT_EQUITY_CARD", "权益卡券");
+        row.setSort(20);
+        row.setVersion(9L);
+        row.setCreatedBy(1001L);
+        row.setCreatedAt(createdAt);
+        row.setUpdatedBy(1002L);
+        row.setUpdatedAt(updatedAt);
+        when(categoryMapper.selectByCode("CAT_EQUITY_CARD")).thenReturn(row);
+
+        CategoryQueryService.CategoryDetail detail = service.detail("CAT_EQUITY_CARD");
+
+        assertThat(detail).isEqualTo(new CategoryQueryService.CategoryDetail(
+                "CAT_EQUITY_CARD", "权益卡券", 1L, (short) 3, 20,
+                CategoryVisibility.VISIBLE.getCode(), CatalogEntityStatus.ACTIVE.getCode(), createdAt, updatedAt));
+    }
+
+    @Test
+    void detailRejectsMissingAndArchivedCategory() {
+        when(categoryMapper.selectByCode("MISSING")).thenReturn(null);
+        ProductCategoryDO archived = category(8L, null, (short) 1, CategoryVisibility.HIDDEN);
+        archived.setStatus(CatalogEntityStatus.ARCHIVED.getCode());
+        when(categoryMapper.selectByCode("ARCHIVED")).thenReturn(archived);
+
+        assertCategoryNotFound("MISSING");
+        assertCategoryNotFound("ARCHIVED");
+    }
+
+    private void assertCategoryNotFound(String categoryCode) {
+        assertThatThrownBy(() -> service.detail(categoryCode))
+                .isInstanceOf(ServiceException.class)
+                .extracting(ex -> ((ServiceException) ex).getCode())
+                .isEqualTo(CATEGORY_NOT_FOUND.getCode());
     }
 
     private void stubCategories(ProductCategoryDO... rows) {

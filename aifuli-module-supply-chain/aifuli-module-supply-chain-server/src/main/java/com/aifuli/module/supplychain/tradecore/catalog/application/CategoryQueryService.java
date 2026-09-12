@@ -12,12 +12,16 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
+
+import static com.aifuli.framework.common.exception.util.ServiceExceptionUtil.exception;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.CATEGORY_NOT_FOUND;
 
 /**
  * 管理端启用类目树查询。子节点嵌在 {@code children}，不提供 {@code /tree} 路径。
@@ -76,6 +80,21 @@ public class CategoryQueryService {
         }
         log.info("查询商品分类管理树 rowCount={}", rows.size());
         return assembleTree(byId, ManagementCategoryNode::parentId, ManagementCategoryNode::children);
+    }
+
+    /**
+     * 查询分类管理详情，只投影稳定业务字段，禁止把数据库主键、乐观锁版本和操作人 ID 暴露为 REST 契约。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线} d16。
+     */
+    public CategoryDetail detail(String categoryCode) {
+        log.info("查询商品分类详情 categoryCode={}", categoryCode);
+        ProductCategoryDO category = categoryMapper.selectByCode(categoryCode);
+        if (category == null || category.getStatus() == CatalogEntityStatus.ARCHIVED.getCode()) {
+            throw exception(CATEGORY_NOT_FOUND);
+        }
+        return new CategoryDetail(category.getCategoryCode(), category.getCategoryName(), category.getParentId(),
+                category.getCategoryLevel(), category.getSort(), category.getVisible(), category.getStatus(),
+                category.getCreatedAt(), category.getUpdatedAt());
     }
 
     /**
@@ -154,5 +173,18 @@ public class CategoryQueryService {
             @Schema(description = "自身及全部祖先均显示时为true") boolean effectiveVisible,
             @Schema(description = "未归档关联SPU数量") long productCount,
             @Schema(description = "直接子类目") List<ManagementCategoryNode> children) {
+    }
+
+    /** 商品分类详情；字段语义与 {@code sc_product_category} DDL COMMENT 一致。 */
+    public record CategoryDetail(
+            @Schema(description = "平台类目永久编码") String categoryCode,
+            @Schema(description = "类目名称") String categoryName,
+            @Schema(description = "父类目内部主键，逻辑引用本表id") Long parentId,
+            @Schema(description = "类目层级，从1开始") Short categoryLevel,
+            @Schema(description = "同级排序") Integer sort,
+            @Schema(description = "前端展示可见性：1显示，0隐藏") Short visible,
+            @Schema(description = "管理状态：0草稿，10启用，20停用，90已归档") Short status,
+            @Schema(description = "分类创建时间，Asia/Shanghai") LocalDateTime createdAt,
+            @Schema(description = "分类最后更新时间，Asia/Shanghai") LocalDateTime updatedAt) {
     }
 }

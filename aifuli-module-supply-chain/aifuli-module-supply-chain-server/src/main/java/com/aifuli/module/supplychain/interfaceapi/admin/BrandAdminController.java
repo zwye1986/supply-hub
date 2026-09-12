@@ -5,6 +5,7 @@ import com.aifuli.framework.common.pojo.PageResult;
 import com.aifuli.module.supplychain.tradecore.catalog.application.BrandAdminService;
 import com.aifuli.module.supplychain.tradecore.catalog.application.BrandAdminService.BrandView;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -33,17 +34,19 @@ public class BrandAdminController {
     @GetMapping
     @PreAuthorize(BRAND_QUERY_EXPRESSION)
     @Operation(summary = "分页查询商品品牌")
-    public CommonResult<PageResult<BrandView>> page(@RequestParam(required = false) String keyword,
-                                                     @RequestParam(required = false) Short status,
-                                                     @RequestParam(required = false) Integer pageNo,
-                                                     @RequestParam(required = false) Integer pageSize) {
+    public CommonResult<PageResult<BrandView>> page(
+            @Parameter(description = "品牌编码或名称模糊搜索", example = "华为") @RequestParam(required = false) String keyword,
+            @Parameter(description = "品牌状态：0草稿，10启用，20停用", example = "10") @RequestParam(required = false) Short status,
+            @Parameter(description = "页码，从1开始", example = "1") @RequestParam(required = false) Integer pageNo,
+            @Parameter(description = "每页条数，默认20", example = "20") @RequestParam(required = false) Integer pageSize) {
         return success(service.page(keyword, status, pageNo, pageSize));
     }
 
     @GetMapping("/{brandCode}")
     @PreAuthorize(BRAND_QUERY_EXPRESSION)
     @Operation(summary = "查询商品品牌详情")
-    public CommonResult<BrandView> detail(@PathVariable String brandCode) {
+    public CommonResult<BrandView> detail(
+            @Parameter(description = "平台品牌永久业务编码", example = "BRD_01ABC") @PathVariable String brandCode) {
         return success(service.detail(brandCode));
     }
 
@@ -58,8 +61,10 @@ public class BrandAdminController {
     @PutMapping("/{brandCode}")
     @PreAuthorize(BRAND_UPDATE_EXPRESSION)
     @Operation(summary = "更新商品品牌")
-    public CommonResult<Boolean> update(@PathVariable String brandCode,
-                                         @Valid @RequestBody BrandSaveReqVO request) {
+    public CommonResult<Boolean> update(
+            @Parameter(description = "平台品牌永久业务编码", example = "BRD_01ABC")
+            @PathVariable String brandCode,
+            @Valid @RequestBody BrandSaveReqVO request) {
         service.update(brandCode, new BrandAdminService.UpdateCommand(request.brandName, request.englishName,
                 request.logoUrl, request.sort, getLoginUserId()));
         return success(true);
@@ -68,8 +73,10 @@ public class BrandAdminController {
     @PutMapping("/{brandCode}/status")
     @PreAuthorize(BRAND_UPDATE_STATUS_EXPRESSION)
     @Operation(summary = "变更商品品牌状态")
-    public CommonResult<Boolean> status(@PathVariable String brandCode,
-                                        @Valid @RequestBody CatalogStatusSwitchReqVO request) {
+    public CommonResult<Boolean> status(
+            @Parameter(description = "平台品牌永久业务编码", example = "BRD_01ABC")
+            @PathVariable String brandCode,
+            @Valid @RequestBody CatalogStatusSwitchReqVO request) {
         service.changeStatus(brandCode, request.requireSwitchTarget(), getLoginUserId());
         return success(true);
     }
@@ -77,7 +84,8 @@ public class BrandAdminController {
     @DeleteMapping("/{brandCode}")
     @PreAuthorize(BRAND_DELETE_EXPRESSION)
     @Operation(summary = "删除商品品牌", description = "存在未归档 SPU 引用时拒绝删除。")
-    public CommonResult<Boolean> delete(@PathVariable String brandCode) {
+    public CommonResult<Boolean> delete(
+            @Parameter(description = "平台品牌永久业务编码", example = "BRD_01ABC") @PathVariable String brandCode) {
         service.delete(brandCode, getLoginUserId());
         return success(true);
     }

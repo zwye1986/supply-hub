@@ -1,14 +1,23 @@
 package com.aifuli.module.supplychain.interfaceapi.admin;
 
 import com.aifuli.framework.common.exception.ServiceException;
+import com.aifuli.module.supplychain.tradecore.catalog.application.BrandAdminService.BrandView;
 import com.aifuli.module.supplychain.tradecore.catalog.application.ProductCatalogCommandService;
+import com.aifuli.module.supplychain.tradecore.catalog.application.ProductCatalogQueryService.SkuDetail;
+import com.aifuli.module.supplychain.tradecore.catalog.application.ProductCatalogQueryService.SpuDetail;
+import com.aifuli.module.supplychain.tradecore.catalog.application.ProductCatalogQueryService.SpuListItem;
+import com.aifuli.module.supplychain.tradecore.catalog.application.ProductTypeAdminService.ProductTypeView;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 
 import java.lang.reflect.Method;
 import java.util.Arrays;
@@ -86,6 +95,20 @@ class ProductCenterContractTest {
         }
     }
 
+    /** Query、Path 参数与响应字段都必须可在 Knife4j 中直接识别，避免联调依赖阅读 Java 源码。 */
+    @Test
+    void productCenterDocumentsParametersAndResponseFields() {
+        assertEndpointParametersDocumented(ProductAdminController.class);
+        assertEndpointParametersDocumented(BrandAdminController.class);
+        assertEndpointParametersDocumented(ProductTypeAdminController.class);
+
+        assertRecordComponentsDocumented(SpuListItem.class);
+        assertRecordComponentsDocumented(SpuDetail.class);
+        assertRecordComponentsDocumented(SkuDetail.class);
+        assertRecordComponentsDocumented(BrandView.class);
+        assertRecordComponentsDocumented(ProductTypeView.class);
+    }
+
     @Test
     void legacyMasterDataCatalogEndpointsAreDeprecated() throws NoSuchMethodException {
         assertThat(M1MasterDataAdminController.class.getMethod("createBrand", M1MasterDataAdminController.CreateBrandReqVO.class)
@@ -142,5 +165,32 @@ class ProductCenterContractTest {
         return method.isAnnotationPresent(RequestMapping.class)
                 || Arrays.stream(method.getDeclaredAnnotations())
                 .anyMatch(ann -> ann.annotationType().isAnnotationPresent(RequestMapping.class));
+    }
+
+    private static void assertEndpointParametersDocumented(Class<?> controllerType) {
+        Arrays.stream(controllerType.getDeclaredMethods())
+                .filter(ProductCenterContractTest::isHttpEndpoint)
+                .flatMap(method -> Arrays.stream(method.getParameters()))
+                .filter(parameter -> parameter.isAnnotationPresent(RequestParam.class)
+                        || parameter.isAnnotationPresent(PathVariable.class))
+                .forEach(parameter -> {
+                    Parameter document = parameter.getAnnotation(Parameter.class);
+                    assertThat(document)
+                            .as("%s 的 Query/Path 参数 %s 缺少 @Parameter",
+                                    controllerType.getSimpleName(), parameter.getName())
+                            .isNotNull();
+                    assertThat(document.description()).isNotBlank();
+                });
+    }
+
+    private static void assertRecordComponentsDocumented(Class<?> recordType) {
+        assertThat(recordType.isRecord()).isTrue();
+        Arrays.stream(recordType.getRecordComponents()).forEach(component -> {
+            Schema schema = component.getAccessor().getAnnotation(Schema.class);
+            assertThat(schema)
+                    .as("%s.%s 缺少 @Schema", recordType.getSimpleName(), component.getName())
+                    .isNotNull();
+            assertThat(schema.description()).isNotBlank();
+        });
     }
 }

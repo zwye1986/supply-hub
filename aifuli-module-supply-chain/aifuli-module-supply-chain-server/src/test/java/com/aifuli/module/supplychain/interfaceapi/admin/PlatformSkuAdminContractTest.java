@@ -1,9 +1,13 @@
 package com.aifuli.module.supplychain.interfaceapi.admin;
 
+import com.aifuli.module.supplychain.tradecore.catalog.application.PlatformSkuQueryService.SkuListItem;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 
 import java.lang.reflect.Method;
 import java.util.Arrays;
@@ -36,6 +40,25 @@ class PlatformSkuAdminContractTest {
                         .noneMatch(path -> path.contains("invoice") || path.contains("page"));
             }
         }
+    }
+
+    /** 标品池筛选参数与列表字段必须具备可读的 OpenAPI 描述。 */
+    @Test
+    void documentsFiltersAndListItemFields() {
+        Arrays.stream(PlatformSkuAdminController.class.getDeclaredMethods())
+                .flatMap(method -> Arrays.stream(method.getParameters()))
+                .filter(parameter -> parameter.isAnnotationPresent(RequestParam.class))
+                .forEach(parameter -> {
+                    Parameter document = parameter.getAnnotation(Parameter.class);
+                    assertThat(document).as("标品池 Query 参数 %s 缺少 @Parameter", parameter.getName()).isNotNull();
+                    assertThat(document.description()).isNotBlank();
+                });
+
+        Arrays.stream(SkuListItem.class.getRecordComponents()).forEach(component -> {
+            Schema schema = component.getAccessor().getAnnotation(Schema.class);
+            assertThat(schema).as("SkuListItem.%s 缺少 @Schema", component.getName()).isNotNull();
+            assertThat(schema.description()).isNotBlank();
+        });
     }
 
     private record GetMappingAlias(String[] paths) {

@@ -1,8 +1,12 @@
 package com.aifuli.module.supplychain.interfaceapi.admin;
 
+import com.aifuli.module.supplychain.tradecore.catalog.application.CategoryQueryService.CategoryDetail;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.junit.jupiter.api.Test;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 
 import java.lang.reflect.Method;
@@ -36,6 +40,33 @@ class CategoryAdminContractTest {
                         .noneMatch(path -> path.contains("invoice") || path.equals("/tree"));
             }
         }
+    }
+
+    /** 分类详情只能返回稳定只读 DTO，且所有 Path 参数及 DTO 字段都有 OpenAPI 语义。 */
+    @Test
+    void categoryDetailUsesDocumentedReadModel() throws NoSuchMethodException {
+        Method detail = CategoryAdminController.class.getMethod("detail", String.class);
+        assertThat(detail.getGenericReturnType().getTypeName())
+                .contains(CategoryDetail.class.getName())
+                .doesNotContain("ProductCategoryDO");
+
+        assertThat(Arrays.stream(CategoryDetail.class.getRecordComponents()).map(component -> component.getName()))
+                .containsExactly("categoryCode", "categoryName", "parentId", "categoryLevel", "sort", "visible",
+                        "status", "createdAt", "updatedAt");
+        Arrays.stream(CategoryDetail.class.getRecordComponents()).forEach(component -> {
+            Schema schema = component.getAccessor().getAnnotation(Schema.class);
+            assertThat(schema).as("CategoryDetail.%s 缺少 @Schema", component.getName()).isNotNull();
+            assertThat(schema.description()).isNotBlank();
+        });
+
+        Arrays.stream(CategoryAdminController.class.getDeclaredMethods())
+                .flatMap(method -> Arrays.stream(method.getParameters()))
+                .filter(parameter -> parameter.isAnnotationPresent(PathVariable.class))
+                .forEach(parameter -> {
+                    Parameter document = parameter.getAnnotation(Parameter.class);
+                    assertThat(document).as("分类 Path 参数 %s 缺少 @Parameter", parameter.getName()).isNotNull();
+                    assertThat(document.description()).isNotBlank();
+                });
     }
 
     private record GetMappingAlias(String[] paths) {

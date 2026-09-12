@@ -1,12 +1,13 @@
 package com.aifuli.module.supplychain.interfaceapi.admin;
 
 import com.aifuli.framework.common.pojo.CommonResult;
+import com.aifuli.module.supplychain.tradecore.catalog.application.CategoryCommandService;
 import com.aifuli.module.supplychain.tradecore.catalog.application.CategoryQueryService;
+import com.aifuli.module.supplychain.tradecore.catalog.application.CategoryQueryService.CategoryDetail;
 import com.aifuli.module.supplychain.tradecore.catalog.application.CategoryQueryService.CategoryNode;
 import com.aifuli.module.supplychain.tradecore.catalog.application.CategoryQueryService.ManagementCategoryNode;
-import com.aifuli.module.supplychain.tradecore.catalog.application.CategoryCommandService;
-import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProductCategoryDO;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -69,8 +70,10 @@ public class CategoryAdminController {
     @GetMapping("/{categoryCode}")
     @PreAuthorize(CATEGORY_QUERY_EXPRESSION)
     @Operation(summary = "查询商品分类详情")
-    public CommonResult<ProductCategoryDO> detail(@PathVariable String categoryCode) {
-        return success(commandService.detail(categoryCode));
+    public CommonResult<CategoryDetail> detail(
+            @Parameter(description = "平台类目永久编码", example = "CAT_01ABC")
+            @PathVariable String categoryCode) {
+        return success(queryService.detail(categoryCode));
     }
 
     @PostMapping
@@ -87,8 +90,10 @@ public class CategoryAdminController {
     @Operation(summary = "更新商品分类",
             description = "parentCategoryCode 三态：不传表示不变更父级，空字符串表示挂到根，非空编码表示挂到该父级。"
                     + "仅在实际变更父级时防循环并递归重算整棵子树层级。")
-    public CommonResult<Boolean> update(@PathVariable String categoryCode,
-                                         @Valid @RequestBody CategorySaveReqVO request) {
+    public CommonResult<Boolean> update(
+            @Parameter(description = "平台类目永久编码", example = "CAT_01ABC")
+            @PathVariable String categoryCode,
+            @Valid @RequestBody CategorySaveReqVO request) {
         commandService.update(categoryCode, new CategoryCommandService.UpdateCommand(request.categoryName,
                 request.parentCategoryCode, request.sort, request.visible, getLoginUserId()));
         return success(true);
@@ -97,8 +102,10 @@ public class CategoryAdminController {
     @PutMapping("/{categoryCode}/status")
     @PreAuthorize(CATEGORY_UPDATE_STATUS_EXPRESSION)
     @Operation(summary = "变更商品分类状态")
-    public CommonResult<Boolean> status(@PathVariable String categoryCode,
-                                        @Valid @RequestBody CatalogStatusSwitchReqVO request) {
+    public CommonResult<Boolean> status(
+            @Parameter(description = "平台类目永久编码", example = "CAT_01ABC")
+            @PathVariable String categoryCode,
+            @Valid @RequestBody CatalogStatusSwitchReqVO request) {
         commandService.changeStatus(categoryCode, request.requireSwitchTarget(), getLoginUserId());
         return success(true);
     }
@@ -106,7 +113,9 @@ public class CategoryAdminController {
     @DeleteMapping("/{categoryCode}")
     @PreAuthorize(CATEGORY_DELETE_EXPRESSION)
     @Operation(summary = "删除商品分类", description = "存在子分类或未归档 SPU 引用时拒绝删除。")
-    public CommonResult<Boolean> delete(@PathVariable String categoryCode) {
+    public CommonResult<Boolean> delete(
+            @Parameter(description = "平台类目永久编码", example = "CAT_01ABC")
+            @PathVariable String categoryCode) {
         commandService.delete(categoryCode, getLoginUserId());
         return success(true);
     }
