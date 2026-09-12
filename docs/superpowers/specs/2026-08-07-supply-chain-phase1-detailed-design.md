@@ -2,7 +2,7 @@
 
 > 采购商项目化修订：采购商主体、项目应用身份、项目目录/价格、账户指派、项目路由及所有新订单项目归属，以[《供应链中台采购商主体与采购项目详细设计》](./2026-08-21-supply-chain-buyer-project-design.md)为准。本文中来源租户直接映射 Buyer、Buyer 级 Listing/集成/幂等等旧规则不再作为实现基线。
 >
-> PRD 对齐修订：三级结算价、加价模板与 C 端销售价、标准商品仅退款售后、路由四级配置组与 `MANUAL`/`PRICE_ASC` 排序、管理端 REST 范围，以[《供应链中台 PRD 对齐详细设计》](./2026-08-28-supply-chain-prd-alignment-design.md)为准。本文中「受理后采购方完全不能退款」「路由仅 Buyer+SKU+履约类型且禁止价格排序」「中台不产出 C 端售价」等旧规则不再作为上述主题的实现基线。
+> PRD 范围修订：本期是否建设加价模板、C 端销售价来源、平台售后边界、谁走路由、下单前选源 API、路由排序与数据权限，以[《供应链中台 PRD 一期范围对齐》](./2026-09-12-supply-chain-prd-scope-alignment-design.md)为准。该文已明确本期不建设加价模板、下单前选源 API、路由四级配置组与 `PRICE_ASC`；本文及[《供应链中台 PRD 对齐详细设计》](./2026-08-28-supply-chain-prd-alignment-design.md)中的对应旧方案仅作后续设计背景，不作为本期实现或验收基线。供应商 / 分销商 / 项目管理端 REST 字段继续以 09-02 设计为准。
 
 ## 1. 文档定位
 
@@ -1015,7 +1015,7 @@ RoutingDecision decide(
 
 标准候选配置只绑定 Supplier，不绑定报价版本；运行时按 Buyer、PlatformSKU、数量和业务时间解析唯一适用的 SupplierOfferVersion，使报价正常发布不必同步重发路由策略。场景路由不依赖中台 PlatformSKU、SupplierOffer、菜品、影片、场次或座位。
 
-一期实现 `STANDARD_PRODUCT` 路由；路由键与配置组、排序模式以[《供应链中台 PRD 对齐详细设计》](./2026-08-28-supply-chain-prd-alignment-design.md#8-路由扩展)为准。奇那梦也必须通过该路由模块选出，不能由业务代码硬编码。`SCENARIO` 场景路由、综合权重、稳定性/时效评分、自动学习、表达式 DSL 和拆量路由仍不进入本期。淘宝闪购/盒马继续使用 SupplierChannelBinding 直连外部商户，不进入标准商品路由。
+一期实现 `STANDARD_PRODUCT` 路由；奇那梦也必须通过该路由模块选出，不能由业务代码硬编码。本期保持现有规则维度和静态优先级（`candidatePriority` → `supplierCode` → `offerId`，原因码 `SELECTED_BY_STABLE_PRIORITY`），不物化四级配置组，不启用 `PRICE_ASC`、综合权重、稳定性/时效评分、自动学习、表达式 DSL 或拆量路由。`SCENARIO` 表保留但不建设应用服务；淘宝闪购与大润发继续使用渠道绑定的固定商户，不进入标准商品路由。边界见[《供应链中台 PRD 一期范围对齐》§7](./2026-09-12-supply-chain-prd-scope-alignment-design.md#7-路由)。
 
 ### 8.3 策略、版本和强类型规则
 
@@ -1034,7 +1034,9 @@ RoutingDecision decide(
 
 规则条件和操作符由代码封闭定义，不支持 SpEL、脚本、动态 SQL 或任意表达式。管理端只能维护结构化字段、候选顺序和受控枚举，并提供无副作用的校验与模拟路由。
 
-### 8.4 规则匹配与稳定排序
+### 8.4 规则匹配与稳定排序（后续目标）
+
+> 本节以下四级配置组、`MANUAL` / `PRICE_ASC` 和动态资格检查描述是后续目标模型，本期不实施、不启用，也不作为测试或验收门禁。本期排序口径以上一节及 09-12 范围对齐 §7 为准。
 
 规则按固定特异性选择，四级配置组与 SKU 专属规则见[PRD 对齐设计 §8.2](./2026-08-28-supply-chain-prd-alignment-design.md#82-四级配置组)。同一特异性按 `rule_priority` 升序。两个同优先级规则可能匹配同一输入时禁止发布；运行时再次检测，出现冲突即失败关闭，不能按数据库主键随机兜底。
 
@@ -1046,7 +1048,7 @@ RoutingDecision decide(
 4. 按策略版本 `ranking_mode` 排序：`MANUAL` 为显式 `candidate_priority` 升序再 `supplier_code`/`offer_id`；`PRICE_ASC` 为 `supplierSettlementUnitPrice` 升序再 `candidate_priority`、`supplier_code`、`offer_id`。不得按综合权重、健康分、数据库返回顺序或随机权重改变名次。
 5. 选择第一名，并为所有候选生成稳定原因码和检查快照。
 
-库存、余额和健康检查模式只允许 `REQUIRED（必需）`、`OPTIONAL（可选）`、`UNSUPPORTED（不支持）`。`REQUIRED` 查询失败、超时、过期或结果未知时淘汰候选；`OPTIONAL` 只记录审计，不淘汰也不改变候选顺序；`UNSUPPORTED` 不发起查询。若 Connector 未声明相应能力，则候选不能把该检查发布为 `REQUIRED`。综合权重、稳定性/时效评分必须另行评审并发布新策略版本，不能静默改变本期 `MANUAL`/`PRICE_ASC` 语义。
+库存、余额和健康检查模式只允许 `REQUIRED（必需）`、`OPTIONAL（可选）`、`UNSUPPORTED（不支持）`。`REQUIRED` 查询失败、超时、过期或结果未知时淘汰候选；`OPTIONAL` 只记录审计，不淘汰也不改变候选顺序；`UNSUPPORTED` 不发起查询。若 Connector 未声明相应能力，则候选不能把该检查发布为 `REQUIRED`。这些动态检查与 `MANUAL` / `PRICE_ASC` 均属于后续目标；启用前必须另立设计、实现和测试门禁，不能静默改变本期静态优先级语义。
 
 ### 8.5 路由轮次与候选审计
 
@@ -1079,7 +1081,7 @@ RoutingDecision decide(
 
 无已发布策略、规则冲突或全部候选淘汰属于路由业务拒绝，不得降级为随机 Supplier。外部履约调用失败属于 SupplierOrder 生命周期，不回滚已提交的路由决策。路由日志只记录订单/请求业务号、策略版本、轮次、Supplier 和原因码；指标覆盖决策耗时、无候选率、各原因淘汰量、Supplier 选择量、动态检查失败/过期量、重路由次数和并发冲突。
 
-纯 Engine 单元测试必须覆盖规则特异性（含四级配置组与 SKU 专属）、显式优先级、`PRICE_ASC` 与 `MANUAL`、`supplier_code/offer_id` 稳定兜底、输入候选乱序后的稳定结果、三种检查模式、无候选和重复计算一致性；测试还必须证明 OPTIONAL 动态事实不能改变名次。发布校验测试覆盖重叠规则、生效区间、无候选、非法能力组合；MySQL 集成测试覆盖并发双路由、版本切换、路由记录唯一约束、资金/SupplierOrder/Outbox 原子性和受限重路由。
+本期纯 Engine 单元测试覆盖现有规则匹配、`candidatePriority` / `supplierCode` / `offerId` 静态排序、原因码 `SELECTED_BY_STABLE_PRIORITY`、输入候选乱序、无候选和重复计算一致性。四级配置组、`PRICE_ASC`、综合权重和动态资格检查不作为本期门禁。MySQL 集成测试继续覆盖路由记录唯一约束、资金 / SupplierOrder / Outbox 原子性和既有受限重路由。
 
 ## 9. O2O 与 INSTORE 场景详情
 
@@ -1440,8 +1442,8 @@ mvn -pl aifuli-module-supply-chain-server -am verify -Psupply-chain-integration
 3. Supplier/Connector/Offer 停用使 ListingAvailability 临时不可用，恢复后自动推送可用，但不改 Listing 发布状态。
 4. Connector 并发发布只有一个版本成为当前版本；回滚产生新版本，在途 SupplierOrder 继续使用原版本。
 5. 缺失凭证、非法 URL、私网地址、过期验证结果或超出平台上限的配置不能发布，管理接口和日志不泄露秘密。
-6. 标准路由按项目已物化策略匹配四级配置组（及 SKU 专属规则）；`MANUAL` 使用候选优先级及 `supplier_code/offer_id` 兜底，`PRICE_ASC` 使用供应商结算单价升序。候选输入乱序、OPTIONAL 动态事实均不能改变同一 `ranking_mode` 下的结果。
-7. 路由策略版本不可变、特异性优先、重叠规则禁止发布；`REQUIRED/OPTIONAL/UNSUPPORTED` 资格检查、事实过期、无候选、并发双路由和相同快照重复计算一致性。
+6. 标准路由保持既有规则维度和静态优先级；`candidatePriority` 相同时按 `supplierCode`、`offerId` 稳定兜底，候选输入乱序不改变结果，选中原因码为 `SELECTED_BY_STABLE_PRIORITY`。
+7. 路由规则与候选引用有效；无候选、并发冲突和相同输入重复计算保持既有一致性。四级配置组、`PRICE_ASC` 与动态资格检查不作为本期验收门禁。
 8. 只有权威失败且零交付才可消费同一冻结路由轮次的下一候选并新建 SupplierOrder；不得新建路由轮次或重新读取配置。尝试序号、唯一前序、活动/有效成功标记在并发下保持单链；结果未知、部分交付和场景订单均禁止自动切换 Supplier。
 9. 标准商品有效请求 `quantity=1`；回执三种状态、独立回执事务、各宕机点恢复、临时密文完成后清除、多节点恢复 CAS、相同摘要重放、不同摘要冲突，FAILED BuyerOrder 不可重开。
 10. 奇那梦直充/发码均创建 SupplierOrderOperation；覆盖成功、确定失败、超时查单、回调去重和敏感资产加密。查单成功但无卡密时必须提交一次资金、SupplierOrder 成功、BuyerOrder 转 MANUAL、创建异常 Case，补录资产后 BuyerOrder 成功且不二次扣款。

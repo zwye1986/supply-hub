@@ -13,7 +13,7 @@
 | 供应商 / 分销商 / 项目的管理端 REST 路径、字段、枚举、状态机 | **本文** |
 | 供应商 / 分销商开票查询与保存 | `docs/superpowers/specs/2026-09-07-供应链管理端开票信息设计.md` |
 | 表单字典、供货/分销商品类编码、SPU 三码命中 | `docs/superpowers/specs/2026-09-07-供应链管理端表单字典与标品标签设计.md` |
-| 金额口径、身份用 code、不按树拆账、L1/L2/L3 仍是结算价来源 | 08-28 与 `CONTEXT.md` |
+| 金额口径、身份用 code、不按树拆账、L1/L2/L3 仍是结算价来源 | 08-28 与 `CONTEXT.md`；**无加价模板、销售价来源、`FOLLOW_TEMPLATE` 真实语义**以 `docs/superpowers/specs/2026-09-12-supply-chain-prd-scope-alignment-design.md` 为准（否定本文 a5「L2 默认来自加价模板」） |
 | BuyerOrder / 资金预留 / 幂等 / 项目 appId | 既有内核，本文不改 |
 
 代码、表名、日志继续使用 `Buyer` / `BuyerProject`。管理端中文文案用「分销商」「项目」。
@@ -28,7 +28,7 @@
 | a2 | 领域内核不动：金额 CNY 分、路径身份用业务 code。开票见 `docs/superpowers/specs/2026-09-07-供应链管理端开票信息设计.md`。前端关 mock 后改 URL/字段对齐后端（由前端仓库完成，见 a13）。 |
 | a3 | 扩展现有 `/admin-api/supply-chain/{resource}`，不新建 `/scm` 适配层，不废弃已落地的 `/suppliers`。 |
 | a4 | 分销商组织树真实落库（一级/二级/三级、上级、下级）。树不参与拆账；只有项目所属 Buyer 与中台一本账结算。组织等级 ≠ 结算价 L1/L2/L3。 |
-| a5 | L2 默认来自加价模板；分销商品新增/改价可按 SKU 覆盖，覆盖后该 SKU 的 L2 以手填为准。页面文案「按分销价=销售建议价」对接为 `EQUAL_L1`（粘性覆盖，值=当前 L1 **B 端结算分**，不是 C 端 `marketPrice`）；「自定义」对接 `CUSTOM`。未传 `l2AdjustMode` 时后端仍默认 `FOLLOW_TEMPLATE`。 |
+| a5 | L2 无手工覆盖时继承 L1（`FOLLOW_TEMPLATE` 只清覆盖，**本期无模板表**，见 09-12 s4）。分销商品新增/改价可按 SKU 覆盖，覆盖后该 SKU 的 L2 以手填为准。页面文案「按分销价=销售建议价」对接为 `EQUAL_L1`（粘性覆盖，值=当前 L1 **B 端结算分**，不是 C 端 `marketPrice`）；「自定义」对接 `CUSTOM`。未传 `l2AdjustMode` 时后端仍默认 `FOLLOW_TEMPLATE`。 |
 | a6 | 供货模式扩展为 5 种；发货时效 / 结算方式 / 对接方式可落库。可售品类 / 商品类型 / 商品分类为三级独立封闭枚举（system 字典），不是类目树 id；SPU 打同一套三码并按三码整体命中供货配置。清单与命中规则见 `docs/superpowers/specs/2026-09-07-供应链管理端表单字典与标品标签设计.md`。 |
 | a7 | 合作商品新增即 `PUBLISHED`（上架）。下架=`SUSPENDED`，移除=`RETIRED`。 |
 | a8 | 项目「已结束」=`CLOSED`，可恢复为进行中或已暂停。`ARCHIVED` 仍不可逆，本批页面不暴露。 |
@@ -185,7 +185,7 @@
 
 **分销商类型** `distributorType`：`ENTERPRISE` / `PERSONAL` / `PLATFORM`。
 
-**供货择优倾向** `supplyPreference`：`STABLE` / `PRICE` / `COMPREHENSIVE`。只存档案，**不改变**路由引擎（路由仍只有 `MANUAL` / `PRICE_ASC`）。
+**供货择优倾向** `supplyPreference`：`STABLE` / `PRICE` / `COMPREHENSIVE`。只存档案，**不改变**路由引擎。本期标准商品路由保持既有静态优先级与原因码 `SELECTED_BY_STABLE_PRIORITY`，不启用 `PRICE_ASC` 或综合排序；见 09-12 范围对齐 s12。
 
 **项目类型** `projectType` 以 PRD 8.3.1 为准，管理端可选值如下，只存档案：
 
@@ -213,7 +213,7 @@
 
 **结算方** `settlementPartyType`：只接受 `DISTRIBUTOR`。`PLATFORM` → `PROJECT_PLATFORM_SETTLEMENT_NOT_ENABLED`。
 
-**L2 调价方式** `l2AdjustMode`：`FOLLOW_TEMPLATE`（跟模板，清除覆盖）、`EQUAL_L1`（分销价=L1 平台默认定价）、`CUSTOM`（L1×percent/100 + amountCents）。现有页面「按分销价=销售建议价」对接 `EQUAL_L1`，见 a5。
+**L2 调价方式** `l2AdjustMode`：`FOLLOW_TEMPLATE`（清除手工覆盖，结算价回退 L1；枚举名历史遗留，本期无模板）、`EQUAL_L1`（分销价=L1 平台默认定价）、`CUSTOM`（L1×percent/100 + amountCents）。现有页面「按分销价=销售建议价」对接 `EQUAL_L1`，见 a5。
 
 **L3 调价方式** `l3AdjustMode`：`FOLLOW_L2`（不写 L3）、`EQUAL_L1`、`CUSTOM`。现有页面「按项目价=销售建议价」对接 `EQUAL_L1`（同样是 L1 结算分，不是 C 端销售价）。
 
@@ -468,16 +468,15 @@ Springdoc `components.schemas` 中冲突的通用简单类名。生成契约必�
 ```text
 若项目 listing 存在 L3 覆盖 → L3
 否则若该 BuyerProduct 存在手工 L2 覆盖 → 覆盖 L2
-否则若存在模板发布的当前 L2 → 模板 L2
 否则 L1
-均无 → 标准商品不可发布 / 受理失败 PLATFORM_SETTLEMENT_PRICE_MISSING
+均无 L1 → 标准商品不可发布 / 受理失败 PLATFORM_SETTLEMENT_PRICE_MISSING
 ```
+
+本期无加价模板，「模板 L2」一层不存在。`FOLLOW_TEMPLATE` 清除手工覆盖后下一跳即 L1。
 
 `EQUAL_L1`：覆盖值 = 当前 L1 **B 端结算分**，不是 C 端 `marketPrice`。`CUSTOM`：`round(L1结算分 * percent / 100) + amountCents`，结果必须 >0。percent 为整数百分比，100 表示等于 L1。折扣基点 `discountBp` 仅用于供应商 Offer 的 `DISCOUNT` 模式（10000=100%），不要与这里的 percent 混用。
 
 O2O / INSTORE 仍 `buyerSettlementAmount = channelPayAmount`，不读三级价。
-
-加价模板发布仍会刷新「模板 L2」指针；**已有手工覆盖的 SKU 不被模板覆盖冲掉**，直到改价选择 `FOLLOW_TEMPLATE`。
 
 ## 9. 错误码（增量）
 
@@ -508,7 +507,7 @@ O2O / INSTORE 仍 `buyerSettlementAmount = channelPayAmount`，不读三级价�
 
 - `BuyerStatus` 含黑名单可逆；`BuyerProjectStatus` 含 `CLOSED` 可恢复、不能从草稿直接结束。
 - 组织树：一级无上级、二/三级上级校验、成环拒绝。
-- L3 > 手工 L2 > 模板 L2 > L1；`FOLLOW_TEMPLATE` 清除手工覆盖后回到模板。
+- L3 > 手工 L2 > L1；`FOLLOW_TEMPLATE` 清除手工覆盖后回到 L1（无模板层）。
 - 供货模式 5 值 + 一行多模式；三码元组仍唯一。
 - 金额分；开票 `GET` 无行预填不落库；`PUT` 企业/个人校验；保存不回写档案。
 
@@ -528,7 +527,7 @@ O2O / INSTORE 仍 `buyerSettlementAmount = channelPayAmount`，不读三级价�
 偏离框架默认 `**.controller.admin.**` 而丢失 `/admin-api` 前缀；网关配置评审须同时检查供应链业务路由
 与 Swagger 聚合路由。
 
-`*ArchitectureTest`：Admin Controller 不访问供应商 Adapter；`tradecore.pricing` 仍不写订单账本。
+`*ArchitectureTest`：Admin Controller 不访问供应商 Adapter；本期不得新增 `tradecore.pricing`；O2O / INSTORE 应用服务不得依赖 `SupplierRoutingEngine` 选供。完整边界见 09-12 范围对齐 §12。
 
 ## 11. 前端对齐清单
 

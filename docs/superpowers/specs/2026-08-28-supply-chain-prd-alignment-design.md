@@ -4,7 +4,7 @@
 
 本文把《供应链中台管理系统一期产品需求文档（PRD）》与当前采购履约内核对齐为可实施基线。领域代码标识仍以仓库根目录 `CONTEXT.md` 为准；管理端文案与对外文档使用 PRD 用语。
 
-与下列文档冲突时，**定价内核、加价模板、标准商品售后、路由配置组与排序**以本文为准。**供应商 / 分销商 / 项目的管理端 REST 字段、枚举、状态机与前端对齐**以 `docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md` 为准。**开票查询与保存**以 `docs/superpowers/specs/2026-09-07-供应链管理端开票信息设计.md` 为准（取代本文 g13）。
+与下列文档冲突时，**本期实际交付范围**（加价模板是否建设、销售价来源、售后聚合与状态机、路由节点、选源 API、点餐实现责任、数据权限）以 `docs/superpowers/specs/2026-09-12-supply-chain-prd-scope-alignment-design.md` 为准；本文 g1–g6、g8–g10、第 4.1 节对应条目、第 6–8 章与第 10 章 `tradecore.pricing` 不再作为本期实施依据。**供应商 / 分销商 / 项目的管理端 REST 字段、枚举、状态机与前端对齐**以 `docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md` 为准。**开票查询与保存**以 `docs/superpowers/specs/2026-09-07-供应链管理端开票信息设计.md` 为准（取代本文 g13）。
 
 - `docs/superpowers/specs/2026-08-04-supply-chain-core-design.md`
 - `docs/superpowers/specs/2026-08-07-supply-chain-phase1-detailed-design.md`

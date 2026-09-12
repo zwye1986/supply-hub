@@ -12,7 +12,7 @@
 - `docs/superpowers/specs/2026-08-11-saas-mall-supply-chain-integration-spec.md`
 - `docs/superpowers/specs/2026-08-18-rtmart-instore-channel-design.md`
 
-三级结算价、加价模板、C 端销售价、标准商品仅退款与路由四级配置组以[《供应链中台 PRD 对齐详细设计》](./2026-08-28-supply-chain-prd-alignment-design.md)为准；本文第 7 章与之冲突的「仅项目单一结算价、中台不产出销售价」不再作为实现基线。`
+三级结算价、C 端销售价、平台售后与路由的**本期范围**以[《供应链中台 PRD 一期范围对齐》](./2026-09-12-supply-chain-prd-scope-alignment-design.md)为准；本文第 7 章与之冲突的旧口径，以及 08-28 对齐设计中的加价模板、四级路由配置组与 `PRICE_ASC`，均不作为本期实现或验收基线。
 
 本文只规定目标模型，不承担历史业务数据迁移、旧调用方兼容或双写切换。数据库实现仍须使用可审计的 Liquibase 前向变更集，禁止静默修改已发布变更集校验和；具体发布步骤在实施计划中确定。
 
@@ -265,7 +265,7 @@ O2O、到店购首期不读取项目商品或项目报价，继续使用渠道�
 buyerSettlementAmount = channelPayAmount
 ```
 
-C 端销售价由加价模板计算，标准商品随目录推送、场景商品实时报价，不得写入上述冻结金额。
+C 端销售价本期来自平台 SKU `suggested_sale_price`（及商品行内调价），不建设加价模板或场景实时报价 API；不得写入上述冻结金额。范围口径见[《供应链中台 PRD 一期范围对齐》§5](./2026-09-12-supply-chain-prd-scope-alignment-design.md#5-销售价与分销价无模板)。
 
 ### 7.2 项目路由
 
@@ -275,7 +275,7 @@ C 端销售价由加价模板计算，标准商品随目录推送、场景商品
 - 有效 Supplier、SupplierOffer、Connector 和 InventorySource；
 - 当前项目策略显式允许的候选。
 
-配置组特异性为分销商+品类、分销商、品类、全局（外加 SKU 专属规则），GLOBAL/CATEGORY/BUYER 规则必须物化进项目策略版本。排序为 `MANUAL` 或 `PRICE_ASC`。细则见[PRD 对齐设计 §8](./2026-08-28-supply-chain-prd-alignment-design.md#8-路由扩展)。
+四级配置组、综合排序与 `PRICE_ASC` 属于后续规划，本期不物化。标准商品继续使用现有静态优先级（`candidatePriority` → `supplierCode` → `offerId`，原因码 `SELECTED_BY_STABLE_PRIORITY`）；大润发与淘宝闪购不进入供应商路由，点餐模型本仓本期不实现。当前边界见[《供应链中台 PRD 一期范围对齐》§7](./2026-09-12-supply-chain-prd-scope-alignment-design.md#7-路由)。
 
 同一 Buyer 的不同项目可对同一平台 SKU 发布不同供应商候选和优先级。无项目策略时不得回退读取其他项目策略；主体默认策略必须先物化并发布为项目自己的策略版本。
 
