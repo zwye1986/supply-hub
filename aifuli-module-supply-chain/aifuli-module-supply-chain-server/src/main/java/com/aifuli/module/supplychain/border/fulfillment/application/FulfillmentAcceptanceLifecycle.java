@@ -50,6 +50,7 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSk
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerListingAvailabilityMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerListingMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerListingVersionMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.BuyerListingStatus;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.ListingAvailability;
 import com.aifuli.module.supplychain.tradecore.catalog.application.ProductSellabilityService;
@@ -104,6 +105,7 @@ public class FulfillmentAcceptanceLifecycle {
     private final BuyerListingMapper listingMapper;
     private final BuyerListingVersionMapper listingVersionMapper;
     private final BuyerListingAvailabilityMapper listingAvailabilityMapper;
+    private final PlatformSkuMapper skuMapper;
     private final ProductSellabilityService productSellabilityService;
     private final SupplierRoutingApplicationService routingService;
     private final FundReservationService fundReservationService;
@@ -112,6 +114,28 @@ public class FulfillmentAcceptanceLifecycle {
     private final ObjectMapper objectMapper;
     private final OrderSummaryPolicyRegistry orderSummaryPolicyRegistry;
     private final ObjectProvider<AcceptanceFailureInjector> failureInjector;
+
+    /**
+     * 在敏感目标加密前，根据采购商商品关系解析平台 SKU 持有的权威 Schema。
+     *
+     * <p>这里只读取 SKU 的稳定协议元数据，不以当前可售状态改变请求指纹；Listing 版本、商品可售、库存和路由等
+     * 业务条件仍在受理事务内校验。
+     * 无法解析时返回不可用快照，让 Lifecycle 按原有业务拒绝顺序收敛，避免把预读取失败变成 HTTP 异常。
+     * 设计见 {@code docs/superpowers/specs/2026-08-07-supply-chain-phase1-detailed-design.md#72-fulfillmentrequest路由与-supplierorder}。</p>
+     */
+    @Transactional(transactionManager = TRANSACTION_MANAGER, readOnly = true)
+    public TargetSchemaSnapshot resolveTargetSchema(Long buyerId, String buyerSkuCode) {
+        log.debug("[履约][lifecycle] resolveTargetSchema 入口 buyerId={}, buyerSkuCode={}", buyerId, buyerSkuCode);
+        BuyerListingDO listing = listingMapper.selectByBuyerAndSkuCode(buyerId, buyerSkuCode);
+        if (listing == null) {
+            return TargetSchemaSnapshot.unavailable();
+        }
+        PlatformSkuDO sku = skuMapper.selectById(listing.getPlatformSkuId());
+        if (sku == null || sku.getTargetSchemaCode() == null || sku.getTargetSchemaVersion() == null) {
+            return TargetSchemaSnapshot.unavailable();
+        }
+        return new TargetSchemaSnapshot(sku.getTargetSchemaCode(), sku.getTargetSchemaVersion(), true);
+    }
 
     /**
      * 抢占受理回执：按 (buyerId, buyerOrderNo) 幂等创建 PROCESSING 回执或回放已有终态。
@@ -593,6 +617,13 @@ public class FulfillmentAcceptanceLifecycle {
                                      long receiptVersion, String orderNo, String fulfillmentRequestNo,
                                      String rejectionCode, String supplierCode, String supplierName,
                                      LocalDateTime acceptedAt, boolean idempotentReplay) {
+    }
+
+    /** 加密与请求指纹准备阶段使用的平台 SKU Schema 快照。 */
+    public record TargetSchemaSnapshot(String schemaCode, int schemaVersion, boolean available) {
+        private static TargetSchemaSnapshot unavailable() {
+            return new TargetSchemaSnapshot("", 0, false);
+        }
     }
 
     public static final class PreparedAcceptance {

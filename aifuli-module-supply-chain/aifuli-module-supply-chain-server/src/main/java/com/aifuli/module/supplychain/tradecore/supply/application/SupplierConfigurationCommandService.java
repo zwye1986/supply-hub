@@ -94,9 +94,10 @@ public class SupplierConfigurationCommandService {
         SupplierDO supplier = requireActiveStandardSupplier(command.supplierCode());
         CredentialSlotDO slot = requireActiveSlot(command.credentialSlotNo());
         AdapterMetadata metadata = metadataRegistry.require(command.adapterType());
+        int schemaVersion = metadata.connectorSchemaVersion();
         JsonNode config = parseObject(command.adapterConfigJson());
         schemaValidator.validate(metadata.connectorSchemaResource(), config);
-        metadata.validateConnectorConfig(command.adapterConfigSchemaVersion(), config);
+        metadata.validateConnectorConfig(schemaVersion, config);
         String normalizedConfig = normalize(config);
         LocalDateTime now = now();
         SupplierConnectorDO connector = SupplierConnectorDO.builder()
@@ -106,14 +107,14 @@ public class SupplierConfigurationCommandService {
                 .updatedBy(command.operatorId()).updatedAt(now).build();
         connectorMapper.insert(connector);
 
-        byte[] digest = connectorDigest(command, connector.getId(), slot.getId(), normalizedConfig);
+        byte[] digest = connectorDigest(command, connector.getId(), slot.getId(), schemaVersion, normalizedConfig);
         SupplierConnectorVersionDO version = SupplierConnectorVersionDO.builder()
                 .connectorId(connector.getId()).versionNo(1).baseUrl(command.baseUrl())
                 .merchantAccount(command.merchantAccount()).credentialSlotId(slot.getId())
                 .protocolVersion(command.protocolVersion()).callbackPath(command.callbackPath())
                 .connectTimeoutMs(command.connectTimeoutMs()).readTimeoutMs(command.readTimeoutMs())
                 .rateLimit(command.rateLimit()).concurrencyLimit(command.concurrencyLimit())
-                .adapterConfigSchemaVersion(command.adapterConfigSchemaVersion())
+                .adapterConfigSchemaVersion(schemaVersion)
                 .adapterConfigJson(normalizedConfig).validationStatus((short) 0)
                 .configDigest(digest).status(ConnectorVersionStatus.DRAFT.getCode()).version(0L)
                 .createdBy(command.operatorId()).createdAt(now)
@@ -212,12 +213,12 @@ public class SupplierConfigurationCommandService {
     }
 
     private static byte[] connectorDigest(CreateConnectorDraftCommand command, Long connectorId,
-                                          Long slotId, String normalizedConfig) {
+                                          Long slotId, int schemaVersion, String normalizedConfig) {
         return ConfigurationDigest.sha256(String.valueOf(connectorId), command.baseUrl(),
                 value(command.merchantAccount()), String.valueOf(slotId), command.protocolVersion(),
                 value(command.callbackPath()), String.valueOf(command.connectTimeoutMs()),
                 String.valueOf(command.readTimeoutMs()), value(command.rateLimit()),
-                value(command.concurrencyLimit()), String.valueOf(command.adapterConfigSchemaVersion()),
+                value(command.concurrencyLimit()), String.valueOf(schemaVersion),
                 normalizedConfig);
     }
 
@@ -242,7 +243,7 @@ public class SupplierConfigurationCommandService {
                                               String credentialSlotNo, String protocolVersion,
                                               String callbackPath, int connectTimeoutMs, int readTimeoutMs,
                                               Integer rateLimit, Integer concurrencyLimit,
-                                              int adapterConfigSchemaVersion, String adapterConfigJson,
+                                              String adapterConfigJson,
                                               Long operatorId) {
     }
 

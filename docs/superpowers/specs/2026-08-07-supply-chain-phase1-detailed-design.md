@@ -114,7 +114,7 @@ Facade 是外部用例 Interface，Lifecycle 是内部一致性编排者。二�
 
 采购商 H5 入口与渠道交易命令分属不同信任域，禁止使用一个混合入口与渠道命令的 Facade。Facade 接收入站 Adapter 构造的 `BuyerCallerPrincipal` 或 `ChannelCallerPrincipal`，不得接受调用方直接指定内部 `buyerId`。标准履约下单、O2O H5 入口及创建采购商收银台订单的业务链路必须携带 `buyerUserId`；渠道服务通过已固化的会话或交易绑定传递该用户身份。采购商支付或退款回调不依赖回调参数重新传递 BuyerUser，必须先按 `outTradeNo/middleRefundNo` 加载订单中已固化的 Buyer 与 BuyerUser，再核对已认证 Principal；遗留协议若同时声明 `buyerUserId`，只能用于一致性比较，不能决定订单归属。
 
-请求可以提交外部业务号、平台商品、数量、履约目标、渠道金额和原始状态，但不能提交最终 Supplier、公共订单状态、账本动作或资金冻结状态。标准履约永久幂等键为 `(buyerId, buyerOrderNo)`，O2O 支付为 `(channelCode, transactionId)`，O2O 退款为 `(channelCode, refundNo)`。一期标准履约只接受 `quantity=1`；其他数量以 `QUANTITY_NOT_SUPPORTED` 原子拒绝。相同键和相同请求指纹返回首次结果；相同键但不可变业务字段不同返回 `IDEMPOTENCY_CONFLICT`。
+请求可以提交外部业务号、平台商品、数量、履约目标值、渠道金额和原始状态，但不能提交最终 Supplier、公共订单状态、账本动作或资金冻结状态。标准履约目标的 Schema 编码与版本由已发布 Listing 关联的平台 SKU 决定，调用方不得提交或覆盖；Facade 在加密前读取该只读元数据，并继续把派生后的 Schema 纳入密文关联数据和持久化快照。标准履约永久幂等键为 `(buyerId, buyerOrderNo)`，O2O 支付为 `(channelCode, transactionId)`，O2O 退款为 `(channelCode, refundNo)`。一期标准履约只接受 `quantity=1`；其他数量以 `QUANTITY_NOT_SUPPORTED` 原子拒绝。相同键和相同请求指纹返回首次结果；相同键但不可变业务字段不同返回 `IDEMPOTENCY_CONFLICT`。
 
 查询 Facade 不产生状态推进，也不在查询线程中访问供应商或渠道。`getFulfillmentResult` 只返回履约状态、交付数量和脱敏摘要，不返回卡密或券码；`getFulfillmentAssets` 必须同时校验 Buyer、`buyerUserId` 所有权和 `FULFILLMENT_ASSET_READ` scope，并追加不可变访问审计。需要主动查单时，由独立恢复命令创建受控 Operation，再由 Outbox/Timer 异步执行。`pageOrders` 只读 `sc_buyer_order`；`getOrderDetail` 再按 `detailType` 调用唯一注册的 `OrderDetailProvider`，详情不可用时返回成功的 `OrderDetailResult`，其中保留总表摘要并设置 `detailAvailability=UNAVAILABLE/detailErrorCode=DETAIL_UNAVAILABLE`，不得伪造空详情或错误终态。`SupplierOrderAdminQueryFacade` 必须使用中台运营权限，按 `attempt_sequence` 返回单链，并默认隐藏目标、卡密、凭证和原始报文；敏感资产仍只能走独立审计接口。
 
@@ -597,6 +597,8 @@ validation_status, validated_at, published_at, config_digest
 
 标准、高频和需要索引的字段必须结构化。`adapter_config_json` 只承载低频协议差异，由对应 Adapter 的封闭 JSON Schema 校验；禁止脚本、SpEL、动态 SQL、类名或数据库更新表达式。
 
+管理端创建连接器草稿时只提交 `adapter_type` 与 `adapter_config_json`，不提交 `adapter_config_schema_version`；应用服务必须从代码内 `AdapterMetadata.connectorSchemaVersion()` 取得当前版本并用于校验、摘要和持久化，避免页面伪造版本。
+
 `sc_supplier_connector_capability` 保存 `connector_version_id/capability_code/enabled/metadata_version`，`(connector_version_id,capability_code)` 唯一。封闭能力集合为 `CREATE_RECHARGE/ISSUE_ASSET/BIND_BENEFIT/QUERY_ORDER/QUERY_ASSET/VOID_ASSET/UNBIND_ASSET/QUERY_BALANCE/QUERY_INVENTORY/RECEIVE_CALLBACK`；未通过对应契约测试的能力不能启用。能力只表示接口存在，不承载重试、状态或账本动作。
 
 `sc_supplier_account_balance_snapshot` 保存 Connector 账号级的追加式余额观察：
@@ -672,6 +674,8 @@ connector_id, external_sku_code, offer_id, offer_version_id, version
 `(connector_id,external_sku_code)` 和 `offer_id` 分别唯一。发布 OfferVersion 时，在同一事务中条件更新该投影、切换 `current_version_id`、追加发布审计和 Outbox；历史 OfferVersion 始终不变。
 
 发布时必须验证 Supplier、PlatformSKU、ConnectorVersion 和 InventorySource 之间的逻辑引用一致，Connector 能力覆盖 SKU 的 fulfillmentType，并且执行画像、Adapter Schema 与 ConnectorVersion 兼容。
+
+管理端发布 Offer 时只提交 `fulfillment_config_json`，不提交 `fulfillment_config_schema_version`；应用服务按已选 Connector 的 `adapter_type` 从 `AdapterMetadata.offerSchemaVersion()` 派生版本并用于校验和持久化。数据库版本字段继续保留，作为不可变历史配置的解释依据。
 
 供应商履约相关金额分为五种事实：
 
@@ -860,6 +864,8 @@ CARD 的 Supplier 展示规则为：处理中显示当前活动 SupplierOrder �
 场景模块只提交封闭的 `OrderSummaryFact`，`OrderSummaryPolicy` 唯一计算并写入公共状态。总表不反向读取场景详情。
 
 ### 7.2 FulfillmentRequest、路由与 SupplierOrder
+
+标准履约受理请求中的 `target` 只包含业务目标 `values`。`schemaCode/schemaVersion` 是平台 SKU 的内部协议元数据，由 Facade 根据 `(buyerId, buyerSkuCode)` 解析 Listing 与平台 SKU 后取得；调用方不能传入。解析结果在事务外完成字段校验、规范化和加密，Lifecycle 在事务内再次与实际可售 SKU 比较，防止并发漂移。
 
 | 表 | 核心职责与约束 |
 | --- | --- |

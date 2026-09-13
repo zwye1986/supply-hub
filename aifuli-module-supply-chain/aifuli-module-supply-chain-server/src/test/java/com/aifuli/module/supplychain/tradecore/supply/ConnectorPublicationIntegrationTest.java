@@ -152,6 +152,8 @@ class ConnectorPublicationIntegrationTest {
             assertThat(connector.getCurrentVersionId()).isEqualTo(draft.connectorVersionId());
             assertThat(connector.getVersion()).isEqualTo(1L);
             assertThat(connectorVersion.getStatus()).isEqualTo(ConnectorVersionStatus.PUBLISHED.getCode());
+            assertThat(connectorVersion.getAdapterConfigSchemaVersion())
+                    .isEqualTo(qnmMetadata.connectorSchemaVersion());
             assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_supplier_connector_capability "
                     + "WHERE connector_version_id = ? AND enabled = 1", Long.class, draft.connectorVersionId()))
                     .isEqualTo(5L);
@@ -182,6 +184,10 @@ class ConnectorPublicationIntegrationTest {
             assertThat(afterSecond.getStatus()).isEqualTo(OfferStatus.PUBLISHED.getCode());
             assertThat(firstVersion.getSupplierSettlementUnitPrice()).isEqualTo(9_700L);
             assertThat(secondVersion.getSupplierSettlementUnitPrice()).isEqualTo(9_600L);
+            assertThat(firstVersion.getFulfillmentConfigSchemaVersion())
+                    .isEqualTo(qnmMetadata.offerSchemaVersion());
+            assertThat(secondVersion.getFulfillmentConfigSchemaVersion())
+                    .isEqualTo(qnmMetadata.offerSchemaVersion());
             assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_supplier_external_sku_binding "
                     + "WHERE offer_id = ? AND offer_version_id = ?", Long.class,
                     afterSecond.getId(), secondVersion.getId())).isEqualTo(1L);
@@ -226,8 +232,7 @@ class ConnectorPublicationIntegrationTest {
         catalog.changeSpuStatus("QNM_TELCO", CatalogEntityStatus.ACTIVE, 1L);
         catalog.createSku(new ProductCatalogCommandService.CreateSkuCommand(
                 "QNM_TELCO_100", "QNM_TELCO", "话费直充 100 元", "DIRECT_RECHARGE",
-                10_000L, "CNY", "DIRECT_RECHARGE_TARGET", 1,
-                "DIRECT_RECHARGE_RESULT", 1, 1L));
+                10_000L, "CNY", 1L));
         catalog.changeSkuStatus("QNM_TELCO_100", CatalogEntityStatus.ACTIVE, 1L);
     }
 
@@ -235,7 +240,7 @@ class ConnectorPublicationIntegrationTest {
             String slotNo, String adapterType, String baseUrl, String config, String code) {
         return new SupplierConfigurationCommandService.CreateConnectorDraftCommand(
                 "QINAMENG", code, adapterType, baseUrl, "qnm-user", slotNo, "V1",
-                "/callbacks/qnm/game-order/v1", 3_000, 10_000, 100, 20, 1, config, 1L);
+                "/callbacks/qnm/game-order/v1", 3_000, 10_000, 100, 20, config, 1L);
     }
 
     private static ConnectorValidationService.ValidateConnectorCommand validate(Long versionId) {
@@ -251,7 +256,7 @@ class ConnectorPublicationIntegrationTest {
         return new SupplierOfferPublicationService.PublishOfferCommand(
                 offerNo, expectedVersion, "QNM-TELCO-100", price, connectorVersionId, sourceNo,
                 1L, 1L, 1L, Capability.CREATE_RECHARGE.name(), "QUERY_OR_CALLBACK",
-                "DEDUP_ONLY", "QUERY_ORDER", "FORBIDDEN", "NONE", 1, "{}",
+                "DEDUP_ONLY", "QUERY_ORDER", "FORBIDDEN", "NONE", "{}",
                 validFrom, null, "奇那梦话费直充报价", 1L,
                 "trace-offer", null, null);
     }
@@ -262,7 +267,7 @@ class ConnectorPublicationIntegrationTest {
         return new SupplierOfferPublicationService.PublishOfferCommand(
                 offerNo, expectedVersion, "QNM-TELCO-100", 9_500L, connectorVersionId, sourceNo,
                 1L, 1L, 1L, Capability.CREATE_RECHARGE.name(), "QUERY",
-                "DEDUP_ONLY", "REPLAY_SAME_KEY", "FORBIDDEN", "NONE", 1, "{}",
+                "DEDUP_ONLY", "REPLAY_SAME_KEY", "FORBIDDEN", "NONE", "{}",
                 validFrom, null, "非法重放策略", 1L, "trace-invalid", null, null);
     }
 

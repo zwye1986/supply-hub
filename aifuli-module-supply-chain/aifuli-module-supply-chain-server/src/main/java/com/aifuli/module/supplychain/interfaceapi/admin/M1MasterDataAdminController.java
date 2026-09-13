@@ -97,12 +97,11 @@ public class M1MasterDataAdminController {
     @PostMapping("/skus")
     @Deprecated
     @Operation(summary = "创建平台标准商品 SKU 草稿（兼容接口）", deprecated = true,
-            description = "请迁移至 POST /supply-chain/products/spus 复合创建。")
+            description = "请迁移至 POST /supply-chain/products/spus 复合创建；目标与结果 Schema 由服务端按履约类型生成。")
     public CommonResult<String> createSku(@Valid @RequestBody CreateSkuReqVO request) {
         return success(catalogCommandService.createSku(new ProductCatalogCommandService.CreateSkuCommand(
                 request.getSkuCode(), request.getSpuCode(), request.getSkuName(), request.getFulfillmentType(),
-                request.getFaceValue(), "CNY", request.getTargetSchemaCode(), request.getTargetSchemaVersion(),
-                request.getResultSchemaCode(), request.getResultSchemaVersion(), getLoginUserId())));
+                request.getFaceValue(), "CNY", getLoginUserId())));
     }
 
     @PutMapping("/catalog-entities/status")
@@ -253,14 +252,6 @@ public class M1MasterDataAdminController {
         private String fulfillmentType;
         @Min(0) @Schema(description = "标准面值，单位 CNY 分", example = "10000")
         private long faceValue;
-        @Schema(description = "履约目标 Schema 编码", example = "DIRECT_RECHARGE_TARGET")
-        private String targetSchemaCode;
-        @Schema(description = "履约目标 Schema 版本", example = "1")
-        private Integer targetSchemaVersion;
-        @NotBlank @Schema(description = "履约结果 Schema 编码", example = "DIRECT_RECHARGE_RESULT")
-        private String resultSchemaCode;
-        @Min(1) @Schema(description = "履约结果 Schema 版本", example = "1")
-        private int resultSchemaVersion;
     }
 
     @Schema(description = "变更品牌、类目、SPU 或 SKU 状态请求")

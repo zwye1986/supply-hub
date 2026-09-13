@@ -57,7 +57,8 @@ public class AcceptFulfillmentReqDTO implements Serializable {
     @Positive(message = "履约数量必须为正数")
     private Long quantity;
 
-    @Schema(description = "按平台封闭 Schema 表达的履约目标", requiredMode = Schema.RequiredMode.REQUIRED)
+    @Schema(description = "履约目标值；Schema 编码与版本由服务端按采购商商品关联的平台 SKU 生成",
+            requiredMode = Schema.RequiredMode.REQUIRED)
     @Valid
     @NotNull(message = "履约目标不能为空")
     private FulfillmentTargetDTO target;

@@ -61,11 +61,13 @@ class ProductCatalogCommandServiceTest {
     private final ProductSellabilityService sellabilityService = mock(ProductSellabilityService.class);
     private final ProductDeletionValidator deletionValidator = mock(ProductDeletionValidator.class);
     private final FulfillmentTargetSchemaRegistry targetSchemaRegistry = mock(FulfillmentTargetSchemaRegistry.class);
+    private final PlatformSkuSchemaRegistry skuSchemaRegistry = new PlatformSkuSchemaRegistry(targetSchemaRegistry);
 
     private final ProductCatalogCommandService service = new ProductCatalogCommandService(
             clock, brandMapper, categoryMapper, spuMapper, skuMapper, buyerMapper, listingMapper,
             availabilityMapper, generator, brandAdminService, categoryCommandService,
-            productTypeValidationService, sellabilityService, deletionValidator, targetSchemaRegistry);
+            productTypeValidationService, sellabilityService, deletionValidator, targetSchemaRegistry,
+            skuSchemaRegistry);
 
     /** 请求中省略、且仍被下游引用的 SKU 保留原状态，不被停用，且整体更新继续成功。 */
     @Test
@@ -132,7 +134,7 @@ class ProductCatalogCommandServiceTest {
     private ProductCatalogCommandService.SaveSpuCommand saveCommand() {
         ProductCatalogCommandService.SaveSkuLine keepLine = new ProductCatalogCommandService.SaveSkuLine(
                 "SKU_KEEP", "保留SKU", FulfillmentType.CARD_CODE_SECRET.code(), 100L, 0L, 0L, 1L, 10L,
-                null, null, "RESULT_V1", 1, CatalogEntityStatus.DRAFT.getCode());
+                CatalogEntityStatus.DRAFT.getCode());
         return new ProductCatalogCommandService.SaveSpuCommand(SPU_CODE, "商品", null, 2L, 3L, null,
                 SellableCategory.EQUITY.name(), "EQUITY_PRODUCT", ProductClassification.VIRTUAL_CARD.name(),
                 null, null, null, null, null, 1L, 10L,

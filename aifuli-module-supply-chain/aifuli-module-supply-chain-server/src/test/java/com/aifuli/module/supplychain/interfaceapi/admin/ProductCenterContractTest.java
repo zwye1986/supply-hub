@@ -54,6 +54,29 @@ class ProductCenterContractTest {
         }
     }
 
+    /** 商品复合保存只接受业务履约类型，内部 Schema 不得重新暴露为可写请求字段。 */
+    @Test
+    void productSaveRequestDoesNotExposeFulfillmentSchemas() {
+        assertThat(Arrays.stream(ProductAdminController.SkuItemSaveReqVO.class.getDeclaredFields())
+                .map(field -> field.getName()))
+                .doesNotContain("targetSchemaCode", "targetSchemaVersion", "resultSchemaCode", "resultSchemaVersion")
+                .contains("fulfillmentType");
+    }
+
+    /** 所有管理端写入口都不得要求页面决定内部 Schema 编码或版本。 */
+    @Test
+    void adminWriteRequestsDoNotExposeInternalSchemas() {
+        assertThat(fieldNames(M1MasterDataAdminController.CreateSkuReqVO.class))
+                .doesNotContain("targetSchemaCode", "targetSchemaVersion", "resultSchemaCode", "resultSchemaVersion")
+                .contains("fulfillmentType");
+        assertThat(fieldNames(SupplierConfigurationAdminController.CreateConnectorDraftReqVO.class))
+                .doesNotContain("adapterConfigSchemaVersion")
+                .contains("adapterType", "adapterConfigJson");
+        assertThat(fieldNames(SupplierConfigurationAdminController.PublishOfferReqVO.class))
+                .doesNotContain("fulfillmentConfigSchemaVersion")
+                .contains("connectorVersionId", "fulfillmentConfigJson");
+    }
+
     @Test
     void brandAdminControllerDeclaresTagAndOperations() {
         assertThat(BrandAdminController.class.getAnnotation(Tag.class)).isNotNull();
@@ -166,6 +189,10 @@ class ProductCenterContractTest {
         return method.isAnnotationPresent(RequestMapping.class)
                 || Arrays.stream(method.getDeclaredAnnotations())
                 .anyMatch(ann -> ann.annotationType().isAnnotationPresent(RequestMapping.class));
+    }
+
+    private static String[] fieldNames(Class<?> type) {
+        return Arrays.stream(type.getDeclaredFields()).map(field -> field.getName()).toArray(String[]::new);
     }
 
     private static void assertEndpointParametersDocumented(Class<?> controllerType) {

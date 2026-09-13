@@ -157,9 +157,10 @@ public class SupplierOfferPublicationService {
         requireExecutionCapabilities(connectorVersion.getId(), command);
 
         AdapterMetadata metadata = metadataRegistry.require(connector.getAdapterType());
+        int schemaVersion = metadata.offerSchemaVersion();
         JsonNode config = parse(command.fulfillmentConfigJson());
         schemaValidator.validate(metadata.offerSchemaResource(), config);
-        metadata.validateOfferConfig(command.fulfillmentConfigSchemaVersion(), config);
+        metadata.validateOfferConfig(schemaVersion, config);
         String normalizedConfig = normalize(config);
 
         SupplierOfferVersionDO latest = offerVersionMapper.selectLatest(offer.getId());
@@ -176,7 +177,7 @@ public class SupplierOfferPublicationService {
                 .unknownResultPolicy(command.unknownResultPolicy())
                 .partialDeliveryMode(command.partialDeliveryMode())
                 .resultMultiplicity(command.resultMultiplicity())
-                .fulfillmentConfigSchemaVersion(command.fulfillmentConfigSchemaVersion())
+                .fulfillmentConfigSchemaVersion(schemaVersion)
                 .fulfillmentConfigJson(normalizedConfig).validFrom(command.validFrom())
                 .validTo(command.validTo()).publishReason(command.publishReason())
                 .publishedBy(command.operatorId()).publishedAt(now).createdAt(now).build();
@@ -323,7 +324,7 @@ public class SupplierOfferPublicationService {
                                       String primaryCapabilityCode, String completionMode,
                                       String createIdempotencyMode, String unknownResultPolicy,
                                       String partialDeliveryMode, String resultMultiplicity,
-                                      int fulfillmentConfigSchemaVersion, String fulfillmentConfigJson,
+                                      String fulfillmentConfigJson,
                                       LocalDateTime validFrom, LocalDateTime validTo,
                                       String publishReason, Long operatorId, String traceId,
                                       String correlationId, String causationId) {

@@ -8,6 +8,7 @@ import com.aifuli.module.supplychain.api.fulfillment.dto.FulfillmentReceiptStatu
 import com.aifuli.module.supplychain.api.fulfillment.dto.FulfillmentTargetDTO;
 import com.aifuli.module.supplychain.api.order.dto.SupplyChainOrderStatus;
 import com.aifuli.module.supplychain.border.fulfillment.application.FulfillmentAcceptanceLifecycle;
+import com.aifuli.module.supplychain.border.fulfillment.application.FulfillmentAcceptanceLifecycle.TargetSchemaSnapshot;
 import com.aifuli.module.supplychain.border.fulfillment.application.FulfillmentTargetSchemaRegistry;
 import com.aifuli.module.supplychain.border.fulfillment.domain.AcceptanceReceiptStatus;
 import com.aifuli.module.supplychain.border.fulfillment.domain.FulfillmentTargetFields;
@@ -57,7 +58,7 @@ public class BuyerFulfillmentCommandFacade {
     private final ObjectMapper objectMapper;
 
     /**
-     * 标准履约受理入口：校验目标 Schema 与指纹后进入 Lifecycle 抢占/受理。
+     * 标准履约受理入口：按平台 SKU 派生并校验目标 Schema 与指纹后进入 Lifecycle 抢占/受理。
      *
      * <p>加密与 Schema 校验在数据库事务外完成。幂等冲突返回已有回执；可重试拒绝由 Lifecycle 收敛。
      * 详见 {@code docs/superpowers/specs/2026-08-07-supply-chain-phase1-detailed-design.md#7.2-标准履约受理}。</p>
@@ -70,8 +71,9 @@ public class BuyerFulfillmentCommandFacade {
         LocalDateTime now = databaseClock.now();
         BuyerResolver.BuyerSnapshot buyer = buyerResolver.resolve(
                 request.getSourceSystem(), request.getExternalTenantId(), now);
+        TargetSchemaSnapshot targetSchema = lifecycle.resolveTargetSchema(buyer.id(), request.getBuyerSkuCode());
         String requestId = businessNoGenerator.next(BusinessNoPrefixes.REQ);
-        FulfillmentAcceptanceLifecycle.PreparedAcceptance prepared = prepare(request, buyer, requestId);
+        FulfillmentAcceptanceLifecycle.PreparedAcceptance prepared = prepare(request, buyer, targetSchema, requestId);
         FulfillmentAcceptanceLifecycle.ClaimResult claim;
         try {
             claim = lifecycle.claim(prepared);
@@ -100,40 +102,45 @@ public class BuyerFulfillmentCommandFacade {
     }
 
     private FulfillmentAcceptanceLifecycle.PreparedAcceptance prepare(
-            AcceptFulfillmentReqDTO request, BuyerResolver.BuyerSnapshot buyer, String traceId) {
+            AcceptFulfillmentReqDTO request, BuyerResolver.BuyerSnapshot buyer,
+            TargetSchemaSnapshot targetSchema, String traceId) {
         FulfillmentTargetDTO target = request.getTarget();
-        byte[] targetCanonical = canonicalTarget(target);
+        byte[] targetCanonical = canonicalTarget(target, targetSchema);
         byte[] targetDigest = hmacFingerprint.fingerprint(FulfillmentTargetFields.FINGERPRINT_PURPOSE, targetCanonical);
-        boolean targetValid = true;
-        try {
-            targetSchemaRegistry.validate(target.getSchemaCode(), target.getSchemaVersion(), target.getValues());
-        } catch (FulfillmentTargetSchemaRegistry.InvalidTargetException invalid) {
-            targetValid = false;
+        boolean targetValid = targetSchema.available();
+        if (targetValid) {
+            try {
+                targetSchemaRegistry.validate(
+                        targetSchema.schemaCode(), targetSchema.schemaVersion(), target.getValues());
+            } catch (FulfillmentTargetSchemaRegistry.InvalidTargetException invalid) {
+                targetValid = false;
+            }
         }
         EnvelopeCryptoPort.EncryptedPayload encrypted = null;
         if (targetValid) {
             encrypted = envelopeCrypto.encrypt(targetCanonical, associatedData(
-                    buyer.id(), request.getBuyerOrderNo(), target.getSchemaCode(), target.getSchemaVersion()));
+                    buyer.id(), request.getBuyerOrderNo(),
+                    targetSchema.schemaCode(), targetSchema.schemaVersion()));
         }
 
-        byte[] invariant = sha256(canonicalRequest(request, targetDigest, false));
-        byte[] fingerprint = sha256(canonicalRequest(request, targetDigest, true));
+        byte[] invariant = sha256(canonicalRequest(request, targetSchema, targetDigest, false));
+        byte[] fingerprint = sha256(canonicalRequest(request, targetSchema, targetDigest, true));
         byte[] buyerOrderDigest = sha256((request.getBuyerOrderNo() + '|'
                 + request.getBuyerUserId()).getBytes(StandardCharsets.UTF_8));
         return new FulfillmentAcceptanceLifecycle.PreparedAcceptance(
                 buyer.id(), buyer.buyerCode(), buyer.buyerName(), request.getBuyerOrderNo(),
                 request.getBuyerUserId(), request.getBuyerSkuCode(),
                 Math.toIntExact(request.getListingVersion()), request.getQuantity(),
-                target.getSchemaCode(), target.getSchemaVersion(),
+                targetSchema.schemaCode(), targetSchema.schemaVersion(),
                 encrypted == null ? null : encrypted.ciphertext(), targetDigest,
                 encrypted == null ? null : encrypted.keyVersion(), targetValid,
                 invariant, fingerprint, buyerOrderDigest, request.getPreviousReceiptVersion(), traceId);
     }
 
-    private byte[] canonicalTarget(FulfillmentTargetDTO target) {
+    private byte[] canonicalTarget(FulfillmentTargetDTO target, TargetSchemaSnapshot targetSchema) {
         Map<String, Object> canonical = new TreeMap<>();
-        canonical.put("schemaCode", target.getSchemaCode());
-        canonical.put("schemaVersion", target.getSchemaVersion());
+        canonical.put("schemaCode", targetSchema.schemaCode());
+        canonical.put("schemaVersion", targetSchema.schemaVersion());
         canonical.put("values", new TreeMap<>(target.getValues()));
         try {
             return objectMapper.writeValueAsBytes(canonical);
@@ -142,15 +149,15 @@ public class BuyerFulfillmentCommandFacade {
         }
     }
 
-    private byte[] canonicalRequest(AcceptFulfillmentReqDTO request, byte[] targetDigest,
-                                    boolean includeListingVersion) {
+    private byte[] canonicalRequest(AcceptFulfillmentReqDTO request, TargetSchemaSnapshot targetSchema,
+                                    byte[] targetDigest, boolean includeListingVersion) {
         Map<String, Object> canonical = new TreeMap<>();
         canonical.put("buyerOrderNo", request.getBuyerOrderNo());
         canonical.put("buyerUserId", request.getBuyerUserId());
         canonical.put("buyerSkuCode", request.getBuyerSkuCode());
         canonical.put("quantity", request.getQuantity());
-        canonical.put("targetSchemaCode", request.getTarget().getSchemaCode());
-        canonical.put("targetSchemaVersion", request.getTarget().getSchemaVersion());
+        canonical.put("targetSchemaCode", targetSchema.schemaCode());
+        canonical.put("targetSchemaVersion", targetSchema.schemaVersion());
         canonical.put("targetDigest", java.util.HexFormat.of().formatHex(targetDigest));
         canonical.put("paidAt", request.getPaidAt().toInstant().toString());
         if (includeListingVersion) {
@@ -178,8 +185,7 @@ public class BuyerFulfillmentCommandFacade {
         Objects.requireNonNull(request.getPaidAt(), "Paid time is required");
         if (blank(request.getSourceSystem()) || blank(request.getExternalTenantId())
                 || blank(request.getBuyerOrderNo()) || blank(request.getBuyerUserId())
-                || blank(request.getBuyerSkuCode()) || blank(request.getTarget().getSchemaCode())
-                || request.getTarget().getSchemaVersion() == null
+                || blank(request.getBuyerSkuCode())
                 || request.getListingVersion() <= 0 || request.getListingVersion() > Integer.MAX_VALUE
                 || request.getQuantity() <= 0) {
             throw new IllegalArgumentException("Fulfillment request is incomplete");

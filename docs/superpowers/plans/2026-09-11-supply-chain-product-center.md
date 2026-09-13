@@ -211,7 +211,7 @@
     - `ProjectListing`: `buyer_product_id IN (SELECT id FROM sc_buyer_product WHERE platform_sku_id = :skuId) AND status = 10`，不得按 BuyerProduct 状态过滤。
   - 拦截并抛出精准业务异常及关联方信息。
 - [x] **Step 2: 实现 SPU+SKU 复合创建与更新业务编排**
-  - 复合创建：校验三码合规，从 `sc_product_type` 动态校验商品类型是否启用有效，校验品牌与分类；原子插入 SPU 并批量插入 SKU。自动生成 `SPU_`/`SKU_` 编码；`targetSchemaCode/targetSchemaVersion` 成对校验，ACTIVE SKU 必须提供，并调用新增的 `FulfillmentTargetSchemaRegistry.requireSupportedSchema(code, version)` 验证；`resultSchemaCode/resultSchemaVersion` 必须显式提供非空编码及正版本，禁止自动写入 `DEFAULT` 占位。
+  - 复合创建：校验三码合规，从 `sc_product_type` 动态校验商品类型是否启用有效，校验品牌与分类；原子插入 SPU 并批量插入 SKU。自动生成 `SPU_`/`SKU_` 编码；管理端只提交 `fulfillmentType`，应用层通过 `PlatformSkuSchemaRegistry` 派生并校验目标与结果 Schema 编码、版本后持久化，禁止前端显式传入 Schema 或自动写入 `DEFAULT` 占位。
   - 复合更新：原子更新 SPU 基础与扩展字段；比对 SKU 列表增补新 SKU、更新已有项。
   - 状态解耦：SPU 上下架仅操作 SPU 自身，不盲目覆写独立置为 `INACTIVE` 的 SKU；对外提供 `effectiveSellable` 计算。
   - 逻辑删除：集成 `ProductDeletionValidator` 强校验通过后归档为 90。

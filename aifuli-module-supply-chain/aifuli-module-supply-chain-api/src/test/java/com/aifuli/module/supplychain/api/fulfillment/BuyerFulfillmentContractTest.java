@@ -75,7 +75,7 @@ class BuyerFulfillmentContractTest {
         assertThat(root.get("quantity").isIntegralNumber()).isTrue();
         assertThat(root.get("listingVersion").isIntegralNumber()).isTrue();
         assertThat(root.has("paidAt")).isTrue();
-        assertThat(root.get("target").get("schemaCode").asText()).isEqualTo("DIRECT_RECHARGE_TARGET");
+        assertThat(root.get("target").fieldNames()).toIterable().containsExactly("values");
     }
 
     @Test
@@ -89,8 +89,6 @@ class BuyerFulfillmentContractTest {
 
     private static AcceptFulfillmentReqDTO validRequest() {
         FulfillmentTargetDTO target = new FulfillmentTargetDTO();
-        target.setSchemaCode("DIRECT_RECHARGE_TARGET");
-        target.setSchemaVersion(1);
         target.setValues(Map.of("accountType", "MOBILE", "accountValue", "13800000000"));
 
         AcceptFulfillmentReqDTO request = new AcceptFulfillmentReqDTO();

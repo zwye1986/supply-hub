@@ -12,7 +12,6 @@ import com.aifuli.module.supplychain.border.fulfillment.application.FulfillmentT
 import com.aifuli.module.supplychain.border.fulfillment.domain.AcceptanceRejectionCode;
 import com.aifuli.module.supplychain.border.fulfillment.domain.FulfillmentOutboxCodes;
 import com.aifuli.module.supplychain.border.fulfillment.domain.FulfillmentTargetFields;
-import com.aifuli.module.supplychain.border.fulfillment.domain.FulfillmentTargetSchemaCode;
 import com.aifuli.module.supplychain.border.order.domain.CardOrderSummaryPolicy;
 import com.aifuli.module.supplychain.border.order.domain.OrderSummaryPolicyRegistry;
 import com.aifuli.module.supplychain.infrastructure.configuration.SupplyChainDataSourceConfiguration;
@@ -145,6 +144,10 @@ class FulfillmentAcceptanceIntegrationTest {
             byte[] encryptedTarget = jdbc.queryForObject("SELECT target_ciphertext FROM sc_fulfillment_request",
                     byte[].class);
             assertThat(new String(encryptedTarget, StandardCharsets.UTF_8)).doesNotContain("13800138000");
+            assertThat(jdbc.queryForObject("SELECT target_schema_code FROM sc_fulfillment_request", String.class))
+                    .isEqualTo("DIRECT_RECHARGE_TARGET");
+            assertThat(jdbc.queryForObject("SELECT target_schema_version FROM sc_fulfillment_request", Integer.class))
+                    .isEqualTo(1);
             assertThat(jdbc.queryForObject("SELECT detail_version FROM sc_supply_chain_order", Long.class))
                     .isEqualTo(1L);
 
@@ -263,8 +266,7 @@ class FulfillmentAcceptanceIntegrationTest {
         catalog.changeSpuStatus("TELCO_RECHARGE", CatalogEntityStatus.ACTIVE, 1L);
         catalog.createSku(new ProductCatalogCommandService.CreateSkuCommand(
                 "TELCO_100", "TELCO_RECHARGE", "话费直充 100 元", FulfillmentType.DIRECT_RECHARGE.code(),
-                10_000L, Money.CURRENCY_CNY, FulfillmentTargetSchemaCode.DIRECT_RECHARGE_TARGET.name(), 1,
-                "DIRECT_RECHARGE_RESULT", 1, 1L));
+                10_000L, Money.CURRENCY_CNY, 1L));
         catalog.changeSkuStatus("TELCO_100", CatalogEntityStatus.ACTIVE, 1L);
         String listingNo = catalog.createBuyerListing(
                 new ProductCatalogCommandService.CreateBuyerListingCommand(
@@ -390,8 +392,6 @@ class FulfillmentAcceptanceIntegrationTest {
         request.setQuantity(1L);
         request.setPaidAt(OffsetDateTime.now(ZoneOffset.UTC));
         FulfillmentTargetDTO target = new FulfillmentTargetDTO();
-        target.setSchemaCode(FulfillmentTargetSchemaCode.DIRECT_RECHARGE_TARGET.name());
-        target.setSchemaVersion(1);
         target.setValues(Map.of(
                 FulfillmentTargetFields.ACCOUNT_TYPE, FulfillmentTargetFields.ACCOUNT_TYPE_MOBILE,
                 FulfillmentTargetFields.ACCOUNT_VALUE, "13800138000"));
@@ -411,8 +411,6 @@ class FulfillmentAcceptanceIntegrationTest {
         target.setPaidAt(source.getPaidAt());
         target.setPreviousReceiptVersion(source.getPreviousReceiptVersion());
         FulfillmentTargetDTO fulfillmentTarget = new FulfillmentTargetDTO();
-        fulfillmentTarget.setSchemaCode(source.getTarget().getSchemaCode());
-        fulfillmentTarget.setSchemaVersion(source.getTarget().getSchemaVersion());
         fulfillmentTarget.setValues(Map.copyOf(source.getTarget().getValues()));
         target.setTarget(fulfillmentTarget);
         return target;

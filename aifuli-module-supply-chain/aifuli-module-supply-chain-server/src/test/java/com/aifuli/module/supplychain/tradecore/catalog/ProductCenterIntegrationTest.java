@@ -114,13 +114,16 @@ class ProductCenterIntegrationTest {
                     "测试详情", "VIRTUAL", 1L, 100L, CatalogEntityStatus.ACTIVE.getCode(),
                     List.of(new SaveSkuLine("PC_SKU_100", "商品中心直充100元", "DIRECT_RECHARGE",
                             10_000L, 12_000L, 9_900L, 1L, 10L,
-                            "DIRECT_RECHARGE_TARGET", 1, "DIRECT_RECHARGE_RESULT", 1,
                             CatalogEntityStatus.ACTIVE.getCode())), 1L));
 
             PlatformSkuDO platformSku = skuMapper.selectByCode("PC_SKU_100");
             assertThat(platformSku.getFaceValue()).isEqualTo(10_000L);
             assertThat(platformSku.getMarketPrice()).isEqualTo(12_000L);
             assertThat(platformSku.getSuggestedSalePrice()).isEqualTo(9_900L);
+            assertThat(platformSku.getTargetSchemaCode()).isEqualTo("DIRECT_RECHARGE_TARGET");
+            assertThat(platformSku.getTargetSchemaVersion()).isEqualTo(1);
+            assertThat(platformSku.getResultSchemaCode()).isEqualTo("DIRECT_RECHARGE_RESULT");
+            assertThat(platformSku.getResultSchemaVersion()).isEqualTo(1);
             LocalDateTime now = LocalDateTime.now();
             PlatformSettlementPriceVersionDO priceVersion = PlatformSettlementPriceVersionDO.builder()
                     .platformSkuId(platformSku.getId())

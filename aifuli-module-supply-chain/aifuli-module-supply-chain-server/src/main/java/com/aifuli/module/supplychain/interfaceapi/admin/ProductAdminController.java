@@ -89,14 +89,16 @@ public class ProductAdminController {
 
     @PostMapping("/spus")
     @PreAuthorize(PRODUCT_CREATE_EXPRESSION)
-    @Operation(summary = "复合创建 SPU 与 SKU", description = "在同一事务中创建一个 SPU 和至少一个 SKU。")
+    @Operation(summary = "复合创建 SPU 与 SKU",
+            description = "在同一事务中创建一个 SPU 和至少一个 SKU；目标与结果 Schema 由服务端按履约方式生成。")
     public CommonResult<String> create(@Valid @RequestBody SpuSaveReqVO request) {
         return success(commandService.createProduct(toCommand(request)));
     }
 
     @PutMapping("/spus/{spuCode}")
     @PreAuthorize(PRODUCT_UPDATE_EXPRESSION)
-    @Operation(summary = "复合更新 SPU 与 SKU", description = "按 SKU 编码新增、更新；遗漏且无有效引用的 SKU 自动停用。")
+    @Operation(summary = "复合更新 SPU 与 SKU",
+            description = "按 SKU 编码新增、更新；遗漏且无有效引用的 SKU 自动停用；目标与结果 Schema 由服务端按履约方式生成。")
     public CommonResult<Boolean> update(
             @Parameter(description = "平台SPU永久业务编码", example = "SPU_01ABC") @PathVariable String spuCode,
             @Valid @RequestBody SpuSaveReqVO request) {
@@ -147,8 +149,7 @@ public class ProductAdminController {
     private SaveSpuCommand toCommand(SpuSaveReqVO request) {
         List<SaveSkuLine> skus = request.skus.stream().map(line -> new SaveSkuLine(line.skuCode, line.skuName,
                 line.fulfillmentType, line.faceValue, line.marketPrice, line.suggestedSalePrice, line.minQuantity,
-                line.maxQuantity, line.targetSchemaCode, line.targetSchemaVersion, line.resultSchemaCode,
-                line.resultSchemaVersion, line.status)).toList();
+                line.maxQuantity, line.status)).toList();
         return new SaveSpuCommand(request.spuCode, request.spuName, request.subtitle, request.brandId,
                 request.primaryCategoryId, request.secondaryCategoryIds, request.sellableCategory,
                 request.productType, request.productClassification, request.coverUrl, request.sliderImageUrls,
@@ -190,10 +191,6 @@ public class ProductAdminController {
         @Min(0) @Schema(description = "销售建议价，CNY分；默认0") private Long suggestedSalePrice;
         @Positive @Schema(description = "SKU 最低起购量；默认1") private Long minQuantity;
         @Positive @Schema(description = "SKU 单次最高购买量；默认9999999") private Long maxQuantity;
-        @Size(max = 64) @Schema(description = "目标参数 Schema 编码；与版本成对") private String targetSchemaCode;
-        @Positive @Schema(description = "目标参数 Schema 版本；与编码成对") private Integer targetSchemaVersion;
-        @NotBlank @Size(max = 64) @Schema(description = "履约结果 Schema 编码，不允许 DEFAULT") private String resultSchemaCode;
-        @NotNull @Positive @Schema(description = "履约结果 Schema 版本") private Integer resultSchemaVersion;
         @Schema(description = "SKU 状态；默认继承 SPU") private Short status;
     }
 }

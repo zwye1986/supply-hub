@@ -100,8 +100,7 @@ class MasterDataLifecycleIntegrationTest {
             catalogService.changeSpuStatus("TELCO_RECHARGE", CatalogEntityStatus.ACTIVE, 1L);
             catalogService.createSku(new ProductCatalogCommandService.CreateSkuCommand(
                     "TELCO_100", "TELCO_RECHARGE", "话费直充 100 元", "DIRECT_RECHARGE",
-                    10_000L, "CNY", "DIRECT_RECHARGE_TARGET", 1,
-                    "DIRECT_RECHARGE_RESULT", 1, 1L));
+                    10_000L, "CNY", 1L));
             catalogService.changeSkuStatus("TELCO_100", CatalogEntityStatus.ACTIVE, 1L);
 
             String listingNo = catalogService.createBuyerListing(

@@ -401,8 +401,7 @@ class BuyerAdminIntegrationTest {
         catalog.changeSpuStatus("MOVIE_TICKET", CatalogEntityStatus.ACTIVE, 1L);
         catalog.createSku(new ProductCatalogCommandService.CreateSkuCommand(
                 "MOVIE_100", "MOVIE_TICKET", "电影票 100", FulfillmentType.DIRECT_RECHARGE.name(),
-                10_000L, Money.CURRENCY_CNY, "DIRECT_RECHARGE_TARGET", 1,
-                "DIRECT_RECHARGE_RESULT", 1, 1L));
+                10_000L, Money.CURRENCY_CNY, 1L));
         catalog.changeSkuStatus("MOVIE_100", CatalogEntityStatus.ACTIVE, 1L);
     }
 

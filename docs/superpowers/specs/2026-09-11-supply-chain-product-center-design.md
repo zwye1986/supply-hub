@@ -18,7 +18,7 @@
 | **d8** | **跨模块 Mapper 依赖与验证收敛** | 新增/抽取独立商品删除校验器 `ProductDeletionValidator`，明确注入跨模块 Mapper：`SupplierOfferMapper`（属于 `tradecore.supply`）、`BuyerProductMapper` 与 `ProjectListingMapper`（属于 `tradecore.buyer`）、`BuyerListingMapper`（属于 `tradecore.catalog`），保持单向数据所有权并收敛强校验规则。 | 明确跨包依赖边界 |
 | **d9** | **存量主数据写接口统一收口** | `M1MasterDataAdminController` 的品牌、分类、SPU、SKU 创建及状态变更端点全部委托到新的统一领域服务；旧契约可保留兼容，但不得保留独立写实现。新旧入口必须共享动态类型、分类防重、Schema 成对校验、状态机与删除引用规则。 | 堵塞全部旧写接口旁路 |
 | **d10** | **SPU 与 SKU 状态解耦及全链路有效可售校验** | SPU 与 SKU 维持独立物理状态；SKU 的**有效可售状态（Effective Sellable State）**定义为双亲有效：`SPU.status == ACTIVE (10) && SKU.status == ACTIVE (10)`。新增 `ProductSellabilityService` 作为统一判断入口，商品池查询、供应商报价创建/发布、分销商品加入、采购商上架发布及履约受理均必须调用该校验。SPU 重新上架时绝不盲目恢复被运营单独置为 `INACTIVE` 的 SKU。 | 防止覆盖独立下架状态并封堵交易旁路 |
-| **d11** | **复合表单契约、品牌唯一约束与 Schema 安全防线** | SPU+SKU 复合创建/编辑接口采用事务内原子保存；`sc_brand` 在 `028` DDL 中追加 `uk_sc_brand_name` 唯一索引；业务编码（`SPU_`, `SKU_`, `BRD_`, `CAT_`, `PT_`）支持「前端传入或缺省由 `BusinessNoGenerator` 自动生成」。SKU 的 `targetSchemaCode/targetSchemaVersion` 必须成对为空或成对存在，启用 SKU 时必须存在，并通过 `FulfillmentTargetSchemaRegistry.requireSupportedSchema(code, version)` 校验编码与版本受支持；`resultSchemaCode/resultSchemaVersion` 必须显式提供非空编码及正版本，禁止自动写入 `DEFAULT/1` 占位。 | 防止创建成功但无法履约的 SKU |
+| **d11** | **复合表单契约、品牌唯一约束与 Schema 安全防线** | SPU+SKU 复合创建/编辑接口采用事务内原子保存；`sc_brand` 在 `028` DDL 中追加 `uk_sc_brand_name` 唯一索引；业务编码（`SPU_`, `SKU_`, `BRD_`, `CAT_`, `PT_`）支持「前端传入或缺省由 `BusinessNoGenerator` 自动生成」。全部管理端 SKU 写请求只暴露业务字段 `fulfillmentType`，不得要求管理前端传递内部 `targetSchemaCode/targetSchemaVersion/resultSchemaCode/resultSchemaVersion`；应用层通过 `PlatformSkuSchemaRegistry` 将封闭履约类型映射为固定的目标与结果 Schema 编码、版本并持久化，避免产生任意组合。详情响应保留四个字段作为只读诊断信息。已废弃的 `M1MasterDataAdminController` 兼容写入口也必须复用同一派生规则，不得保留旁路。 | 防止前端误配内部协议导致商品创建成功但无法履约 |
 | **d12** | **详细 Swagger/OpenAPI 文档标准** | 所有管理端 Controller、方法、Query/Path 参数、Request/Response VO 必须提供完整的 OpenAPI/Swagger 3 注解（`@Tag`、`@Operation`、`@Parameter`、`@Schema`）。VO 字段描述必须与 DDL `COMMENT` 严格一致，参数注明枚举取值、单位（CNY分）、示例值与必填约束，并在操作描述中注明前置条件与错误码映射。 | 严格落实规范 |
 | **d13** | **权限兼容与菜单授权闭环** | 新增细粒度权限必须集中定义在 `SupplyChainAdminPermissions`，方法表达式统一使用 `hasAnyPermissions('supply-chain:admin', '<细权限>')`，保持旧管理员权限为超集；同步维护供应链菜单 SQL 与权限契约测试，使细权限可实际分配。 | 防止旧管理员升级后 403 |
 | **d14** | **类目选项接口向后兼容** | 保留 `GET /supply-chain/categories` 只返回启用类目树的既有契约；新增 `GET /supply-chain/categories/management-tree` 返回包含草稿、停用节点及管理字段的全量树，避免存量下拉组件把不可用类目重新选入业务表单。 | 防止类目选项接口行为回归 |
@@ -268,11 +268,8 @@ PRD 8.4.1 的列表 Tab 支持从 `GET /supply-chain/product-types` 动态拉取
     * `suggestedSalePrice` (Long, 默认 0，分)
     * `minQuantity` (Long, 默认 1)
     * `maxQuantity` (Long, 默认 9999999)
-    * `targetSchemaCode` (String, 可选；与 `targetSchemaVersion` 成对出现，SKU 启用时必填)
-    * `targetSchemaVersion` (Integer, 可选；与 `targetSchemaCode` 成对出现，当前已发布版本为 1)
-    * `resultSchemaCode` (String, 必填，不允许自动填入 `DEFAULT` 占位值)
-    * `resultSchemaVersion` (Integer, 必填且 ≥1)
     * `status` (Short, 默认与 SPU 保持一致)
+  * 目标与结果 Schema 不属于前端请求契约。应用层按 `fulfillmentType` 从 `PlatformSkuSchemaRegistry` 获取并写入 SKU；当前映射版本均为 1。查询详情可返回这些字段，但前端只能只读展示，不得回传决定其取值。
 * **响应**：`CommonResult<String>`（返回生成的 `spuCode`）
 
 #### 4.1.4 SPU+SKU 复合更新：`PUT /supply-chain/products/spus/{spuCode}`

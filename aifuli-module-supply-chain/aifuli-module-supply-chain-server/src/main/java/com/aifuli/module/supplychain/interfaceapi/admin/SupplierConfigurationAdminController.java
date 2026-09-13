@@ -66,7 +66,8 @@ public class SupplierConfigurationAdminController {
     }
 
     @PostMapping("/connectors/drafts")
-    @Operation(summary = "创建连接器及首个草稿版本")
+    @Operation(summary = "创建连接器及首个草稿版本",
+            description = "适配器配置 Schema 版本由服务端按 adapterType 生成。")
     public CommonResult<SupplierConfigurationCommandService.DraftConnectorResult> createConnectorDraft(
             @Valid @RequestBody CreateConnectorDraftReqVO request) {
         return success(configurationService.createConnectorDraft(
@@ -75,7 +76,7 @@ public class SupplierConfigurationAdminController {
                         request.getBaseUrl(), request.getMerchantAccount(), request.getCredentialSlotNo(),
                         request.getProtocolVersion(), request.getCallbackPath(), request.getConnectTimeoutMs(),
                         request.getReadTimeoutMs(), request.getRateLimit(), request.getConcurrencyLimit(),
-                        request.getAdapterConfigSchemaVersion(), request.getAdapterConfigJson(), getLoginUserId())));
+                        request.getAdapterConfigJson(), getLoginUserId())));
     }
 
     @PostMapping("/connectors/qnm-status-mappings")
@@ -150,7 +151,8 @@ public class SupplierConfigurationAdminController {
     }
 
     @PostMapping("/offers/publish")
-    @Operation(summary = "发布供应商供给不可变版本")
+    @Operation(summary = "发布供应商供给不可变版本",
+            description = "履约配置 Schema 版本由服务端按连接器 adapterType 生成。")
     public CommonResult<SupplierOfferPublicationService.PublishResult> publishOffer(
             @Valid @RequestBody PublishOfferReqVO request) {
         return success(offerService.publish(new SupplierOfferPublicationService.PublishOfferCommand(
@@ -160,7 +162,7 @@ public class SupplierConfigurationAdminController {
                 request.getQuantityStep(), request.getPrimaryCapabilityCode(), request.getCompletionMode(),
                 request.getCreateIdempotencyMode(), request.getUnknownResultPolicy(),
                 request.getPartialDeliveryMode(), request.getResultMultiplicity(),
-                request.getFulfillmentConfigSchemaVersion(), request.getFulfillmentConfigJson(),
+                request.getFulfillmentConfigJson(),
                 request.getValidFrom(), request.getValidTo(), request.getPublishReason(),
                 getLoginUserId(), traceId(), null, null)));
     }
@@ -205,7 +207,6 @@ public class SupplierConfigurationAdminController {
         @Min(1) private int readTimeoutMs;
         @Min(1) private Integer rateLimit;
         @Min(1) private Integer concurrencyLimit;
-        @Min(1) private int adapterConfigSchemaVersion;
         @NotBlank @Schema(description = "封闭 Schema JSON；奇那梦一期固定为 {}")
         private String adapterConfigJson;
     }
@@ -286,7 +287,6 @@ public class SupplierConfigurationAdminController {
         @NotBlank private String unknownResultPolicy;
         @NotBlank private String partialDeliveryMode;
         @NotBlank private String resultMultiplicity;
-        @Min(1) private int fulfillmentConfigSchemaVersion;
         @NotBlank private String fulfillmentConfigJson;
         @NotNull private LocalDateTime validFrom;
         private LocalDateTime validTo;

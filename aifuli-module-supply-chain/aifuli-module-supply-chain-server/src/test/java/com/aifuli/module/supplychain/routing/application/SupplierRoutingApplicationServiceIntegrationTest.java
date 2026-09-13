@@ -228,8 +228,7 @@ class SupplierRoutingApplicationServiceIntegrationTest {
         catalog.changeSpuStatus("ROUTE_TELCO", CatalogEntityStatus.ACTIVE, 1L);
         catalog.createSku(new ProductCatalogCommandService.CreateSkuCommand(
                 "ROUTE_TELCO_100", "ROUTE_TELCO", "路由话费直充 100 元",
-                "DIRECT_RECHARGE", 10_000L, "CNY", "DIRECT_RECHARGE_TARGET", 1,
-                "DIRECT_RECHARGE_RESULT", 1, 1L));
+                "DIRECT_RECHARGE", 10_000L, "CNY", 1L));
         catalog.changeSkuStatus("ROUTE_TELCO_100", CatalogEntityStatus.ACTIVE, 1L);
     }
 
