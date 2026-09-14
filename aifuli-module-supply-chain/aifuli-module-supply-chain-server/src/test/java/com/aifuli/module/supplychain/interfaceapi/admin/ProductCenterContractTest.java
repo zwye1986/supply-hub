@@ -12,17 +12,20 @@ import io.swagger.v3.core.converter.ModelConverters;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.Valid;
 import org.junit.jupiter.api.Test;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 
 import java.lang.reflect.Method;
 import java.util.Arrays;
 import java.util.Map;
 
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BRAND_LEGACY_API_DEPRECATED;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_STATUS_INVALID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -135,8 +138,12 @@ class ProductCenterContractTest {
 
     @Test
     void legacyMasterDataCatalogEndpointsAreDeprecated() throws NoSuchMethodException {
-        assertThat(M1MasterDataAdminController.class.getMethod("createBrand", M1MasterDataAdminController.CreateBrandReqVO.class)
-                .isAnnotationPresent(Deprecated.class)).isTrue();
+        Method legacyBrandMethod = M1MasterDataAdminController.class.getMethod(
+                "createBrand", M1MasterDataAdminController.CreateBrandReqVO.class);
+        assertThat(legacyBrandMethod.isAnnotationPresent(Deprecated.class)).isTrue();
+        assertThat(legacyBrandMethod.getAnnotation(Operation.class).deprecated()).isTrue();
+        assertThat(legacyBrandMethod.getParameters()[0].isAnnotationPresent(Valid.class)).isFalse();
+        assertThat(legacyBrandMethod.getParameters()[0].getAnnotation(RequestBody.class).required()).isFalse();
         assertThat(M1MasterDataAdminController.class.getMethod("createCategory", M1MasterDataAdminController.CreateCategoryReqVO.class)
                 .isAnnotationPresent(Deprecated.class)).isTrue();
         assertThat(M1MasterDataAdminController.class.getMethod("createSpu", M1MasterDataAdminController.CreateSpuReqVO.class)
@@ -145,6 +152,27 @@ class ProductCenterContractTest {
                 .isAnnotationPresent(Deprecated.class)).isTrue();
         assertThat(M1MasterDataAdminController.class.getMethod("changeCatalogEntityStatus", M1MasterDataAdminController.ChangeCatalogEntityStatusReqVO.class)
                 .isAnnotationPresent(Deprecated.class)).isTrue();
+    }
+
+    /**
+     * 旧品牌创建入口必须固定拒绝请求，禁止再绕过新接口的 Logo 必填约束写入品牌。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#45-存量主数据接口治理m1masterdataadmincontroller}。
+     */
+    @Test
+    void legacyBrandCreateEndpointAlwaysReturnsDeprecatedError() {
+        M1MasterDataAdminController controller = new M1MasterDataAdminController(null, null, null);
+        M1MasterDataAdminController.CreateBrandReqVO request = new M1MasterDataAdminController.CreateBrandReqVO();
+
+        assertThatThrownBy(() -> controller.createBrand(null))
+                .isInstanceOf(ServiceException.class)
+                .hasMessage(BRAND_LEGACY_API_DEPRECATED.getMsg())
+                .extracting(ex -> ((ServiceException) ex).getCode())
+                .isEqualTo(BRAND_LEGACY_API_DEPRECATED.getCode());
+        assertThatThrownBy(() -> controller.createBrand(request))
+                .isInstanceOf(ServiceException.class)
+                .hasMessage(BRAND_LEGACY_API_DEPRECATED.getMsg())
+                .extracting(ex -> ((ServiceException) ex).getCode())
+                .isEqualTo(BRAND_LEGACY_API_DEPRECATED.getCode());
     }
 
     /**

@@ -18,6 +18,7 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -29,9 +30,11 @@ import org.springframework.web.bind.annotation.RestController;
 import java.time.LocalDateTime;
 import java.util.UUID;
 
+import static com.aifuli.framework.common.exception.util.ServiceExceptionUtil.exception;
 import static com.aifuli.framework.common.pojo.CommonResult.success;
-import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.ADMIN_EXPRESSION;
 import static com.aifuli.framework.security.core.util.SecurityFrameworkUtils.getLoginUserId;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BRAND_LEGACY_API_DEPRECATED;
+import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.ADMIN_EXPRESSION;
 
 @Tag(name = "管理后台 - 供应链 M1 主数据")
 @RestController
@@ -39,6 +42,7 @@ import static com.aifuli.framework.security.core.util.SecurityFrameworkUtils.get
 @Validated
 @RequiredArgsConstructor
 @PreAuthorize(ADMIN_EXPRESSION)
+@Slf4j
 public class M1MasterDataAdminController {
 
     private final BuyerCommandService buyerCommandService;
@@ -62,14 +66,17 @@ public class M1MasterDataAdminController {
         return success(true);
     }
 
+    /**
+     * 已退役的品牌创建入口。保留 HTTP 映射用于向尚未迁移的调用方返回稳定错误，禁止继续委托写服务。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#45-存量主数据接口治理m1masterdataadmincontroller}。
+     */
     @PostMapping("/brands")
     @Deprecated
-    @Operation(summary = "创建平台品牌草稿（兼容接口）", deprecated = true,
-            description = "请迁移至 POST /supply-chain/brands；本接口委托同一品牌服务。")
-    public CommonResult<String> createBrand(@Valid @RequestBody CreateBrandReqVO request) {
-        return success(catalogCommandService.createBrand(new ProductCatalogCommandService.CreateBrandCommand(
-                request.getBrandCode(), request.getBrandName(), request.getEnglishName(),
-                request.getLogoUrl(), request.getSort(), getLoginUserId())));
+    @Operation(summary = "旧品牌创建接口（已废弃）", deprecated = true,
+            description = "接口已终止写入，固定返回 BRAND_LEGACY_API_DEPRECATED；请迁移至 POST /supply-chain/brands。")
+    public CommonResult<String> createBrand(@RequestBody(required = false) CreateBrandReqVO request) {
+        log.warn("拒绝已废弃的品牌创建接口 operatorId={}", getLoginUserId());
+        throw exception(BRAND_LEGACY_API_DEPRECATED);
     }
 
     @PostMapping("/categories")

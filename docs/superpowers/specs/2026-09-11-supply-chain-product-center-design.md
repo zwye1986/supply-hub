@@ -25,6 +25,7 @@
 | **d15** | **标品选品池销售价投影** | `GET /supply-chain/products/skus` 为兼容 09-02 前端契约继续返回字段名 `marketPriceCents`，但该字段的业务值固定取 `sc_platform_sku.suggested_sale_price`；不得再取 `face_value` 或 `market_price`。`face_value` 是履约面值，`market_price` 是市场划线价，二者都不是 09-12 锁定的 C 端建议售价来源。 | 修复商品中心扩展字段落地后选品池仍沿用旧面值的偏差 |
 | **d16** | **分类详情隔离持久化模型** | `GET /supply-chain/categories/{categoryCode}` 返回专用 `CategoryDetail`，保持现有业务字段但不再序列化 `ProductCategoryDO`。响应只含分类编码、名称、父分类 ID、层级、排序、可见性、状态和创建/更新时间；数据库主键、乐观锁版本及操作人 ID 不进入管理端契约。商品中心所有 Query/Path 参数补齐 `@Parameter`，所有响应 DTO 字段补齐与 DDL 语义一致的 `@Schema`。 | 防止数据库内部字段成为前端兼容包袱，并补齐 Knife4j 参数说明 |
 | **d17** | **品牌与商品类型管理模型原型对齐** | 严格按管理端原型对齐主数据能力：<br>1. `sc_brand` 增加 `short_name`（品牌简称）和 `description`（品牌介绍与说明）；`BrandSaveReqVO.logoUrl` 增加 `@NotBlank` 必填校验；`BrandView` 补充 `shortName`、`description` 并显式投影 `spuCount`。<br>2. `sc_product_type` 增加 `icon_url`（类型图标）和 `description`（类型详细描述）；`ProductTypeSaveReqVO.iconUrl` 必填，支持创建时指定 `status`（10启用/20停用，缺省10）；`ProductTypeView` 补充 `iconUrl`、`description`，并一次性聚合未归档 `spuCount` 与 `skuCount` 两项统计指标，避免 N+1 查询。变更由 `029` 变更集执行。 | 彻底对齐原型字段与卡片双指标展示 |
+| **d18** | **旧品牌创建接口终止写入** | 品牌创建统一使用 `POST /supply-chain/brands`。已废弃的 `POST /supply-chain/master-data/brands` 不再委托应用服务、不再执行参数校验或数据库写入，而是固定返回稳定业务错误 `BRAND_LEGACY_API_DEPRECATED`（`1_050_001_106`，不可重试），提示调用方迁移至新接口。其他 M1 兼容接口不受本决策影响。 | 关闭旧品牌入口绕过 Logo 必填约束的写入旁路 |
 
 ---
 
@@ -354,10 +355,11 @@ PRD 8.4.1 的列表 Tab 支持从 `GET /supply-chain/product-types` 动态拉取
 ---
 
 ### 4.5 存量主数据接口治理：`M1MasterDataAdminController`
-* `/supply-chain/master-data/brands`、`/categories`、`/spus`、`/skus`：保留旧请求契约作为兼容入口，但分别委托 `BrandAdminService`、`CategoryCommandService`、`ProductCatalogCommandService` 的统一写方法；不再保留独立校验和持久化逻辑。
+* `POST /supply-chain/master-data/brands`：接口保留为明确的退役响应，不再创建品牌；无论请求体内容如何，固定返回 `BRAND_LEGACY_API_DEPRECATED`（`1_050_001_106`），并提示改用 `POST /supply-chain/brands`。该错误不可重试，调用方必须迁移接口。
+* `/supply-chain/master-data/categories`、`/spus`、`/skus`：保留旧请求契约作为兼容入口，分别委托 `CategoryCommandService`、`ProductCatalogCommandService` 的统一写方法；不再保留独立校验和持久化逻辑。
 * 旧 `/spus`、`/skus` 契约不携带 SKU 列表与限购、辅助类目等新字段，因此按「共享校验与落库、放宽组合要求」方式收口：`createSpu` 先按业务编码解析品牌与主类目，再走 `ProductCatalogCommandService.insertSpu`；`createSku` 走 `insertSku`。两者与复合创建共享动态商品类型准入、品牌与类目有效性、配送模式、限购区间、Schema 成对校验与建议价默认值；差异仅在于兼容入口固定产出 `DRAFT` 状态，且允许先建 SPU 草稿而不强制同时挂载 SKU（复合创建仍强制至少一个 SKU）。
 * `/supply-chain/master-data/catalog-entities/status`：委托 `ProductCatalogCommandService.changeSpuStatus` / `changeSkuStatus` / `BrandAdminService.changeStatus` / `CategoryCommandService.changeStatus`，复用统一状态机与引用规则。
-* 旧接口统一标注 `@Deprecated` 并在 OpenAPI 描述中指向新端点；兼容期内必须通过 ContractTest 验证新旧入口的核心校验和错误码一致。
+* 旧接口统一标注 `@Deprecated` 并在 OpenAPI 描述中指向新端点；仍处于兼容期的接口必须通过 ContractTest 验证新旧入口的核心校验和错误码一致，已终止写入的旧品牌接口则验证其固定返回退役错误且不会调用写服务。
 
 ---
 

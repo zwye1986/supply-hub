@@ -124,6 +124,8 @@ public interface SupplyChainErrorCodeConstants {
     ErrorCode PRODUCT_CURRENCY_INVALID = error(1_050_001_103, "平台 SKU 币种仅支持 CNY");
     ErrorCode SUPPLY_CHAIN_ORDER_NOT_FOUND = error(1_050_001_104, "供应链总订单不存在");
     ErrorCode ORDER_QUERY_TIME_RANGE_INVALID = error(1_050_001_105, "订单受理时间区间不合法");
+    ErrorCode BRAND_LEGACY_API_DEPRECATED =
+            error(1_050_001_106, "品牌旧接口已废弃，请使用 POST /supply-chain/brands");
 
     /** 订单详情不可用只作为成功响应中的详情标记，不作为 CommonResult 失败码。 */
     String DETAIL_UNAVAILABLE = "DETAIL_UNAVAILABLE";
@@ -233,7 +235,8 @@ public interface SupplyChainErrorCodeConstants {
             entry(PRODUCT_SKU_FIELD_INVALID, RetryDirective.DO_NOT_RETRY),
             entry(PRODUCT_CURRENCY_INVALID, RetryDirective.DO_NOT_RETRY),
             entry(SUPPLY_CHAIN_ORDER_NOT_FOUND, RetryDirective.DO_NOT_RETRY),
-            entry(ORDER_QUERY_TIME_RANGE_INVALID, RetryDirective.DO_NOT_RETRY));
+            entry(ORDER_QUERY_TIME_RANGE_INVALID, RetryDirective.DO_NOT_RETRY),
+            entry(BRAND_LEGACY_API_DEPRECATED, RetryDirective.DO_NOT_RETRY));
 
     static RetryDirective retryDirective(int errorCode) {
         return RETRY_DIRECTIVES.getOrDefault(errorCode, RetryDirective.DO_NOT_RETRY);

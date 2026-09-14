@@ -9,6 +9,7 @@ import java.lang.reflect.Field;
 import java.util.HashSet;
 import java.util.Set;
 
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BRAND_LEGACY_API_DEPRECATED;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.INSTORE_CREDENTIAL_REVOKED;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.INSTORE_ENTRY_URL_UNAVAILABLE;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.INSTORE_MEMBER_PROFILE_INVALID;
@@ -125,6 +126,16 @@ class SupplyChainErrorMappingTest {
                 "到店购入口地址暂时不可用", RetryDirective.RETRY_SAME_KEY);
         assertErrorContract(SUPPLIER_OPENING_ALREADY_DONE, 1_050_001_050,
                 "供应商期初已入账，禁止再改余额字段", RetryDirective.DO_NOT_RETRY);
+    }
+
+    /**
+     * 旧品牌创建接口终止写入后，调用方必须迁移到新接口，不能重试旧请求。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#45-存量主数据接口治理m1masterdataadmincontroller}。
+     */
+    @Test
+    void preservesBrandLegacyApiRetirementContract() {
+        assertErrorContract(BRAND_LEGACY_API_DEPRECATED, 1_050_001_106,
+                "品牌旧接口已废弃，请使用 POST /supply-chain/brands", RetryDirective.DO_NOT_RETRY);
     }
 
     @Test
