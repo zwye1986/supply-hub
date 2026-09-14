@@ -28,10 +28,14 @@ public class ProductTypeDO {
     private String typeCode;
     /** 商品类型名称 */
     private String typeName;
+    /** 商品类型图标地址 */
+    private String iconUrl;
     /** 展示排序值，越小越靠前 */
     private Integer sort;
     /** 管理状态：10启用，20停用，90已归档 */
     private Short status;
+    /** 商品类型详细描述 */
+    private String description;
     /** 类型备注与说明 */
     private String remark;
     /** 乐观锁版本号 */

@@ -55,7 +55,8 @@ public class BrandAdminController {
     @Operation(summary = "创建商品品牌", description = "brandCode 为空时生成 BRD_+ULID；品牌名称全局唯一。")
     public CommonResult<String> create(@Valid @RequestBody BrandSaveReqVO request) {
         return success(service.create(new BrandAdminService.CreateCommand(request.brandCode, request.brandName,
-                request.englishName, request.logoUrl, request.sort, request.status, getLoginUserId())));
+                request.shortName, request.englishName, request.logoUrl, request.description, request.sort,
+                request.status, getLoginUserId())));
     }
 
     @PutMapping("/{brandCode}")
@@ -65,8 +66,8 @@ public class BrandAdminController {
             @Parameter(description = "平台品牌永久业务编码", example = "BRD_01ABC")
             @PathVariable String brandCode,
             @Valid @RequestBody BrandSaveReqVO request) {
-        service.update(brandCode, new BrandAdminService.UpdateCommand(request.brandName, request.englishName,
-                request.logoUrl, request.sort, getLoginUserId()));
+        service.update(brandCode, new BrandAdminService.UpdateCommand(request.brandName, request.shortName,
+                request.englishName, request.logoUrl, request.description, request.sort, getLoginUserId()));
         return success(true);
     }
 
@@ -94,9 +95,11 @@ public class BrandAdminController {
     @Schema(description = "品牌保存请求")
     public static class BrandSaveReqVO {
         @Size(max = 32) @Schema(description = "品牌编码；创建时可空") private String brandCode;
-        @NotBlank @Size(max = 128) @Schema(description = "品牌名称") private String brandName;
+        @NotBlank @Size(max = 128) @Schema(description = "品牌中文或标准名称") private String brandName;
+        @Size(max = 64) @Schema(description = "品牌简称") private String shortName;
         @Size(max = 128) @Schema(description = "品牌英文名称") private String englishName;
-        @Size(max = 512) @Schema(description = "品牌 Logo 地址") private String logoUrl;
+        @NotBlank @Size(max = 512) @Schema(description = "品牌 Logo 地址") private String logoUrl;
+        @Size(max = 512) @Schema(description = "品牌介绍与详细说明") private String description;
         @Schema(description = "同级排序") private Integer sort;
         @Schema(description = "创建状态：0草稿，10启用") private Short status;
     }

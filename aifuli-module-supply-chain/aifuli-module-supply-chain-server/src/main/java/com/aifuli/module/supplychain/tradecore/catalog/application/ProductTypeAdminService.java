@@ -5,8 +5,10 @@ import com.aifuli.framework.common.pojo.PageResult;
 import com.aifuli.module.supplychain.infrastructure.identity.BusinessNoGenerator;
 import com.aifuli.module.supplychain.infrastructure.identity.BusinessNoPrefixes;
 import com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSpuDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProductTypeDO;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSpuMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProductTypeMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
@@ -19,6 +21,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -48,6 +51,7 @@ public class ProductTypeAdminService {
 
     private final ProductTypeMapper typeMapper;
     private final PlatformSpuMapper spuMapper;
+    private final PlatformSkuMapper skuMapper;
     private final BusinessNoGenerator businessNoGenerator;
     private final SupplyChainDatabaseClock databaseClock;
 
@@ -63,33 +67,69 @@ public class ProductTypeAdminService {
                 .orderByAsc(ProductTypeDO::getSort)
                 .orderByAsc(ProductTypeDO::getId);
         PageResult<ProductTypeDO> page = typeMapper.selectPage(param, wrapper);
-        Map<String, Long> productCounts = productCounts(page.getList().stream()
+        Map<String, TypeCounts> counts = typeCounts(page.getList().stream()
                 .map(ProductTypeDO::getTypeCode).toList());
         List<ProductTypeView> views = page.getList().stream()
-                .map(type -> toView(type, productCounts.getOrDefault(type.getTypeCode(), 0L)))
+                .map(type -> toView(type, counts.getOrDefault(type.getTypeCode(), TypeCounts.ZERO)))
                 .toList();
         return new PageResult<>(views, page.getTotal());
     }
 
     public ProductTypeView detail(String typeCode) {
         ProductTypeDO type = requireLive(typeCode, false);
-        return toView(type, productCounts(List.of(type.getTypeCode())).getOrDefault(type.getTypeCode(), 0L));
+        TypeCounts counts = typeCounts(List.of(type.getTypeCode()))
+                .getOrDefault(type.getTypeCode(), TypeCounts.ZERO);
+        return toView(type, counts);
+    }
+
+    private record TypeCounts(long spuCount, long skuCount) {
+        private static final TypeCounts ZERO = new TypeCounts(0L, 0L);
     }
 
     /**
-     * 批量统计各商品类型的未归档 SPU 数量。整页一次查询后在内存聚合，
-     * 避免逐行 {@code selectCount} 造成的 N+1。
+     * 批量统计各商品类型的未归档 SPU 与关联未归档 SKU 数量。
+     * 整页一次加载 SPU 并批量拉取关联 SKU，在内存分组聚合输出，避免 N+1 查询。
      */
-    private Map<String, Long> productCounts(List<String> typeCodes) {
-        if (typeCodes.isEmpty()) {
+    private Map<String, TypeCounts> typeCounts(List<String> typeCodes) {
+        if (typeCodes == null || typeCodes.isEmpty()) {
             return Map.of();
         }
-        return spuMapper.selectList(new LambdaQueryWrapper<PlatformSpuDO>()
-                        .select(PlatformSpuDO::getProductType)
-                        .in(PlatformSpuDO::getProductType, typeCodes)
-                        .ne(PlatformSpuDO::getStatus, CatalogEntityStatus.ARCHIVED.getCode())).stream()
-                .map(PlatformSpuDO::getProductType).filter(Objects::nonNull)
-                .collect(Collectors.groupingBy(typeCode -> typeCode, Collectors.counting()));
+        List<PlatformSpuDO> spus = spuMapper.selectList(new LambdaQueryWrapper<PlatformSpuDO>()
+                .select(PlatformSpuDO::getId, PlatformSpuDO::getProductType)
+                .in(PlatformSpuDO::getProductType, typeCodes)
+                .ne(PlatformSpuDO::getStatus, CatalogEntityStatus.ARCHIVED.getCode()));
+        if (spus.isEmpty()) {
+            return typeCodes.stream().collect(Collectors.toMap(c -> c, c -> TypeCounts.ZERO));
+        }
+
+        Map<String, Long> spuCountMap = spus.stream()
+                .filter(spu -> spu.getProductType() != null)
+                .collect(Collectors.groupingBy(PlatformSpuDO::getProductType, Collectors.counting()));
+
+        Map<Long, String> spuToTypeMap = spus.stream()
+                .filter(spu -> spu.getId() != null && spu.getProductType() != null)
+                .collect(Collectors.toMap(PlatformSpuDO::getId, PlatformSpuDO::getProductType, (a, b) -> a));
+
+        List<Long> spuIds = spus.stream().map(PlatformSpuDO::getId).filter(Objects::nonNull).toList();
+        Map<String, Long> skuCountMap = Map.of();
+        if (!spuIds.isEmpty()) {
+            List<PlatformSkuDO> skus = skuMapper.selectList(new LambdaQueryWrapper<PlatformSkuDO>()
+                    .select(PlatformSkuDO::getId, PlatformSkuDO::getSpuId)
+                    .in(PlatformSkuDO::getSpuId, spuIds)
+                    .ne(PlatformSkuDO::getStatus, CatalogEntityStatus.ARCHIVED.getCode()));
+            skuCountMap = skus.stream()
+                    .map(sku -> spuToTypeMap.get(sku.getSpuId()))
+                    .filter(Objects::nonNull)
+                    .collect(Collectors.groupingBy(type -> type, Collectors.counting()));
+        }
+
+        Map<String, TypeCounts> result = new HashMap<>();
+        for (String typeCode : typeCodes) {
+            long spuCount = spuCountMap.getOrDefault(typeCode, 0L);
+            long skuCount = skuCountMap.getOrDefault(typeCode, 0L);
+            result.put(typeCode, new TypeCounts(spuCount, skuCount));
+        }
+        return result;
     }
 
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
@@ -98,11 +138,19 @@ public class ProductTypeAdminService {
                 ? command.typeCode().trim().toUpperCase(Locale.ROOT)
                 : businessNoGenerator.next(BusinessNoPrefixes.PT);
         LocalDateTime now = databaseClock.now();
+        Short status = command.status() == null ? CatalogEntityStatus.ACTIVE.getCode() : command.status();
+        if (status != CatalogEntityStatus.ACTIVE.getCode() && status != CatalogEntityStatus.INACTIVE.getCode()) {
+            throw exception(PRODUCT_STATUS_INVALID);
+        }
+        String description = hasText(command.description()) ? command.description().trim()
+                : (hasText(command.remark()) ? command.remark().trim() : null);
         ProductTypeDO type = ProductTypeDO.builder()
                 .typeCode(code)
                 .typeName(command.typeName().trim())
+                .iconUrl(command.iconUrl() != null ? command.iconUrl().trim() : null)
                 .sort(command.sort() == null ? 0 : command.sort())
-                .status(CatalogEntityStatus.ACTIVE.getCode())
+                .status(status)
+                .description(description)
                 .remark(command.remark())
                 .version(0L)
                 .createdBy(command.operatorId())
@@ -123,7 +171,11 @@ public class ProductTypeAdminService {
     public void update(String typeCode, UpdateCommand command) {
         ProductTypeDO type = requireLive(typeCode, true);
         type.setTypeName(command.typeName().trim());
+        type.setIconUrl(command.iconUrl() != null ? command.iconUrl().trim() : null);
         type.setSort(command.sort() == null ? type.getSort() : command.sort());
+        if (command.description() != null) {
+            type.setDescription(command.description().trim());
+        }
         type.setRemark(command.remark());
         touch(type, command.operatorId());
         try {
@@ -172,9 +224,20 @@ public class ProductTypeAdminService {
         return type;
     }
 
-    private ProductTypeView toView(ProductTypeDO type, long productCount) {
-        return new ProductTypeView(type.getTypeCode(), type.getTypeName(), type.getSort(), type.getStatus(),
-                type.getRemark(), productCount, type.getCreatedAt(), type.getUpdatedAt());
+    private ProductTypeView toView(ProductTypeDO type, TypeCounts counts) {
+        return new ProductTypeView(
+                type.getTypeCode(),
+                type.getTypeName(),
+                type.getIconUrl(),
+                type.getSort(),
+                type.getStatus(),
+                type.getDescription(),
+                type.getRemark(),
+                counts.spuCount(),
+                counts.spuCount(),
+                counts.skuCount(),
+                type.getCreatedAt(),
+                type.getUpdatedAt());
     }
 
     private void touch(ProductTypeDO type, Long operatorId) {
@@ -192,20 +255,26 @@ public class ProductTypeAdminService {
         return value != null && !value.isBlank();
     }
 
-    public record CreateCommand(String typeCode, String typeName, Integer sort, String remark, Long operatorId) {
+    public record CreateCommand(String typeCode, String typeName, String iconUrl, Integer sort,
+                                Short status, String description, String remark, Long operatorId) {
     }
 
-    public record UpdateCommand(String typeName, Integer sort, String remark, Long operatorId) {
+    public record UpdateCommand(String typeName, String iconUrl, Integer sort,
+                                String description, String remark, Long operatorId) {
     }
 
     /** 商品类型管理端投影；字段语义与 {@code sc_product_type} DDL COMMENT 一致。 */
     public record ProductTypeView(
             @Schema(description = "商品类型业务编码") String typeCode,
             @Schema(description = "商品类型名称") String typeName,
+            @Schema(description = "商品类型图标地址") String iconUrl,
             @Schema(description = "展示排序值，越小越靠前") Integer sort,
             @Schema(description = "管理状态：10启用，20停用，90已归档") Short status,
-            @Schema(description = "类型备注与说明") String remark,
+            @Schema(description = "商品类型详细描述") String description,
+            @Schema(description = "类型内部备注与说明") String remark,
             @Schema(description = "引用该类型的未归档SPU数量") long productCount,
+            @Schema(description = "引用该类型的未归档SPU数量") long spuCount,
+            @Schema(description = "引用该类型的未归档SKU数量") long skuCount,
             @Schema(description = "类型创建时间，Asia/Shanghai") LocalDateTime createdAt,
             @Schema(description = "类型最后更新时间，Asia/Shanghai") LocalDateTime updatedAt) {
     }

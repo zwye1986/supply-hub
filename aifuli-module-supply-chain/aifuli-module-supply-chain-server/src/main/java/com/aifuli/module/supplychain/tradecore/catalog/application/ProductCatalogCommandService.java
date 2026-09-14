@@ -111,8 +111,8 @@ public class ProductCatalogCommandService {
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public String createBrand(CreateBrandCommand command) {
         return brandAdminService.create(new BrandAdminService.CreateCommand(command.brandCode(), command.brandName(),
-                command.englishName(), command.logoUrl(), command.sort(), CatalogEntityStatus.DRAFT.getCode(),
-                command.operatorId()));
+                null, command.englishName(), command.logoUrl(), null, command.sort(),
+                CatalogEntityStatus.DRAFT.getCode(), command.operatorId()));
     }
 
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)

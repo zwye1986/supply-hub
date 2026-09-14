@@ -89,8 +89,8 @@ class ProductCenterIntegrationTest {
             ObjectMapper objectMapper = context.getBean(ObjectMapper.class);
 
             String brandCode = brandService.create(new BrandAdminService.CreateCommand(
-                    "PC_BRAND", "商品中心测试品牌", null, null, 0,
-                    CatalogEntityStatus.ACTIVE.getCode(), 1L));
+                    "PC_BRAND", "商品中心测试品牌", "PC品牌", null, "https://example.com/logo.png",
+                    "商品中心测试品牌说明", 0, CatalogEntityStatus.ACTIVE.getCode(), 1L));
             String categoryCode = categoryService.create(new CategoryCommandService.CreateCommand(
                     "PC_CATEGORY", "商品中心测试分类", null, 0, (short) 1,
                     CatalogEntityStatus.ACTIVE.getCode(), 1L));

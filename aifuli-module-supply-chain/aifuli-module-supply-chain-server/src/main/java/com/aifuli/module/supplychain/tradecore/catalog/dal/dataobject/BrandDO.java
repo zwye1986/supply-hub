@@ -20,9 +20,16 @@ public class BrandDO {
     @TableId(type = IdType.AUTO)
     private Long id;
     private String brandCode;
+    /** 品牌中文或标准名称 */
     private String brandName;
+    /** 品牌简称 */
+    private String shortName;
+    /** 品牌英文名称 */
     private String englishName;
+    /** 品牌Logo地址 */
     private String logoUrl;
+    /** 品牌介绍与详细说明 */
+    private String description;
     private Short status;
     private Integer sort;
     @Version

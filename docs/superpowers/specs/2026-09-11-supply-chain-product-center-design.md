@@ -24,6 +24,7 @@
 | **d14** | **类目选项接口向后兼容** | 保留 `GET /supply-chain/categories` 只返回启用类目树的既有契约；新增 `GET /supply-chain/categories/management-tree` 返回包含草稿、停用节点及管理字段的全量树，避免存量下拉组件把不可用类目重新选入业务表单。 | 防止类目选项接口行为回归 |
 | **d15** | **标品选品池销售价投影** | `GET /supply-chain/products/skus` 为兼容 09-02 前端契约继续返回字段名 `marketPriceCents`，但该字段的业务值固定取 `sc_platform_sku.suggested_sale_price`；不得再取 `face_value` 或 `market_price`。`face_value` 是履约面值，`market_price` 是市场划线价，二者都不是 09-12 锁定的 C 端建议售价来源。 | 修复商品中心扩展字段落地后选品池仍沿用旧面值的偏差 |
 | **d16** | **分类详情隔离持久化模型** | `GET /supply-chain/categories/{categoryCode}` 返回专用 `CategoryDetail`，保持现有业务字段但不再序列化 `ProductCategoryDO`。响应只含分类编码、名称、父分类 ID、层级、排序、可见性、状态和创建/更新时间；数据库主键、乐观锁版本及操作人 ID 不进入管理端契约。商品中心所有 Query/Path 参数补齐 `@Parameter`，所有响应 DTO 字段补齐与 DDL 语义一致的 `@Schema`。 | 防止数据库内部字段成为前端兼容包袱，并补齐 Knife4j 参数说明 |
+| **d17** | **品牌与商品类型管理模型原型对齐** | 严格按管理端原型对齐主数据能力：<br>1. `sc_brand` 增加 `short_name`（品牌简称）和 `description`（品牌介绍与说明）；`BrandSaveReqVO.logoUrl` 增加 `@NotBlank` 必填校验；`BrandView` 补充 `shortName`、`description` 并显式投影 `spuCount`。<br>2. `sc_product_type` 增加 `icon_url`（类型图标）和 `description`（类型详细描述）；`ProductTypeSaveReqVO.iconUrl` 必填，支持创建时指定 `status`（10启用/20停用，缺省10）；`ProductTypeView` 补充 `iconUrl`、`description`，并一次性聚合未归档 `spuCount` 与 `skuCount` 两项统计指标，避免 N+1 查询。变更由 `029` 变更集执行。 | 彻底对齐原型字段与卡片双指标展示 |
 
 ---
 
@@ -127,6 +128,25 @@ ALTER TABLE sc_supplier_supply_scope DROP CHECK ck_sc_supplier_scope_product_typ
 | `sc_platform_spu` 增加 `ck_sc_spu_quantity CHECK (min_quantity > 0 AND max_quantity >= min_quantity)` | 与 2.2 节 SKU 侧 `ck_sc_sku_quantity` 对称，把 SPU 默认起购/限购区间的不变量同样下沉到数据库，防止绕过应用层写入非法区间。 |
 | `sc_platform_spu.product_type` 由 `NOT NULL` 改为 `NULL` | 配合 d3 解除 Java/DB 封闭枚举：类型编码改由 `sc_product_type` 动态维护，历史数据在类型治理期间可能短暂缺失归属。应用层准入仍由 `ProductTypeValidationService` 强校验，启用 SPU 必须具备有效类型。 |
 | `sc_buyer_category_scope.scope_code` 执行 `MODIFY` 刷新列注释 | 该列语义从「可售品类枚举名」扩展为「可售品类枚举名或动态商品类型编码」，注释需与 d3 后的实际取值域一致。 |
+
+### 2.7 品牌与商品类型原型对齐扩展（029 Changeset）
+对齐管理端原型图 5/6/7/8 的主数据展示与输入要求，增加品牌简称、介绍与类型图标、描述：
+
+```sql
+-- 变更集：029-brand-and-product-type-enhancement.sql
+-- 1. 品牌表 sc_brand 增加简称与介绍
+ALTER TABLE sc_brand
+    ADD COLUMN short_name VARCHAR(64) NULL COMMENT '品牌简称' AFTER brand_name,
+    ADD COLUMN description VARCHAR(512) NULL COMMENT '品牌介绍与详细说明' AFTER logo_url;
+
+-- 2. 商品类型表 sc_product_type 增加图标地址与类型描述
+ALTER TABLE sc_product_type
+    ADD COLUMN icon_url VARCHAR(512) NULL COMMENT '商品类型图标地址' AFTER type_name,
+    ADD COLUMN description VARCHAR(512) NULL COMMENT '商品类型详细描述' AFTER status;
+
+-- 3. 数据迁移：将存量商品类型的 remark 复制到 description
+UPDATE sc_product_type SET description = remark WHERE description IS NULL;
+```
 
 ---
 
@@ -312,10 +332,10 @@ PRD 8.4.1 的列表 Tab 支持从 `GET /supply-chain/product-types` 动态拉取
 ### 4.3 商品品牌管理：`BrandAdminController`
 基路径：`/supply-chain/brands`
 
-* `GET /supply-chain/brands`：品牌分页查询（支持名称/编码检索、状态筛选、排序）。
+* `GET /supply-chain/brands`：品牌分页查询（支持名称/编码检索、状态筛选、排序）。响应 `BrandView` 返回品牌编码、名称、简称（`shortName`）、英文名、Logo、介绍（`description`）、排序、状态、引用未归档 SPU 数量（`productCount`/`spuCount`）、创建/更新时间，完全支撑原型卡片视图。
 * `GET /supply-chain/brands/{brandCode}`：品牌详情。
-* `POST /supply-chain/brands`：创建品牌（支持自动生成 `BRD_`+ULID、品牌名称唯一校验、Logo、英文名、排序）。
-* `PUT /supply-chain/brands/{brandCode}`：更新品牌（名称、英文名、Logo、排序，名称变更时防重校验）。
+* `POST /supply-chain/brands`：创建品牌（支持自动生成 `BRD_`+ULID、品牌名称全局唯一校验、Logo 必填校验、简称、介绍、英文名、排序、创建状态）。
+* `PUT /supply-chain/brands/{brandCode}`：更新品牌（名称、简称、Logo 必填、介绍、英文名、排序，名称变更时防重校验）。
 * `PUT /supply-chain/brands/{brandCode}/status`：启用/停用品牌状态。
 * `DELETE /supply-chain/brands/{brandCode}`：删除品牌（强校验：若有未归档 SPU 引用该品牌，禁止删除）。
 
@@ -324,10 +344,10 @@ PRD 8.4.1 的列表 Tab 支持从 `GET /supply-chain/product-types` 动态拉取
 ### 4.4 商品类型管理（PRD 8.7）：`ProductTypeAdminController`
 基路径：`/supply-chain/product-types`
 
-* `GET /supply-chain/product-types`：商品类型卡片列表查询（返回类型编码、名称、排序、状态、备注、关联的 SPU 数量、创建/更新时间，用于后台列表及商品列表 Tab 动态渲染）。
+* `GET /supply-chain/product-types`：商品类型卡片列表查询（返回类型编码、名称、图标地址 `iconUrl`、描述 `description`、内部备注 `remark`、排序、状态、关联的未归档 SPU 数量 `spuCount`、关联的未归档 SKU 数量 `skuCount`、创建/更新时间）。通过整页一次加载 SPU 并批量拉取关联 SKU，在内存分组聚合输出 `spuCount` 与 `skuCount`，无 N+1 查询，完全支撑原型卡片双指标展示及商品列表 Tab 动态渲染。
 * `GET /supply-chain/product-types/{typeCode}`：类型详情。
-* `POST /supply-chain/product-types`：新增商品类型（支持自动生成 `PT_`+ULID 或前端指定，名称唯一性校验，排序，备注）。
-* `PUT /supply-chain/product-types/{typeCode}`：更新商品类型（名称、排序、备注，名称防重校验）。
+* `POST /supply-chain/product-types`：新增商品类型（支持自动生成 `PT_`+ULID 或前端指定，名称唯一性校验，图标 `iconUrl` 必填，描述 `description`，初始状态 `status` 允许指定 10 启用或 20 停用，缺省为 10，排序，内部备注）。
+* `PUT /supply-chain/product-types/{typeCode}`：更新商品类型（名称、图标 `iconUrl` 必填、描述 `description`、排序、备注，名称防重校验）。
 * `PUT /supply-chain/product-types/{typeCode}/status`：启用/停用商品类型（停用后新增 SPU 不可选，历史 SPU 不受影响）。
 * `DELETE /supply-chain/product-types/{typeCode}`：删除商品类型（强校验：若有未归档 SPU 引用该类型，禁止删除，抛出 `PRODUCT_TYPE_HAS_PRODUCTS`）。
 

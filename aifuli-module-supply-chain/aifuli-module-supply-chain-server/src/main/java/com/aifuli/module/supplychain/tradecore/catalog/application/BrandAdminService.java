@@ -95,7 +95,10 @@ public class BrandAdminService {
         requireNameAvailable(command.brandName().trim(), null);
         LocalDateTime now = databaseClock.now();
         BrandDO brand = BrandDO.builder().brandCode(code).brandName(command.brandName().trim())
-                .englishName(command.englishName()).logoUrl(command.logoUrl())
+                .shortName(hasText(command.shortName()) ? command.shortName().trim() : null)
+                .englishName(hasText(command.englishName()) ? command.englishName().trim() : null)
+                .logoUrl(command.logoUrl())
+                .description(hasText(command.description()) ? command.description().trim() : null)
                 .status(command.status() == null ? CatalogEntityStatus.DRAFT.getCode() : command.status())
                 .sort(command.sort() == null ? 0 : command.sort()).version(0L)
                 .createdBy(command.operatorId()).createdAt(now).updatedBy(command.operatorId()).updatedAt(now).build();
@@ -113,8 +116,10 @@ public class BrandAdminService {
         BrandDO brand = requireLive(brandCode, true);
         requireNameAvailable(command.brandName().trim(), brand.getId());
         brand.setBrandName(command.brandName().trim());
-        brand.setEnglishName(command.englishName());
+        brand.setShortName(hasText(command.shortName()) ? command.shortName().trim() : null);
+        brand.setEnglishName(hasText(command.englishName()) ? command.englishName().trim() : null);
         brand.setLogoUrl(command.logoUrl());
+        brand.setDescription(hasText(command.description()) ? command.description().trim() : null);
         brand.setSort(command.sort() == null ? brand.getSort() : command.sort());
         touch(brand, command.operatorId());
         try {
@@ -182,8 +187,9 @@ public class BrandAdminService {
     }
 
     private BrandView toView(BrandDO brand, long productCount) {
-        return new BrandView(brand.getBrandCode(), brand.getBrandName(), brand.getEnglishName(), brand.getLogoUrl(),
-                brand.getSort(), brand.getStatus(), productCount,
+        return new BrandView(brand.getBrandCode(), brand.getBrandName(), brand.getShortName(),
+                brand.getEnglishName(), brand.getLogoUrl(), brand.getDescription(),
+                brand.getSort(), brand.getStatus(), productCount, productCount,
                 brand.getCreatedAt(), brand.getUpdatedAt());
     }
 
@@ -206,22 +212,26 @@ public class BrandAdminService {
         return value != null && !value.isBlank();
     }
 
-    public record CreateCommand(String brandCode, String brandName, String englishName, String logoUrl,
-                                Integer sort, Short status, Long operatorId) {
+    public record CreateCommand(String brandCode, String brandName, String shortName, String englishName,
+                                String logoUrl, String description, Integer sort, Short status, Long operatorId) {
     }
 
-    public record UpdateCommand(String brandName, String englishName, String logoUrl, Integer sort, Long operatorId) {
+    public record UpdateCommand(String brandName, String shortName, String englishName, String logoUrl,
+                                String description, Integer sort, Long operatorId) {
     }
 
     /** 商品品牌管理端投影；字段语义与 {@code sc_brand} DDL COMMENT 一致。 */
     public record BrandView(
             @Schema(description = "平台品牌永久业务编码") String brandCode,
-            @Schema(description = "品牌名称") String brandName,
+            @Schema(description = "品牌中文或标准名称") String brandName,
+            @Schema(description = "品牌简称") String shortName,
             @Schema(description = "品牌英文名称") String englishName,
             @Schema(description = "品牌Logo地址") String logoUrl,
+            @Schema(description = "品牌介绍与详细说明") String description,
             @Schema(description = "品牌展示排序值") Integer sort,
             @Schema(description = "品牌管理状态：0草稿，10启用，20停用，90已归档") Short status,
             @Schema(description = "引用该品牌的未归档SPU数量") long productCount,
+            @Schema(description = "引用该品牌的未归档SPU数量") long spuCount,
             @Schema(description = "品牌创建时间，Asia/Shanghai") LocalDateTime createdAt,
             @Schema(description = "品牌最后更新时间，Asia/Shanghai") LocalDateTime updatedAt) {
     }

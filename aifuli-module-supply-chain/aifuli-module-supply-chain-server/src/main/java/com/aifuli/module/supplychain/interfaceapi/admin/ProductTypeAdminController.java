@@ -54,10 +54,10 @@ public class ProductTypeAdminController {
 
     @PostMapping
     @PreAuthorize(PRODUCT_TYPE_CREATE_EXPRESSION)
-    @Operation(summary = "创建商品类型", description = "typeCode 为空时生成 PT_+ULID。")
+    @Operation(summary = "创建商品类型", description = "typeCode 为空时生成 PT_+ULID；初始状态默认启用。")
     public CommonResult<String> create(@Valid @RequestBody ProductTypeSaveReqVO request) {
         return success(service.create(new ProductTypeAdminService.CreateCommand(request.typeCode, request.typeName,
-                request.sort, request.remark, getLoginUserId())));
+                request.iconUrl, request.sort, request.status, request.description, request.remark, getLoginUserId())));
     }
 
     @PutMapping("/{typeCode}")
@@ -66,8 +66,8 @@ public class ProductTypeAdminController {
     public CommonResult<Boolean> update(
             @Parameter(description = "商品类型永久业务编码", example = "PT_01ABC") @PathVariable String typeCode,
             @Valid @RequestBody ProductTypeSaveReqVO request) {
-        service.update(typeCode, new ProductTypeAdminService.UpdateCommand(request.typeName, request.sort,
-                request.remark, getLoginUserId()));
+        service.update(typeCode, new ProductTypeAdminService.UpdateCommand(request.typeName, request.iconUrl,
+                request.sort, request.description, request.remark, getLoginUserId()));
         return success(true);
     }
 
@@ -93,9 +93,12 @@ public class ProductTypeAdminController {
     @Data
     @Schema(description = "商品类型保存请求")
     public static class ProductTypeSaveReqVO {
-        @Size(max = 32) @Schema(description = "商品类型编码；创建时可空") private String typeCode;
+        @Size(max = 32) @Schema(description = "商品类型业务编码；创建时可空，缺省自动生成") private String typeCode;
         @NotBlank @Size(max = 128) @Schema(description = "商品类型名称") private String typeName;
-        @Schema(description = "排序") private Integer sort;
-        @Size(max = 512) @Schema(description = "备注") private String remark;
+        @NotBlank @Size(max = 512) @Schema(description = "商品类型图标地址") private String iconUrl;
+        @Schema(description = "展示排序值，越小越靠前") private Integer sort;
+        @Schema(description = "管理状态：10启用，20停用；创建时可选，默认10启用") private Short status;
+        @Size(max = 512) @Schema(description = "商品类型详细描述") private String description;
+        @Size(max = 512) @Schema(description = "类型内部备注与说明") private String remark;
     }
 }
