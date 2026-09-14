@@ -272,7 +272,7 @@ public class ProductTypeAdminService {
             @Schema(description = "管理状态：10启用，20停用，90已归档") Short status,
             @Schema(description = "商品类型详细描述") String description,
             @Schema(description = "类型内部备注与说明") String remark,
-            @Schema(description = "引用该类型的未归档SPU数量") long productCount,
+            @Schema(description = "引用该类型的未归档SPU数量（兼容旧接口，等同于spuCount，新接入方请使用spuCount）") long productCount,
             @Schema(description = "引用该类型的未归档SPU数量") long spuCount,
             @Schema(description = "引用该类型的未归档SKU数量") long skuCount,
             @Schema(description = "类型创建时间，Asia/Shanghai") LocalDateTime createdAt,

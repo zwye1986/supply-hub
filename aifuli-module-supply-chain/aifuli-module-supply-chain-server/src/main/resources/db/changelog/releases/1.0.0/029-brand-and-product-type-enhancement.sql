@@ -8,8 +8,8 @@ ALTER TABLE sc_brand
 
 -- 2. 商品类型表 sc_product_type 增加图标地址与类型描述
 ALTER TABLE sc_product_type
-    ADD COLUMN icon_url VARCHAR(512) NULL COMMENT '商品类型图标地址' AFTER type_name,
+    ADD COLUMN icon_url VARCHAR(512) NOT NULL DEFAULT '' COMMENT '商品类型图标地址' AFTER type_name,
     ADD COLUMN description VARCHAR(512) NULL COMMENT '商品类型详细描述' AFTER status;
 
--- 3. 数据迁移：将存量商品类型的 remark 复制到 description
-UPDATE sc_product_type SET description = remark WHERE description IS NULL;
+-- 3. 数据迁移：将存量商品类型的 remark 复制到 description（仅当 remark 有值时）
+UPDATE sc_product_type SET description = remark WHERE description IS NULL AND remark IS NOT NULL;

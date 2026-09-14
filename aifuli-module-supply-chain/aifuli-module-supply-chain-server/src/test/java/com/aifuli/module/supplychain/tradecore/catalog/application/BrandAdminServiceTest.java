@@ -21,6 +21,7 @@ import java.util.List;
 
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BRAND_HAS_PRODUCTS;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BRAND_NAME_DUPLICATE;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_STATUS_INVALID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
@@ -61,6 +62,18 @@ class BrandAdminServiceTest {
                 .isInstanceOf(ServiceException.class)
                 .extracting(ex -> ((ServiceException) ex).getCode())
                 .isEqualTo(BRAND_NAME_DUPLICATE.getCode());
+    }
+
+    @Test
+    void createValidatesInitialStatus() {
+        BrandAdminService.CreateCommand cmd = new BrandAdminService.CreateCommand(
+                null, "测试品牌", "简称", null, "https://example.com/logo.png",
+                "品牌描述", 0, CatalogEntityStatus.ARCHIVED.getCode(), 1L);
+
+        assertThatThrownBy(() -> service.create(cmd))
+                .isInstanceOf(ServiceException.class)
+                .extracting(ex -> ((ServiceException) ex).getCode())
+                .isEqualTo(PRODUCT_STATUS_INVALID.getCode());
     }
 
     @Test

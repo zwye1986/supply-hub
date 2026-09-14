@@ -19,6 +19,7 @@ import java.time.LocalDateTime;
 public class BrandDO {
     @TableId(type = IdType.AUTO)
     private Long id;
+    /** 平台品牌永久业务编码 */
     private String brandCode;
     /** 品牌中文或标准名称 */
     private String brandName;
