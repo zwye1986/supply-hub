@@ -7,7 +7,7 @@ import lombok.Data;
 @Data
 public class MenuListReqVO {
 
-    @Schema(description = "管理端应用标识", example = "mall-admin")
+    @Schema(description = "已废弃的管理端应用标识；查询时忽略", example = "mall-admin")
     private String applicationCode;
 
     @Schema(description = "菜单名称，模糊匹配", example = "芋道")

@@ -29,7 +29,6 @@ import static com.aifuli.framework.common.util.collection.CollectionUtils.conver
 import static com.aifuli.framework.common.util.collection.CollectionUtils.convertMap;
 import static com.aifuli.module.system.dal.dataobject.permission.MenuDO.ID_ROOT;
 import static com.aifuli.module.system.enums.ErrorCodeConstants.*;
-import static com.aifuli.module.system.enums.permission.MenuApplicationCodeConstants.ALL;
 import static com.aifuli.module.system.enums.permission.MenuApplicationCodeConstants.MALL_ADMIN;
 
 /**
@@ -53,10 +52,9 @@ public class MenuServiceImpl implements MenuService {
     @CacheEvict(value = RedisKeyConstants.PERMISSION_MENU_ID_LIST, key = "#createReqVO.permission",
             condition = "#createReqVO.permission != null")
     public Long createMenu(MenuSaveVO createReqVO) {
-        initAndValidateApplicationCode(createReqVO, null);
         // 校验父菜单存在
         validateParentMenu(createReqVO.getParentId(), null);
-        validateParentApplication(createReqVO.getParentId(), createReqVO.getApplicationCode());
+        initLegacyApplicationCode(createReqVO, null);
         // 校验菜单（自己）
         validateMenuName(createReqVO.getParentId(), createReqVO.getName(), null);
         validateMenuComponentName(createReqVO.getComponentName(), null);
@@ -78,11 +76,9 @@ public class MenuServiceImpl implements MenuService {
         if (existingMenu == null) {
             throw exception(MENU_NOT_EXISTS);
         }
-        initAndValidateApplicationCode(updateReqVO, existingMenu);
+        initLegacyApplicationCode(updateReqVO, existingMenu);
         // 校验父菜单存在
         validateParentMenu(updateReqVO.getParentId(), updateReqVO.getId());
-        validateParentApplication(updateReqVO.getParentId(), updateReqVO.getApplicationCode());
-        validateChildrenApplication(updateReqVO.getId(), updateReqVO.getApplicationCode());
         // 校验菜单（自己）
         validateMenuName(updateReqVO.getParentId(), updateReqVO.getName(), updateReqVO.getId());
         validateMenuComponentName(updateReqVO.getComponentName(), updateReqVO.getId());
@@ -248,43 +244,24 @@ public class MenuServiceImpl implements MenuService {
     }
 
     /**
-     * 初始化并校验菜单所属管理端应用。
+     * 初始化菜单的历史应用标识，忽略前端传值。
      *
-     * <p>旧版管理端创建菜单时没有该字段，创建场景默认归入商城后台；旧版管理端更新时则保留
-     * 原应用，避免误把供应链菜单迁回商城后台。设计见
+     * <p>该字段已不参与菜单过滤或父子挂接约束，但数据库列仍为非空。创建根节点时使用历史默认值，
+     * 创建子节点时继承父节点的兼容值；更新时保留原值。这样既不会信任前端传入的
+     * {@code applicationCode}，也不会破坏现有部署 SQL 的数据形态。设计见
      * {@code docs/superpowers/specs/2026-09-03-supply-chain-admin-rbac-design.md#81-应用隔离模型}。</p>
      */
-    private void initAndValidateApplicationCode(MenuSaveVO reqVO, MenuDO existingMenu) {
-        if (StrUtil.isBlank(reqVO.getApplicationCode())) {
-            reqVO.setApplicationCode(existingMenu == null ? MALL_ADMIN : existingMenu.getApplicationCode());
-        }
-        if (!ALL.contains(reqVO.getApplicationCode())) {
-            throw exception(MENU_APPLICATION_CODE_INVALID);
-        }
-    }
-
-    /**
-     * 菜单树不能跨管理端应用挂接，否则应用过滤后会产生没有父节点的动态路由。
-     */
-    private void validateParentApplication(Long parentId, String applicationCode) {
-        if (parentId == null || ID_ROOT.equals(parentId)) {
+    private void initLegacyApplicationCode(MenuSaveVO reqVO, MenuDO existingMenu) {
+        if (existingMenu != null) {
+            reqVO.setApplicationCode(existingMenu.getApplicationCode());
             return;
         }
-        MenuDO parent = menuMapper.selectById(parentId);
-        if (parent != null && !Objects.equals(parent.getApplicationCode(), applicationCode)) {
-            throw exception(MENU_PARENT_APPLICATION_MISMATCH);
+        if (reqVO.getParentId() == null || ID_ROOT.equals(reqVO.getParentId())) {
+            reqVO.setApplicationCode(MALL_ADMIN);
+            return;
         }
-    }
-
-    /**
-     * 父节点切换应用时，其直接子节点也会在应用过滤后失去父节点，因此必须拒绝跨应用更新。
-     */
-    private void validateChildrenApplication(Long menuId, String applicationCode) {
-        boolean mismatched = menuMapper.selectListByParentId(menuId).stream()
-                .anyMatch(child -> !Objects.equals(child.getApplicationCode(), applicationCode));
-        if (mismatched) {
-            throw exception(MENU_PARENT_APPLICATION_MISMATCH);
-        }
+        MenuDO parent = menuMapper.selectById(reqVO.getParentId());
+        reqVO.setApplicationCode(parent == null ? MALL_ADMIN : parent.getApplicationCode());
     }
 
     /**

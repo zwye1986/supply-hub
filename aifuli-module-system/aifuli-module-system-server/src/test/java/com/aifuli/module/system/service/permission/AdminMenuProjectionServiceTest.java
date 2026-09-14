@@ -42,7 +42,8 @@ class AdminMenuProjectionServiceTest {
                         "supply-chain:supplier:query", "manage"),
                 menu(4L, 3L, SUPPLY_CHAIN_ADMIN, MenuTypeEnum.BUTTON,
                         "supply-chain:supplier:create", ""),
-                menu(5L, 2L, SUPPLY_CHAIN_ADMIN, MenuTypeEnum.MENU,
+                // 故意保留不同的历史应用值，验证超集展开只依赖菜单树。
+                menu(5L, 2L, MALL_ADMIN, MenuTypeEnum.MENU,
                         "supply-chain:buyer:query", "buyer"),
                 // 旧 admin 权限节点属于商城应用，验证供应链投影仍能识别其全局授权事实。
                 menu(6L, 1L, MALL_ADMIN, MenuTypeEnum.BUTTON,
@@ -64,7 +65,7 @@ class AdminMenuProjectionServiceTest {
     }
 
     @Test
-    void shouldExpandLegacyAdminToWholeSupplyChainApplication() {
+    void shouldExpandLegacyAdminToWholeSupplyChainMenuTree() {
         AdminMenuProjectionService.Projection result = projectionService.project(
                 Set.of(6L), false);
 

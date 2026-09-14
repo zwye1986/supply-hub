@@ -13,8 +13,7 @@ public class MenuSaveVO {
     @Schema(description = "菜单编号", example = "1024")
     private Long id;
 
-    @Schema(description = "管理端应用标识；创建时省略默认 mall-admin，更新时省略保持原值", example = "mall-admin")
-    @Size(max = 32, message = "管理端应用标识长度不能超过32个字符")
+    @Schema(description = "已废弃的管理端应用标识；请求值会被忽略", example = "mall-admin")
     private String applicationCode;
 
     @Schema(description = "菜单名称", requiredMode = Schema.RequiredMode.REQUIRED, example = "芋道")

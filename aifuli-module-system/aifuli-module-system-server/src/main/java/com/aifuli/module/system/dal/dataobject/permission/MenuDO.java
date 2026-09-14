@@ -35,7 +35,7 @@ public class MenuDO extends BaseDO {
     /**
      * 管理端应用标识
      *
-     * <p>只用于菜单/路由投影隔离，不参与接口权限判断。
+     * <p>仅为兼容既有数据与部署 SQL 保留，不参与菜单过滤、路由投影或接口权限判断。
      * 设计见 {@code docs/superpowers/specs/2026-09-03-supply-chain-admin-rbac-design.md#81-应用隔离模型}。</p>
      */
     private String applicationCode;

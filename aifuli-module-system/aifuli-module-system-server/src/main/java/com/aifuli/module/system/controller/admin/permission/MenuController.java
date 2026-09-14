@@ -79,10 +79,10 @@ public class MenuController {
     @Operation(summary = "获取菜单精简信息列表",
             description = "只包含被开启的菜单，用于【角色分配菜单】功能的选项。在多租户的场景下，会只返回租户所在套餐有的菜单")
     public CommonResult<List<MenuSimpleRespVO>> getSimpleMenuList(
+            @Parameter(description = "已废弃的管理端应用标识；查询时忽略")
             @RequestParam(value = "applicationCode", required = false) String applicationCode) {
         List<MenuDO> list = menuService.getMenuListByTenant(
-                new MenuListReqVO().setApplicationCode(applicationCode)
-                        .setStatus(CommonStatusEnum.ENABLE.getStatus()));
+                new MenuListReqVO().setStatus(CommonStatusEnum.ENABLE.getStatus()));
         list = menuService.filterDisableMenus(list);
         list.sort(Comparator.comparing(MenuDO::getSort));
         return success(BeanUtils.toBean(list, MenuSimpleRespVO.class));

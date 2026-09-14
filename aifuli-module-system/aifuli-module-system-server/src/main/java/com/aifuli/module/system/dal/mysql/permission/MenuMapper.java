@@ -19,13 +19,8 @@ public interface MenuMapper extends BaseMapperX<MenuDO> {
         return selectCount(MenuDO::getParentId, parentId);
     }
 
-    default List<MenuDO> selectListByParentId(Long parentId) {
-        return selectList(MenuDO::getParentId, parentId);
-    }
-
     default List<MenuDO> selectList(MenuListReqVO reqVO) {
         return selectList(new LambdaQueryWrapperX<MenuDO>()
-                .eqIfPresent(MenuDO::getApplicationCode, reqVO.getApplicationCode())
                 .likeIfPresent(MenuDO::getName, reqVO.getName())
                 .eqIfPresent(MenuDO::getStatus, reqVO.getStatus()));
     }

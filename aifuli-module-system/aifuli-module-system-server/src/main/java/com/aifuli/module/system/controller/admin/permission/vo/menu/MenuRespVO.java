@@ -15,7 +15,7 @@ public class MenuRespVO {
     @Schema(description = "菜单编号", requiredMode = Schema.RequiredMode.REQUIRED, example = "1024")
     private Long id;
 
-    @Schema(description = "管理端应用标识", requiredMode = Schema.RequiredMode.REQUIRED, example = "mall-admin")
+    @Schema(description = "历史管理端应用标识（兼容字段）", requiredMode = Schema.RequiredMode.REQUIRED, example = "mall-admin")
     private String applicationCode;
 
     @Schema(description = "菜单名称", requiredMode = Schema.RequiredMode.REQUIRED, example = "芋道")

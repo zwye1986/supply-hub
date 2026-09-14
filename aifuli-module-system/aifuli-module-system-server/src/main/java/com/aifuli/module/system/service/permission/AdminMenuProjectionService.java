@@ -12,13 +12,11 @@ import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import static com.aifuli.module.system.dal.dataobject.permission.MenuDO.ID_ROOT;
-import static com.aifuli.module.system.enums.permission.MenuApplicationCodeConstants.SUPPLY_CHAIN_ADMIN;
 import static com.aifuli.module.system.enums.permission.MenuApplicationCodeConstants.SUPPLY_CHAIN_ADMIN_PERMISSION;
 
 /**
@@ -60,10 +58,7 @@ public class AdminMenuProjectionService {
         if (superAdmin) {
             projectedMenuIds.addAll(enabledMenus.stream().map(MenuDO::getId).toList());
         } else if (globalPermissions.contains(SUPPLY_CHAIN_ADMIN_PERMISSION)) {
-            enabledMenus.stream()
-                    .filter(menu -> SUPPLY_CHAIN_ADMIN.equals(menu.getApplicationCode()))
-                    .map(MenuDO::getId)
-                    .forEach(projectedMenuIds::add);
+            projectedMenuIds.addAll(findSupplyChainMenuTreeIds(enabledMenus));
         }
         List<MenuDO> projectedMenus = enabledMenus.stream()
                 .filter(menu -> projectedMenuIds.contains(menu.getId()))
@@ -91,14 +86,35 @@ public class AdminMenuProjectionService {
                 .collect(Collectors.toCollection(LinkedHashSet::new));
     }
 
+    /**
+     * 根据 {@code supply-chain:admin} 根目录和父子关系展开供应链菜单，不再依赖历史应用标识。
+     */
+    private static Set<Long> findSupplyChainMenuTreeIds(List<MenuDO> menus) {
+        Set<Long> menuIds = menus.stream()
+                .filter(AdminMenuProjectionService::isRouteMenu)
+                .filter(menu -> ID_ROOT.equals(menu.getParentId()))
+                .filter(menu -> SUPPLY_CHAIN_ADMIN_PERMISSION.equals(menu.getPermission()))
+                .map(MenuDO::getId)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        boolean added;
+        do {
+            added = false;
+            for (MenuDO menu : menus) {
+                if (menuIds.contains(menu.getParentId())) {
+                    added |= menuIds.add(menu.getId());
+                }
+            }
+        } while (added);
+        return menuIds;
+    }
+
     private static void addAncestorMenuIds(Set<Long> routeMenuIds, Map<Long, MenuDO> menuMap) {
         List<Long> seeds = new ArrayList<>(routeMenuIds);
         for (Long menuId : seeds) {
             MenuDO current = menuMap.get(menuId);
-            String applicationCode = current == null ? null : current.getApplicationCode();
             while (current != null && !ID_ROOT.equals(current.getParentId())) {
                 MenuDO parent = menuMap.get(current.getParentId());
-                if (parent == null || !Objects.equals(applicationCode, parent.getApplicationCode())) {
+                if (parent == null) {
                     break;
                 }
                 routeMenuIds.add(parent.getId());

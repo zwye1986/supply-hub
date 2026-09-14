@@ -29,6 +29,7 @@ import static com.aifuli.module.system.enums.permission.MenuApplicationCodeConst
 import static com.aifuli.module.system.enums.permission.MenuApplicationCodeConstants.SUPPLY_CHAIN_ADMIN;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.verify;
@@ -109,7 +110,7 @@ public class MenuServiceImplTest extends BaseDbUnitTest {
     }
 
     @Test
-    public void testCreateMenu_parentApplicationMismatch() {
+    public void testCreateMenu_ignoreApplicationAndInheritParent() {
         MenuDO parent = buildMenuDO(MenuTypeEnum.DIR, "supply-parent", ID_ROOT);
         parent.setApplicationCode(SUPPLY_CHAIN_ADMIN);
         menuMapper.insert(parent);
@@ -117,11 +118,13 @@ public class MenuServiceImplTest extends BaseDbUnitTest {
                 .setParentId(parent.getId()).setName("mall-child")
                 .setType(MenuTypeEnum.MENU.getType()).setApplicationCode(MALL_ADMIN));
 
-        assertServiceException(() -> menuService.createMenu(reqVO), MENU_PARENT_APPLICATION_MISMATCH);
+        Long menuId = menuService.createMenu(reqVO);
+
+        assertEquals(SUPPLY_CHAIN_ADMIN, menuMapper.selectById(menuId).getApplicationCode());
     }
 
     @Test
-    public void testUpdateMenu_childApplicationMismatch() {
+    public void testUpdateMenu_ignoreApplicationAndKeepExisting() {
         MenuDO parent = buildMenuDO(MenuTypeEnum.DIR, "application-parent", ID_ROOT);
         menuMapper.insert(parent);
         MenuDO child = buildMenuDO(MenuTypeEnum.MENU, "application-child", parent.getId());
@@ -130,7 +133,9 @@ public class MenuServiceImplTest extends BaseDbUnitTest {
                 .setParentId(ID_ROOT).setName(parent.getName())
                 .setType(MenuTypeEnum.DIR.getType()).setApplicationCode(SUPPLY_CHAIN_ADMIN));
 
-        assertServiceException(() -> menuService.updateMenu(reqVO), MENU_PARENT_APPLICATION_MISMATCH);
+        menuService.updateMenu(reqVO);
+
+        assertEquals(parent.getApplicationCode(), menuMapper.selectById(parent.getId()).getApplicationCode());
     }
 
     @Test
@@ -203,7 +208,7 @@ public class MenuServiceImplTest extends BaseDbUnitTest {
     }
 
     @Test
-    public void testGetMenuList_applicationCode() {
+    public void testGetMenuList_ignoreApplicationCode() {
         MenuDO mallMenu = randomPojo(MenuDO.class,
                 o -> o.setApplicationCode(MALL_ADMIN));
         menuMapper.insert(mallMenu);
@@ -214,8 +219,8 @@ public class MenuServiceImplTest extends BaseDbUnitTest {
 
         List<MenuDO> result = menuService.getMenuList(reqVO);
 
-        assertEquals(1, result.size());
-        assertPojoEquals(supplyChainMenu, result.get(0));
+        assertEquals(2, result.size());
+        assertTrue(result.containsAll(List.of(mallMenu, supplyChainMenu)));
     }
 
     @Test

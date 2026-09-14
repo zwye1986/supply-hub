@@ -180,11 +180,14 @@ C 的详细设计至少必须拆成两类能力：
 权限信息必须拆开计算“已授予权限”与“用于路由的菜单”，不能继续让一个会被修改的 `menuList` 同时承担两者：
 
 1. 从角色菜单关系得到完整菜单集合，先计算真实 `grantedPermissions`。
-2. 不读取请求中的 `applicationCode`，始终使用全部启用菜单作为投影范围。普通细权限用户自动补齐获准页面在原有同一应用内的祖先目录，但补祖先只用于组成路由树，不把祖先的 permission 加进 `grantedPermissions`。这里保留同应用祖先约束只是兼容既有菜单树数据，不再由请求参数选择应用。
-3. 供应链根目录的 permission 固定为 `supply-chain:admin`。若真实 `grantedPermissions` 含该值，则展开 `supply-chain-admin` 下全部启用 DIR/PAGE 和按钮权限；用户是 yudao 超管时，展开全部应用的启用菜单与权限。
+2. 不读取请求中的 `applicationCode`，始终使用全部启用菜单作为投影范围。普通细权限用户按父子关系自动补齐获准页面的祖先目录；补祖先只用于组成路由树，不把祖先的 permission 加进 `grantedPermissions`，也不再检查历史应用标识。
+3. 供应链根目录的 permission 固定为 `supply-chain:admin`。若真实 `grantedPermissions` 含该值，则从该根目录按父子关系展开全部启用 DIR/PAGE 和按钮权限，不得再读取 `application_code` 判断范围；用户是 yudao 超管时，展开全部启用菜单与权限。
 4. 权限数组合并全部应用的已授予权限及上一步的超集展开。后端 `PermissionCommonApi` 仍按完整角色权限独立判定。
 
-菜单管理、角色分配用的管理接口仍可查看全部应用菜单，并增加可选 `applicationCode` 筛选；不得让登录态的应用投影过滤掉角色管理员需要配置的供应链菜单。`MenuDO`、保存/响应 VO、Mapper 查询和缓存键/失效规则同步覆盖该字段。
+菜单管理、角色分配接口同样忽略前端传入的 `applicationCode` 并返回统一菜单集合。菜单创建时不接受
+前端指定应用：根节点使用历史默认值 `mall-admin`，子节点继承父节点的兼容字段值；菜单更新时保留原值。
+不得再校验父子菜单的应用值，也不得用该字段过滤列表或阻断父子挂接。`MenuDO`、保存/响应 VO 和数据库列
+本轮仅为兼容既有数据与部署 SQL 保留，错误码 `1002001007`、`1002001008` 退出菜单接口运行路径。
 
 ### 8.2 供应链菜单树
 
@@ -231,6 +234,7 @@ C 的详细设计至少必须拆成两类能力：
 - HTTP 方法 → 权限动作对照（§5）与「合作商品 PATCH 走 update」断言。
 - SKU 查询组合权限：无资源 code、单资源 code、多资源 code、`admin` 超集。
 - 统一菜单投影：省略 `applicationCode`、传历史合法值或未知值都合并返回全部应用的已授权菜单。
+- 菜单维护忽略应用参数：在 `supply-chain-admin` 历史父节点下新增目录/菜单时，即使前端省略或传入其它 `applicationCode` 也成功，落库兼容值继承父节点；列表过滤参数不改变返回集合。
 - 旧 `supply-chain:admin` 角色无需复制子树关系即可获得供应链目录、页面和按钮；普通细权限角色能补齐目录但不会因此获得 `admin`；重复执行 SQL 不产生重复菜单或角色关系。
 
 `*ContractTest`：使用已启用 Spring Method Security 的测试上下文和 stub `PermissionCommonApi`，不得只反射注解文本：
