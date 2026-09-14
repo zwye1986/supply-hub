@@ -29,11 +29,11 @@ _避免使用_：采购商、租户、应用、项目租户、把已结束当成
 _避免使用_：来源租户、采购商身份、项目编号、明文密钥配置
 
 **中台运营人员（Operator）**：
-通过 `system-server` 管理端账号登录独立站点 `supplychainhubweb`（或同一 token 的其它管理端）的人。中台不保存其密码与会话，只从 `LoginUser` 取得系统用户 id，并通过 `system-server` 查询角色权限。不同管理站点共享账号与权限体系，但菜单按 `applicationCode` 投影隔离。不是采购商、不是供应商门户账号，也不是采购商用户标识。
+通过 `system-server` 管理端账号登录独立站点 `supplychainhubweb` 的人。中台不保存其密码与会话，只从 `LoginUser` 取得系统用户 id，并通过 `system-server` 查询角色权限。当前只有 `supplychainhubweb` 消费动态菜单；权限信息接口兼容接收但忽略 `applicationCode`，始终返回全局已授权菜单。不是采购商、不是供应商门户账号，也不是采购商用户标识。
 _避免使用_：中台用户表、buyerUserId、项目 appId、渠道用户
 
 **运营功能权限（Operator Permission）**：
-yudao 权限标识 `supply-chain:{resource}:{action}`，由角色-菜单授予，拦截管理端 REST 能做什么；`system_menu.application_code` 只隔离不同管理站点的菜单和路由，不改变接口权限语义。它不是 Facade 的机器 scope，也不表达「能碰哪几家供应商」。
+yudao 权限标识 `supply-chain:{resource}:{action}`，由角色-菜单授予，拦截管理端 REST 能做什么；`system_menu.application_code` 仅作为菜单维护兼容字段保留，不影响权限信息接口结果或接口权限语义。它不是 Facade 的机器 scope，也不表达「能碰哪几家供应商」。
 _避免使用_：CATALOG_READ 等 Facade scope、把数据范围编进权限字符串
 
 **运营数据范围（Operator Data Scope）**：

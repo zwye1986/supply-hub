@@ -12,7 +12,7 @@
 
 登录供应链独立站点后：
 
-1. 侧栏只显示当前账号在 `supply-chain-admin` 下有权的页面。
+1. 侧栏显示当前账号在统一菜单树中有权的页面。
 2. 页面按钮按细权限显示/隐藏；旧权限 `supply-chain:admin` 仍能看到全部按钮。
 3. 没有对应 `*:query`、也没有 `supply-chain:admin` 时，该页不出现在侧栏，直接粘贴 URL 不能再靠静态路由进去。
 
@@ -20,12 +20,12 @@
 
 ## 2. 不要做
 
-- `applicationCode` 省略时后端会聚合全部应用菜单；任何只消费单一应用菜单的前端都应显式传自己的应用标识。
+- 不要依赖 `applicationCode` 过滤菜单；后端仅为兼容保留参数并忽略其值，始终返回全局授权菜单。
 - 不要为迁就现有 `/scm/**` 再做后端适配层。
 - 不要关掉 `USE_SUPPLIER_MOCK` / `USE_DISTRIBUTOR_MOCK`（当前均为 `true`）。关 mock 是独立任务，清单见前端 API 设计第 11 章后半。
 - 不要自己往 `system_menu` 插菜单；测试库已有 17 条（2 目录 + 3 页面 + 12 按钮）。
 - 不要把按钮隐藏当成安全控制。接口仍由供应链 `@PreAuthorize` 返回业务码 `403`。
-- 不要打现网网关 `58080` / `https://aifuli-test.qihaofu.cn` 验收本功能。菜单应用隔离在 **supplyhub 测试栈**。
+- 不要打现网网关 `58080` / `https://aifuli-test.qihaofu.cn` 验收本功能。统一菜单契约在 **supplyhub 测试栈**。
 
 ## 3. 现状（前端仓库）
 
@@ -33,7 +33,7 @@
 
 | 点 | 现状 | 问题 |
 | --- | --- | --- |
-| 权限信息 | `src/api/login/index.ts` 的 `getInfo()` 请求 `/system/auth/get-permission-info`，**不带** `applicationCode` | 后端会返回全部应用菜单；若本站点只允许供应链路由，应显式过滤到 `supply-chain-admin` |
+| 权限信息 | `src/api/login/index.ts` 的 `getInfo()` 请求 `/system/auth/get-permission-info`，**不带** `applicationCode` | 与后端统一菜单契约一致，无需追加应用参数 |
 | 动态路由 | `src/store/modules/user.ts` 把 `userInfo.menus` 写入 `ROLE_ROUTERS`；`src/store/modules/permission.ts` 用 `generateRoute` 注册 | 机制可用，但目前拿到的是商城菜单 |
 | 静态三页 | `src/router/modules/remaining.ts` 末尾无条件挂了 `/supplier` 下供应商、分销商、项目 | 任何登录用户都能进这三页 |
 | 按钮 | 供应链三个页面**没有** `v-hasPermi`；仓库其它模块已有该指令 | 仅 query 的账号仍能点新增/暂停 |
@@ -47,13 +47,12 @@
 ### 4.1 接口
 
 ```http
-GET /admin-api/system/auth/get-permission-info?applicationCode=supply-chain-admin
+GET /admin-api/system/auth/get-permission-info
 Authorization: Bearer <token>
 tenant-id: 1
 ```
 
-- 本站点若只展示供应链路由，必须显式传 `applicationCode=supply-chain-admin`；省略参数会聚合返回全部应用菜单。
-- 合法值只有 `mall-admin`、`supply-chain-admin`。其它值业务码 `1002001007`（管理端应用标识不合法），不会回退成全量菜单。
+- `applicationCode` 是废弃的兼容参数：省略、传历史合法值或传未知值，均返回相同的全局授权菜单与权限。
 - 未登录：业务码 `401`。
 - 应用标识只过滤菜单投影，伪造它拿不到未授予的接口权限。
 
@@ -111,29 +110,29 @@ yudao 超管走框架 `*:*:*`，同样应看到三页。
 
 按顺序做。先能按角色出菜单，再藏按钮。每步都要能单独验收。
 
-### 5.1 权限信息带上应用标识
+### 5.1 权限信息使用统一菜单契约
 
 **文件：** `src/api/login/index.ts`
 
-把 `getInfo` 改为请求：
+`getInfo` 直接请求：
 
-```ts
-params: { applicationCode: 'supply-chain-admin' }
+```http
+GET /admin-api/system/auth/get-permission-info
 ```
 
-建议抽常量，例如 `SUPPLY_CHAIN_ADMIN_APPLICATION_CODE = 'supply-chain-admin'`，禁止散落其它拼写。
+若前端已经传递 `applicationCode=supply-chain-admin`，可暂时保留以兼容旧版本，但不得用它区分缓存或判断返回菜单范围。
 
 ### 5.2 不要用商城投影的本地缓存顶替本次结果
 
 **文件：** `src/store/modules/user.ts`
 
-现在会读 `CACHE_KEY.USER`。若缓存里是旧的、不带 `applicationCode` 的 `get-permission-info` 结果，侧栏会继续没有供应链菜单或串了商城菜单。
+现在会读 `CACHE_KEY.USER`。发布统一菜单契约后，若缓存里仍是旧的应用投影结果，侧栏会继续显示旧菜单集合。
 
 要求：
 
-- 本站点每次 `setUserInfoAction` 都必须用 `applicationCode=supply-chain-admin` 拉最新结果。
-- 若继续写 `wsCache`，缓存键要能区分应用（例如带 `supply-chain-admin` 后缀），或登录后先清 `USER` / `ROLE_ROUTERS` 再请求。
-- 不要在请求失败时静默沿用一份 `mall-admin` 菜单。
+- 本站点每次 `setUserInfoAction` 都应拉取最新结果，不依赖 `applicationCode`。
+- 若继续写 `wsCache`，发布后先清 `USER` / `ROLE_ROUTERS` 再请求；无需再按应用拆分缓存键。
+- 不要在请求失败时静默沿用旧的应用投影菜单。
 
 ### 5.3 删除静态三页
 
@@ -143,7 +142,7 @@ params: { applicationCode: 'supply-chain-admin' }
 
 删完后，三页只能来自 `permissionStore.generateRoutes()` → `router.addRoute`。无权限用户粘贴 `/supplier/manage` 应落到现有 404（或项目统一无权限页），不能再进页面。
 
-发布顺序：先保证 5.1/5.2 在测试环境返回菜单，再删静态路由上线。禁止「先删静态、权限接口还没带 applicationCode」。
+发布顺序：先保证 5.1/5.2 在测试环境返回统一菜单，再删静态路由上线。禁止在权限接口尚未返回动态菜单前先删静态路由。
 
 ### 5.4 按钮加 `v-hasPermi`
 
@@ -212,8 +211,8 @@ VITE_API_URL=/admin-api
 2. 同一账号请求里 `permissions` 含 `supply-chain:admin`（超管可能是 `*:*:*`）。
 3. `scrbacsupq`：只有供应商管理；没有分销商/项目；新增、批量暂停、黑名单隐藏；能进供应商列表/详情查看。
 4. `scrbacnone`：侧栏无这三页；地址栏进 `/supplier/manage` 为 404 或统一无权限页，不是供应商页面。
-5. 浏览器 Network：`get-permission-info` 的 query 含 `applicationCode=supply-chain-admin`。
-6. 故意改成 `applicationCode=foo`：业务码 `1002001007`，页面不应当成「无菜单的成功登录」而不提示。
+5. 浏览器 Network：`get-permission-info` 可不带 `applicationCode`；旧前端继续携带也应成功。
+6. 分别省略参数、传 `applicationCode=supply-chain-admin` 和 `applicationCode=foo`，三次响应中的 `permissions` 与 `menus` 一致。
 7. 登出再登录、强制刷新后，菜单仍按角色，不因 `wsCache` 串成商城菜单。
 8. `USE_SUPPLIER_MOCK` / `USE_DISTRIBUTOR_MOCK` 仍为 `true`。
 

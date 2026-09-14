@@ -13,8 +13,6 @@ import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-import static com.aifuli.framework.test.core.util.AssertUtils.assertServiceException;
-import static com.aifuli.module.system.enums.ErrorCodeConstants.MENU_APPLICATION_CODE_INVALID;
 import static com.aifuli.module.system.enums.permission.MenuApplicationCodeConstants.MALL_ADMIN;
 import static com.aifuli.module.system.enums.permission.MenuApplicationCodeConstants.SUPPLY_CHAIN_ADMIN;
 import static com.aifuli.module.system.enums.permission.MenuApplicationCodeConstants.SUPPLY_CHAIN_ADMIN_PERMISSION;
@@ -56,7 +54,7 @@ class AdminMenuProjectionServiceTest {
     @Test
     void shouldProjectFinePermissionAndCompleteAncestors() {
         AdminMenuProjectionService.Projection result = projectionService.project(
-                Set.of(3L, 4L), SUPPLY_CHAIN_ADMIN, false);
+                Set.of(3L, 4L), false);
 
         assertEquals(Set.of("supply-chain:supplier:query", "supply-chain:supplier:create"),
                 result.permissions());
@@ -68,7 +66,7 @@ class AdminMenuProjectionServiceTest {
     @Test
     void shouldExpandLegacyAdminToWholeSupplyChainApplication() {
         AdminMenuProjectionService.Projection result = projectionService.project(
-                Set.of(6L), SUPPLY_CHAIN_ADMIN, false);
+                Set.of(6L), false);
 
         assertTrue(result.permissions().containsAll(Set.of(
                 SUPPLY_CHAIN_ADMIN_PERMISSION,
@@ -80,22 +78,8 @@ class AdminMenuProjectionServiceTest {
     }
 
     @Test
-    void shouldExpandSuperAdminToRequestedApplicationOnly() {
-        AdminMenuProjectionService.Projection result = projectionService.project(
-                Set.of(), SUPPLY_CHAIN_ADMIN, true);
-
-        assertTrue(result.permissions().containsAll(Set.of(
-                SUPPLY_CHAIN_ADMIN_PERMISSION,
-                "supply-chain:supplier:query",
-                "supply-chain:supplier:create",
-                "supply-chain:buyer:query")));
-        assertEquals(Set.of(2L, 3L, 5L),
-                result.routeMenus().stream().map(MenuDO::getId).collect(Collectors.toSet()));
-    }
-
-    @Test
-    void shouldExpandSuperAdminToAllApplicationsWhenApplicationCodeOmitted() {
-        AdminMenuProjectionService.Projection result = projectionService.project(Set.of(), null, true);
+    void shouldExpandSuperAdminToAllApplications() {
+        AdminMenuProjectionService.Projection result = projectionService.project(Set.of(), true);
 
         assertTrue(result.permissions().containsAll(Set.of(
                 SUPPLY_CHAIN_ADMIN_PERMISSION,
@@ -107,44 +91,15 @@ class AdminMenuProjectionServiceTest {
     }
 
     @Test
-    void shouldProjectGrantedMenusAcrossApplicationsWhenApplicationCodeOmitted() {
+    void shouldProjectGrantedMenusAcrossApplications() {
         AdminMenuProjectionService.Projection result = projectionService.project(
-                Set.of(1L, 3L, 4L), null, false);
+                Set.of(1L, 3L, 4L), false);
 
         assertEquals(Set.of("supply-chain:supplier:query", "supply-chain:supplier:create"),
                 result.permissions());
         assertEquals(Set.of(1L, 2L, 3L),
                 result.routeMenus().stream().map(MenuDO::getId).collect(Collectors.toSet()));
         assertFalse(result.permissions().contains(SUPPLY_CHAIN_ADMIN_PERMISSION));
-    }
-
-    @Test
-    void shouldExpandLegacyAdminOnlyWithinSupplyChainWhenApplicationCodeOmitted() {
-        AdminMenuProjectionService.Projection result = projectionService.project(Set.of(6L), null, false);
-
-        assertTrue(result.permissions().containsAll(Set.of(
-                SUPPLY_CHAIN_ADMIN_PERMISSION,
-                "supply-chain:supplier:query",
-                "supply-chain:supplier:create",
-                "supply-chain:buyer:query")));
-        assertEquals(Set.of(2L, 3L, 5L),
-                result.routeMenus().stream().map(MenuDO::getId).collect(Collectors.toSet()));
-    }
-
-    @Test
-    void shouldNotReturnSupplyChainMenusForMallApplication() {
-        AdminMenuProjectionService.Projection result = projectionService.project(
-                Set.of(1L, 3L, 4L), MALL_ADMIN, false);
-
-        assertEquals(Set.of(1L),
-                result.routeMenus().stream().map(MenuDO::getId).collect(Collectors.toSet()));
-        assertTrue(result.permissions().isEmpty());
-    }
-
-    @Test
-    void shouldRejectUnknownApplication() {
-        assertServiceException(() -> projectionService.project(Set.of(), "unknown", false),
-                MENU_APPLICATION_CODE_INVALID);
     }
 
     private static MenuDO menu(Long id, Long parentId, String applicationCode,

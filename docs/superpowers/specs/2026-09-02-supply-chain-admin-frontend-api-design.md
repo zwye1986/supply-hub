@@ -534,7 +534,7 @@ O2O / INSTORE 仍 `buyerSettlementAmount = channelPayAmount`，不读三级价�
 独立前端任务/团队按以下契约完成权限菜单接入；本后端任务不修改或构建前端工程。逐步说明、按钮对照表、联调账号与验收清单见
 `docs/superpowers/specs/2026-09-06-supplychainhubweb-dynamic-menu-handoff-design.md`。
 
-1. 删除 `remaining.ts` 中供应商、分销商、项目的无条件静态路由；登录后以 `applicationCode=supply-chain-admin` 请求 `system-server` 权限信息并动态注册获准页面。
+1. 删除 `remaining.ts` 中供应商、分销商、项目的无条件静态路由；登录后请求 `system-server` 权限信息并动态注册获准页面。后端兼容接收但忽略 `applicationCode`，前端不得依赖该参数过滤菜单。
 2. 页面按钮接入 `v-hasPermi` 或等价指令，允许集合同时包含 `supply-chain:admin` 与对应细权限；刷新、直接粘贴 URL 均不得恢复未授权路由。
 3. 保持当前业务 mock 开关，不把“菜单动态化”与“REST 数据联调”捆成一次不可回滚发布。菜单模型、站点隔离与联调门禁见 `docs/superpowers/specs/2026-09-03-supply-chain-admin-rbac-design.md`。
 

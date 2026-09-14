@@ -173,7 +173,7 @@ class SupplyChainModuleArchitectureTest {
             .should(havePreAuthorizeIfHttpMapping());
 
     /**
-     * {@code system_menu.application_code} 只影响权限信息投影，不得成为供应链业务接口的授权条件。
+     * {@code system_menu.application_code} 是菜单维护兼容字段，不得影响供应链业务接口授权。
      * 设计见 {@code docs/superpowers/specs/2026-09-03-supply-chain-admin-rbac-design.md#81-应用隔离模型}。
      */
     static final ArchRule admin_api_does_not_depend_on_menu_application_code = noClasses()

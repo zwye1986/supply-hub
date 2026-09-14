@@ -412,13 +412,23 @@ token = res.get("data", {}).get("accessToken")
 assert token, f"未能取得有效 accessToken: {res}"
 print(f"[OK] 登录成功，Token: {token[:8]}...")
 
-print("\n=== [2/5] 验证供应链 37 个细粒度权限全集与动态菜单树 ===")
+print("\n=== [2/5] 验证统一权限菜单、兼容参数忽略与供应链动态菜单树 ===")
 status, perm_res = http_json(
-    f"{SYSTEM_URL}/admin-api/system/auth/get-permission-info?applicationCode=supply-chain-admin",
+    f"{SYSTEM_URL}/admin-api/system/auth/get-permission-info",
     headers={"Authorization": f"Bearer {token}", "tenant-id": "1"}
 )
 assert status == 200, f"获取权限信息 HTTP 异常: {status}"
 assert perm_res.get("code") == 0, f"获取权限信息业务错误: {perm_res}"
+
+compat_status, compat_res = http_json(
+    f"{SYSTEM_URL}/admin-api/system/auth/get-permission-info?applicationCode=ignored-by-server",
+    headers={"Authorization": f"Bearer {token}", "tenant-id": "1"}
+)
+assert compat_status == 200, f"携带兼容参数获取权限信息 HTTP 异常: {compat_status}"
+assert compat_res.get("code") == 0, f"携带兼容参数获取权限信息业务错误: {compat_res}"
+assert compat_res.get("data") == perm_res.get("data"), \
+    "applicationCode 未被忽略：携带参数与省略参数的权限菜单响应不一致"
+print("[OK] applicationCode 兼容参数已被忽略，两次权限菜单响应一致")
 
 permissions = set(perm_res.get("data", {}).get("permissions", []))
 EXPECTED_37_PERMISSIONS = {

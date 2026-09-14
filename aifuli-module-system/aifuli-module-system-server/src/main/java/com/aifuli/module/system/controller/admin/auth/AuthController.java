@@ -93,9 +93,10 @@ public class AuthController {
     @Operation(summary = "获取登录用户的权限信息")
     @DataPermission(enable = false) // 忽略数据权限，避免因为过滤，导致无法查询用户。类似：https://t.zsxq.com/LHnrp
     public CommonResult<AuthPermissionInfoRespVO> getPermissionInfo(
-            @Parameter(description = "管理端应用标识；省略时聚合全部应用菜单")
+            @Parameter(description = "已废弃的管理端应用标识；保留参数仅用于兼容，后端忽略其值")
             @RequestParam(value = "applicationCode", required = false) String applicationCode) {
-        log.info("[getPermissionInfo][用户({}) 获取管理端应用({})权限菜单]", getLoginUserId(), applicationCode);
+        log.info("[getPermissionInfo][用户({}) 获取全局权限菜单，兼容参数 applicationCode({}) 已忽略]",
+                getLoginUserId(), applicationCode);
         // 1.1 获得用户信息
         AdminUserDO user = userService.getUser(getLoginUserId());
         if (user == null) {
@@ -106,7 +107,7 @@ public class AuthController {
         Set<Long> roleIds = permissionService.getUserRoleIdListByUserId(getLoginUserId());
         if (CollUtil.isEmpty(roleIds)) {
             AdminMenuProjectionService.Projection projection = adminMenuProjectionService.project(
-                    Collections.emptySet(), applicationCode, false);
+                    Collections.emptySet(), false);
             return success(AuthConvert.INSTANCE.convert(user, Collections.emptyList(),
                     projection.permissions(), projection.routeMenus()));
         }
@@ -117,7 +118,7 @@ public class AuthController {
         Set<Long> menuIds = permissionService.getRoleMenuListByRoleId(convertSet(roles, RoleDO::getId));
         boolean superAdmin = roleService.hasAnySuperAdmin(convertSet(roles, RoleDO::getId));
         AdminMenuProjectionService.Projection projection = adminMenuProjectionService.project(
-                menuIds, applicationCode, superAdmin);
+                menuIds, superAdmin);
 
         // 2. 拼接结果返回
         return success(AuthConvert.INSTANCE.convert(user, roles,

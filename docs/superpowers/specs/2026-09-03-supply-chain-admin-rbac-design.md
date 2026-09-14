@@ -8,7 +8,7 @@
 
 管理端 REST 字段、状态机、路径仍以
 `docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md`
-为准。本文替换该文 §3.1 的单一 `supply-chain:admin` 方案，并补充 `system_menu` 应用隔离及 `supplychainhubweb` 动态菜单设计：已登记页面资源改为细权限，未拆接口仍用 `supply-chain:admin`。
+为准。本文替换该文 §3.1 的单一 `supply-chain:admin` 方案，并补充 `system_menu` 历史应用字段及 `supplychainhubweb` 统一动态菜单设计：已登记页面资源改为细权限，未拆接口仍用 `supply-chain:admin`。
 
 与 `docs/superpowers/specs/2026-08-07-supply-chain-phase1-detailed-design.md#37-事务恢复与权限规则`
 中的 Facade `scope`（如 `CATALOG_READ`、`FULFILLMENT_EXCEPTION_RESOLVE`）不是同一套东西：那是采购商/渠道/系统身份的机器能力；本文是 `system-server` 管理端用户的 yudao 权限标识。禁止把 Facade scope 写成 `supply-chain:…` 或反过来。
@@ -21,13 +21,13 @@
 | --- | --- |
 | r1 | 只设计运营后台的人。不做外部门户登录，不出四套身份的总图切片。 |
 | r2 | 账号复用 `system-server` 用户 / 角色 / 菜单 / token。中台库不建运营用户表、不发登录态。 |
-| r3 | 独立站点 `supplychainhubweb`；与商城后台同一账号、同一 token、同一套角色权限。菜单按应用隔离：商城后台为 `mall-admin`，供应链中台为 `supply-chain-admin`。应用标识只决定菜单投影，不作为后端授权凭证。 |
+| r3 | 当前只有独立站点 `supplychainhubweb` 消费动态菜单；与商城后台同一账号、同一 token、同一套角色权限。`applicationCode` 仅作为兼容参数保留，权限信息接口忽略其值并返回全局授权菜单；应用标识不作为后端授权凭证。 |
 | r4 | **本轮落地 B**：按资源拆功能权限，数据全量。**最终目标 C**：再按供应商/分销商/项目 code 做数据范围。范围不编进权限字符串，不用 yudao 部门数据权限，不在 `sc_*` 上套框架 `@DataPermission`。 |
 | r5 | 权限目录覆盖供应商、分销商、项目、商品中心与订单只读查询。类目树 / 标品 SKU 下拉只读。账户、路由、连接器、`/supplier-config`、`/master-data` 等未拆接口仍只认 `supply-chain:admin`。订单权限增量见 `docs/superpowers/specs/2026-09-12-supply-chain-order-admin-readonly-design.md`。 |
 | r6 | 动作：`query` / `create` / `update` / `delete` / `update-status`。`delete` 只表示逻辑移除子资源（合作商品 / 分销商品 / 项目商品），禁止物理删主体。`update-status` 只对**主体**状态机。 |
 | r7 | 子资源跟主体走：供货配置、合作商品、分销商品、项目商品、开票不单开权限资源。合作商品上架/下架走 `supplier:update`，不是 `update-status`。开票契约见 `docs/superpowers/specs/2026-09-07-供应链管理端开票信息设计.md`。 |
 | r8 | `supply-chain:admin` 仍是所有供应链细权限的超集（`hasAnyPermissions(admin, 细权限)`），避免现网只勾了旧权限的账号突然 403。yudao 超管角色走框架放行。 |
-| r9 | 本任务不修改 `supplychainhubweb` 或其它前端工程，只交付其所需的 `system_menu` 应用隔离、权限信息接口和按钮权限数据。删除 `remaining.ts` 静态挂载、动态注册路由及接入 `v-hasPermi`（或等价指令）由独立前端任务/团队完成。 |
+| r9 | 本任务不修改 `supplychainhubweb` 或其它前端工程，只交付统一的权限信息接口和按钮权限数据。删除 `remaining.ts` 静态挂载、动态注册路由及接入 `v-hasPermi`（或等价指令）由独立前端任务/团队完成。 |
 | r10 | `system_menu` 增加 `application_code`，既有菜单迁移为 `mall-admin`，供应链目录/页面/按钮写 `supply-chain-admin`。菜单结构与权限登记到 **system-server 的库**，使用可重复 SQL；禁止中台 Liquibase 写 `system_menu`。本轮不预置「商务/运营」等业务角色。 |
 | r11 | 供应商/分销商档案 GET 在通过对应 `query` 权限后按原值回显手机号、开户账号和证件 fileKey，不另设「看明文」权限；本轮仍不增加导出能力。库内加密、履约资产访问控制与所有日志脱敏规则不变。 |
 | r12 | 中台业务表没有 `tenant_id`。yudao 租户只约束谁能登录，不隔离供应商/分销商/项目数据。 |
@@ -42,7 +42,7 @@
 
 请求处理分两层：
 
-1. **菜单投影**（本轮实现后端）：权限信息接口按 `applicationCode=supply-chain-admin` 返回属于供应链站点且当前角色拥有的菜单和按钮权限。前端消费该数据的改造不属于本任务；菜单投影也不替代接口鉴权。
+1. **菜单投影**（本轮实现后端）：权限信息接口忽略兼容参数 `applicationCode`，返回当前角色在全部应用下拥有的菜单和按钮权限。前端消费该数据的改造不属于本任务；菜单投影也不替代接口鉴权。
 2. **功能权限**（本轮实现）：`@ss.hasAnyPermissions(...)`，由 `system-server` 判定。yudao 为严格模式：权限标识必须在 `system_menu` 有对应菜单/按钮，否则非超管为无权限。
 
 数据范围属于后续 C：本轮功能权限通过后仍可访问全部供应商、分销商和项目，不创建空的 AllowAll 协作点；C 必须另行设计分页前过滤与命令单资源校验。
@@ -171,14 +171,18 @@ C 的详细设计至少必须拆成两类能力：
 | `mall-admin` | 现有商城管理端菜单；历史数据迁移后的默认值 |
 | `supply-chain-admin` | 独立站点 `supplychainhubweb` 的菜单 |
 
-`GET /system/auth/get-permission-info` 增加可选查询参数 `applicationCode`：省略时合并返回用户在全部管理端应用下已授权的菜单与权限；传值时只投影指定应用。当前合法值为 `mall-admin`、`supply-chain-admin`，未知非空值返回参数错误。需要应用隔离的前端应显式传自己的应用标识；省略参数是跨应用聚合查询，不参与 `@PreAuthorize`，也不能获得角色未授予的接口权限。
+`GET /system/auth/get-permission-info` 保留可选查询参数 `applicationCode` 仅用于兼容已经上线的前端请求，
+后端必须忽略其值并始终合并返回用户在全部管理端应用下已授权的菜单与权限。传入
+`mall-admin`、`supply-chain-admin`、未知值或省略参数的响应语义完全一致，不再因未知值返回
+`1002001007`。当前只有 `supplychainhubweb` 消费动态菜单，因此权限信息接口不再承担多前端菜单投影职责；
+该参数不参与 `@PreAuthorize`，也不能获得角色未授予的接口权限。
 
 权限信息必须拆开计算“已授予权限”与“用于路由的菜单”，不能继续让一个会被修改的 `menuList` 同时承担两者：
 
 1. 从角色菜单关系得到完整菜单集合，先计算真实 `grantedPermissions`。
-2. 传入 `applicationCode` 时按 `application_code` 过滤；省略时保留全部应用。普通细权限用户自动补齐获准页面在同一应用内的祖先目录，但补祖先只用于组成路由树，不把祖先的 permission 加进 `grantedPermissions`。
-3. 供应链根目录的 permission 固定为 `supply-chain:admin`。若真实 `grantedPermissions` 含该值，则在查询范围包含 `supply-chain-admin` 时展开其全部启用 DIR/PAGE 和按钮权限；用户是 yudao 超管时，展开当前查询范围内全部应用的启用菜单与权限。
-4. 显式应用查询的权限数组只包含该应用已授予的权限及上一步的超集展开；省略参数时合并全部应用的对应结果。后端 `PermissionCommonApi` 仍按完整角色权限独立判定。
+2. 不读取请求中的 `applicationCode`，始终使用全部启用菜单作为投影范围。普通细权限用户自动补齐获准页面在原有同一应用内的祖先目录，但补祖先只用于组成路由树，不把祖先的 permission 加进 `grantedPermissions`。这里保留同应用祖先约束只是兼容既有菜单树数据，不再由请求参数选择应用。
+3. 供应链根目录的 permission 固定为 `supply-chain:admin`。若真实 `grantedPermissions` 含该值，则展开 `supply-chain-admin` 下全部启用 DIR/PAGE 和按钮权限；用户是 yudao 超管时，展开全部应用的启用菜单与权限。
+4. 权限数组合并全部应用的已授予权限及上一步的超集展开。后端 `PermissionCommonApi` 仍按完整角色权限独立判定。
 
 菜单管理、角色分配用的管理接口仍可查看全部应用菜单，并增加可选 `applicationCode` 筛选；不得让登录态的应用投影过滤掉角色管理员需要配置的供应链菜单。`MenuDO`、保存/响应 VO、Mapper 查询和缓存键/失效规则同步覆盖该字段。
 
@@ -204,7 +208,7 @@ C 的详细设计至少必须拆成两类能力：
 实现时落地两个 system 库脚本，禁止写入中台 changelog：
 
 1. `script/deploy/aifuli-test/sql/system-menu-application-schema.sql`：只做可向后兼容的 schema 扩展，为 `system_menu` 增加非空且默认 `mall-admin` 的 `application_code`，可重复执行；旧版 system 代码必须能在该列存在时继续工作。测试环境 MySQL 不支持 `ADD COLUMN IF NOT EXISTS`，脚本必须通过 `information_schema.COLUMNS` 判定后使用 `PREPARE` 执行 DDL，已存在时执行无副作用语句。
-2. `script/deploy/aifuli-test/sql/system-supply-chain-admin-menus.sql`：在新版 system 已支持应用过滤后执行，可重复创建供应链菜单树并保留旧 `admin` 节点及角色关联；不得按 permission 全局更新其它应用的同名记录。脚本中的用户变量、派生表字面量与 `system_menu` 字段可能使用不同的 `utf8mb4` 排序规则；所有 `application_code` 与 `@sc_app` 的判重/定位，以及按钮插入和同步中的 permission 比较，都必须使用 `BINARY` 精确比较，不能依赖连接默认排序规则，否则测试库会报 `Illegal mix of collations`。
+2. `script/deploy/aifuli-test/sql/system-supply-chain-admin-menus.sql`：在新版 system 已支持菜单字段后执行，可重复创建供应链菜单树并保留旧 `admin` 节点及角色关联；不得按 permission 全局更新其它应用的同名记录。脚本中的用户变量、派生表字面量与 `system_menu` 字段可能使用不同的 `utf8mb4` 排序规则；所有 `application_code` 与 `@sc_app` 的判重/定位，以及按钮插入和同步中的 permission 比较，都必须使用 `BINARY` 精确比较，不能依赖连接默认排序规则，否则测试库会报 `Illegal mix of collations`。
 
 两个脚本的执行目标都是 `aifuli-supplyhub-test` 命名空间对应的测试环境 **system 数据源**（当前库名 `aifuli-mall-test_hub`），不是旧 `aifuli-mall-test`，也不是 `supply-chain-test`。本任务发布顺序固定为：先执行 schema 扩展脚本 → 发布新版 `system-server` → 执行供应链菜单与角色迁移脚本 → 通过 system 服务或明确运维步骤清理 `permission_menu_ids`、`menu_role_ids` 等相关缓存 → 等待或重启供应链进程使一分钟权限判断缓存失效 → 发布 `supply-chain-server`。独立前端任务只能在这些后端步骤验收通过后发布；禁止在 system 尚未过滤应用时提前插入供应链 PAGE 菜单，也禁止前端先删静态路由再提供动态菜单。
 
@@ -220,19 +224,19 @@ C 的详细设计至少必须拆成两类能力：
 - `SupplierAdminController` / `BuyerAdminController` / `ProjectAdminController` 的方法注解含对应细权限字符串，并含 `supply-chain:admin`。
 - 未拆 AdminController 的权限字符串仅为 `supply-chain:admin`（可与超管放行并存）。
 - 管理端包不得依赖 yudao 数据权限注解去标 `sc_*`。
-- `system_menu.application_code` 只影响权限信息的菜单投影，不得成为供应链业务接口的授权条件。
+- `system_menu.application_code` 是菜单维护兼容字段，不得影响权限信息接口结果，也不得成为供应链业务接口的授权条件。
 
 `*Test`：
 
 - HTTP 方法 → 权限动作对照（§5）与「合作商品 PATCH 走 update」断言。
 - SKU 查询组合权限：无资源 code、单资源 code、多资源 code、`admin` 超集。
-- 应用菜单过滤：省略应用合并返回全部应用的已授权菜单；供应链应用不返回商城页面；商城应用不返回供应链页面；未知非空应用返回参数错误。
+- 统一菜单投影：省略 `applicationCode`、传历史合法值或未知值都合并返回全部应用的已授权菜单。
 - 旧 `supply-chain:admin` 角色无需复制子树关系即可获得供应链目录、页面和按钮；普通细权限角色能补齐目录但不会因此获得 `admin`；重复执行 SQL 不产生重复菜单或角色关系。
 
 `*ContractTest`：使用已启用 Spring Method Security 的测试上下文和 stub `PermissionCommonApi`，不得只反射注解文本：
 
 - 仅 `supply-chain:admin` 与仅对应细权限都能通过；无权限、错资源权限返回 `403`。
-- `get-permission-info` 的 `applicationCode` 请求/响应契约、省略参数的跨应用聚合语义和菜单组件字段稳定。
+- `get-permission-info` 保留可选 `applicationCode` 参数但忽略其值；省略、合法值和未知值均返回相同的跨应用聚合结果，菜单组件字段稳定。
 - 权限信息响应中的权限数组同时支持未来前端按 `admin` 与细权限 OR 语义消费。
 
 不要求本切片拉起真实 `system-server` 与供应链服务组成全自动环境，但真实联调必须写入 `docs/集成测试.md`：
@@ -241,7 +245,7 @@ C 的详细设计至少必须拆成两类能力：
 - 仅 `supplier:query`：供应商 GET 成功，供应商 PATCH 状态 `403`，分销商 GET `403`。
 - 未登录：业务 `401`。
 - 已登录无任何供应链权限：`403`。
-- 同一用户请求 `mall-admin` 时后端不返回供应链路由；请求 `supply-chain-admin` 时后端只返回已授权页面。
+- 同一用户省略 `applicationCode`，或传 `mall-admin`、`supply-chain-admin`、未知值时，返回完全相同的已授权菜单和权限。
 - 角色权限变更后按发布规则处理缓存，并验证收权与授权都在约定时间内生效。
 
 动态路由、直接粘贴 URL 和按钮显示属于独立前端任务的验收范围，不纳入本任务门禁。
@@ -259,9 +263,9 @@ C 的详细设计至少必须拆成两类能力：
 
 ## 11. 实现顺序（本切片，规格批准后）
 
-1. system 菜单应用隔离设计落地：`application_code` 数据模型、权限信息接口、管理端菜单 VO/查询、缓存和自动化测试。
+1. system 菜单历史应用字段落地：`application_code` 数据模型、管理端菜单 VO/查询和缓存继续保留；权限信息接口改为忽略兼容参数并统一聚合。
 2. system 库 schema 扩展脚本先加兼容列；发布新版 `system-server` 后再执行供应链菜单脚本。
 3. 供应链权限常量、三个 Controller、类目/SKU 的方法级 `@PreAuthorize` 和 SKU 组合权限组件。
 4. ArchitectureTest、方法安全 ContractTest、菜单隔离/SQL 幂等测试。
 5. 按 §8.3 的后端顺序部署，完成真实菜单投影、角色、缓存、旧 `admin` 与 `403` 联调，并更新 `docs/集成测试.md`。
-6. 将 `applicationCode=supply-chain-admin`、动态路由和按钮权限契约移交独立前端任务/团队；前端发布不属于本任务。
+6. 将统一动态路由和按钮权限契约移交独立前端任务/团队；前端可继续传 `applicationCode=supply-chain-admin`，但不得依赖其过滤效果；前端发布不属于本任务。

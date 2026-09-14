@@ -15,7 +15,7 @@
 | d3 | 基础设施探活与兜底 | 探测 MySQL（默认 `127.0.0.1:3306`）与 Redis（默认 `127.0.0.1:6379`）；若本地 Redis 未运行，自动在临时端口（如 `16379`）启动轻量级临时 Redis 实例，并在测试结束后清理。支持环境变量自由覆盖连接参数。 |
 | d4 | SQL 执行时序 | system 库按序执行 `sql/mysql/ruoyi-vue-pro.sql`（基线表与用户）、`script/deploy/aifuli-test/sql/system-menu-application-schema.sql`（增加 `application_code` 列）、`script/deploy/aifuli-test/sql/system-supply-chain-admin-menus.sql`（37 个权限与动态菜单树）；supply-chain 库保持空库，由进程启动时 Liquibase 自动执行全量 29 个变更集。 |
 | d5 | 进程编排与就绪探测 | 两个应用均未暴露 Actuator 健康端点（`/actuator/health` 返回 404/401），因此采用 TCP 端口轮询探测 + 日志关键标记识别作为服务就绪标准，超时时间可控（默认 60s）。 |
-| d6 | 严密契约断言 | 登录后断言返回有效 Token；断言权限接口返回 `applicationCode=supply-chain-admin` 的 37 个细粒度权限全集与根菜单结构；使用 Token 访问 6 个供应链接口断言业务码 0；匿名访问断言 401；请求 OpenAPI 关键 Schema 精确核对 `CategoryDetail`（9 字段）与 `SkuListItem`（10 字段）的字段集合与中文说明。 |
+| d6 | 严密契约断言 | 登录后断言返回有效 Token；分别省略 `applicationCode` 和传入未知值请求权限接口，断言两次响应完全一致且包含 37 个供应链细粒度权限与根菜单结构；使用 Token 访问 6 个供应链接口断言业务码 0；匿名访问断言 401；请求 OpenAPI 关键 Schema 精确核对 `CategoryDetail`（9 字段）与 `SkuListItem`（10 字段）的字段集合与中文说明。 |
 | d7 | 无条件资源清理 | 采用 bash `trap ... EXIT INT TERM` 机制，无论测试成功、断言失败、进程异常还是人为中断，均保证立即杀死已启动的服务进程、停止临时 Redis、删除临时 MySQL 库。 |
 
 ## 3. 架构拓扑与交互链路
@@ -110,8 +110,8 @@
    - 断言：HTTP 200，`code == 0`，`data.accessToken` 非空。
 
 2. **权限与菜单树验证**：
-   - `GET /admin-api/system/auth/get-permission-info?applicationCode=supply-chain-admin`，带 Bearer Token。
-   - 断言：`code == 0`。
+   - 先请求 `GET /admin-api/system/auth/get-permission-info`，再请求 `GET /admin-api/system/auth/get-permission-info?applicationCode=ignored-by-server`，均带 Bearer Token。
+   - 断言：两次 `code == 0`，且 `data` 完全一致，证明兼容参数不会参与菜单过滤或合法值校验。
    - 断言 `data.permissions` 包含全部 37 个细粒度权限：
      - `supply-chain:admin`
      - 供应商：`query`, `create`, `update`, `delete`, `update-status` (5)
