@@ -306,4 +306,15 @@ databaseChangeLog:
             encoding: UTF-8
             splitStatements: true
             stripComments: false
+  - changeSet:
+      id: 030-product-management-grid-enhancement
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 030-product-management-grid-enhancement.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+
 

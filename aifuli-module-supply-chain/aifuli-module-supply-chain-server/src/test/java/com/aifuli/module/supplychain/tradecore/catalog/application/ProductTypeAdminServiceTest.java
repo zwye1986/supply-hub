@@ -96,13 +96,8 @@ class ProductTypeAdminServiceTest {
                 .updatedAt(LocalDateTime.now())
                 .build();
         when(typeMapper.selectByCode("PT_CARD")).thenReturn(type);
-        when(spuMapper.selectList(any())).thenReturn(List.of(
-                PlatformSpuDO.builder().id(101L).productType("PT_CARD").build(),
-                PlatformSpuDO.builder().id(102L).productType("PT_CARD").build()));
-        when(skuMapper.selectList(any())).thenReturn(List.of(
-                PlatformSkuDO.builder().id(201L).spuId(101L).build(),
-                PlatformSkuDO.builder().id(202L).spuId(101L).build(),
-                PlatformSkuDO.builder().id(203L).spuId(102L).build()));
+        when(spuMapper.countProductAndSkuByTypeCodes(any())).thenReturn(List.of(
+                new com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProductTypeCountRow("PT_CARD", 2L, 3L)));
 
         ProductTypeAdminService.ProductTypeView view = service.detail("PT_CARD");
         assertThat(view.typeCode()).isEqualTo("PT_CARD");

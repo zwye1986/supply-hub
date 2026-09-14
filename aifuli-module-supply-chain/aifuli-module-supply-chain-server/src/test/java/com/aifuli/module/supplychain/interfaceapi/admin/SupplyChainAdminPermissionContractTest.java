@@ -126,11 +126,16 @@ class SupplyChainAdminPermissionContractTest {
     @Test
     void productCenterMethodsUseFineGrainedPermissionsWithAdminFallback() {
         assertMethodPermissions(ProductAdminController.class, Map.ofEntries(
-                Map.entry("page", PRODUCT_QUERY_EXPRESSION), Map.entry("detail", PRODUCT_QUERY_EXPRESSION),
-                Map.entry("create", PRODUCT_CREATE_EXPRESSION), Map.entry("update", PRODUCT_UPDATE_EXPRESSION),
+                Map.entry("page", PRODUCT_QUERY_EXPRESSION),
+                Map.entry("managementPage", PRODUCT_QUERY_EXPRESSION),
+                Map.entry("detail", PRODUCT_QUERY_EXPRESSION),
+                Map.entry("create", PRODUCT_CREATE_EXPRESSION),
+                Map.entry("update", PRODUCT_UPDATE_EXPRESSION),
                 Map.entry("changeSpuStatus", PRODUCT_UPDATE_STATUS_EXPRESSION),
+                Map.entry("batchChangeStatus", PRODUCT_UPDATE_STATUS_EXPRESSION),
                 Map.entry("changeSkuStatus", PRODUCT_UPDATE_STATUS_EXPRESSION),
-                Map.entry("deleteSpu", PRODUCT_DELETE_EXPRESSION), Map.entry("deleteSku", PRODUCT_DELETE_EXPRESSION)));
+                Map.entry("deleteSpu", PRODUCT_DELETE_EXPRESSION),
+                Map.entry("deleteSku", PRODUCT_DELETE_EXPRESSION)));
         assertMethodPermissions(BrandAdminController.class, Map.ofEntries(
                 Map.entry("page", BRAND_QUERY_EXPRESSION), Map.entry("detail", BRAND_QUERY_EXPRESSION),
                 Map.entry("create", BRAND_CREATE_EXPRESSION), Map.entry("update", BRAND_UPDATE_EXPRESSION),

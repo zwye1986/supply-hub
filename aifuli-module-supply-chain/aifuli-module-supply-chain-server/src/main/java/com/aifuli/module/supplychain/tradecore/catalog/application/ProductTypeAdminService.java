@@ -88,46 +88,25 @@ public class ProductTypeAdminService {
 
     /**
      * 批量统计各商品类型的未归档 SPU 与关联未归档 SKU 数量。
-     * 整页一次加载 SPU 并批量拉取关联 SKU，在内存分组聚合输出，避免 N+1 查询。
+     * 调用数据库 GROUP BY 聚合查询，避免在内存中加载整页类型关联的全部 SPU/SKU 对象。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#28-商品管理列表端模型增强与类型优化030-changeset}。
      */
     private Map<String, TypeCounts> typeCounts(List<String> typeCodes) {
         if (typeCodes == null || typeCodes.isEmpty()) {
             return Map.of();
         }
-        List<PlatformSpuDO> spus = spuMapper.selectList(new LambdaQueryWrapper<PlatformSpuDO>()
-                .select(PlatformSpuDO::getId, PlatformSpuDO::getProductType)
-                .in(PlatformSpuDO::getProductType, typeCodes)
-                .ne(PlatformSpuDO::getStatus, CatalogEntityStatus.ARCHIVED.getCode()));
-        if (spus.isEmpty()) {
-            return typeCodes.stream().collect(Collectors.toMap(c -> c, c -> TypeCounts.ZERO));
-        }
-
-        Map<String, Long> spuCountMap = spus.stream()
-                .filter(spu -> spu.getProductType() != null)
-                .collect(Collectors.groupingBy(PlatformSpuDO::getProductType, Collectors.counting()));
-
-        Map<Long, String> spuToTypeMap = spus.stream()
-                .filter(spu -> spu.getId() != null && spu.getProductType() != null)
-                .collect(Collectors.toMap(PlatformSpuDO::getId, PlatformSpuDO::getProductType, (a, b) -> a));
-
-        List<Long> spuIds = spus.stream().map(PlatformSpuDO::getId).filter(Objects::nonNull).toList();
-        Map<String, Long> skuCountMap = Map.of();
-        if (!spuIds.isEmpty()) {
-            List<PlatformSkuDO> skus = skuMapper.selectList(new LambdaQueryWrapper<PlatformSkuDO>()
-                    .select(PlatformSkuDO::getId, PlatformSkuDO::getSpuId)
-                    .in(PlatformSkuDO::getSpuId, spuIds)
-                    .ne(PlatformSkuDO::getStatus, CatalogEntityStatus.ARCHIVED.getCode()));
-            skuCountMap = skus.stream()
-                    .map(sku -> spuToTypeMap.get(sku.getSpuId()))
-                    .filter(Objects::nonNull)
-                    .collect(Collectors.groupingBy(type -> type, Collectors.counting()));
-        }
-
         Map<String, TypeCounts> result = new HashMap<>();
         for (String typeCode : typeCodes) {
-            long spuCount = spuCountMap.getOrDefault(typeCode, 0L);
-            long skuCount = skuCountMap.getOrDefault(typeCode, 0L);
-            result.put(typeCode, new TypeCounts(spuCount, skuCount));
+            result.put(typeCode, TypeCounts.ZERO);
+        }
+        List<com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProductTypeCountRow> rows =
+                spuMapper.countProductAndSkuByTypeCodes(typeCodes);
+        if (rows != null) {
+            for (var row : rows) {
+                if (row.productType() != null) {
+                    result.put(row.productType(), new TypeCounts(row.spuCount(), row.skuCount()));
+                }
+            }
         }
         return result;
     }

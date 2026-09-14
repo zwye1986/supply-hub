@@ -26,6 +26,7 @@
 | **d16** | **分类详情隔离持久化模型** | `GET /supply-chain/categories/{categoryCode}` 返回专用 `CategoryDetail`，保持现有业务字段但不再序列化 `ProductCategoryDO`。响应只含分类编码、名称、父分类 ID、层级、排序、可见性、状态和创建/更新时间；数据库主键、乐观锁版本及操作人 ID 不进入管理端契约。商品中心所有 Query/Path 参数补齐 `@Parameter`，所有响应 DTO 字段补齐与 DDL 语义一致的 `@Schema`。 | 防止数据库内部字段成为前端兼容包袱，并补齐 Knife4j 参数说明 |
 | **d17** | **品牌与商品类型管理模型原型对齐** | 严格按管理端原型对齐主数据能力：<br>1. `sc_brand` 增加 `short_name`（品牌简称）和 `description`（品牌介绍与说明）；`BrandSaveReqVO.logoUrl` 增加 `@NotBlank` 必填校验；`BrandView` 补充 `shortName`、`description` 并显式投影 `spuCount`。<br>2. `sc_product_type` 增加 `icon_url`（类型图标）和 `description`（类型详细描述）；`ProductTypeSaveReqVO.iconUrl` 必填，支持创建时指定 `status`（10启用/20停用，缺省10）；`ProductTypeView` 补充 `iconUrl`、`description`，并一次性聚合未归档 `spuCount` 与 `skuCount` 两项统计指标，避免 N+1 查询。变更由 `029` 变更集执行。 | 彻底对齐原型字段与卡片双指标展示 |
 | **d18** | **旧品牌创建接口终止写入** | 品牌创建统一使用 `POST /supply-chain/brands`。已废弃的 `POST /supply-chain/master-data/brands` 不再委托应用服务、不再执行参数校验或数据库写入，而是固定返回稳定业务错误 `BRAND_LEGACY_API_DEPRECATED`（`1_050_001_106`，不可重试），提示调用方迁移至新接口。其他 M1 兼容接口不受本决策影响。 | 关闭旧品牌入口绕过 Logo 必填约束的写入旁路 |
+| **d19** | **商品管理列表端管理端聚合读模型与批量上下架** | 针对运营管理端原型中「SPU 嵌套多 SKU 展开展示」与复杂多维检索诉求：<br>1. 新增管理端聚合读接口 `GET /supply-chain/products/management-page`，整页一次批量拉取 SPU、SKU、生效 Offer 及供应商信息在内存组装，返回包含市场价、销售建议价、供货价、不含税供货价、税率、税额、供应商名称列表、总库存、兑换方式、下架方式的聚合模型。<br>2. 新增批量上下架接口 `PUT /supply-chain/products/batch-status`，支持批量上架、下架并记录 `unshelve_mode`（`MANUAL_UNSHELVE`）。<br>3. `030` 变更集：`sc_platform_spu` 增加 `unshelve_mode`；`sc_platform_sku` 增加 `tax_rate`；存量商品类型回填默认 icon 图标；为 `sc_platform_spu` 补充 `idx_sc_platform_spu_type_status` 复合索引；商品类型卡片双指标重构为数据库 `GROUP BY` 聚合，彻底消除大数据量下的内存风险。 | 支撑商品列表管理端原型与批量操作 |
 
 ---
 
@@ -147,6 +148,30 @@ ALTER TABLE sc_product_type
 
 -- 3. 数据迁移：将存量商品类型的 remark 复制到 description
 UPDATE sc_product_type SET description = remark WHERE description IS NULL;
+```
+
+### 2.8 商品管理列表端模型增强与类型优化（030 Changeset）
+对齐管理端商品列表原型展示与多维检索诉求，物理落库下架方式与税率，并补齐商品类型存量图标与性能索引：
+
+```sql
+-- 变更集：030-product-management-grid-enhancement.sql
+-- 1. SPU 表增加下架方式与类型状态复合索引
+ALTER TABLE sc_platform_spu
+    ADD COLUMN unshelve_mode VARCHAR(32) NULL COMMENT '下架方式：MANUAL_UNSHELVE手动下架，SYSTEM_UNSHELVE系统下架' AFTER status,
+    ADD KEY idx_sc_platform_spu_type_status (product_type, status);
+
+-- 2. SKU 表增加税率配置
+ALTER TABLE sc_platform_sku
+    ADD COLUMN tax_rate DECIMAL(6,4) NULL COMMENT '税率，如0.0600表示6%，NULL表示不征税/未配置' AFTER suggested_sale_price;
+
+-- 3. 存量商品类型回填默认图标，避免空串
+UPDATE sc_product_type SET icon_url = 'https://img.qihaofu.cn/supplyhub/icons/card.svg' WHERE type_code = 'PT_CARD' AND (icon_url IS NULL OR icon_url = '');
+UPDATE sc_product_type SET icon_url = 'https://img.qihaofu.cn/supplyhub/icons/recharge.svg' WHERE type_code = 'PT_RECHARGE' AND (icon_url IS NULL OR icon_url = '');
+UPDATE sc_product_type SET icon_url = 'https://img.qihaofu.cn/supplyhub/icons/movie_fast.svg' WHERE type_code = 'PT_MOVIE_FAST' AND (icon_url IS NULL OR icon_url = '');
+UPDATE sc_product_type SET icon_url = 'https://img.qihaofu.cn/supplyhub/icons/movie_slow.svg' WHERE type_code = 'PT_MOVIE_SLOW' AND (icon_url IS NULL OR icon_url = '');
+UPDATE sc_product_type SET icon_url = 'https://img.qihaofu.cn/supplyhub/icons/dining.svg' WHERE type_code = 'PT_DINING' AND (icon_url IS NULL OR icon_url = '');
+UPDATE sc_product_type SET icon_url = 'https://img.qihaofu.cn/supplyhub/icons/jd.svg' WHERE type_code = 'PT_JD' AND (icon_url IS NULL OR icon_url = '');
+UPDATE sc_product_type SET icon_url = 'https://img.qihaofu.cn/supplyhub/icons/default.svg' WHERE icon_url IS NULL OR icon_url = '';
 ```
 
 ---
@@ -313,6 +338,60 @@ PRD 8.4.1 的列表 Tab 支持从 `GET /supply-chain/product-types` 动态拉取
 #### 4.1.8 单 SKU 逻辑删除：`DELETE /supply-chain/products/skus/{skuCode}`
 * **权限**：使用 `SupplyChainAdminPermissions.PRODUCT_DELETE_EXPRESSION`。
 * **执行**：执行 3.2 节 4 表强校验。
+
+#### 4.1.9 管理端商品列表聚合查询：`GET /supply-chain/products/management-page`
+* **设计目的**：支撑商品管理后台原型中「SPU 包含多 SKU 行内平铺展开」、「复杂多维度组合检索」与「供货价、税率、税额、供应商换行展示及总库存聚合展示」，避免前端逐条查询详情造成数百次网络请求。
+* **权限**：使用 `SupplyChainAdminPermissions.PRODUCT_QUERY_EXPRESSION`。
+* **Query 参数**：
+  * `keyword` (String, 可选): SPU 编码、名称模糊检索
+  * `productType` (String, 可选): 商品类型编码（如 `PT_CARD`）
+  * `categoryId` (Long, 可选): 商品主分类 ID
+  * `brandId` (Long, 可选): 品牌 ID
+  * `status` (Short, 可选): SPU 状态（0-草稿，10-已上架，20-已下架）
+  * `fulfillmentType` (String, 可选): 兑换方式（如 `CARD_CODE_SECRET`）
+  * `marketPriceMin` / `marketPriceMax` (Long, 可选): 市场价区间（单位：分）
+  * `supplyPriceMin` / `supplyPriceMax` (Long, 可选): 供货价区间（单位：分）
+  * `supplierCode` (String, 可选): 供应商编码
+  * `unshelveMode` (String, 可选): 下架方式（`MANUAL_UNSHELVE` 手动下架，`SYSTEM_UNSHELVE` 系统下架）
+  * `updateTimeStart` / `updateTimeEnd` (LocalDateTime, 可选): SPU 更新时间区间
+  * `pageNo` (Integer, 默认 1)
+  * `pageSize` (Integer, 默认 20)
+* **响应**：`CommonResult<PageResult<ProductManagementSpuItem>>`
+  * `ProductManagementSpuItem`:
+    * `spuCode` (String): 平台 SPU 业务编码
+    * `spuName` (String): 平台 SPU 标准名称
+    * `coverUrl` (String): 商品封面图
+    * `productType` (String): 商品类型编码
+    * `productTypeName` (String): 商品类型中文名称
+    * `primaryCategoryName` (String): 商品分类中文名称
+    * `brandName` (String): 品牌中文名称
+    * `status` (Short): SPU 状态（0草稿，10已上架，20已下架）
+    * `unshelveMode` (String): 下架方式（已下架时回显）
+    * `updatedAt` (LocalDateTime): SPU 最后更新时间
+    * `skus` (List<ProductManagementSkuItem>): 挂载的未归档多 SKU 聚合明细
+  * `ProductManagementSkuItem`:
+    * `skuCode` (String): 平台 SKU 业务编码
+    * `skuName` (String): 规格名称
+    * `marketPrice` (Long): 市场价（分）
+    * `suggestedSalePrice` (Long): 销售建议价（分）
+    * `supplyPrice` (Long): 供货价/有效结算价（分）
+    * `supplyPriceExclusive` (Long): 不含税供货价（分）
+    * `taxRate` (BigDecimal): 税率（例如 0.0600 代表 6%）
+    * `taxAmount` (Long): 税额（分）
+    * `suppliers` (List<SupplierSimpleItem>): 供应商列表（编码与名称，支撑多供应商换行展示）
+    * `totalInventory` (Long): 总库存（来源库存事实快照，无库存管理默认0）
+    * `fulfillmentType` (String): 兑换方式编码与名称
+    * `status` (Short): SKU 状态（0草稿，10已上架，20已下架）
+
+#### 4.1.10 批量上下架接口：`PUT /supply-chain/products/batch-status`
+* **设计目的**：支撑商品列表页表头「批量上架」与「批量下架」按钮，支持多选 SPU 或多选 SKU 进行批量状态流转，并在下架时统一打上 `MANUAL_UNSHELVE` 标记。
+* **权限**：使用 `SupplyChainAdminPermissions.PRODUCT_UPDATE_STATUS_EXPRESSION`。
+* **请求体**：`ProductBatchStatusReqVO`
+  * `spuCodes` (List<String>, 可选): 选中的 SPU 编码列表
+  * `skuCodes` (List<String>, 可选): 选中的 SKU 编码列表
+  * `targetStatus` (Short, 必填): 目标状态（10-上架，20-下架）
+  * `unshelveMode` (String, 可选): 下架方式，默认为 `MANUAL_UNSHELVE`
+* **响应**：`CommonResult<Boolean>`
 
 ---
 

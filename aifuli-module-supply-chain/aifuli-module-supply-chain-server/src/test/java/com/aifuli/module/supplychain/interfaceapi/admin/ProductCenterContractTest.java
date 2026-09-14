@@ -134,6 +134,9 @@ class ProductCenterContractTest {
         assertRecordComponentsDocumented(SkuDetail.class);
         assertRecordComponentsDocumented(BrandView.class);
         assertRecordComponentsDocumented(ProductTypeView.class);
+        assertRecordComponentsDocumented(com.aifuli.module.supplychain.tradecore.catalog.application.ProductCatalogQueryService.ProductManagementSpuItem.class);
+        assertRecordComponentsDocumented(com.aifuli.module.supplychain.tradecore.catalog.application.ProductCatalogQueryService.ProductManagementSkuItem.class);
+        assertRecordComponentsDocumented(com.aifuli.module.supplychain.tradecore.catalog.application.ProductCatalogQueryService.SupplierSimpleInfo.class);
     }
 
     @Test

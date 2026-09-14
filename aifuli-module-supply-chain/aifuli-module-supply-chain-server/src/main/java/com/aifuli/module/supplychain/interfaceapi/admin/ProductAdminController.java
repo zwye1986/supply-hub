@@ -79,6 +79,45 @@ public class ProductAdminController {
                 productType, productClassification, status, pageNo, pageSize)));
     }
 
+    @GetMapping("/management-page")
+    @PreAuthorize(PRODUCT_QUERY_EXPRESSION)
+    @Operation(summary = "管理端分页查询商品聚合列表",
+            description = "支撑运营管理端商品列表原型：SPU平铺展开多SKU明细、多维筛选及供货价、税率、税额、供应商换行聚合展示。")
+    public CommonResult<PageResult<ProductCatalogQueryService.ProductManagementSpuItem>> managementPage(
+            @Parameter(description = "业务 Tab 标识", example = "VIRTUAL_CARD") @RequestParam(required = false) String tabCode,
+            @Parameter(description = "SPU 编码、名称模糊搜索", example = "爱奇艺") @RequestParam(required = false) String keyword,
+            @Parameter(description = "商品类型编码", example = "PT_CARD") @RequestParam(required = false) String productType,
+            @Parameter(description = "主类目内部主键", example = "10") @RequestParam(required = false) Long categoryId,
+            @Parameter(description = "品牌内部主键", example = "1") @RequestParam(required = false) Long brandId,
+            @Parameter(description = "SPU 状态：0草稿，10已上架，20已下架", example = "10") @RequestParam(required = false) Short status,
+            @Parameter(description = "下架方式：MANUAL_UNSHELVE手动下架，SYSTEM_UNSHELVE系统下架", example = "MANUAL_UNSHELVE") @RequestParam(required = false) String unshelveMode,
+            @Parameter(description = "兑换方式：CARD_CODE_SECRET卡号卡密，DIRECT_RECHARGE虚拟直充", example = "CARD_CODE_SECRET") @RequestParam(required = false) String fulfillmentType,
+            @Parameter(description = "市场价最小金额，单位CNY分", example = "1000") @RequestParam(required = false) Long marketPriceMin,
+            @Parameter(description = "市场价最大金额，单位CNY分", example = "5000") @RequestParam(required = false) Long marketPriceMax,
+            @Parameter(description = "供货价最小金额，单位CNY分", example = "800") @RequestParam(required = false) Long supplyPriceMin,
+            @Parameter(description = "供货价最大金额，单位CNY分", example = "4000") @RequestParam(required = false) Long supplyPriceMax,
+            @Parameter(description = "供应商编码", example = "SUP_01ABC") @RequestParam(required = false) String supplierCode,
+            @Parameter(description = "更新时间开始，Asia/Shanghai") @RequestParam(required = false) java.time.LocalDateTime updateTimeStart,
+            @Parameter(description = "更新时间结束，Asia/Shanghai") @RequestParam(required = false) java.time.LocalDateTime updateTimeEnd,
+            @Parameter(description = "页码，从1开始", example = "1") @RequestParam(required = false) Integer pageNo,
+            @Parameter(description = "每页条数，默认20", example = "20") @RequestParam(required = false) Integer pageSize) {
+        return success(queryService.managementPage(new ProductCatalogQueryService.ProductManagementPageQuery(
+                tabCode, keyword, productType, categoryId, brandId, status, unshelveMode, fulfillmentType,
+                marketPriceMin, marketPriceMax, supplyPriceMin, supplyPriceMax, supplierCode,
+                updateTimeStart, updateTimeEnd, pageNo, pageSize)));
+    }
+
+    @PutMapping("/batch-status")
+    @PreAuthorize(PRODUCT_UPDATE_STATUS_EXPRESSION)
+    @Operation(summary = "批量变更平台商品状态（批量上下架）",
+            description = "支持多选 SPU 或多选 SKU 进行批量上架或下架操作；下架时统一记录下架方式。")
+    public CommonResult<Boolean> batchChangeStatus(@Valid @RequestBody ProductBatchStatusReqVO request) {
+        commandService.batchChangeStatus(new ProductCatalogCommandService.BatchStatusCommand(
+                request.getSpuCodes(), request.getSkuCodes(), request.getTargetStatus(),
+                request.getUnshelveMode(), getLoginUserId()));
+        return success(true);
+    }
+
     @GetMapping("/spus/{spuCode}")
     @PreAuthorize(PRODUCT_QUERY_EXPRESSION)
     @Operation(summary = "查询平台 SPU 与 SKU 详情")
@@ -192,5 +231,19 @@ public class ProductAdminController {
         @Positive @Schema(description = "SKU 最低起购量；默认1") private Long minQuantity;
         @Positive @Schema(description = "SKU 单次最高购买量；默认9999999") private Long maxQuantity;
         @Schema(description = "SKU 状态；默认继承 SPU") private Short status;
+    }
+
+    @Data
+    @Schema(description = "商品批量上下架请求")
+    public static class ProductBatchStatusReqVO {
+        @Schema(description = "选中的平台 SPU 编码列表")
+        private List<String> spuCodes;
+        @Schema(description = "选中的平台 SKU 编码列表")
+        private List<String> skuCodes;
+        @NotNull(message = "目标状态不能为空")
+        @Schema(description = "目标状态：10上架，20下架", requiredMode = Schema.RequiredMode.REQUIRED, example = "10")
+        private Short targetStatus;
+        @Schema(description = "下架方式：MANUAL_UNSHELVE手动下架，SYSTEM_UNSHELVE系统下架；下架时可选，缺省为 MANUAL_UNSHELVE", example = "MANUAL_UNSHELVE")
+        private String unshelveMode;
     }
 }

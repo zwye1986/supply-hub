@@ -26,6 +26,7 @@ import com.aifuli.module.supplychain.tradecore.catalog.domain.CategoryVisibility
 import com.aifuli.module.supplychain.tradecore.catalog.domain.DeliveryType;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.FulfillmentType;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.ListingAvailability;
+import com.aifuli.module.supplychain.tradecore.catalog.domain.UnshelveMode;
 import com.aifuli.module.supplychain.tradecore.profile.domain.ClosedEnums;
 import com.aifuli.module.supplychain.tradecore.profile.domain.ProductClassification;
 import com.aifuli.module.supplychain.tradecore.profile.domain.SellableCategory;
@@ -204,7 +205,12 @@ public class ProductCatalogCommandService {
 
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public void changeSpuStatus(String code, CatalogEntityStatus target, Long operatorId) {
-        applySpuStatus(code, target, operatorId);
+        applySpuStatus(code, target, UnshelveMode.MANUAL_UNSHELVE.getCode(), operatorId);
+    }
+
+    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
+    public void changeSpuStatus(String code, CatalogEntityStatus target, String unshelveMode, Long operatorId) {
+        applySpuStatus(code, target, unshelveMode, operatorId);
     }
 
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
@@ -213,16 +219,51 @@ public class ProductCatalogCommandService {
     }
 
     /**
+     * 批量变更平台商品（SPU/SKU）状态。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#4110-批量上下架接口put-supply-chainproductsbatch-status}。
+     */
+    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
+    public void batchChangeStatus(BatchStatusCommand command) {
+        log.info("批量变更商品状态 spuCodes={} skuCodes={} targetStatus={} unshelveMode={} operatorId={}",
+                command.spuCodes(), command.skuCodes(), command.targetStatus(), command.unshelveMode(), command.operatorId());
+        CatalogEntityStatus target = CatalogEntityStatus.fromCode(command.targetStatus());
+        if (target != CatalogEntityStatus.ACTIVE && target != CatalogEntityStatus.INACTIVE) {
+            throw exception(PRODUCT_STATUS_INVALID);
+        }
+        if (command.spuCodes() != null) {
+            for (String spuCode : command.spuCodes()) {
+                if (hasText(spuCode)) {
+                    applySpuStatus(spuCode.trim(), target, command.unshelveMode(), command.operatorId());
+                }
+            }
+        }
+        if (command.skuCodes() != null) {
+            for (String skuCode : command.skuCodes()) {
+                if (hasText(skuCode)) {
+                    applySkuStatus(skuCode.trim(), target, command.operatorId());
+                }
+            }
+        }
+    }
+
+    /**
      * SPU 状态迁移。归档分支必须与 {@code selectByCodeForUpdate} 行锁处于同一事务，
      * 否则 4 表引用校验通过后仍可能被并发写入引用，故仅允许由带 {@code @Transactional} 的入口调用。
      * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#32-删除强校验规则4-表物理主键与关联路径检查}。
      */
     private void applySpuStatus(String code, CatalogEntityStatus target, Long operatorId) {
-        log.info("变更平台 SPU 状态 spuCode={} targetStatus={} operatorId={}", code, target, operatorId);
+        applySpuStatus(code, target, null, operatorId);
+    }
+
+    private void applySpuStatus(String code, CatalogEntityStatus target, String unshelveMode, Long operatorId) {
+        log.info("变更平台 SPU 状态 spuCode={} targetStatus={} unshelveMode={} operatorId={}", code, target, unshelveMode, operatorId);
         PlatformSpuDO entity = requireSpuForUpdate(code);
         checkTransition(entity.getStatus(), target);
         if (target == CatalogEntityStatus.ACTIVE) {
             productTypeValidationService.requireActiveForUpdate(entity.getProductType());
+            entity.setUnshelveMode(null);
+        } else if (target == CatalogEntityStatus.INACTIVE) {
+            entity.setUnshelveMode(hasText(unshelveMode) ? unshelveMode.trim() : UnshelveMode.MANUAL_UNSHELVE.getCode());
         } else if (target == CatalogEntityStatus.ARCHIVED) {
             deletionValidator.validateSpu(entity.getId());
         }
@@ -663,5 +704,14 @@ public class ProductCatalogCommandService {
             this(skuCode, skuName, fulfillmentType, faceValue, marketPrice, suggestedSalePrice,
                     minQuantity, maxQuantity, null, null, null, null, status);
         }
+    }
+
+    /** 批量上下架命令。 */
+    public record BatchStatusCommand(
+            List<String> spuCodes,
+            List<String> skuCodes,
+            Short targetStatus,
+            String unshelveMode,
+            Long operatorId) {
     }
 }

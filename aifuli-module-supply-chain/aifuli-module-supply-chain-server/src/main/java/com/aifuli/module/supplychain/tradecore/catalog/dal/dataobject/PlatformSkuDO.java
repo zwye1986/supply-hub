@@ -28,6 +28,8 @@ public class PlatformSkuDO {
     private Long marketPrice;
     /** 建议零售价/销售建议价，单位为分 */
     private Long suggestedSalePrice;
+    /** 税率，如0.0600表示6%，NULL表示不征税/未配置 */
+    private java.math.BigDecimal taxRate;
     /** SKU单次最小起购数量 */
     private Long minQuantity;
     /** SKU单次最大限购数量 */

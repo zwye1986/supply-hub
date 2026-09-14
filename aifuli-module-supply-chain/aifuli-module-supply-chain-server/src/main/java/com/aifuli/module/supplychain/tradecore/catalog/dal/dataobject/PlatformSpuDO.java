@@ -45,6 +45,8 @@ public class PlatformSpuDO {
     /** 商品富文本详情与图文介绍 */
     private String description;
     private Short status;
+    /** 下架方式：MANUAL_UNSHELVE手动下架，SYSTEM_UNSHELVE系统下架 */
+    private String unshelveMode;
     /** 配送履约模式：VIRTUAL虚拟发货, EXPRESS物流快递, PICKUP自提核销 */
     private String deliveryType;
     /** SPU默认单次最低起购量 */
