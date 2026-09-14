@@ -31,7 +31,8 @@ class ProjectAdminRestContractTest {
             Set.of("invoice", "create", "page", "appKey");
     private static final List<String> ALLOWED_PREFIXES = List.of(
             "", "/{projectCode}",
-            "/{projectCode}/products", "/{projectCode}/products/{listingCode}");
+            "/{projectCode}/products", "/{projectCode}/products/{listingCode}",
+            "/{projectCode}/products/pricing/preview", "/{projectCode}/products/pricing");
 
     @Test
     void mappingsAreNounsUnderProjects() {

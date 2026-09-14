@@ -18,6 +18,7 @@ import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerAdminQuery
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerAdminQueryService.BuyerPageQuery;
 import com.aifuli.module.supplychain.tradecore.buyer.domain.BuyerStatus;
 import com.aifuli.module.supplychain.tradecore.catalog.application.BuyerProductCommandService;
+import com.aifuli.module.supplychain.tradecore.catalog.application.BuyerProductCommandService.L2PricingPreview;
 import com.aifuli.module.supplychain.tradecore.catalog.application.BuyerProductCommandService.ProductLine;
 import com.aifuli.module.supplychain.tradecore.catalog.application.BuyerProductQueryService;
 import com.aifuli.module.supplychain.tradecore.catalog.application.BuyerProductQueryService.BuyerProductListItem;
@@ -254,6 +255,32 @@ public class BuyerAdminController {
         return success(true);
     }
 
+    @PostMapping("/{buyerCode}/products/pricing/preview")
+    @PreAuthorize(BUYER_QUERY_EXPRESSION)
+    @Operation(summary = "批量试算分销商商品L2价格",
+            description = "只读试算当前分销商作用域内的L2有效价，不写价格版本；税务元数据不参与计算。")
+    public CommonResult<List<L2PricingPreview>> previewProductPricing(
+            @Parameter(description = "采购商永久业务编码") @PathVariable String buyerCode,
+            @Valid @RequestBody BuyerProductBatchPricingReqVO request) {
+        return success(productCommandService.previewL2Batch(buyerCode, request.getBuyerProductCodes(),
+                ClosedEnums.parseRequired(L2AdjustMode.class, request.getL2AdjustMode()),
+                request.getPercent(), request.getAmountCents()));
+    }
+
+    @PutMapping("/{buyerCode}/products/pricing")
+    @PreAuthorize(BUYER_UPDATE_EXPRESSION)
+    @Operation(summary = "批量保存分销商商品L2价格",
+            description = "仅更新路径分销商下选中商品的L2价格版本；单事务全量成功或回滚，税务元数据不参与计算。")
+    public CommonResult<Boolean> updateProductPricing(
+            @Parameter(description = "采购商永久业务编码") @PathVariable String buyerCode,
+            @Valid @RequestBody BuyerProductBatchPricingReqVO request) {
+        productCommandService.patchL2Batch(buyerCode, request.getBuyerProductCodes(),
+                ClosedEnums.parseRequired(L2AdjustMode.class, request.getL2AdjustMode()),
+                request.getPercent(), request.getAmountCents(), request.getDisplayThresholdPercent(),
+                getLoginUserId());
+        return success(true);
+    }
+
     @DeleteMapping("/{buyerCode}/products/{buyerProductCode}")
     @PreAuthorize(BUYER_DELETE_EXPRESSION)
     @Operation(summary = "逻辑移除分销商品",
@@ -478,6 +505,25 @@ public class BuyerAdminController {
     public static class PatchBuyerProductReqVO {
         @NotBlank
         @Schema(description = "L2调价方式：FOLLOW_TEMPLATE（清手工覆盖并继承L1，不读取模板价）/ EQUAL_L1 / CUSTOM")
+        private String l2AdjustMode;
+        @Schema(description = "CUSTOM时的整数百分比，100等于L1")
+        private Integer percent;
+        @Schema(description = "CUSTOM时加减的CNY分")
+        private Long amountCents;
+        @Schema(description = "利润空间低于该百分比时C端隐藏，本批不消费")
+        private Integer displayThresholdPercent;
+    }
+
+    @Data
+    @Schema(description = "分销商商品L2批量定价请求")
+    public static class BuyerProductBatchPricingReqVO {
+        @NotEmpty
+        @Size(max = 200)
+        @Schema(description = "当前分销商下的分销商品编码列表", requiredMode = Schema.RequiredMode.REQUIRED)
+        private List<@NotBlank String> buyerProductCodes;
+        @NotBlank
+        @Schema(description = "L2调价方式：FOLLOW_TEMPLATE（继承L1）/ EQUAL_L1 / CUSTOM",
+                requiredMode = Schema.RequiredMode.REQUIRED)
         private String l2AdjustMode;
         @Schema(description = "CUSTOM时的整数百分比，100等于L1")
         private Integer percent;

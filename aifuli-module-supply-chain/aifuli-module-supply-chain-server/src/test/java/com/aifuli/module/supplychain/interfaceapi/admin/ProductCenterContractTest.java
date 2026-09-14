@@ -63,7 +63,18 @@ class ProductCenterContractTest {
         assertThat(Arrays.stream(ProductAdminController.SkuItemSaveReqVO.class.getDeclaredFields())
                 .map(field -> field.getName()))
                 .doesNotContain("targetSchemaCode", "targetSchemaVersion", "resultSchemaCode", "resultSchemaVersion")
-                .contains("fulfillmentType");
+                .contains("fulfillmentType", "taxIncluded", "taxRate");
+    }
+
+    /** 税务字段必须停留在 SKU 展示元数据契约，不能混入 L2/L3 定价请求。 */
+    @Test
+    void taxMetadataIsSeparatedFromLayeredPricingRequests() {
+        assertThat(fieldNames(ProductAdminController.SkuTaxMetadataBatchReqVO.class))
+                .containsExactlyInAnyOrder("skuCodes", "taxIncluded", "taxRate");
+        assertThat(fieldNames(BuyerAdminController.BuyerProductBatchPricingReqVO.class))
+                .doesNotContain("taxIncluded", "taxRate");
+        assertThat(fieldNames(ProjectAdminController.ProjectProductBatchPricingReqVO.class))
+                .doesNotContain("taxIncluded", "taxRate");
     }
 
     /** 所有管理端写入口都不得要求页面决定内部 Schema 编码或版本。 */

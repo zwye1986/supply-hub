@@ -37,9 +37,11 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -78,6 +80,8 @@ public class ProductCatalogCommandService {
     private static final long DEFAULT_MAX_QUANTITY = 9_999_999L;
     /** 与 {@code market_price/suggested_sale_price} DDL DEFAULT 对齐的默认价格（单位：分）。 */
     private static final long DEFAULT_PRICE_FEN = 0L;
+    /** 单次批量更新 SKU 税务元数据的上限，避免超大事务。 */
+    private static final int MAX_BATCH_SKU_COUNT = 200;
     /**
      * 禁止写入的回执 Schema 占位编码。
      * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线}（d11）。
@@ -243,6 +247,27 @@ public class ProductCatalogCommandService {
                     applySkuStatus(skuCode.trim(), target, command.operatorId());
                 }
             }
+        }
+    }
+
+    /**
+     * 批量记录 SKU 税务元数据。该方法只修改 {@code tax_included/tax_rate}，不得调用价格解析器或修改价格列。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#411-sku-税务元数据批量记录put-supply-chainproductsskustax-metadata}。
+     */
+    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
+    public void batchUpdateSkuTaxMetadata(SkuTaxMetadataBatchCommand command) {
+        List<String> skuCodes = normalizeSkuCodes(command.skuCodes());
+        validateTaxMetadata(command.taxIncluded(), command.taxRate());
+        log.info("批量记录SKU税务元数据 skuCount={} taxIncluded={} taxRate={} operatorId={}",
+                skuCodes.size(), command.taxIncluded(), command.taxRate(), command.operatorId());
+        LocalDateTime now = now();
+        for (String skuCode : skuCodes) {
+            PlatformSkuDO sku = requireSkuForUpdate(skuCode);
+            sku.setTaxIncluded(command.taxIncluded());
+            sku.setTaxRate(command.taxRate());
+            sku.setUpdatedBy(command.operatorId());
+            sku.setUpdatedAt(now);
+            requireUpdated(skuMapper.updateById(sku));
         }
     }
 
@@ -470,6 +495,7 @@ public class ProductCatalogCommandService {
                 .skuName(line.skuName().trim()).fulfillmentType(line.fulfillmentType())
                 .faceValue(line.faceValue()).marketPrice(defaultLong(line.marketPrice(), DEFAULT_PRICE_FEN))
                 .suggestedSalePrice(defaultLong(line.suggestedSalePrice(), DEFAULT_PRICE_FEN))
+                .taxIncluded(Boolean.TRUE.equals(line.taxIncluded())).taxRate(line.taxRate())
                 .minQuantity(defaultLong(line.minQuantity(), DEFAULT_MIN_QUANTITY))
                 .maxQuantity(defaultLong(line.maxQuantity(), DEFAULT_MAX_QUANTITY))
                 .currency(CURRENCY_CNY).targetSchemaCode(schema.targetSchemaCode())
@@ -486,6 +512,13 @@ public class ProductCatalogCommandService {
         sku.setFaceValue(line.faceValue());
         sku.setMarketPrice(defaultLong(line.marketPrice(), DEFAULT_PRICE_FEN));
         sku.setSuggestedSalePrice(defaultLong(line.suggestedSalePrice(), DEFAULT_PRICE_FEN));
+        // 兼容尚未携带新增税务字段的旧商品编辑请求：两字段均缺省时保留原值；显式传含税标识时全量替换税务元数据。
+        if (line.taxIncluded() != null) {
+            sku.setTaxIncluded(line.taxIncluded());
+            sku.setTaxRate(line.taxRate());
+        } else if (line.taxRate() != null) {
+            sku.setTaxRate(line.taxRate());
+        }
         sku.setMinQuantity(defaultLong(line.minQuantity(), DEFAULT_MIN_QUANTITY));
         sku.setMaxQuantity(defaultLong(line.maxQuantity(), DEFAULT_MAX_QUANTITY));
         sku.setCurrency(CURRENCY_CNY);
@@ -505,6 +538,7 @@ public class ProductCatalogCommandService {
                 || defaultLong(line.suggestedSalePrice(), DEFAULT_PRICE_FEN) < 0) {
             throw exception(PRODUCT_SKU_FIELD_INVALID);
         }
+        validateTaxMetadata(Boolean.TRUE.equals(line.taxIncluded()), line.taxRate());
         FulfillmentType fulfillmentType = FulfillmentType.fromCode(line.fulfillmentType());
         validateQuantity(line.minQuantity(), line.maxQuantity());
         boolean explicitSchemaPresent = hasText(line.targetSchemaCode()) || line.targetSchemaVersion() != null
@@ -576,6 +610,27 @@ public class ProductCatalogCommandService {
 
     private static long defaultLong(Long value, long defaultValue) {
         return value == null ? defaultValue : value;
+    }
+
+    private static void validateTaxMetadata(Boolean taxIncluded, BigDecimal taxRate) {
+        if (taxIncluded == null || (taxRate != null
+                && (taxRate.compareTo(BigDecimal.ZERO) < 0 || taxRate.compareTo(BigDecimal.ONE) > 0))) {
+            throw exception(PRODUCT_SKU_FIELD_INVALID);
+        }
+    }
+
+    private static List<String> normalizeSkuCodes(List<String> skuCodes) {
+        if (skuCodes == null || skuCodes.isEmpty() || skuCodes.size() > MAX_BATCH_SKU_COUNT) {
+            throw exception(PRODUCT_SKU_FIELD_INVALID);
+        }
+        LinkedHashSet<String> normalized = new LinkedHashSet<>();
+        for (String skuCode : skuCodes) {
+            if (!hasText(skuCode)) {
+                throw exception(PRODUCT_SKU_FIELD_INVALID);
+            }
+            normalized.add(skuCode.trim());
+        }
+        return List.copyOf(normalized);
     }
 
     private static String blankToNull(String value) {
@@ -691,7 +746,8 @@ public class ProductCatalogCommandService {
     }
 
     public record SaveSkuLine(String skuCode, String skuName, String fulfillmentType, Long faceValue,
-                              Long marketPrice, Long suggestedSalePrice, Long minQuantity, Long maxQuantity,
+                              Long marketPrice, Long suggestedSalePrice, Boolean taxIncluded, BigDecimal taxRate,
+                              Long minQuantity, Long maxQuantity,
                               String targetSchemaCode, Integer targetSchemaVersion,
                               String resultSchemaCode, Integer resultSchemaVersion, Short status) {
         /**
@@ -702,7 +758,25 @@ public class ProductCatalogCommandService {
                            Long marketPrice, Long suggestedSalePrice, Long minQuantity, Long maxQuantity,
                            Short status) {
             this(skuCode, skuName, fulfillmentType, faceValue, marketPrice, suggestedSalePrice,
-                    minQuantity, maxQuantity, null, null, null, null, status);
+                    false, null, minQuantity, maxQuantity, null, null, null, null, status);
+        }
+
+        /** 商品中心复合接口携带税务展示元数据的构造器，Schema 仍由应用层注册表派生。 */
+        public SaveSkuLine(String skuCode, String skuName, String fulfillmentType, Long faceValue,
+                           Long marketPrice, Long suggestedSalePrice, Boolean taxIncluded, BigDecimal taxRate,
+                           Long minQuantity, Long maxQuantity, Short status) {
+            this(skuCode, skuName, fulfillmentType, faceValue, marketPrice, suggestedSalePrice,
+                    taxIncluded, taxRate, minQuantity, maxQuantity, null, null, null, null, status);
+        }
+
+        /** 保留已有显式 Schema 调用方的构造契约，税务元数据缺省为不含税且税率未配置。 */
+        public SaveSkuLine(String skuCode, String skuName, String fulfillmentType, Long faceValue,
+                           Long marketPrice, Long suggestedSalePrice, Long minQuantity, Long maxQuantity,
+                           String targetSchemaCode, Integer targetSchemaVersion,
+                           String resultSchemaCode, Integer resultSchemaVersion, Short status) {
+            this(skuCode, skuName, fulfillmentType, faceValue, marketPrice, suggestedSalePrice,
+                    false, null, minQuantity, maxQuantity, targetSchemaCode, targetSchemaVersion,
+                    resultSchemaCode, resultSchemaVersion, status);
         }
     }
 
@@ -713,5 +787,10 @@ public class ProductCatalogCommandService {
             Short targetStatus,
             String unshelveMode,
             Long operatorId) {
+    }
+
+    /** SKU 税务展示元数据批量记录命令。 */
+    public record SkuTaxMetadataBatchCommand(List<String> skuCodes, Boolean taxIncluded,
+                                              BigDecimal taxRate, Long operatorId) {
     }
 }

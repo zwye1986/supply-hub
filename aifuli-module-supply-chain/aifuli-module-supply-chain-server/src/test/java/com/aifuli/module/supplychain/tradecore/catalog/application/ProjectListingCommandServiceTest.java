@@ -43,6 +43,7 @@ import java.util.List;
 import java.time.LocalDateTime;
 
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PLATFORM_SETTLEMENT_PRICE_MISSING;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PROJECT_LISTING_NOT_FOUND;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PROJECT_SKU_NOT_IN_BUYER_CATALOG;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -228,6 +229,51 @@ class ProjectListingCommandServiceTest {
                 .isInstanceOf(ServiceException.class)
                 .extracting(ex -> ((ServiceException) ex).getCode())
                 .isEqualTo(PLATFORM_SETTLEMENT_PRICE_MISSING.getCode());
+    }
+
+    /** L3 试算严格限定项目作用域，SKU 税务元数据不改变试算金额。 */
+    @Test
+    void previewL3IsProjectScopedAndIgnoresTaxMetadata() {
+        when(projectMapper.selectByProjectCode(PROJECT_CODE)).thenReturn(BuyerProjectDO.builder()
+                .id(9L).projectCode(PROJECT_CODE).buyerId(5L).build());
+        ProjectListingDO listing = ProjectListingDO.builder().id(80L).listingCode(LISTING_CODE)
+                .projectId(9L).buyerProductId(77L).currentVersionId(801L)
+                .status(ProjectListingStatus.AVAILABLE.getCode()).build();
+        when(listingMapper.selectByCode(LISTING_CODE)).thenReturn(listing);
+        when(productMapper.selectById(77L)).thenReturn(liveProduct());
+        when(skuMapper.selectById(11L)).thenReturn(PlatformSkuDO.builder()
+                .id(11L).skuCode("MOVIE_100").taxIncluded(true)
+                .taxRate(new java.math.BigDecimal("0.2500"))
+                .status(CatalogEntityStatus.ACTIVE.getCode()).build());
+        stubL1(L1_CENTS);
+        when(overrideMapper.selectByBuyerProductId(77L)).thenReturn(null);
+        when(listingVersionMapper.selectById(801L)).thenReturn(ProjectListingVersionDO.builder()
+                .id(801L).listingId(80L).buyerSettlementUnitPrice(L1_CENTS)
+                .settlementPriceLevel(PriceSource.L1.name()).build());
+
+        var result = service.previewL3Batch(PROJECT_CODE, List.of(LISTING_CODE),
+                L3AdjustMode.CUSTOM, 75, 0L);
+
+        assertThat(result).singleElement().satisfies(line -> {
+            assertThat(line.currentFinalPriceCents()).isEqualTo(L1_CENTS);
+            assertThat(line.previewFinalPriceCents()).isEqualTo(750L);
+        });
+    }
+
+    /** 即使属于同一分销商，其它项目的 listing 也不能通过当前项目路径试算或改价。 */
+    @Test
+    void previewL3RejectsListingFromAnotherProject() {
+        when(projectMapper.selectByProjectCode(PROJECT_CODE)).thenReturn(BuyerProjectDO.builder()
+                .id(9L).projectCode(PROJECT_CODE).buyerId(5L).build());
+        when(listingMapper.selectByCode("PLT_OTHER_PROJECT")).thenReturn(ProjectListingDO.builder()
+                .id(81L).listingCode("PLT_OTHER_PROJECT").projectId(10L).buyerProductId(77L)
+                .status(ProjectListingStatus.AVAILABLE.getCode()).build());
+
+        assertThatThrownBy(() -> service.previewL3Batch(PROJECT_CODE, List.of("PLT_OTHER_PROJECT"),
+                L3AdjustMode.FOLLOW_L2, null, null))
+                .isInstanceOf(ServiceException.class)
+                .extracting(ex -> ((ServiceException) ex).getCode())
+                .isEqualTo(PROJECT_LISTING_NOT_FOUND.getCode());
     }
 
     private void stubLiveBuyerProduct() {

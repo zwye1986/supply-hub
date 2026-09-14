@@ -21,7 +21,9 @@ import com.aifuli.module.supplychain.tradecore.catalog.domain.FulfillmentType;
 import com.aifuli.module.supplychain.tradecore.profile.domain.ProductClassification;
 import com.aifuli.module.supplychain.tradecore.profile.domain.SellableCategory;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 
@@ -35,6 +37,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -105,6 +108,28 @@ class ProductCatalogCommandServiceTest {
                 .isInstanceOf(ServiceException.class)
                 .extracting(ex -> ((ServiceException) ex).getCode())
                 .isEqualTo(PRODUCT_CONCURRENT_UPDATE.getCode());
+    }
+
+    /** 含税标识与税率只更新两个元数据字段，既有价格字段必须保持不变。 */
+    @Test
+    void batchTaxMetadataDoesNotChangeAnyPrice() {
+        LocalDateTime now = LocalDateTime.of(2026, 9, 14, 19, 0);
+        when(clock.now()).thenReturn(now);
+        PlatformSkuDO sku = PlatformSkuDO.builder().id(10L).skuCode("SKU_TAX")
+                .marketPrice(2_000L).suggestedSalePrice(1_800L)
+                .taxIncluded(false).taxRate(null).status(CatalogEntityStatus.ACTIVE.getCode()).build();
+        when(skuMapper.selectByCodeForUpdate("SKU_TAX")).thenReturn(sku);
+        when(skuMapper.updateById(any(PlatformSkuDO.class))).thenReturn(1);
+
+        service.batchUpdateSkuTaxMetadata(new ProductCatalogCommandService.SkuTaxMetadataBatchCommand(
+                List.of("SKU_TAX"), true, new BigDecimal("0.0600"), 7L));
+
+        ArgumentCaptor<PlatformSkuDO> captor = ArgumentCaptor.forClass(PlatformSkuDO.class);
+        verify(skuMapper).updateById(captor.capture());
+        assertThat(captor.getValue().getTaxIncluded()).isTrue();
+        assertThat(captor.getValue().getTaxRate()).isEqualByComparingTo("0.0600");
+        assertThat(captor.getValue().getMarketPrice()).isEqualTo(2_000L);
+        assertThat(captor.getValue().getSuggestedSalePrice()).isEqualTo(1_800L);
     }
 
     /** 构造：SPU 下挂 keep 与 omitted 两个启用 SKU，更新请求只保留 keep。 */

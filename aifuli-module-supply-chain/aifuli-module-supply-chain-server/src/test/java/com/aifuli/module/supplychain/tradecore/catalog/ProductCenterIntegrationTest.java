@@ -35,6 +35,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
 import org.testcontainers.containers.MySQLContainer;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -113,13 +114,15 @@ class ProductCenterIntegrationTest {
                     "EQUITY", "EQUITY_PRODUCT", "VIRTUAL_CARD", null, List.of(), "测试说明",
                     "测试详情", "VIRTUAL", 1L, 100L, CatalogEntityStatus.ACTIVE.getCode(),
                     List.of(new SaveSkuLine("PC_SKU_100", "商品中心直充100元", "DIRECT_RECHARGE",
-                            10_000L, 12_000L, 9_900L, 1L, 10L,
+                            10_000L, 12_000L, 9_900L, true, new BigDecimal("0.0600"), 1L, 10L,
                             CatalogEntityStatus.ACTIVE.getCode())), 1L));
 
             PlatformSkuDO platformSku = skuMapper.selectByCode("PC_SKU_100");
             assertThat(platformSku.getFaceValue()).isEqualTo(10_000L);
             assertThat(platformSku.getMarketPrice()).isEqualTo(12_000L);
             assertThat(platformSku.getSuggestedSalePrice()).isEqualTo(9_900L);
+            assertThat(platformSku.getTaxIncluded()).isTrue();
+            assertThat(platformSku.getTaxRate()).isEqualByComparingTo("0.0600");
             assertThat(platformSku.getTargetSchemaCode()).isEqualTo("DIRECT_RECHARGE_TARGET");
             assertThat(platformSku.getTargetSchemaVersion()).isEqualTo(1);
             assertThat(platformSku.getResultSchemaCode()).isEqualTo("DIRECT_RECHARGE_RESULT");
@@ -147,10 +150,21 @@ class ProductCenterIntegrationTest {
             assertThat(skuListItem.suggestPriceCents()).isEqualTo(8_800L);
             assertThat(skuListItem.marketPriceCents()).isEqualTo(9_900L);
 
+            commandService.batchUpdateSkuTaxMetadata(new ProductCatalogCommandService.SkuTaxMetadataBatchCommand(
+                    List.of("PC_SKU_100"), false, new BigDecimal("0.1300"), 1L));
+            PlatformSkuDO taxUpdatedSku = skuMapper.selectByCode("PC_SKU_100");
+            assertThat(taxUpdatedSku.getTaxIncluded()).isFalse();
+            assertThat(taxUpdatedSku.getTaxRate()).isEqualByComparingTo("0.1300");
+            assertThat(taxUpdatedSku.getMarketPrice()).isEqualTo(12_000L);
+            assertThat(taxUpdatedSku.getSuggestedSalePrice()).isEqualTo(9_900L);
+            assertThat(priceVersionMapper.selectById(priceVersion.getId()).getUnitPriceCents()).isEqualTo(8_800L);
+
             ProductCatalogQueryService.SpuDetail created = queryService.detail(spuCode);
             assertThat(created.skus()).singleElement().satisfies(sku -> {
                 assertThat(sku.skuCode()).isEqualTo("PC_SKU_100");
                 assertThat(sku.effectiveSellable()).isTrue();
+                assertThat(sku.taxIncluded()).isFalse();
+                assertThat(sku.taxRate()).isEqualByComparingTo("0.1300");
             });
 
             commandService.changeSkuStatus("PC_SKU_100", CatalogEntityStatus.INACTIVE, 1L);

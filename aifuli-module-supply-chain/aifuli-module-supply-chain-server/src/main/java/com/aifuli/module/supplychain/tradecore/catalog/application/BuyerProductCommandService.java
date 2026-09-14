@@ -19,6 +19,8 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerProductL2O
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceVersionMapper;
 import com.aifuli.module.supplychain.tradecore.profile.domain.L2AdjustMode;
+import com.aifuli.module.supplychain.tradecore.profile.domain.PriceSource;
+import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;
@@ -27,6 +29,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 
 import static com.aifuli.framework.common.exception.util.ServiceExceptionUtil.exception;
@@ -48,6 +51,7 @@ public class BuyerProductCommandService {
     private final SupplyChainDatabaseClock databaseClock;
 
     private static final String TRANSACTION_MANAGER = "supplyChainTransactionManager";
+    private static final int MAX_BATCH_PRODUCT_COUNT = 200;
 
     private final BuyerMapper buyerMapper;
     private final BuyerProductMapper productMapper;
@@ -93,6 +97,59 @@ public class BuyerProductCommandService {
         PlatformSkuDO sku = requireActiveSkuById(product.getPlatformSkuId());
         applyL2Override(product, sku, mode == null ? L2AdjustMode.FOLLOW_TEMPLATE : mode,
                 percent, amountCents, operatorId, now);
+    }
+
+    /**
+     * 只读试算同一分销商下的多条 L2 价格。税务元数据不进入试算。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#4112-分销商与项目分层批量定价}。
+     */
+    @Transactional(transactionManager = TRANSACTION_MANAGER, readOnly = true)
+    public List<L2PricingPreview> previewL2Batch(String buyerCode, List<String> buyerProductCodes,
+                                                  L2AdjustMode mode, Integer percent, Long amountCents) {
+        BuyerDO buyer = requireBuyer(buyerCode);
+        L2AdjustMode resolvedMode = mode == null ? L2AdjustMode.FOLLOW_TEMPLATE : mode;
+        List<L2PricingPreview> previews = new ArrayList<>();
+        for (String buyerProductCode : normalizeCodes(buyerProductCodes)) {
+            BuyerProductDO product = requireLiveProduct(buyer.getId(), buyerProductCode, false);
+            PlatformSkuDO sku = requireActiveSkuById(product.getPlatformSkuId());
+            Long l1 = loadL1Cents(sku.getId());
+            Long currentOverride = loadL2OverrideCents(product.getId());
+            SettlementPriceResolver.ResolvedPrice current = settlementPriceResolver.resolve(null, currentOverride, l1);
+            Long previewOverride = settlementPriceResolver.applyL2(resolvedMode,
+                    requireL1(l1), percent, amountCents);
+            SettlementPriceResolver.ResolvedPrice preview = settlementPriceResolver.resolve(null, previewOverride, l1);
+            previews.add(new L2PricingPreview(product.getBuyerProductCode(), sku.getSkuCode(), l1,
+                    current.unitPriceCents(), current.source(), preview.unitPriceCents(), preview.source()));
+        }
+        return previews;
+    }
+
+    /**
+     * 在一个本地事务内批量发布分销商商品 L2 版本，任一行失败则全部回滚。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#4112-分销商与项目分层批量定价}。
+     */
+    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
+    public void patchL2Batch(String buyerCode, List<String> buyerProductCodes, L2AdjustMode mode,
+                             Integer percent, Long amountCents, Integer displayThresholdPercent, Long operatorId) {
+        List<String> codes = normalizeCodes(buyerProductCodes);
+        log.info("批量修改分销商品L2 buyerCode={} productCount={} l2AdjustMode={} operatorId={}",
+                buyerCode, codes.size(), mode, operatorId);
+        BuyerDO buyer = requireBuyerForUpdate(buyerCode);
+        LocalDateTime now = databaseClock.now();
+        L2AdjustMode resolvedMode = mode == null ? L2AdjustMode.FOLLOW_TEMPLATE : mode;
+        for (String buyerProductCode : codes) {
+            BuyerProductDO product = requireLiveProduct(buyer.getId(), buyerProductCode, true);
+            if (displayThresholdPercent != null) {
+                product.setDisplayThresholdPercent(displayThresholdPercent);
+                product.setUpdatedBy(operatorId);
+                product.setUpdatedAt(now);
+                if (productMapper.updateById(product) != 1) {
+                    throw exception(BUYER_PRODUCT_NOT_FOUND);
+                }
+            }
+            PlatformSkuDO sku = requireActiveSkuById(product.getPlatformSkuId());
+            applyL2Override(product, sku, resolvedMode, percent, amountCents, operatorId, now);
+        }
     }
 
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
@@ -217,6 +274,30 @@ public class BuyerProductCommandService {
         return version.getUnitPriceCents();
     }
 
+    private Long loadL2OverrideCents(Long buyerProductId) {
+        BuyerProductL2OverrideDO identity = overrideMapper.selectByBuyerProductId(buyerProductId);
+        if (identity == null || identity.getCurrentVersionId() == null) {
+            return null;
+        }
+        BuyerProductL2OverrideVersionDO version = overrideVersionMapper.selectById(identity.getCurrentVersionId());
+        return version == null ? null : version.getResolvedUnitPriceCents();
+    }
+
+    private static long requireL1(Long l1) {
+        if (l1 == null) {
+            throw exception(PLATFORM_SETTLEMENT_PRICE_MISSING);
+        }
+        return l1;
+    }
+
+    private BuyerDO requireBuyer(String buyerCode) {
+        BuyerDO buyer = buyerMapper.selectByBuyerCode(buyerCode);
+        if (buyer == null) {
+            throw exception(BUYER_PROFILE_NOT_FOUND);
+        }
+        return buyer;
+    }
+
     private BuyerDO requireBuyerForUpdate(String buyerCode) {
         BuyerDO buyer = buyerMapper.selectByBuyerCodeForUpdate(buyerCode);
         if (buyer == null) {
@@ -226,18 +307,34 @@ public class BuyerProductCommandService {
     }
 
     private BuyerProductDO requireLiveProduct(String buyerCode, String buyerProductCode) {
-        BuyerDO buyer = buyerMapper.selectByBuyerCode(buyerCode);
-        if (buyer == null) {
-            throw exception(BUYER_PROFILE_NOT_FOUND);
-        }
-        BuyerProductDO product = productMapper.selectByCodeForUpdate(buyerProductCode);
+        BuyerDO buyer = requireBuyer(buyerCode);
+        return requireLiveProduct(buyer.getId(), buyerProductCode, true);
+    }
+
+    private BuyerProductDO requireLiveProduct(Long buyerId, String buyerProductCode, boolean forUpdate) {
+        BuyerProductDO product = forUpdate ? productMapper.selectByCodeForUpdate(buyerProductCode)
+                : productMapper.selectByCode(buyerProductCode);
         if (product == null
-                || !buyer.getId().equals(product.getBuyerId())
+                || !buyerId.equals(product.getBuyerId())
                 || product.getStatus() == null
                 || product.getStatus() != BuyerProductStatus.ACTIVE.getCode()) {
             throw exception(BUYER_PRODUCT_NOT_FOUND);
         }
         return product;
+    }
+
+    private static List<String> normalizeCodes(List<String> codes) {
+        if (codes == null || codes.isEmpty() || codes.size() > MAX_BATCH_PRODUCT_COUNT) {
+            throw new IllegalArgumentException("buyerProductCodes must contain 1 to 200 items");
+        }
+        LinkedHashSet<String> normalized = new LinkedHashSet<>();
+        for (String code : codes) {
+            if (code == null || code.isBlank()) {
+                throw exception(BUYER_PRODUCT_NOT_FOUND);
+            }
+            normalized.add(code.trim());
+        }
+        return List.copyOf(normalized);
     }
 
     private PlatformSkuDO requireActiveSku(String platformSkuCode) {
@@ -250,5 +347,15 @@ public class BuyerProductCommandService {
 
     public record ProductLine(String platformSkuCode, L2AdjustMode l2AdjustMode,
                               Integer percent, Long amountCents, Integer displayThresholdPercent) {
+    }
+
+    public record L2PricingPreview(
+            @Schema(description = "分销商品永久业务编码") String buyerProductCode,
+            @Schema(description = "平台SKU永久业务编码") String platformSkuCode,
+            @Schema(description = "L1平台结算单价，单位CNY分") Long l1PriceCents,
+            @Schema(description = "当前L2有效单价，单位CNY分") long currentL2PriceCents,
+            @Schema(description = "当前L2有效价来源：L1或L2") PriceSource currentPriceSource,
+            @Schema(description = "试算后L2有效单价，单位CNY分") long previewL2PriceCents,
+            @Schema(description = "试算后L2有效价来源：L1或L2") PriceSource previewPriceSource) {
     }
 }

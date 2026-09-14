@@ -11,6 +11,7 @@ import com.aifuli.module.supplychain.tradecore.buyer.application.ProjectAdminQue
 import com.aifuli.module.supplychain.tradecore.buyer.application.ProjectAdminQueryService.ProjectPageQuery;
 import com.aifuli.module.supplychain.tradecore.buyer.domain.BuyerProjectStatus;
 import com.aifuli.module.supplychain.tradecore.catalog.application.ProjectListingCommandService;
+import com.aifuli.module.supplychain.tradecore.catalog.application.ProjectListingCommandService.L3PricingPreview;
 import com.aifuli.module.supplychain.tradecore.catalog.application.ProjectListingCommandService.ListingLine;
 import com.aifuli.module.supplychain.tradecore.catalog.application.ProjectListingQueryService;
 import com.aifuli.module.supplychain.tradecore.catalog.application.ProjectListingQueryService.ProjectListingListItem;
@@ -173,6 +174,31 @@ public class ProjectAdminController {
         return success(true);
     }
 
+    @PostMapping("/{projectCode}/products/pricing/preview")
+    @PreAuthorize(PROJECT_QUERY_EXPRESSION)
+    @Operation(summary = "批量试算项目商品L3价格",
+            description = "只读试算当前项目作用域内的L3最终价；同一分销商其它项目不受影响，税务元数据不参与计算。")
+    public CommonResult<List<L3PricingPreview>> previewProductPricing(
+            @Parameter(description = "采购项目全局永久编码") @PathVariable String projectCode,
+            @Valid @RequestBody ProjectProductBatchPricingReqVO request) {
+        return success(listingCommandService.previewL3Batch(projectCode, request.getListingCodes(),
+                ClosedEnums.parseRequired(L3AdjustMode.class, request.getL3AdjustMode()),
+                request.getPercent(), request.getAmountCents()));
+    }
+
+    @PutMapping("/{projectCode}/products/pricing")
+    @PreAuthorize(PROJECT_UPDATE_EXPRESSION)
+    @Operation(summary = "批量保存项目商品L3价格",
+            description = "仅发布路径项目下选中商品的L3价格版本；单事务全量成功或回滚，税务元数据不参与计算。")
+    public CommonResult<Boolean> updateProductPricing(
+            @Parameter(description = "采购项目全局永久编码") @PathVariable String projectCode,
+            @Valid @RequestBody ProjectProductBatchPricingReqVO request) {
+        listingCommandService.patchL3Batch(projectCode, request.getListingCodes(),
+                ClosedEnums.parseRequired(L3AdjustMode.class, request.getL3AdjustMode()),
+                request.getPercent(), request.getAmountCents(), getLoginUserId());
+        return success(true);
+    }
+
     @DeleteMapping("/{projectCode}/products/{listingCode}")
     @PreAuthorize(PROJECT_DELETE_EXPRESSION)
     @Operation(summary = "逻辑移除项目商品",
@@ -296,6 +322,23 @@ public class ProjectAdminController {
     public static class PatchProjectListingReqVO {
         @NotBlank
         @Schema(description = "L3调价方式：FOLLOW_L2 / EQUAL_L1 / CUSTOM")
+        private String l3AdjustMode;
+        @Schema(description = "CUSTOM时的整数百分比，100等于L1")
+        private Integer percent;
+        @Schema(description = "CUSTOM时加减的CNY分")
+        private Long amountCents;
+    }
+
+    @Data
+    @Schema(description = "项目商品L3批量定价请求")
+    public static class ProjectProductBatchPricingReqVO {
+        @NotEmpty
+        @Size(max = 200)
+        @Schema(description = "当前项目下的项目商品编码列表", requiredMode = Schema.RequiredMode.REQUIRED)
+        private List<@NotBlank String> listingCodes;
+        @NotBlank
+        @Schema(description = "L3调价方式：FOLLOW_L2 / EQUAL_L1 / CUSTOM",
+                requiredMode = Schema.RequiredMode.REQUIRED)
         private String l3AdjustMode;
         @Schema(description = "CUSTOM时的整数百分比，100等于L1")
         private Integer percent;

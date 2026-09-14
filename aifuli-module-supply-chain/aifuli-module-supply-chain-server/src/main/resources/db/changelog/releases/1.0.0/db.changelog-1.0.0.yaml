@@ -316,5 +316,14 @@ databaseChangeLog:
             encoding: UTF-8
             splitStatements: true
             stripComments: false
-
+  - changeSet:
+      id: 031-batch-pricing-tax-metadata
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 031-batch-pricing-tax-metadata.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
 

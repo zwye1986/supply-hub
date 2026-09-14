@@ -107,7 +107,8 @@ public class ProductCatalogQueryService {
                 : categoryMapper.selectById(spu.getPrimaryCategoryId());
         List<SkuDetail> skus = skus(List.of(spu.getId()), null).stream()
                 .map(sku -> new SkuDetail(sku.getSkuCode(), sku.getSkuName(), sku.getFulfillmentType(),
-                        sku.getFaceValue(), sku.getMarketPrice(), sku.getSuggestedSalePrice(), sku.getMinQuantity(),
+                        sku.getFaceValue(), sku.getMarketPrice(), sku.getSuggestedSalePrice(),
+                        sku.getTaxIncluded(), sku.getTaxRate(), sku.getMinQuantity(),
                         sku.getMaxQuantity(), sku.getTargetSchemaCode(), sku.getTargetSchemaVersion(),
                         sku.getResultSchemaCode(), sku.getResultSchemaVersion(), sku.getStatus(),
                         sellabilityService.isSellable(sku, spu)))
@@ -249,6 +250,8 @@ public class ProductCatalogQueryService {
             @Schema(description = "商品标准面值，单位CNY分") Long faceValue,
             @Schema(description = "市场划线价或吊牌价，单位CNY分") Long marketPrice,
             @Schema(description = "建议零售价或销售建议价，单位CNY分") Long suggestedSalePrice,
+            @Schema(description = "是否含税：1含税，0不含税；仅记录展示，不参与价格计算") Boolean taxIncluded,
+            @Schema(description = "税率，如0.0600表示6%；仅记录展示，不参与价格计算") BigDecimal taxRate,
             @Schema(description = "SKU单次最小起购数量") Long minQuantity,
             @Schema(description = "SKU单次最大限购数量") Long maxQuantity,
             @Schema(description = "履约目标封闭Schema编码") String targetSchemaCode,
@@ -432,15 +435,16 @@ public class ProductCatalogQueryService {
 
                 Long supplyPriceExclusive = null;
                 Long taxAmount = null;
-                String taxRateDisplay = "不征税";
+                boolean taxIncluded = Boolean.TRUE.equals(sku.getTaxIncluded());
+                String taxRateDisplay = taxIncluded ? "含税（税率未配置）" : "不含税";
                 BigDecimal taxRate = sku.getTaxRate();
-                if (taxRate != null && taxRate.compareTo(BigDecimal.ZERO) > 0) {
+                if (taxIncluded && taxRate != null && taxRate.compareTo(BigDecimal.ZERO) > 0) {
                     taxRateDisplay = taxRate.multiply(BigDecimal.valueOf(100)).stripTrailingZeros().toPlainString() + "%";
                     if (minSupplyPrice != null) {
                         supplyPriceExclusive = Math.round(minSupplyPrice / (1.0 + taxRate.doubleValue()));
                         taxAmount = minSupplyPrice - supplyPriceExclusive;
                     }
-                } else if (minSupplyPrice != null) {
+                } else if (!taxIncluded && minSupplyPrice != null) {
                     supplyPriceExclusive = minSupplyPrice;
                     taxAmount = 0L;
                 }
@@ -454,6 +458,7 @@ public class ProductCatalogQueryService {
                         sku.getSuggestedSalePrice(),
                         minSupplyPrice,
                         supplyPriceExclusive,
+                        taxIncluded,
                         taxRate,
                         taxRateDisplay,
                         taxAmount,
@@ -546,8 +551,9 @@ public class ProductCatalogQueryService {
             @Schema(description = "建议零售价或销售建议价，单位CNY分") Long suggestedSalePrice,
             @Schema(description = "供货价或有效结算价，单位CNY分") Long supplyPrice,
             @Schema(description = "不含税供货价，单位CNY分") Long supplyPriceExclusive,
-            @Schema(description = "税率，如0.0600表示6%") BigDecimal taxRate,
-            @Schema(description = "税率展示文本，如6%、不征税、—") String taxRateDisplay,
+            @Schema(description = "是否含税：1含税，0不含税；仅记录展示，不参与价格计算") Boolean taxIncluded,
+            @Schema(description = "税率，如0.0600表示6%；仅记录展示，不参与价格计算") BigDecimal taxRate,
+            @Schema(description = "税率展示文本，如6%、不含税、含税（税率未配置）") String taxRateDisplay,
             @Schema(description = "税额，单位CNY分") Long taxAmount,
             @Schema(description = "供应商列表") List<SupplierSimpleInfo> suppliers,
             @Schema(description = "总库存") Long totalInventory,

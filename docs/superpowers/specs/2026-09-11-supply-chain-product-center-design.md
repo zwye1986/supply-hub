@@ -27,6 +27,7 @@
 | **d17** | **品牌与商品类型管理模型原型对齐** | 严格按管理端原型对齐主数据能力：<br>1. `sc_brand` 增加 `short_name`（品牌简称）和 `description`（品牌介绍与说明）；`BrandSaveReqVO.logoUrl` 增加 `@NotBlank` 必填校验；`BrandView` 补充 `shortName`、`description` 并显式投影 `spuCount`。<br>2. `sc_product_type` 增加 `icon_url`（类型图标）和 `description`（类型详细描述）；`ProductTypeSaveReqVO.iconUrl` 必填，支持创建时指定 `status`（10启用/20停用，缺省10）；`ProductTypeView` 补充 `iconUrl`、`description`，并一次性聚合未归档 `spuCount` 与 `skuCount` 两项统计指标，避免 N+1 查询。变更由 `029` 变更集执行。 | 彻底对齐原型字段与卡片双指标展示 |
 | **d18** | **旧品牌创建接口终止写入** | 品牌创建统一使用 `POST /supply-chain/brands`。已废弃的 `POST /supply-chain/master-data/brands` 不再委托应用服务、不再执行参数校验或数据库写入，而是固定返回稳定业务错误 `BRAND_LEGACY_API_DEPRECATED`（`1_050_001_106`，不可重试），提示调用方迁移至新接口。其他 M1 兼容接口不受本决策影响。 | 关闭旧品牌入口绕过 Logo 必填约束的写入旁路 |
 | **d19** | **商品管理列表端管理端聚合读模型与批量上下架** | 针对运营管理端原型中「SPU 嵌套多 SKU 展开展示」与复杂多维检索诉求：<br>1. 新增管理端聚合读接口 `GET /supply-chain/products/management-page`，整页一次批量拉取 SPU、SKU、生效 Offer 及供应商信息在内存组装，返回包含市场价、销售建议价、供货价、不含税供货价、税率、税额、供应商名称列表、总库存、兑换方式、下架方式的聚合模型。<br>2. 新增批量上下架接口 `PUT /supply-chain/products/batch-status`，支持批量上架、下架并记录 `unshelve_mode`（`MANUAL_UNSHELVE`）。<br>3. `030` 变更集：`sc_platform_spu` 增加 `unshelve_mode`；`sc_platform_sku` 增加 `tax_rate`；存量商品类型回填默认 icon 图标；为 `sc_platform_spu` 补充 `idx_sc_platform_spu_type_status` 复合索引；商品类型卡片双指标重构为数据库 `GROUP BY` 聚合，彻底消除大数据量下的内存风险。 | 支撑商品列表管理端原型与批量操作 |
+| **d20** | **分销商/项目分层批量定价与税务元数据隔离** | 分销价必须落在 `分销商 + 分销商品`（L2）作用域，项目价必须落在 `分销商下的项目 + 项目商品`（L3）作用域；同一分销商的不同项目允许形成不同价格，禁止新增平台全局“分销价”。批量试算为只读操作，批量保存复用既有不可变价格版本表并在单事务内全量成功或回滚。`tax_included` 与 `tax_rate` 归属平台 SKU，只记录和展示，不得作为 `SettlementPriceResolver`、L1/L2/L3、服务费或利润率的计算入参；`031` 变更集补充含税标识并收紧字段注释。 | 明确定价作用域并防止税务展示字段污染结算价格 |
 
 ---
 
@@ -174,6 +175,21 @@ UPDATE sc_product_type SET icon_url = 'https://img.qihaofu.cn/supplyhub/icons/jd
 UPDATE sc_product_type SET icon_url = 'https://img.qihaofu.cn/supplyhub/icons/default.svg' WHERE icon_url IS NULL OR icon_url = '';
 ```
 
+### 2.9 分层批量定价与税务元数据隔离（031 Changeset）
+
+L2/L3 批量定价继续复用 `sc_buyer_product_l2_override_version` 与 `sc_project_listing_version` 的不可变版本模型，不新增全局价格列。税务信息归属平台 SKU，仅用于管理端记录和展示：
+
+```sql
+-- 变更集：031-batch-pricing-tax-metadata.sql
+ALTER TABLE sc_platform_sku
+    MODIFY COLUMN tax_rate DECIMAL(6,4) NULL COMMENT '税率，如0.0600表示6%；仅记录展示，不参与价格计算',
+    ADD COLUMN tax_included TINYINT(1) NOT NULL DEFAULT 0
+        COMMENT '是否含税：1含税，0不含税；仅记录展示，不参与价格计算' AFTER tax_rate,
+    ADD CONSTRAINT ck_sc_sku_tax_rate CHECK (tax_rate IS NULL OR (tax_rate >= 0 AND tax_rate <= 1));
+```
+
+`tax_included` 与 `tax_rate` 不进入任何价格版本表，也不进入 `SettlementPriceResolver`。管理列表中的不含税供货价与税额仅是展示投影，不得回写、覆盖或改变市场价、销售建议价、L1 平台价、L2 分销商价、L3 项目价及最终结算价。
+
 ---
 
 ## 3. 核心业务规则与状态机设计
@@ -312,6 +328,8 @@ PRD 8.4.1 的列表 Tab 支持从 `GET /supply-chain/product-types` 动态拉取
     * `faceValue` (Long, 必填，单位分)
     * `marketPrice` (Long, 默认 0，分)
     * `suggestedSalePrice` (Long, 默认 0，分)
+    * `taxIncluded` (Boolean, 可选): 是否含税；仅记录展示，不参与价格计算。
+    * `taxRate` (BigDecimal, 可选): 税率，取值 `[0, 1]`；仅记录展示，不参与价格计算。
     * `minQuantity` (Long, 默认 1)
     * `maxQuantity` (Long, 默认 9999999)
     * `status` (Short, 默认与 SPU 保持一致)
@@ -376,6 +394,7 @@ PRD 8.4.1 的列表 Tab 支持从 `GET /supply-chain/product-types` 动态拉取
     * `suggestedSalePrice` (Long): 销售建议价（分）
     * `supplyPrice` (Long): 供货价/有效结算价（分）
     * `supplyPriceExclusive` (Long): 不含税供货价（分）
+    * `taxIncluded` (Boolean): 是否含税；仅记录展示，不参与价格计算
     * `taxRate` (BigDecimal): 税率（例如 0.0600 代表 6%）
     * `taxAmount` (Long): 税额（分）
     * `suppliers` (List<SupplierSimpleItem>): 供应商列表（编码与名称，支撑多供应商换行展示）
@@ -392,6 +411,27 @@ PRD 8.4.1 的列表 Tab 支持从 `GET /supply-chain/product-types` 动态拉取
   * `targetStatus` (Short, 必填): 目标状态（10-上架，20-下架）
   * `unshelveMode` (String, 可选): 下架方式，默认为 `MANUAL_UNSHELVE`
 * **响应**：`CommonResult<Boolean>`
+
+#### 4.1.11 SKU 税务元数据批量记录：`PUT /supply-chain/products/skus/tax-metadata`
+* **设计目的**：记录并回显商品管理原型中的「是否含税、税率」，不参与任何价格计算。
+* **权限**：使用 `SupplyChainAdminPermissions.PRODUCT_UPDATE_EXPRESSION`。
+* **请求体**：`SkuTaxMetadataBatchReqVO`
+  * `skuCodes` (List<String>, 必填，1~200 个): 平台 SKU 业务编码列表。
+  * `taxIncluded` (Boolean, 必填): 是否含税，`true` 含税、`false` 不含税。
+  * `taxRate` (BigDecimal, 可选): 税率，取值区间 `[0, 1]`，例如 `0.0600` 表示 6%。
+* **执行**：在单事务内更新所有指定 SKU；任一 SKU 不存在或已归档则全量回滚。保存逻辑不得调用任何价格解析器，也不得修改价格字段或价格版本。
+* **响应**：`CommonResult<Boolean>`。
+
+#### 4.1.12 分销商与项目分层批量定价
+
+批量定价沿用现有 L1/L2/L3 价格链：L3 项目价 > L2 分销商价 > L1 平台价。L2 与 L3 是两个不同作用域，不提供跨分销商或跨项目的全局价格覆盖。
+
+* `POST /supply-chain/buyers/{buyerCode}/products/pricing/preview`：批量试算选中分销商品的新 L2 有效价，不写数据库。请求包含 `buyerProductCodes`、`l2AdjustMode`、`percent`、`amountCents`、`displayThresholdPercent`；响应逐项返回 L1、当前 L2 与试算后 L2。
+* `PUT /supply-chain/buyers/{buyerCode}/products/pricing`：批量保存该分销商下选中商品的 L2 规则，复用不可变 `BuyerProductL2OverrideVersion`，单事务全量成功或回滚。
+* `POST /supply-chain/projects/{projectCode}/products/pricing/preview`：批量试算该项目中选中商品的新 L3 有效价，不写数据库。请求包含 `listingCodes`、`l3AdjustMode`、`percent`、`amountCents`；响应逐项返回 L1、L2、当前最终价与试算后最终价。
+* `PUT /supply-chain/projects/{projectCode}/products/pricing`：批量保存该项目下选中商品的 L3 规则，复用不可变 `ProjectListingVersion`，单事务全量成功或回滚。
+
+试算与保存均按路径中的 `buyerCode` / `projectCode` 校验资源归属，禁止仅凭商品编码跨作用域改价。`taxIncluded`、`taxRate` 不出现在上述定价请求中，也不参与试算结果。
 
 ---
 

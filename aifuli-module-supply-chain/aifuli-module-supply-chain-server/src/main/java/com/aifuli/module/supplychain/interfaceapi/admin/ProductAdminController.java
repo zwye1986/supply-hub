@@ -15,6 +15,8 @@ import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.DecimalMax;
+import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
@@ -27,6 +29,7 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
+import java.math.BigDecimal;
 import java.util.List;
 
 import static com.aifuli.framework.common.pojo.CommonResult.success;
@@ -118,6 +121,17 @@ public class ProductAdminController {
         return success(true);
     }
 
+    @PutMapping("/skus/tax-metadata")
+    @PreAuthorize(PRODUCT_UPDATE_EXPRESSION)
+    @Operation(summary = "批量记录SKU税务元数据",
+            description = "是否含税与税率只保存和展示，不参与市场价、供货价、L1/L2/L3或最终结算价计算。")
+    public CommonResult<Boolean> batchUpdateSkuTaxMetadata(
+            @Valid @RequestBody SkuTaxMetadataBatchReqVO request) {
+        commandService.batchUpdateSkuTaxMetadata(new ProductCatalogCommandService.SkuTaxMetadataBatchCommand(
+                request.getSkuCodes(), request.getTaxIncluded(), request.getTaxRate(), getLoginUserId()));
+        return success(true);
+    }
+
     @GetMapping("/spus/{spuCode}")
     @PreAuthorize(PRODUCT_QUERY_EXPRESSION)
     @Operation(summary = "查询平台 SPU 与 SKU 详情")
@@ -187,8 +201,8 @@ public class ProductAdminController {
 
     private SaveSpuCommand toCommand(SpuSaveReqVO request) {
         List<SaveSkuLine> skus = request.skus.stream().map(line -> new SaveSkuLine(line.skuCode, line.skuName,
-                line.fulfillmentType, line.faceValue, line.marketPrice, line.suggestedSalePrice, line.minQuantity,
-                line.maxQuantity, line.status)).toList();
+                line.fulfillmentType, line.faceValue, line.marketPrice, line.suggestedSalePrice,
+                line.taxIncluded, line.taxRate, line.minQuantity, line.maxQuantity, line.status)).toList();
         return new SaveSpuCommand(request.spuCode, request.spuName, request.subtitle, request.brandId,
                 request.primaryCategoryId, request.secondaryCategoryIds, request.sellableCategory,
                 request.productType, request.productClassification, request.coverUrl, request.sliderImageUrls,
@@ -228,6 +242,9 @@ public class ProductAdminController {
         @NotNull @Min(0) @Schema(description = "面值，CNY分") private Long faceValue;
         @Min(0) @Schema(description = "市场价，CNY分；默认0") private Long marketPrice;
         @Min(0) @Schema(description = "销售建议价，CNY分；默认0") private Long suggestedSalePrice;
+        @Schema(description = "是否含税：1含税，0不含税；仅记录展示，不参与价格计算") private Boolean taxIncluded;
+        @DecimalMin("0.0000") @DecimalMax("1.0000")
+        @Schema(description = "税率，如0.0600表示6%；仅记录展示，不参与价格计算") private BigDecimal taxRate;
         @Positive @Schema(description = "SKU 最低起购量；默认1") private Long minQuantity;
         @Positive @Schema(description = "SKU 单次最高购买量；默认9999999") private Long maxQuantity;
         @Schema(description = "SKU 状态；默认继承 SPU") private Short status;
@@ -245,5 +262,22 @@ public class ProductAdminController {
         private Short targetStatus;
         @Schema(description = "下架方式：MANUAL_UNSHELVE手动下架，SYSTEM_UNSHELVE系统下架；下架时可选，缺省为 MANUAL_UNSHELVE", example = "MANUAL_UNSHELVE")
         private String unshelveMode;
+    }
+
+    @Data
+    @Schema(description = "SKU税务展示元数据批量记录请求")
+    public static class SkuTaxMetadataBatchReqVO {
+        @NotEmpty
+        @Size(max = 200)
+        @Schema(description = "平台SKU永久业务编码列表", requiredMode = Schema.RequiredMode.REQUIRED)
+        private List<@NotBlank String> skuCodes;
+        @NotNull
+        @Schema(description = "是否含税：1含税，0不含税；仅记录展示，不参与价格计算",
+                requiredMode = Schema.RequiredMode.REQUIRED)
+        private Boolean taxIncluded;
+        @DecimalMin("0.0000")
+        @DecimalMax("1.0000")
+        @Schema(description = "税率，如0.0600表示6%；仅记录展示，不参与价格计算", example = "0.0600")
+        private BigDecimal taxRate;
     }
 }

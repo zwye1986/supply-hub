@@ -31,6 +31,7 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProjectListingV
 import com.aifuli.module.supplychain.tradecore.profile.domain.L3AdjustMode;
 import com.aifuli.module.supplychain.tradecore.profile.domain.ListingPriceSource;
 import com.aifuli.module.supplychain.tradecore.profile.domain.PriceSource;
+import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;
@@ -39,6 +40,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 
 import static com.aifuli.framework.common.exception.util.ServiceExceptionUtil.exception;
@@ -59,6 +61,7 @@ public class ProjectListingCommandService {
     private final SupplyChainDatabaseClock databaseClock;
 
     private static final String TRANSACTION_MANAGER = "supplyChainTransactionManager";
+    private static final int MAX_BATCH_LISTING_COUNT = 200;
 
     private final BuyerProjectMapper projectMapper;
     private final BuyerMapper buyerMapper;
@@ -101,13 +104,64 @@ public class ProjectListingCommandService {
                 projectCode, listingCode, mode, operatorId);
         BuyerProjectDO project = requireProjectForUpdate(projectCode);
         ProjectListingDO listing = requireLiveListing(project.getId(), listingCode);
-        BuyerProductDO product = productMapper.selectById(listing.getBuyerProductId());
-        if (product == null) {
-            throw exception(PROJECT_SKU_NOT_IN_BUYER_CATALOG);
-        }
+        BuyerProductDO product = requireBuyerProduct(project, listing);
         LocalDateTime now = databaseClock.now();
         publishVersion(listing, product, mode == null ? L3AdjustMode.FOLLOW_L2 : mode,
                 percent, amountCents, operatorId, now);
+    }
+
+    /**
+     * 只读试算单一项目内的多条 L3 价格。同一分销商的其它项目不会被读取或改写。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#4112-分销商与项目分层批量定价}。
+     */
+    @Transactional(transactionManager = TRANSACTION_MANAGER, readOnly = true)
+    public List<L3PricingPreview> previewL3Batch(String projectCode, List<String> listingCodes,
+                                                  L3AdjustMode mode, Integer percent, Long amountCents) {
+        BuyerProjectDO project = requireProject(projectCode);
+        L3AdjustMode resolvedMode = mode == null ? L3AdjustMode.FOLLOW_L2 : mode;
+        List<L3PricingPreview> previews = new ArrayList<>();
+        for (String listingCode : normalizeCodes(listingCodes)) {
+            ProjectListingDO listing = requireLiveListing(project.getId(), listingCode, false);
+            BuyerProductDO product = requireBuyerProduct(project, listing);
+            PlatformSkuDO sku = skuMapper.selectById(product.getPlatformSkuId());
+            if (sku == null) {
+                throw exception(PROJECT_SKU_NOT_IN_BUYER_CATALOG);
+            }
+            Long l1 = loadL1Cents(product.getPlatformSkuId());
+            Long l2Override = loadOverrideCents(product.getId());
+            ResolvedPrice l2 = settlementPriceResolver.resolve(null, l2Override, l1);
+            ProjectListingVersionDO currentVersion = listing.getCurrentVersionId() == null ? null
+                    : listingVersionMapper.selectById(listing.getCurrentVersionId());
+            if (currentVersion == null) {
+                throw exception(PROJECT_LISTING_NOT_FOUND);
+            }
+            FrozenPrice preview = freeze(product, resolvedMode, percent, amountCents);
+            previews.add(new L3PricingPreview(listing.getListingCode(), sku.getSkuCode(), l1,
+                    l2.unitPriceCents(), l2.source(), currentVersion.getBuyerSettlementUnitPrice(),
+                    PriceSource.valueOf(currentVersion.getSettlementPriceLevel()),
+                    preview.unitPriceCents(), preview.level()));
+        }
+        return previews;
+    }
+
+    /**
+     * 在一个本地事务内批量发布项目 L3 版本，任一 listing 不属于当前项目时全量回滚。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#4112-分销商与项目分层批量定价}。
+     */
+    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
+    public void patchL3Batch(String projectCode, List<String> listingCodes, L3AdjustMode mode,
+                             Integer percent, Long amountCents, Long operatorId) {
+        List<String> codes = normalizeCodes(listingCodes);
+        log.info("批量修改项目商品L3 projectCode={} listingCount={} l3AdjustMode={} operatorId={}",
+                projectCode, codes.size(), mode, operatorId);
+        BuyerProjectDO project = requireProjectForUpdate(projectCode);
+        LocalDateTime now = databaseClock.now();
+        L3AdjustMode resolvedMode = mode == null ? L3AdjustMode.FOLLOW_L2 : mode;
+        for (String listingCode : codes) {
+            ProjectListingDO listing = requireLiveListing(project.getId(), listingCode, true);
+            publishVersion(listing, requireBuyerProduct(project, listing), resolvedMode,
+                    percent, amountCents, operatorId, now);
+        }
     }
 
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
@@ -236,8 +290,21 @@ public class ProjectListingCommandService {
         return project;
     }
 
+    private BuyerProjectDO requireProject(String projectCode) {
+        BuyerProjectDO project = projectMapper.selectByProjectCode(projectCode);
+        if (project == null) {
+            throw exception(PROJECT_NOT_FOUND);
+        }
+        return project;
+    }
+
     private ProjectListingDO requireLiveListing(Long projectId, String listingCode) {
-        ProjectListingDO listing = listingMapper.selectByCodeForUpdate(listingCode);
+        return requireLiveListing(projectId, listingCode, true);
+    }
+
+    private ProjectListingDO requireLiveListing(Long projectId, String listingCode, boolean forUpdate) {
+        ProjectListingDO listing = forUpdate ? listingMapper.selectByCodeForUpdate(listingCode)
+                : listingMapper.selectByCode(listingCode);
         if (listing == null
                 || !projectId.equals(listing.getProjectId())
                 || listing.getStatus() == null
@@ -245,6 +312,30 @@ public class ProjectListingCommandService {
             throw exception(PROJECT_LISTING_NOT_FOUND);
         }
         return listing;
+    }
+
+    private BuyerProductDO requireBuyerProduct(BuyerProjectDO project, ProjectListingDO listing) {
+        BuyerProductDO product = productMapper.selectById(listing.getBuyerProductId());
+        if (product == null || product.getStatus() == null
+                || !java.util.Objects.equals(project.getBuyerId(), product.getBuyerId())
+                || product.getStatus() != BuyerProductStatus.ACTIVE.getCode()) {
+            throw exception(PROJECT_SKU_NOT_IN_BUYER_CATALOG);
+        }
+        return product;
+    }
+
+    private static List<String> normalizeCodes(List<String> codes) {
+        if (codes == null || codes.isEmpty() || codes.size() > MAX_BATCH_LISTING_COUNT) {
+            throw new IllegalArgumentException("listingCodes must contain 1 to 200 items");
+        }
+        LinkedHashSet<String> normalized = new LinkedHashSet<>();
+        for (String code : codes) {
+            if (code == null || code.isBlank()) {
+                throw exception(PROJECT_LISTING_NOT_FOUND);
+            }
+            normalized.add(code.trim());
+        }
+        return List.copyOf(normalized);
     }
 
     private Long loadL1Cents(Long skuId) {
@@ -273,5 +364,17 @@ public class ProjectListingCommandService {
 
     public record ListingLine(String platformSkuCode, L3AdjustMode l3AdjustMode,
                               Integer percent, Long amountCents) {
+    }
+
+    public record L3PricingPreview(
+            @Schema(description = "项目商品永久业务编码") String listingCode,
+            @Schema(description = "平台SKU永久业务编码") String platformSkuCode,
+            @Schema(description = "L1平台结算单价，单位CNY分") Long l1PriceCents,
+            @Schema(description = "当前L2有效单价，单位CNY分") long l2PriceCents,
+            @Schema(description = "当前L2有效价来源：L1或L2") PriceSource l2PriceSource,
+            @Schema(description = "当前项目冻结最终价，单位CNY分") Long currentFinalPriceCents,
+            @Schema(description = "当前项目冻结最终价来源：L1、L2或L3") PriceSource currentPriceSource,
+            @Schema(description = "试算后项目最终价，单位CNY分") long previewFinalPriceCents,
+            @Schema(description = "试算后项目最终价来源：L1、L2或L3") PriceSource previewPriceSource) {
     }
 }

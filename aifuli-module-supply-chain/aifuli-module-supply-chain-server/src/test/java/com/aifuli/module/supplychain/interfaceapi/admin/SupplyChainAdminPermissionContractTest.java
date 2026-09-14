@@ -91,6 +91,8 @@ class SupplyChainAdminPermissionContractTest {
                 Map.entry("pageProducts", BUYER_QUERY_EXPRESSION),
                 Map.entry("addProducts", BUYER_UPDATE_EXPRESSION),
                 Map.entry("patchProduct", BUYER_UPDATE_EXPRESSION),
+                Map.entry("previewProductPricing", BUYER_QUERY_EXPRESSION),
+                Map.entry("updateProductPricing", BUYER_UPDATE_EXPRESSION),
                 Map.entry("retireProduct", BUYER_DELETE_EXPRESSION),
                 Map.entry("getInvoice", BUYER_QUERY_EXPRESSION),
                 Map.entry("saveInvoice", BUYER_UPDATE_EXPRESSION)));
@@ -107,6 +109,8 @@ class SupplyChainAdminPermissionContractTest {
                 Map.entry("pageProducts", PROJECT_QUERY_EXPRESSION),
                 Map.entry("addProducts", PROJECT_UPDATE_EXPRESSION),
                 Map.entry("patchProduct", PROJECT_UPDATE_EXPRESSION),
+                Map.entry("previewProductPricing", PROJECT_QUERY_EXPRESSION),
+                Map.entry("updateProductPricing", PROJECT_UPDATE_EXPRESSION),
                 Map.entry("retireProduct", PROJECT_DELETE_EXPRESSION)));
     }
 
@@ -133,6 +137,7 @@ class SupplyChainAdminPermissionContractTest {
                 Map.entry("update", PRODUCT_UPDATE_EXPRESSION),
                 Map.entry("changeSpuStatus", PRODUCT_UPDATE_STATUS_EXPRESSION),
                 Map.entry("batchChangeStatus", PRODUCT_UPDATE_STATUS_EXPRESSION),
+                Map.entry("batchUpdateSkuTaxMetadata", PRODUCT_UPDATE_EXPRESSION),
                 Map.entry("changeSkuStatus", PRODUCT_UPDATE_STATUS_EXPRESSION),
                 Map.entry("deleteSpu", PRODUCT_DELETE_EXPRESSION),
                 Map.entry("deleteSku", PRODUCT_DELETE_EXPRESSION)));

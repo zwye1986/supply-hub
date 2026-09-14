@@ -9,6 +9,7 @@ import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerMapper;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerProductMapper;
 import com.aifuli.module.supplychain.tradecore.buyer.domain.BuyerProductStatus;
 import com.aifuli.module.supplychain.tradecore.catalog.application.BuyerProductCommandService.ProductLine;
+import com.aifuli.module.supplychain.tradecore.catalog.application.BuyerProductCommandService.L2PricingPreview;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerProductL2OverrideDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerProductL2OverrideVersionDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSettlementPriceDO;
@@ -38,6 +39,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -170,6 +172,52 @@ class BuyerProductCommandServiceTest {
         service.patchL2("BYR_A", "BPD_1", L2AdjustMode.FOLLOW_TEMPLATE, null, null, null, 1L);
     }
 
+    /** 税务元数据即使存在，也不改变 L2 试算结果。 */
+    @Test
+    void previewL2IgnoresTaxMetadata() {
+        when(buyerMapper.selectByBuyerCode("BYR_A")).thenReturn(BuyerDO.builder().id(5L).buyerCode("BYR_A").build());
+        when(productMapper.selectByCode("BPD_1")).thenReturn(BuyerProductDO.builder()
+                .id(77L).buyerProductCode("BPD_1").buyerId(5L).platformSkuId(11L)
+                .status(BuyerProductStatus.ACTIVE.getCode()).build());
+        when(skuMapper.selectById(11L)).thenReturn(PlatformSkuDO.builder()
+                .id(11L).spuId(101L).skuCode("MOVIE_100").taxIncluded(true)
+                .taxRate(new java.math.BigDecimal("0.2500"))
+                .status(CatalogEntityStatus.ACTIVE.getCode()).build());
+        stubL1(1_000L);
+        when(overrideMapper.selectByBuyerProductId(77L)).thenReturn(null);
+
+        List<L2PricingPreview> result = service.previewL2Batch(
+                "BYR_A", List.of("BPD_1"), L2AdjustMode.CUSTOM, 80, 0L);
+
+        assertThat(result).singleElement().satisfies(line -> {
+            assertThat(line.currentL2PriceCents()).isEqualTo(1_000L);
+            assertThat(line.previewL2PriceCents()).isEqualTo(800L);
+        });
+    }
+
+    /** 批量 L2 在分销商作用域内逐条发布不可变版本。 */
+    @Test
+    void batchL2PublishesEveryScopedProduct() {
+        stubL1(1_000L);
+        when(productMapper.selectByCodeForUpdate("BPD_1")).thenReturn(liveProduct(77L, "BPD_1"));
+        when(productMapper.selectByCodeForUpdate("BPD_2")).thenReturn(liveProduct(78L, "BPD_2"));
+        when(skuMapper.selectById(11L)).thenReturn(PlatformSkuDO.builder()
+                .id(11L).spuId(101L).skuCode("MOVIE_100")
+                .status(CatalogEntityStatus.ACTIVE.getCode()).build());
+        when(overrideMapper.selectByBuyerProductId(any())).thenReturn(null);
+        when(overrideVersionMapper.selectByBuyerProductId(any())).thenReturn(List.of());
+        when(overrideVersionMapper.insert(any(BuyerProductL2OverrideVersionDO.class))).thenReturn(1);
+
+        service.patchL2Batch("BYR_A", List.of("BPD_1", "BPD_2"),
+                L2AdjustMode.CUSTOM, 90, 0L, null, 1L);
+
+        ArgumentCaptor<BuyerProductL2OverrideVersionDO> versions =
+                ArgumentCaptor.forClass(BuyerProductL2OverrideVersionDO.class);
+        verify(overrideVersionMapper, times(2)).insert(versions.capture());
+        assertThat(versions.getAllValues()).allSatisfy(version ->
+                assertThat(version.getResolvedUnitPriceCents()).isEqualTo(900L));
+    }
+
     private void stubLiveProduct() {
         when(productMapper.selectByCodeForUpdate("BPD_1")).thenReturn(BuyerProductDO.builder()
                 .id(77L).buyerProductCode("BPD_1").buyerId(5L).platformSkuId(11L)
@@ -186,6 +234,11 @@ class BuyerProductCommandServiceTest {
                 .platformSkuId(11L).currentVersionId(31L).build());
         when(l1VersionMapper.selectById(31L)).thenReturn(PlatformSettlementPriceVersionDO.builder()
                 .id(31L).platformSkuId(11L).unitPriceCents(cents).build());
+    }
+
+    private static BuyerProductDO liveProduct(long id, String code) {
+        return BuyerProductDO.builder().id(id).buyerProductCode(code).buyerId(5L).platformSkuId(11L)
+                .status(BuyerProductStatus.ACTIVE.getCode()).version(0L).build();
     }
 
     private static ProductLine follow(String skuCode) {

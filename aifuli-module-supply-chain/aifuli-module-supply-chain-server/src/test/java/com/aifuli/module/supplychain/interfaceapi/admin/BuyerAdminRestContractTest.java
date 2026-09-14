@@ -38,6 +38,7 @@ class BuyerAdminRestContractTest {
     private static final List<String> ALLOWED_PREFIXES = List.of(
             "", "/{buyerCode}", "/{buyerCode}/children",
             "/{buyerCode}/products", "/{buyerCode}/products/{buyerProductCode}",
+            "/{buyerCode}/products/pricing/preview", "/{buyerCode}/products/pricing",
             "/{buyerCode}/invoice");
 
     @Test
