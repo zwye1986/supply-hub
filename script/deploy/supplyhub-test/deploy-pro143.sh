@@ -20,6 +20,8 @@ fi
 
 REMOTE_HOST="${SUPPLYHUB_DOCKER_HOST:-pro143}"
 REMOTE_DIR="/data/aifuli-test/supplyhub"
+# pro143 默认 SSH 加密算法传输极慢（约 12KB/s）；aes128-gcm 可达约 7.5MB/s。
+SCP_OPTS=(-c aes128-gcm@openssh.com -o Compression=no)
 MONOREPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 HEALTH_WAIT_SECONDS=900
 TARGET_SERVICE="${1:-all}"
@@ -93,8 +95,8 @@ TARBALL="/tmp/supplyhub-${SHA_TAG}.tar.gz"
 log "Step 3/6: save+scp ${TARBALL}"
 docker save "${IMAGES[@]}" | gzip > "${TARBALL}"
 ssh "${REMOTE_HOST}" "install -d -m 755 ${REMOTE_DIR}/logs"
-scp "${TARBALL}" "${REMOTE_HOST}:${REMOTE_DIR}/$(basename "${TARBALL}")"
-scp "${MONOREPO_ROOT}/script/deploy/supplyhub-test/docker-compose.yml" \
+scp "${SCP_OPTS[@]}" "${TARBALL}" "${REMOTE_HOST}:${REMOTE_DIR}/$(basename "${TARBALL}")"
+scp "${SCP_OPTS[@]}" "${MONOREPO_ROOT}/script/deploy/supplyhub-test/docker-compose.yml" \
   "${REMOTE_HOST}:${REMOTE_DIR}/docker-compose.yml"
 
 log "Step 4/6: remote load + .env"

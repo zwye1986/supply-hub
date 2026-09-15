@@ -34,6 +34,8 @@ SERVER_MODULE="aifuli-module-supply-chain/aifuli-module-supply-chain-server"
 DOCKERFILE_DIR="${MONOREPO_ROOT}/${SERVER_MODULE}"
 HEALTH_WAIT_SECONDS=180
 SSH_OPTS=(-o ServerAliveInterval=15 -o ServerAliveCountMax=60)
+# pro143 默认 SSH 加密算法传输极慢（约 12KB/s）；aes128-gcm 可达约 7.5MB/s。
+SCP_OPTS=(-c aes128-gcm@openssh.com -o Compression=no)
 # ─────────────────────────────────────────────────────────────────────────────
 
 # 颜色输出
@@ -97,7 +99,7 @@ LOCAL_SIZE=$(du -h "${LOCAL_TARBALL}" | cut -f1)
 log "本地镜像包: ${LOCAL_TARBALL} (${LOCAL_SIZE})"
 
 log "正在传输到 pro143..."
-scp "${SSH_OPTS[@]}" "${LOCAL_TARBALL}" "${REMOTE_HOST}:${REMOTE_TARBALL}"
+scp "${SCP_OPTS[@]}" "${SSH_OPTS[@]}" "${LOCAL_TARBALL}" "${REMOTE_HOST}:${REMOTE_TARBALL}"
 log "传输完成"
 echo ""
 
