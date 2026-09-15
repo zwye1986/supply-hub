@@ -195,7 +195,7 @@ public class FulfillmentAcceptanceLifecycle {
         }
         if (existing.getStatus() == AcceptanceReceiptStatus.REJECTED_RETRYABLE.getCode()
                 && command.previousReceiptVersion() != null
-                && command.previousReceiptVersion() == existing.getVersion()
+                && Objects.equals(command.previousReceiptVersion(), existing.getVersion())
                 && command.listingVersionNo() != existing.getListingVersionNo()) {
             reopenRetryable(existing, command);
             return new ClaimResult(existing.getId(), true, false);

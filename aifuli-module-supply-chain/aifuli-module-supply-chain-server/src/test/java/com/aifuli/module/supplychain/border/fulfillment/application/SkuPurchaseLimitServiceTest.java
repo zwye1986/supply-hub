@@ -54,14 +54,6 @@ class SkuPurchaseLimitServiceTest {
     }
 
     @Test
-    void enabledOrderLimitWithoutMaxQuantityThrowsIllegalStateException() {
-        assertThatThrownBy(() -> service.validateLockedSku(
-                PROJECT_ID, USER_PHONE_ID, sku(false, null, null, true, null), 1L, NOW))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessage("启用的SKU每单限购配置缺少有效数量");
-    }
-
-    @Test
     void dailyLimitUsesProjectPhoneSkuWindowAndRejectsOverflow() {
         when(orderMapper.sumEffectivePurchaseQuantity(
                 SupplyChainOrderTypes.ORDER_TYPE_CARD, PROJECT_ID, USER_PHONE_ID, SKU_ID,

@@ -9,6 +9,12 @@ import org.apache.ibatis.annotations.Param;
 
 import java.time.LocalDateTime;
 
+/**
+ * 供应链总订单 DAL 映射器。
+ *
+ * <p>设计见 {@code docs/superpowers/specs/2026-08-07-supply-chain-phase1-detailed-design.md#721-标准履约稳定编码与-java-领域枚举}
+ * 与 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#35-sku-限购计算并发与释放规则}。</p>
+ */
 @Mapper
 public interface SupplyChainOrderMapper extends BaseMapperX<SupplyChainOrderDO> {
 
