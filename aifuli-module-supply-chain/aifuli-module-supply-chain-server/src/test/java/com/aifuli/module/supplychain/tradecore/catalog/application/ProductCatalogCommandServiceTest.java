@@ -28,8 +28,10 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_CANNOT_DELETE_HAS_SUPPLIER_OFFER;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.CATEGORY_NOT_FOUND;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_CONCURRENT_UPDATE;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_PURCHASE_LIMIT_CONFIG_INVALID;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_SKU_FIELD_INVALID;
 import static com.aifuli.framework.common.exception.util.ServiceExceptionUtil.exception;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -132,6 +134,64 @@ class ProductCatalogCommandServiceTest {
         assertThat(captor.getValue().getTaxRate()).isEqualByComparingTo("0.0600");
         assertThat(captor.getValue().getMarketPrice()).isEqualTo(2_000L);
         assertThat(captor.getValue().getSuggestedSalePrice()).isEqualTo(1_800L);
+    }
+
+    /** SKU 主图、详情图与描述通过复合编辑统一规范化并保存。 */
+    @Test
+    void updatesSkuDisplayContent() {
+        givenUpdateWithOneOmittedSku();
+        ProductCatalogCommandService.SaveSkuLine line = new ProductCatalogCommandService.SaveSkuLine(
+                "SKU_KEEP", "保留SKU", " https://example.com/main.png ",
+                List.of(" https://example.com/detail-1.png ", "https://example.com/detail-2.png"),
+                " 商品描述 ", FulfillmentType.CARD_CODE_SECRET.code(), 100L, 0L, 0L,
+                false, null, 1L, 10L, false, null, null, false,
+                false, null, null, CatalogEntityStatus.DRAFT.getCode());
+
+        service.updateProduct(SPU_CODE, saveCommand(line));
+
+        ArgumentCaptor<PlatformSkuDO> captor = ArgumentCaptor.forClass(PlatformSkuDO.class);
+        verify(skuMapper, atLeastOnce()).updateById(captor.capture());
+        assertThat(captor.getAllValues()).filteredOn(sku -> "SKU_KEEP".equals(sku.getSkuCode()))
+                .singleElement().satisfies(sku -> {
+                    assertThat(sku.getMainImageUrl()).isEqualTo("https://example.com/main.png");
+                    assertThat(sku.getDetailImageUrls()).containsExactly(
+                            "https://example.com/detail-1.png", "https://example.com/detail-2.png");
+                    assertThat(sku.getDescription()).isEqualTo("商品描述");
+                });
+    }
+
+    /** 图片地址和描述长度约束必须在应用层拦截，不能依赖数据库截断。 */
+    @Test
+    void rejectsOversizedSkuDisplayContent() {
+        givenUpdateWithOneOmittedSku();
+        ProductCatalogCommandService.SaveSkuLine line = new ProductCatalogCommandService.SaveSkuLine(
+                "SKU_KEEP", "保留SKU", "x".repeat(513), null, null,
+                FulfillmentType.CARD_CODE_SECRET.code(), 100L, 0L, 0L,
+                false, null, 1L, 10L, false, null, null, false,
+                false, null, null, CatalogEntityStatus.DRAFT.getCode());
+
+        assertThatThrownBy(() -> service.updateProduct(SPU_CODE, saveCommand(line)))
+                .isInstanceOf(ServiceException.class)
+                .extracting(ex -> ((ServiceException) ex).getCode())
+                .isEqualTo(PRODUCT_SKU_FIELD_INVALID.getCode());
+    }
+
+    /** 原型商品分类是必填的供应链类目主键，应用层必须先于数据库非空约束明确拒绝。 */
+    @Test
+    void rejectsMissingPrimaryCategory() {
+        givenUpdateWithOneOmittedSku();
+        ProductCatalogCommandService.SaveSpuCommand valid = saveCommand();
+        ProductCatalogCommandService.SaveSpuCommand missingCategory = new ProductCatalogCommandService.SaveSpuCommand(
+                valid.spuCode(), valid.spuName(), valid.subtitle(), valid.brandId(), null,
+                valid.secondaryCategoryIds(), valid.sellableCategory(), valid.productType(),
+                valid.productClassification(), valid.coverUrl(), valid.sliderImageUrls(), valid.useInstruction(),
+                valid.description(), valid.deliveryType(), valid.minQuantity(), valid.maxQuantity(), valid.status(),
+                valid.skus(), valid.operatorId());
+
+        assertThatThrownBy(() -> service.updateProduct(SPU_CODE, missingCategory))
+                .isInstanceOf(ServiceException.class)
+                .extracting(ex -> ((ServiceException) ex).getCode())
+                .isEqualTo(CATEGORY_NOT_FOUND.getCode());
     }
 
     /** 开启每人限购时，周期与正整数数量必须同时提供。 */

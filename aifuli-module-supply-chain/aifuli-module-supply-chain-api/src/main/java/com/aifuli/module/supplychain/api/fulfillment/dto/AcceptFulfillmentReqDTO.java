@@ -39,7 +39,7 @@ public class AcceptFulfillmentReqDTO implements Serializable {
     @Size(max = 128, message = "采购商订单号不能超过 128 个字符")
     private String buyerOrderNo;
 
-    @Schema(description = "采购项目范围内的 C 端用户手机号标识；须由调用方规范化且不得写入日志",
+    @Schema(description = "采购项目范围内的C端用户手机号标识；服务端接受裸号码、+86或0086前缀并统一规范化，不得写入日志",
             requiredMode = Schema.RequiredMode.REQUIRED, example = "13800138000")
     @NotBlank(message = "采购商用户标识不能为空")
     @Size(max = 128, message = "采购商用户标识不能超过 128 个字符")

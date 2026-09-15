@@ -84,6 +84,10 @@ public class ProductCatalogCommandService {
     private static final long DEFAULT_PRICE_FEN = 0L;
     /** 单次批量更新 SKU 税务元数据的上限，避免超大事务。 */
     private static final int MAX_BATCH_SKU_COUNT = 200;
+    /** 与 {@code sc_platform_sku.main_image_url/detail_image_urls} DDL 长度一致。 */
+    private static final int MAX_SKU_IMAGE_URL_LENGTH = 512;
+    /** 与 {@code sc_platform_sku.description} DDL 长度一致。 */
+    private static final int MAX_SKU_DESCRIPTION_LENGTH = 200;
     /**
      * 禁止写入的回执 Schema 占位编码。
      * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线}（d11）。
@@ -494,7 +498,9 @@ public class ProductCatalogCommandService {
                                     CatalogEntityStatus status, SchemaDefinition schema,
                                     Long operatorId, LocalDateTime now) {
         PlatformSkuDO sku = PlatformSkuDO.builder().skuCode(skuCode).spuId(spu.getId())
-                .skuName(line.skuName().trim()).fulfillmentType(line.fulfillmentType())
+                .skuName(line.skuName().trim()).mainImageUrl(normalizeOptionalText(line.mainImageUrl()))
+                .detailImageUrls(normalizeDetailImageUrls(line.detailImageUrls()))
+                .description(normalizeOptionalText(line.description())).fulfillmentType(line.fulfillmentType())
                 .faceValue(line.faceValue()).marketPrice(defaultLong(line.marketPrice(), DEFAULT_PRICE_FEN))
                 .suggestedSalePrice(defaultLong(line.suggestedSalePrice(), DEFAULT_PRICE_FEN))
                 .taxIncluded(Boolean.TRUE.equals(line.taxIncluded())).taxRate(line.taxRate())
@@ -515,6 +521,9 @@ public class ProductCatalogCommandService {
     private void applySku(PlatformSkuDO sku, SaveSkuLine line, CatalogEntityStatus status, SchemaDefinition schema,
                           Long operatorId, LocalDateTime now) {
         sku.setSkuName(line.skuName().trim());
+        sku.setMainImageUrl(normalizeOptionalText(line.mainImageUrl()));
+        sku.setDetailImageUrls(normalizeDetailImageUrls(line.detailImageUrls()));
+        sku.setDescription(normalizeOptionalText(line.description()));
         sku.setFulfillmentType(line.fulfillmentType());
         sku.setFaceValue(line.faceValue());
         sku.setMarketPrice(defaultLong(line.marketPrice(), DEFAULT_PRICE_FEN));
@@ -550,6 +559,7 @@ public class ProductCatalogCommandService {
                 || defaultLong(line.suggestedSalePrice(), DEFAULT_PRICE_FEN) < 0) {
             throw exception(PRODUCT_SKU_FIELD_INVALID);
         }
+        validateSkuDisplayContent(line);
         validateTaxMetadata(Boolean.TRUE.equals(line.taxIncluded()), line.taxRate());
         FulfillmentType fulfillmentType = FulfillmentType.fromCode(line.fulfillmentType());
         validateQuantity(line.minQuantity(), line.maxQuantity());
@@ -696,8 +706,7 @@ public class ProductCatalogCommandService {
     }
 
     private ProductCategoryDO requireCategoryById(Long categoryId, boolean activeRequired) {
-        if (categoryId == null) return null;
-        ProductCategoryDO category = categoryMapper.selectById(categoryId);
+        ProductCategoryDO category = categoryId == null ? null : categoryMapper.selectById(categoryId);
         if (category == null || category.getStatus() == CatalogEntityStatus.ARCHIVED.getCode()
                 || (activeRequired && category.getStatus() != CatalogEntityStatus.ACTIVE.getCode())) {
             throw exception(CATEGORY_NOT_FOUND);
@@ -750,6 +759,36 @@ public class ProductCatalogCommandService {
     }
 
     private static String blankToNull(String value) {
+        return hasText(value) ? value.trim() : null;
+    }
+
+    /**
+     * 校验 SKU 主图、详情图与描述，确保绕过 Controller 的兼容调用也不能写入超过 DDL 长度的数据。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#212-sku-展示资料034-changeset}。
+     */
+    private static void validateSkuDisplayContent(SaveSkuLine line) {
+        if ((hasText(line.mainImageUrl()) && line.mainImageUrl().trim().length() > MAX_SKU_IMAGE_URL_LENGTH)
+                || (hasText(line.description())
+                && line.description().trim().length() > MAX_SKU_DESCRIPTION_LENGTH)) {
+            throw exception(PRODUCT_SKU_FIELD_INVALID);
+        }
+        normalizeDetailImageUrls(line.detailImageUrls());
+    }
+
+    private static List<String> normalizeDetailImageUrls(List<String> imageUrls) {
+        if (imageUrls == null || imageUrls.isEmpty()) {
+            return null;
+        }
+        List<String> normalized = imageUrls.stream().map(url -> {
+            if (!hasText(url) || url.trim().length() > MAX_SKU_IMAGE_URL_LENGTH) {
+                throw exception(PRODUCT_SKU_FIELD_INVALID);
+            }
+            return url.trim();
+        }).toList();
+        return List.copyOf(normalized);
+    }
+
+    private static String normalizeOptionalText(String value) {
         return hasText(value) ? value.trim() : null;
     }
 
@@ -861,7 +900,9 @@ public class ProductCatalogCommandService {
                                  Short status, List<SaveSkuLine> skus, Long operatorId) {
     }
 
-    public record SaveSkuLine(String skuCode, String skuName, String fulfillmentType, Long faceValue,
+    public record SaveSkuLine(String skuCode, String skuName, String mainImageUrl,
+                              List<String> detailImageUrls, String description,
+                              String fulfillmentType, Long faceValue,
                               Long marketPrice, Long suggestedSalePrice, Boolean taxIncluded, BigDecimal taxRate,
                               Long minQuantity, Long maxQuantity,
                               Boolean userLimitEnabled, String userLimitPeriod, Long userLimitQuantity,
@@ -876,7 +917,7 @@ public class ProductCatalogCommandService {
         public SaveSkuLine(String skuCode, String skuName, String fulfillmentType, Long faceValue,
                            Long marketPrice, Long suggestedSalePrice, Long minQuantity, Long maxQuantity,
                            Short status) {
-            this(skuCode, skuName, fulfillmentType, faceValue, marketPrice, suggestedSalePrice,
+            this(skuCode, skuName, null, null, null, fulfillmentType, faceValue, marketPrice, suggestedSalePrice,
                     false, null, minQuantity, maxQuantity, null, null, null, null, null, null, null,
                     null, null, null, null, status);
         }
@@ -885,7 +926,7 @@ public class ProductCatalogCommandService {
         public SaveSkuLine(String skuCode, String skuName, String fulfillmentType, Long faceValue,
                            Long marketPrice, Long suggestedSalePrice, Boolean taxIncluded, BigDecimal taxRate,
                            Long minQuantity, Long maxQuantity, Short status) {
-            this(skuCode, skuName, fulfillmentType, faceValue, marketPrice, suggestedSalePrice,
+            this(skuCode, skuName, null, null, null, fulfillmentType, faceValue, marketPrice, suggestedSalePrice,
                     taxIncluded, taxRate, minQuantity, maxQuantity, null, null, null, null, null, null, null,
                     null, null, null, null, status);
         }
@@ -896,7 +937,7 @@ public class ProductCatalogCommandService {
                            Long minQuantity, Long maxQuantity, Boolean userLimitEnabled,
                            String userLimitPeriod, Long userLimitQuantity, Boolean orderLimitEnabled,
                            Short status) {
-            this(skuCode, skuName, fulfillmentType, faceValue, marketPrice, suggestedSalePrice,
+            this(skuCode, skuName, null, null, null, fulfillmentType, faceValue, marketPrice, suggestedSalePrice,
                     taxIncluded, taxRate, minQuantity, maxQuantity, userLimitEnabled, userLimitPeriod,
                     userLimitQuantity, orderLimitEnabled, null, null, null, null, null, null, null, status);
         }
@@ -908,7 +949,7 @@ public class ProductCatalogCommandService {
                            String userLimitPeriod, Long userLimitQuantity, Boolean orderLimitEnabled,
                            Boolean phoneBindLimitEnabled, String phoneBindLimitPeriod, Long phoneBindLimitQuantity,
                            Short status) {
-            this(skuCode, skuName, fulfillmentType, faceValue, marketPrice, suggestedSalePrice,
+            this(skuCode, skuName, null, null, null, fulfillmentType, faceValue, marketPrice, suggestedSalePrice,
                     taxIncluded, taxRate, minQuantity, maxQuantity, userLimitEnabled, userLimitPeriod,
                     userLimitQuantity, orderLimitEnabled, phoneBindLimitEnabled, phoneBindLimitPeriod,
                     phoneBindLimitQuantity, null, null, null, null, status);
@@ -919,7 +960,7 @@ public class ProductCatalogCommandService {
                            Long marketPrice, Long suggestedSalePrice, Long minQuantity, Long maxQuantity,
                            String targetSchemaCode, Integer targetSchemaVersion,
                            String resultSchemaCode, Integer resultSchemaVersion, Short status) {
-            this(skuCode, skuName, fulfillmentType, faceValue, marketPrice, suggestedSalePrice,
+            this(skuCode, skuName, null, null, null, fulfillmentType, faceValue, marketPrice, suggestedSalePrice,
                     false, null, minQuantity, maxQuantity, null, null, null, null, null, null, null,
                     targetSchemaCode, targetSchemaVersion, resultSchemaCode, resultSchemaVersion, status);
         }
@@ -929,9 +970,24 @@ public class ProductCatalogCommandService {
                            Long marketPrice, Long suggestedSalePrice, Boolean taxIncluded, BigDecimal taxRate,
                            Long minQuantity, Long maxQuantity, String targetSchemaCode, Integer targetSchemaVersion,
                            String resultSchemaCode, Integer resultSchemaVersion, Short status) {
-            this(skuCode, skuName, fulfillmentType, faceValue, marketPrice, suggestedSalePrice,
+            this(skuCode, skuName, null, null, null, fulfillmentType, faceValue, marketPrice, suggestedSalePrice,
                     taxIncluded, taxRate, minQuantity, maxQuantity, null, null, null, null, null, null, null,
                     targetSchemaCode, targetSchemaVersion, resultSchemaCode, resultSchemaVersion, status);
+        }
+
+        /** 商品中心复合接口携带 SKU 展示资料与完整限购配置，内部 Schema 仍由应用层注册表派生。 */
+        public SaveSkuLine(String skuCode, String skuName, String mainImageUrl,
+                           List<String> detailImageUrls, String description,
+                           String fulfillmentType, Long faceValue, Long marketPrice, Long suggestedSalePrice,
+                           Boolean taxIncluded, BigDecimal taxRate, Long minQuantity, Long maxQuantity,
+                           Boolean userLimitEnabled, String userLimitPeriod, Long userLimitQuantity,
+                           Boolean orderLimitEnabled, Boolean phoneBindLimitEnabled,
+                           String phoneBindLimitPeriod, Long phoneBindLimitQuantity, Short status) {
+            this(skuCode, skuName, mainImageUrl, detailImageUrls, description, fulfillmentType, faceValue,
+                    marketPrice, suggestedSalePrice, taxIncluded, taxRate, minQuantity, maxQuantity,
+                    userLimitEnabled, userLimitPeriod, userLimitQuantity, orderLimitEnabled,
+                    phoneBindLimitEnabled, phoneBindLimitPeriod, phoneBindLimitQuantity,
+                    null, null, null, null, status);
         }
     }
 

@@ -6,6 +6,7 @@ import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import com.baomidou.mybatisplus.annotation.Version;
+import com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -13,8 +14,9 @@ import lombok.NoArgsConstructor;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.List;
 
-@TableName("sc_platform_sku")
+@TableName(value = "sc_platform_sku", autoResultMap = true)
 @Data
 @Builder
 @NoArgsConstructor
@@ -25,6 +27,15 @@ public class PlatformSkuDO {
     private String skuCode;
     private Long spuId;
     private String skuName;
+    /** SKU主图地址；完整编辑传空时清空。 */
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
+    private String mainImageUrl;
+    /** SKU详情图地址列表(JSON数组)；保持原型录入顺序，完整编辑传空时清空。 */
+    @TableField(typeHandler = JacksonTypeHandler.class, updateStrategy = FieldStrategy.ALWAYS)
+    private List<String> detailImageUrls;
+    /** SKU商品描述；完整编辑传空时清空。 */
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
+    private String description;
     private String fulfillmentType;
     private Long faceValue;
     /** 市场划线价/吊牌价，单位为分 */

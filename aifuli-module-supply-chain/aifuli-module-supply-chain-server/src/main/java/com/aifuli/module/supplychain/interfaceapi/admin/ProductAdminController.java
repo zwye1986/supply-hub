@@ -201,6 +201,7 @@ public class ProductAdminController {
 
     private SaveSpuCommand toCommand(SpuSaveReqVO request) {
         List<SaveSkuLine> skus = request.skus.stream().map(line -> new SaveSkuLine(line.skuCode, line.skuName,
+                line.mainImageUrl, line.detailImageUrls, line.description,
                 line.fulfillmentType, line.faceValue, line.marketPrice, line.suggestedSalePrice,
                 line.taxIncluded, line.taxRate, line.minQuantity, line.maxQuantity,
                 line.userLimitEnabled, line.userLimitPeriod, line.userLimitQuantity,
@@ -220,11 +221,15 @@ public class ProductAdminController {
         @NotBlank @Size(max = 256) @Schema(description = "SPU 名称") private String spuName;
         @Size(max = 256) @Schema(description = "副标题") private String subtitle;
         @NotNull @Schema(description = "品牌内部主键") private Long brandId;
-        @Schema(description = "主分类内部主键") private Long primaryCategoryId;
+        @NotNull
+        @Schema(description = "商品分类内部主键；来源于 /supply-chain/categories 启用分类树，不是system数据字典")
+        private Long primaryCategoryId;
         @Schema(description = "辅助分类内部主键列表") private List<Long> secondaryCategoryIds;
         @NotBlank @Size(max = 32) @Schema(description = "可售品类") private String sellableCategory;
         @NotBlank @Size(max = 32) @Schema(description = "数据驱动商品类型编码") private String productType;
-        @NotBlank @Size(max = 32) @Schema(description = "商品分类") private String productClassification;
+        @NotBlank @Size(max = 32)
+        @Schema(description = "供货匹配商品分类；system字典supply_chain_product_classification，不是商品分类树")
+        private String productClassification;
         @Size(max = 512) @Schema(description = "封面图地址") private String coverUrl;
         @Schema(description = "轮播图地址列表") private List<String> sliderImageUrls;
         @Size(max = 2000) @Schema(description = "使用说明") private String useInstruction;
@@ -241,6 +246,10 @@ public class ProductAdminController {
     public static class SkuItemSaveReqVO {
         @Size(max = 32) @Schema(description = "SKU 编码；新增时可空") private String skuCode;
         @NotBlank @Size(max = 256) @Schema(description = "SKU 名称") private String skuName;
+        @Size(max = 512) @Schema(description = "SKU主图地址") private String mainImageUrl;
+        @Schema(description = "SKU详情图地址列表(JSON数组)")
+        private List<@NotBlank @Size(max = 512) String> detailImageUrls;
+        @Size(max = 200) @Schema(description = "SKU商品描述") private String description;
         @NotBlank @Size(max = 32) @Schema(description = "履约方式") private String fulfillmentType;
         @NotNull @Min(0) @Schema(description = "面值，CNY分") private Long faceValue;
         @Min(0) @Schema(description = "市场价，CNY分；默认0") private Long marketPrice;

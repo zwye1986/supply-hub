@@ -30,6 +30,8 @@
 | **d20** | **分销商/项目分层批量定价与税务元数据隔离** | 分销价必须落在 `分销商 + 分销商品`（L2）作用域，项目价必须落在 `分销商下的项目 + 项目商品`（L3）作用域；同一分销商的不同项目允许形成不同价格，禁止新增平台全局“分销价”。批量试算为只读操作，批量保存复用既有不可变价格版本表并在单事务内全量成功或回滚。`tax_included` 与 `tax_rate` 归属平台 SKU，只记录和展示，不得作为 `SettlementPriceResolver`、L1/L2/L3、服务费或利润率的计算入参；`031` 变更集补充含税标识并收紧字段注释。 | 明确定价作用域并防止税务展示字段污染结算价格 |
 | **d21** | **SKU 限购配置与项目级交易校验** | 限购配置归属平台 SKU。每人限购支持 `LIFETIME`（终身）、`YEAR`（每年）、`MONTH`（每月）、`WEEK`（每周）、`DAY`（每天）五种自然周期，计数维度固定为 `采购项目 + 用户标识（规范化手机号） + 平台 SKU`；每订单限购限制本次请求购买数量。标准履约请求新增必填 `projectCode`，由服务端校验项目属于已解析采购商，禁止把采购商 ID 或外部租户标识替代项目 ID。并发受理在 SKU 行锁内统计有效订单并校验额度；订单失败、取消或全额退款后通过订单状态投影自然退出计数，释放额度。现有一期 `quantity=1` 与单履约目标契约保持不变。 | 对齐商品编辑原型限购区并形成可并发校验闭环 |
 | **d22** | **权益商品绑定手机号限购** | 原型「限购绑定手机号数量（权益商品专用）」对齐原卡管 `limit_number`：限制的是履约目标手机号，不是买家 `buyerUserId`，也不是一单绑几个号。配置仍归属平台 SKU，周期复用每人限购五值。计数维度为 `采购项目 + 履约目标手机号（target.accountValue 且 accountType=MOBILE） + 平台 SKU`。仅 `DIRECT_RECHARGE` 与 `ACCOUNT_BOUND_BENEFIT` 允许开启；卡号卡密/兑换码/券链不得开启，也不扩展其无手机号目标 Schema。直充与账户绑定权益订单把规范化手机号写入 `sc_supply_chain_order.fulfillment_account_value` 供行锁内聚合；卡密类该列为空。失败、取消、全额退款释放，部分退款不释放。一期 `quantity=1` 与单履约目标不变。 | 纠正原型「每订单」误读，并对齐卡管直充账号当日限量语义 |
+| **d23** | **SKU 展示资料与商品分类映射** | 商品编辑原型中的 SKU 主图、SKU 详情图和商品描述归属平台 SKU，分别持久化为 `main_image_url`、`detail_image_urls` 与 `description`，通过 SPU+SKU 复合创建、编辑和详情接口统一保存与回显。原型「商品分类」唯一映射 `primaryCategoryId`，取值来自供应链独立库 `sc_product_category`，由 `GET /supply-chain/categories` 返回启用树，不是 system 数据字典；`productClassification` 继续作为供货范围命中的 `supply_chain_product_classification` 字典标签，两者不得混用。库存字段本轮保持既有只读占位，不扩展库存写能力。 | 补齐 SKU 展示字段并消除两个“商品分类”的契约歧义 |
+| **d24** | **标准履约手机号服务端规范化** | 标准履约 `buyerUserId` 和 `accountType=MOBILE` 的目标账号统一由服务端规范化为中国大陆 11 位手机号：接受裸号码、`+86`、`0086` 前缀及首尾空白，持久化、幂等指纹与限购统计一律使用去前缀后的 11 位号码；非法号码拒绝受理。调用方无需预先规范化，但完整手机号仍禁止写日志。公开履约数量继续固定为 `quantity=1`。 | 防止同一手机号因格式差异绕过项目级限购 |
 
 ---
 
@@ -236,6 +238,19 @@ ALTER TABLE sc_supply_chain_order
 新受理在目标为 `accountType=MOBILE` 时写入 `accountValue` 的规范化值，长度不超过 128；日志不得输出该列。
 新增索引 `idx_sc_order_phone_bind_limit (project_id, platform_sku_id, fulfillment_account_value, created_at)`。
 
+### 2.12 SKU 展示资料（034 Changeset）
+
+```sql
+ALTER TABLE sc_platform_sku
+    ADD COLUMN main_image_url VARCHAR(512) NULL COMMENT 'SKU主图地址',
+    ADD COLUMN detail_image_urls JSON NULL COMMENT 'SKU详情图地址列表(JSON数组)',
+    ADD COLUMN description VARCHAR(200) NULL COMMENT 'SKU商品描述';
+```
+
+三个字段均为 SKU 可选展示资料；主图与每个详情图地址最长 512 个字符，描述最长 200 个字符。复合编辑按
+完整 SKU 行语义处理：字段传空即清空原值。`detail_image_urls` 使用 MyBatis JSON TypeHandler 显式映射为
+有序字符串列表。该变更不新增库存列、不改变管理列表中 `totalInventory` 的既有投影。
+
 ---
 
 ## 3. 核心业务规则与状态机设计
@@ -311,9 +326,11 @@ PRD 8.4.1 的列表 Tab 支持从 `GET /supply-chain/product-types` 动态拉取
 
 1. 限购只读取平台 SKU 当前配置，不复制到 SPU。每人限购关闭时不统计历史订单；开启时以供应链数据库
    `Asia/Shanghai` 当前时间确定自然日、ISO 自然周（周一开始）、自然月、自然年或终身窗口。
-2. 用户标识继续使用标准履约契约中的 `buyerUserId`，其业务值由调用方提供规范化手机号；该敏感值不得
-   写入日志。项目必须通过新增的 `projectCode` 解析，并校验项目属于当前外部租户解析出的采购商。Facade
-   通过 `BuyerProjectAccessResolver` 获取最小项目快照，不得直接依赖项目 Mapper 或 DO。
+2. 用户标识继续使用标准履约契约中的 `buyerUserId`。Facade 在进入幂等指纹、订单落库和限购统计前统一
+   规范化为中国大陆 11 位手机号，接受裸号码、`+86`、`0086` 前缀及首尾空白，非法号码拒绝受理；调用方
+   无需预先规范化。该敏感值不得写入日志。项目必须通过新增的 `projectCode` 解析，并校验项目属于当前
+   外部租户解析出的采购商。Facade 通过 `BuyerProjectAccessResolver` 获取最小项目快照，不得直接依赖项目
+   Mapper 或 DO。履约目标 `accountType=MOBILE` 的 `accountValue` 复用相同规范化规则。
 3. 计入额度的订单必须同时满足：`CARD` 标准商品、项目/用户/SKU 相同、受理时间落在配置窗口内、
    主状态不是失败或取消、售后状态不是全部退款。部分退款不释放一期数量为 1 的整件额度。
 4. 受理事务先以锁定读取得采购商 Listing，再立即锁定其 `sc_platform_sku` 行；这两个锁定读必须发生在
@@ -384,11 +401,13 @@ PRD 8.4.1 的列表 Tab 支持从 `GET /supply-chain/product-types` 动态拉取
   * `spuCode` (String, 可选，未传时由系统生成 `SPU_`+ULID)
   * `spuName` (String, 必填, 长度 ≤256)
   * `brandId` (Long, 必填)
-  * `primaryCategoryId` (Long, 可选)
+  * `primaryCategoryId` (Long, 必填)：原型「商品分类」字段；取值来自 `GET /supply-chain/categories` 返回的
+    `sc_product_category` 启用树，不是 system 数据字典。
   * `secondaryCategoryIds` (List<Long>, 可选)
   * `sellableCategory` (String, 必填)
   * `productType` (String, 必填，校验在 `sc_product_type` 中启用存在)
-  * `productClassification` (String, 必填)
+  * `productClassification` (String, 必填)：供货配置命中的商品分类标签，取值来自 system 字典
+    `supply_chain_product_classification`，不是原型「商品分类」下拉树。
   * `coverUrl` (String, 可选)
   * `sliderImageUrls` (List<String>, 可选)
   * `description` (String, 可选)
@@ -399,6 +418,9 @@ PRD 8.4.1 的列表 Tab 支持从 `GET /supply-chain/product-types` 动态拉取
   * `skus` (List<SkuItemSaveReqVO>, 必填且非空):
     * `skuCode` (String, 可选，系统自动生成 `SKU_`+ULID)
     * `skuName` (String, 必填)
+    * `mainImageUrl` (String, 可选，长度 ≤512)：SKU 主图地址
+    * `detailImageUrls` (List<String>, 可选)：SKU 详情图地址列表，单项长度 ≤512
+    * `description` (String, 可选，长度 ≤200)：SKU 商品描述
     * `fulfillmentType` (String, 必填)
     * `faceValue` (Long, 必填，单位分)
     * `marketPrice` (Long, 默认 0，分)
@@ -525,6 +547,17 @@ PRD 8.4.1 的列表 Tab 支持从 `GET /supply-chain/product-types` 动态拉取
   `USER_PURCHASE_LIMIT_EXCEEDED`、`ORDER_PURCHASE_LIMIT_EXCEEDED`、
   `PHONE_BIND_PURCHASE_LIMIT_EXCEEDED` 或 `PHONE_BIND_TARGET_REQUIRED`，禁止只返回笼统状态导致调用方
   无法判断重试条件。
+
+#### 4.1.14 SKU 展示资料、商品分类来源与手机号规范化
+
+* `SkuItemSaveReqVO` 与详情 `SkuDetail` 同步增加 `mainImageUrl`、`detailImageUrls`、`description`；创建和编辑
+  复用 `SaveSkuLine`、`PlatformSkuDO` 与 `034` 变更集，不另建旁路接口。
+* `SpuSaveReqVO.primaryCategoryId` 为必填，服务端必须校验类目存在且满足当前 SPU 状态要求；选项从
+  `GET /supply-chain/categories` 获取。`productClassification` 仍是供货匹配标签，不替代主类目。
+* 标准履约受理在生成请求指纹与订单摘要前规范化 `buyerUserId`；目标为 `MOBILE` 时同样规范化
+  `accountValue`。因此 `13800138000`、`+8613800138000`、`008613800138000` 在同一项目与 SKU 下共享限购
+  额度。非法手机号不得降级为不同字符串继续计数。
+* 本轮不修改库存模型，也不扩展公开履约 `quantity=1` 与单目标约束。
 
 ---
 

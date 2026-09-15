@@ -70,7 +70,7 @@ public class BuyerFulfillmentCommandFacade {
         log.info("[履约][facade] acceptFulfillment 入口 sourceSystem={}, externalTenantId={}, projectCode={}, buyerOrderNo={}, buyerSkuCode={}, quantity={}",
                 request.getSourceSystem(), request.getExternalTenantId(), request.getProjectCode(),
                 request.getBuyerOrderNo(), request.getBuyerSkuCode(), request.getQuantity());
-        requireBasicRequest(request);
+        String normalizedBuyerUserId = requireBasicRequest(request);
         LocalDateTime now = databaseClock.now();
         BuyerResolver.BuyerSnapshot buyer = buyerResolver.resolve(
                 request.getSourceSystem(), request.getExternalTenantId(), now);
@@ -78,7 +78,7 @@ public class BuyerFulfillmentCommandFacade {
         TargetSchemaSnapshot targetSchema = lifecycle.resolveTargetSchema(buyer.id(), request.getBuyerSkuCode());
         String requestId = businessNoGenerator.next(BusinessNoPrefixes.REQ);
         FulfillmentAcceptanceLifecycle.PreparedAcceptance prepared = prepare(
-                request, buyer, project.projectId(), targetSchema, requestId);
+                request, normalizedBuyerUserId, buyer, project.projectId(), targetSchema, requestId);
         FulfillmentAcceptanceLifecycle.ClaimResult claim;
         try {
             claim = lifecycle.claim(prepared);
@@ -107,16 +107,25 @@ public class BuyerFulfillmentCommandFacade {
     }
 
     private FulfillmentAcceptanceLifecycle.PreparedAcceptance prepare(
-            AcceptFulfillmentReqDTO request, BuyerResolver.BuyerSnapshot buyer,
+            AcceptFulfillmentReqDTO request, String normalizedBuyerUserId, BuyerResolver.BuyerSnapshot buyer,
             Long projectId, TargetSchemaSnapshot targetSchema, String traceId) {
         FulfillmentTargetDTO target = request.getTarget();
-        byte[] targetCanonical = canonicalTarget(target, targetSchema);
+        Map<String, String> normalizedTargetValues = new TreeMap<>(target.getValues());
+        boolean mobileTarget = FulfillmentTargetFields.ACCOUNT_TYPE_MOBILE.equals(
+                normalizedTargetValues.get(FulfillmentTargetFields.ACCOUNT_TYPE));
+        String normalizedTargetMobile = mobileTarget
+                ? FulfillmentTargetFields.normalizeMobile(
+                normalizedTargetValues.get(FulfillmentTargetFields.ACCOUNT_VALUE)) : null;
+        if (normalizedTargetMobile != null) {
+            normalizedTargetValues.put(FulfillmentTargetFields.ACCOUNT_VALUE, normalizedTargetMobile);
+        }
+        byte[] targetCanonical = canonicalTarget(normalizedTargetValues, targetSchema);
         byte[] targetDigest = hmacFingerprint.fingerprint(FulfillmentTargetFields.FINGERPRINT_PURPOSE, targetCanonical);
-        boolean targetValid = targetSchema.available();
+        boolean targetValid = targetSchema.available() && (!mobileTarget || normalizedTargetMobile != null);
         if (targetValid) {
             try {
                 targetSchemaRegistry.validate(
-                        targetSchema.schemaCode(), targetSchema.schemaVersion(), target.getValues());
+                        targetSchema.schemaCode(), targetSchema.schemaVersion(), normalizedTargetValues);
             } catch (FulfillmentTargetSchemaRegistry.InvalidTargetException invalid) {
                 targetValid = false;
             }
@@ -128,14 +137,16 @@ public class BuyerFulfillmentCommandFacade {
                     targetSchema.schemaCode(), targetSchema.schemaVersion()));
         }
 
-        byte[] invariant = sha256(canonicalRequest(request, targetSchema, targetDigest, false));
-        byte[] fingerprint = sha256(canonicalRequest(request, targetSchema, targetDigest, true));
+        byte[] invariant = sha256(canonicalRequest(
+                request, normalizedBuyerUserId, targetSchema, targetDigest, false));
+        byte[] fingerprint = sha256(canonicalRequest(
+                request, normalizedBuyerUserId, targetSchema, targetDigest, true));
         byte[] buyerOrderDigest = sha256((request.getBuyerOrderNo() + '|'
-                + request.getBuyerUserId()).getBytes(StandardCharsets.UTF_8));
-        String fulfillmentAccountValue = FulfillmentTargetFields.mobileAccountValue(target.getValues());
+                + normalizedBuyerUserId).getBytes(StandardCharsets.UTF_8));
+        String fulfillmentAccountValue = FulfillmentTargetFields.mobileAccountValue(normalizedTargetValues);
         return new FulfillmentAcceptanceLifecycle.PreparedAcceptance(
                 projectId, buyer.id(), buyer.buyerCode(), buyer.buyerName(), request.getBuyerOrderNo(),
-                request.getBuyerUserId(), fulfillmentAccountValue, request.getBuyerSkuCode(),
+                normalizedBuyerUserId, fulfillmentAccountValue, request.getBuyerSkuCode(),
                 Math.toIntExact(request.getListingVersion()), request.getQuantity(),
                 targetSchema.schemaCode(), targetSchema.schemaVersion(),
                 encrypted == null ? null : encrypted.ciphertext(), targetDigest,
@@ -143,11 +154,11 @@ public class BuyerFulfillmentCommandFacade {
                 invariant, fingerprint, buyerOrderDigest, request.getPreviousReceiptVersion(), traceId);
     }
 
-    private byte[] canonicalTarget(FulfillmentTargetDTO target, TargetSchemaSnapshot targetSchema) {
+    private byte[] canonicalTarget(Map<String, String> targetValues, TargetSchemaSnapshot targetSchema) {
         Map<String, Object> canonical = new TreeMap<>();
         canonical.put("schemaCode", targetSchema.schemaCode());
         canonical.put("schemaVersion", targetSchema.schemaVersion());
-        canonical.put("values", new TreeMap<>(target.getValues()));
+        canonical.put("values", new TreeMap<>(targetValues));
         try {
             return objectMapper.writeValueAsBytes(canonical);
         } catch (JsonProcessingException exception) {
@@ -155,12 +166,13 @@ public class BuyerFulfillmentCommandFacade {
         }
     }
 
-    private byte[] canonicalRequest(AcceptFulfillmentReqDTO request, TargetSchemaSnapshot targetSchema,
+    private byte[] canonicalRequest(AcceptFulfillmentReqDTO request, String normalizedBuyerUserId,
+                                    TargetSchemaSnapshot targetSchema,
                                     byte[] targetDigest, boolean includeListingVersion) {
         Map<String, Object> canonical = new TreeMap<>();
         canonical.put("buyerOrderNo", request.getBuyerOrderNo());
         canonical.put("projectCode", request.getProjectCode());
-        canonical.put("buyerUserId", request.getBuyerUserId());
+        canonical.put("buyerUserId", normalizedBuyerUserId);
         canonical.put("buyerSkuCode", request.getBuyerSkuCode());
         canonical.put("quantity", request.getQuantity());
         canonical.put("targetSchemaCode", targetSchema.schemaCode());
@@ -183,7 +195,7 @@ public class BuyerFulfillmentCommandFacade {
                 .getBytes(StandardCharsets.UTF_8);
     }
 
-    private static void requireBasicRequest(AcceptFulfillmentReqDTO request) {
+    private static String requireBasicRequest(AcceptFulfillmentReqDTO request) {
         Objects.requireNonNull(request, "Fulfillment request is required");
         Objects.requireNonNull(request.getTarget(), "Fulfillment target is required");
         Objects.requireNonNull(request.getTarget().getValues(), "Fulfillment target values are required");
@@ -197,6 +209,11 @@ public class BuyerFulfillmentCommandFacade {
                 || request.getQuantity() <= 0) {
             throw new IllegalArgumentException("Fulfillment request is incomplete");
         }
+        String normalizedBuyerUserId = FulfillmentTargetFields.normalizeMobile(request.getBuyerUserId());
+        if (normalizedBuyerUserId == null) {
+            throw new IllegalArgumentException("采购商用户标识必须是有效的中国大陆手机号");
+        }
+        return normalizedBuyerUserId;
     }
 
     private FulfillmentAcceptanceReceiptRespDTO toResponse(

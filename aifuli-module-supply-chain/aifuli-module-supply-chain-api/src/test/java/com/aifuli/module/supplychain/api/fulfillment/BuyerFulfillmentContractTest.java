@@ -105,7 +105,7 @@ class BuyerFulfillmentContractTest {
         request.setExternalTenantId("tenant-wusheng");
         request.setProjectCode("PRJ_01ABC");
         request.setBuyerOrderNo("C202608110001");
-        request.setBuyerUserId("member-1024");
+        request.setBuyerUserId("13800138000");
         request.setBuyerSkuCode("TELCO-100");
         request.setListingVersion(42L);
         request.setQuantity(1L);

@@ -13,10 +13,16 @@ import static org.assertj.core.api.Assertions.assertThat;
 class FulfillmentTargetFieldsTest {
 
     @Test
-    void extractsTrimmedMobileAccountValue() {
+    void extractsCanonicalMobileAccountValue() {
         assertThat(FulfillmentTargetFields.mobileAccountValue(Map.of(
                 FulfillmentTargetFields.ACCOUNT_TYPE, FulfillmentTargetFields.ACCOUNT_TYPE_MOBILE,
                 FulfillmentTargetFields.ACCOUNT_VALUE, " 13900139000 ")))
+                .isEqualTo("13900139000");
+        assertThat(FulfillmentTargetFields.mobileAccountValue(Map.of(
+                FulfillmentTargetFields.ACCOUNT_TYPE, FulfillmentTargetFields.ACCOUNT_TYPE_MOBILE,
+                FulfillmentTargetFields.ACCOUNT_VALUE, "+8613900139000")))
+                .isEqualTo("13900139000");
+        assertThat(FulfillmentTargetFields.normalizeMobile("008613900139000"))
                 .isEqualTo("13900139000");
     }
 
@@ -31,6 +37,8 @@ class FulfillmentTargetFieldsTest {
         assertThat(FulfillmentTargetFields.mobileAccountValue(Map.of(
                 FulfillmentTargetFields.ACCOUNT_TYPE, FulfillmentTargetFields.ACCOUNT_TYPE_MOBILE,
                 FulfillmentTargetFields.ACCOUNT_VALUE, "1".repeat(129)))).isNull();
+        assertThat(FulfillmentTargetFields.normalizeMobile("member-1024")).isNull();
+        assertThat(FulfillmentTargetFields.normalizeMobile("12800138000")).isNull();
         assertThat(FulfillmentTargetFields.mobileAccountValue(null)).isNull();
     }
 }

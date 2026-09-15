@@ -106,7 +106,8 @@ public class ProductCatalogQueryService {
         ProductCategoryDO category = spu.getPrimaryCategoryId() == null ? null
                 : categoryMapper.selectById(spu.getPrimaryCategoryId());
         List<SkuDetail> skus = skus(List.of(spu.getId()), null).stream()
-                .map(sku -> new SkuDetail(sku.getSkuCode(), sku.getSkuName(), sku.getFulfillmentType(),
+                .map(sku -> new SkuDetail(sku.getSkuCode(), sku.getSkuName(), sku.getMainImageUrl(),
+                        sku.getDetailImageUrls(), sku.getDescription(), sku.getFulfillmentType(),
                         sku.getFaceValue(), sku.getMarketPrice(), sku.getSuggestedSalePrice(),
                         sku.getTaxIncluded(), sku.getTaxRate(), sku.getMinQuantity(),
                         sku.getMaxQuantity(), sku.getUserLimitEnabled(), sku.getUserLimitPeriod(),
@@ -250,6 +251,9 @@ public class ProductCatalogQueryService {
     public record SkuDetail(
             @Schema(description = "平台SKU永久业务编码") String skuCode,
             @Schema(description = "平台SKU标准名称") String skuName,
+            @Schema(description = "SKU主图地址") String mainImageUrl,
+            @Schema(description = "SKU详情图地址列表(JSON数组)") List<String> detailImageUrls,
+            @Schema(description = "SKU商品描述") String description,
             @Schema(description = "履约方式封闭枚举名") String fulfillmentType,
             @Schema(description = "商品标准面值，单位CNY分") Long faceValue,
             @Schema(description = "市场划线价或吊牌价，单位CNY分") Long marketPrice,

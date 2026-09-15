@@ -113,7 +113,10 @@ class ProductCenterIntegrationTest {
                     "PC_SPU", "商品中心虚拟直充", "复合保存回归", brandId, categoryId, List.of(),
                     "EQUITY", "EQUITY_PRODUCT", "VIRTUAL_CARD", null, List.of(), "测试说明",
                     "测试详情", "VIRTUAL", 1L, 100L, CatalogEntityStatus.ACTIVE.getCode(),
-                    List.of(new SaveSkuLine("PC_SKU_100", "商品中心直充100元", "DIRECT_RECHARGE",
+                    List.of(new SaveSkuLine("PC_SKU_100", "商品中心直充100元",
+                            "https://example.com/sku-main.png",
+                            List.of("https://example.com/sku-detail-1.png", "https://example.com/sku-detail-2.png"),
+                            "SKU商品描述", "DIRECT_RECHARGE",
                             10_000L, 12_000L, 9_900L, true, new BigDecimal("0.0600"), 1L, 10L,
                             true, "MONTH", 2L, true, true, "DAY", 2L,
                             CatalogEntityStatus.ACTIVE.getCode())), 1L));
@@ -122,6 +125,10 @@ class ProductCenterIntegrationTest {
             assertThat(platformSku.getFaceValue()).isEqualTo(10_000L);
             assertThat(platformSku.getMarketPrice()).isEqualTo(12_000L);
             assertThat(platformSku.getSuggestedSalePrice()).isEqualTo(9_900L);
+            assertThat(platformSku.getMainImageUrl()).isEqualTo("https://example.com/sku-main.png");
+            assertThat(platformSku.getDetailImageUrls()).containsExactly(
+                    "https://example.com/sku-detail-1.png", "https://example.com/sku-detail-2.png");
+            assertThat(platformSku.getDescription()).isEqualTo("SKU商品描述");
             assertThat(platformSku.getTaxIncluded()).isTrue();
             assertThat(platformSku.getTaxRate()).isEqualByComparingTo("0.0600");
             assertThat(platformSku.getUserLimitEnabled()).isTrue();
@@ -170,6 +177,10 @@ class ProductCenterIntegrationTest {
             ProductCatalogQueryService.SpuDetail created = queryService.detail(spuCode);
             assertThat(created.skus()).singleElement().satisfies(sku -> {
                 assertThat(sku.skuCode()).isEqualTo("PC_SKU_100");
+                assertThat(sku.mainImageUrl()).isEqualTo("https://example.com/sku-main.png");
+                assertThat(sku.detailImageUrls()).containsExactly(
+                        "https://example.com/sku-detail-1.png", "https://example.com/sku-detail-2.png");
+                assertThat(sku.description()).isEqualTo("SKU商品描述");
                 assertThat(sku.effectiveSellable()).isTrue();
                 assertThat(sku.taxIncluded()).isFalse();
                 assertThat(sku.taxRate()).isEqualByComparingTo("0.1300");

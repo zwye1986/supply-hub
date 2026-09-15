@@ -14,6 +14,7 @@ import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotNull;
 import org.junit.jupiter.api.Test;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.transaction.annotation.Transactional;
@@ -64,9 +65,33 @@ class ProductCenterContractTest {
         assertThat(Arrays.stream(ProductAdminController.SkuItemSaveReqVO.class.getDeclaredFields())
                 .map(field -> field.getName()))
                 .doesNotContain("targetSchemaCode", "targetSchemaVersion", "resultSchemaCode", "resultSchemaVersion")
-                .contains("fulfillmentType", "taxIncluded", "taxRate",
+                .contains("mainImageUrl", "detailImageUrls", "description",
+                        "fulfillmentType", "taxIncluded", "taxRate",
                         "userLimitEnabled", "userLimitPeriod", "userLimitQuantity", "orderLimitEnabled",
                         "phoneBindLimitEnabled", "phoneBindLimitPeriod", "phoneBindLimitQuantity");
+    }
+
+    /** SKU 展示资料字段注释必须与 034 DDL COMMENT 完全一致。 */
+    @Test
+    void skuDisplayContentCommentsMatchDdl() throws Exception {
+        assertThat(ProductAdminController.SkuItemSaveReqVO.class.getDeclaredField("mainImageUrl")
+                .getAnnotation(Schema.class).description()).isEqualTo("SKU主图地址");
+        assertThat(ProductAdminController.SkuItemSaveReqVO.class.getDeclaredField("detailImageUrls")
+                .getAnnotation(Schema.class).description()).isEqualTo("SKU详情图地址列表(JSON数组)");
+        assertThat(ProductAdminController.SkuItemSaveReqVO.class.getDeclaredField("description")
+                .getAnnotation(Schema.class).description()).isEqualTo("SKU商品描述");
+    }
+
+    /** 原型商品分类必须绑定供应链分类树主键，不能与供货匹配字典混为同一字段。 */
+    @Test
+    void productCategoryUsesRequiredPrimaryCategoryId() throws Exception {
+        var categoryField = ProductAdminController.SpuSaveReqVO.class.getDeclaredField("primaryCategoryId");
+        assertThat(categoryField.isAnnotationPresent(NotNull.class)).isTrue();
+        assertThat(categoryField.getAnnotation(Schema.class).description())
+                .contains("/supply-chain/categories", "不是system数据字典");
+        assertThat(ProductAdminController.SpuSaveReqVO.class.getDeclaredField("productClassification")
+                .getAnnotation(Schema.class).description())
+                .contains("supply_chain_product_classification", "不是商品分类树");
     }
 
     /** SKU 限购请求字段注释必须与 DDL COMMENT 使用同一表述。 */

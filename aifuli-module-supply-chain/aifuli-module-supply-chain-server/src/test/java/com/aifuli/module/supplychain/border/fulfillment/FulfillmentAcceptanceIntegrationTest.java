@@ -173,12 +173,24 @@ class FulfillmentAcceptanceIntegrationTest {
                     "SELECT fulfillment_account_value FROM sc_supply_chain_order WHERE buyer_order_no=?",
                     String.class, first.getBuyerOrderNo())).isEqualTo("13800138000");
 
+            AcceptFulfillmentReqDTO prefixedReplay = copy(first);
+            prefixedReplay.setBuyerUserId("+8613800138000");
+            prefixedReplay.getTarget().setValues(Map.of("accountType", "MOBILE",
+                    "accountValue", "008613800138000"));
+            assertThat(facade.acceptFulfillment(prefixedReplay).getIdempotentReplay()).isTrue();
+
             AcceptFulfillmentReqDTO conflicting = copy(first);
-            conflicting.setBuyerUserId("another-user");
+            conflicting.setBuyerUserId("13700137000");
             assertThatThrownBy(() -> facade.acceptFulfillment(conflicting))
                     .isInstanceOf(ServiceException.class)
                     .extracting("code").isEqualTo(1_050_001_012);
             assertCounts(jdbc, 1, 1, 1, 1, 1, 1);
+
+            AcceptFulfillmentReqDTO invalidMobile = request("C-MOBILE-INVALID", 1L);
+            invalidMobile.setBuyerUserId("member-1024");
+            assertThatThrownBy(() -> facade.acceptFulfillment(invalidMobile))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("中国大陆手机号");
 
             AcceptFulfillmentReqDTO unknownProject = request("C-PROJECT-MISSING", 1L);
             unknownProject.setProjectCode("PRJ_NOT_EXIST");
