@@ -504,6 +504,9 @@ SKU 级条件 `status`、`fulfillmentType`、`marketPriceMin`、`marketPriceMax`
 预过滤和返回 SKU 明细过滤。一个 SPU 只要存在至少一个符合全部 SKU 级条件的未归档 SKU 即可进入分页；响应中
 不得夹带不符合这些条件的兄弟 SKU。SPU 自身的 `status` 字段继续按原值返回，但不参与商品状态筛选。
 
+* **字段字典回显与空值安全不变量**：
+  `productType`、`primaryCategoryId`、`brandId` 在历史数据或未完全归类的商品中允许为 `NULL`。在批量加载字典映射（商品类型、分类、品牌、供应商）时，未查到数据时必须返回支持 `null` 键查询的安全空 Map（例如 `Collections.emptyMap()`），并在数据组装回显时显式对 `key == null` 进行空值防护（禁止直接在 `Map.of()` 上执行 `get(null)` 或 `getOrDefault(null, ...)`），回显名称字段安全降级为 `null`，确保全量查询与存量数据兼容。
+
 system-server 通过追加变更集 `006-product-list-filter-dictionaries` 写入以下筛选字典，按字典类型以及
 `dict_type + value` 幂等新增或同步已知项，不删除管理员额外数据：
 

@@ -19,6 +19,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
@@ -145,8 +146,10 @@ public class ProductCatalogQueryService {
             List<Long> prices = skus.stream().filter(sku -> sellabilityService.isSellable(sku, spu))
                     .map(PlatformSkuDO::getSuggestedSalePrice).filter(Objects::nonNull)
                     .sorted(Comparator.naturalOrder()).toList();
+            String brandName = spu.getBrandId() == null ? null : brandNames.get(spu.getBrandId());
+            String categoryName = spu.getPrimaryCategoryId() == null ? null : categoryNames.get(spu.getPrimaryCategoryId());
             return new SpuListItem(spu.getSpuCode(), spu.getSpuName(),
-                    brandNames.get(spu.getBrandId()), categoryNames.get(spu.getPrimaryCategoryId()),
+                    brandName, categoryName,
                     spu.getSellableCategory(), spu.getProductType(), spu.getProductClassification(),
                     spu.getCoverUrl(), spu.getStatus(), skus.size(),
                     prices.isEmpty() ? null : prices.getFirst(),
@@ -157,7 +160,7 @@ public class ProductCatalogQueryService {
     private Map<Long, String> brandNames(List<Long> brandIds) {
         List<Long> ids = brandIds.stream().filter(Objects::nonNull).distinct().toList();
         if (ids.isEmpty()) {
-            return Map.of();
+            return Collections.emptyMap();
         }
         return brandMapper.selectList(new LambdaQueryWrapper<BrandDO>().in(BrandDO::getId, ids)).stream()
                 .collect(Collectors.toMap(BrandDO::getId, BrandDO::getBrandName));
@@ -166,7 +169,7 @@ public class ProductCatalogQueryService {
     private Map<Long, String> categoryNames(List<Long> categoryIds) {
         List<Long> ids = categoryIds.stream().filter(Objects::nonNull).distinct().toList();
         if (ids.isEmpty()) {
-            return Map.of();
+            return Collections.emptyMap();
         }
         return categoryMapper.selectList(new LambdaQueryWrapper<ProductCategoryDO>()
                         .in(ProductCategoryDO::getId, ids)).stream()
@@ -378,16 +381,17 @@ public class ProductCatalogQueryService {
         List<Long> spuIds = spus.stream().map(PlatformSpuDO::getId).toList();
 
         // 4. 批量加载字典
+        // 设计见 docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#419-管理端商品列表聚合查询get-supply-chainproductsmanagement-page
         List<Long> brandIds = spus.stream().map(PlatformSpuDO::getBrandId).filter(Objects::nonNull).distinct().toList();
-        Map<Long, String> brandNameMap = brandIds.isEmpty() ? Map.of()
+        Map<Long, String> brandNameMap = brandIds.isEmpty() ? Collections.emptyMap()
                 : brandMapper.selectBatchIds(brandIds).stream().collect(Collectors.toMap(BrandDO::getId, BrandDO::getBrandName, (a, b) -> a));
 
         List<Long> categoryIds = spus.stream().map(PlatformSpuDO::getPrimaryCategoryId).filter(Objects::nonNull).distinct().toList();
-        Map<Long, String> categoryNameMap = categoryIds.isEmpty() ? Map.of()
+        Map<Long, String> categoryNameMap = categoryIds.isEmpty() ? Collections.emptyMap()
                 : categoryMapper.selectBatchIds(categoryIds).stream().collect(Collectors.toMap(ProductCategoryDO::getId, ProductCategoryDO::getCategoryName, (a, b) -> a));
 
         List<String> types = spus.stream().map(PlatformSpuDO::getProductType).filter(Objects::nonNull).distinct().toList();
-        Map<String, String> productTypeNameMap = types.isEmpty() ? Map.of()
+        Map<String, String> productTypeNameMap = types.isEmpty() ? Collections.emptyMap()
                 : typeMapper.selectList(new LambdaQueryWrapper<ProductTypeDO>().in(ProductTypeDO::getTypeCode, types))
                 .stream().collect(Collectors.toMap(ProductTypeDO::getTypeCode, ProductTypeDO::getTypeName, (a, b) -> a));
 
@@ -397,9 +401,9 @@ public class ProductCatalogQueryService {
         Map<Long, List<PlatformSkuDO>> spuSkuMap = skus.stream().collect(Collectors.groupingBy(PlatformSkuDO::getSpuId));
 
         List<Long> skuIds = skus.stream().map(PlatformSkuDO::getId).filter(Objects::nonNull).toList();
-        Map<Long, List<SupplierOfferDO>> skuOfferMap = Map.of();
-        Map<Long, SupplierOfferVersionDO> versionMap = Map.of();
-        Map<Long, SupplierDO> supplierMap = Map.of();
+        Map<Long, List<SupplierOfferDO>> skuOfferMap = Collections.emptyMap();
+        Map<Long, SupplierOfferVersionDO> versionMap = Collections.emptyMap();
+        Map<Long, SupplierDO> supplierMap = Collections.emptyMap();
         if (!skuIds.isEmpty()) {
             List<SupplierOfferDO> offers = offerMapper.selectList(new LambdaQueryWrapper<SupplierOfferDO>()
                     .in(SupplierOfferDO::getPlatformSkuId, skuIds)
@@ -430,7 +434,7 @@ public class ProductCatalogQueryService {
                 Long minSupplyPrice = null;
                 List<SupplierSimpleInfo> suppliers = new ArrayList<>();
                 for (SupplierOfferDO offer : skuOffers) {
-                    SupplierDO s = supplierMap.get(offer.getSupplierId());
+                    SupplierDO s = offer.getSupplierId() == null ? null : supplierMap.get(offer.getSupplierId());
                     if (s != null) {
                         suppliers.add(new SupplierSimpleInfo(s.getSupplierCode(), s.getSupplierName()));
                     }
@@ -484,14 +488,23 @@ public class ProductCatalogQueryService {
             String unshelveDisplay = UnshelveMode.fromCode(spu.getUnshelveMode()) != null
                     ? UnshelveMode.fromCode(spu.getUnshelveMode()).getChineseName() : null;
 
+            // 空值安全回显字典名称，避免不可变 Map 敌对 Null Key 引起 NullPointerException
+            // 设计见 docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#419-管理端商品列表聚合查询get-supply-chainproductsmanagement-page
+            String productTypeName = spu.getProductType() == null ? null
+                    : productTypeNameMap.getOrDefault(spu.getProductType(), spu.getProductType());
+            String categoryName = spu.getPrimaryCategoryId() == null ? null
+                    : categoryNameMap.get(spu.getPrimaryCategoryId());
+            String brandName = spu.getBrandId() == null ? null
+                    : brandNameMap.get(spu.getBrandId());
+
             items.add(new ProductManagementSpuItem(
                     spu.getSpuCode(),
                     spu.getSpuName(),
                     spu.getCoverUrl(),
                     spu.getProductType(),
-                    productTypeNameMap.getOrDefault(spu.getProductType(), spu.getProductType()),
-                    categoryNameMap.getOrDefault(spu.getPrimaryCategoryId(), null),
-                    brandNameMap.getOrDefault(spu.getBrandId(), null),
+                    productTypeName,
+                    categoryName,
+                    brandName,
                     spu.getStatus(),
                     spu.getUnshelveMode(),
                     unshelveDisplay,

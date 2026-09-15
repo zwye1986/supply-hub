@@ -263,4 +263,55 @@ class ProductManagementPageQueryTest {
         assertThat(spuQueryCaptor.getValue().getParamNameValuePairs().values())
                 .doesNotContain(CatalogEntityStatus.ACTIVE.getCode());
     }
+
+    @Test
+    void managementPageHandlesNullProductTypeAndCategoriesSafely() {
+        LocalDateTime now = LocalDateTime.now();
+
+        PlatformSpuDO spuWithNulls = PlatformSpuDO.builder()
+                .id(9999L)
+                .spuCode("SPU_HISTORICAL")
+                .spuName("历史存量商品")
+                .coverUrl("https://example.com/hist.png")
+                .brandId(null)
+                .primaryCategoryId(null)
+                .productType(null)
+                .status(CatalogEntityStatus.ACTIVE.getCode())
+                .createdAt(now.minusDays(10))
+                .updatedAt(now)
+                .build();
+
+        PlatformSkuDO sku = PlatformSkuDO.builder()
+                .id(8888L)
+                .spuId(9999L)
+                .skuCode("SKU_HISTORICAL")
+                .skuName("存量规格")
+                .fulfillmentType("DIRECT_RECHARGE")
+                .marketPrice(0L)
+                .status(CatalogEntityStatus.ACTIVE.getCode())
+                .build();
+
+        when(spuMapper.selectPage(any(PageParam.class), any())).thenReturn(new PageResult<>(List.of(spuWithNulls), 1L));
+        when(skuMapper.selectList(any())).thenReturn(List.of(sku));
+        when(offerMapper.selectList(any())).thenReturn(List.of());
+
+        ProductManagementPageQuery query = new ProductManagementPageQuery(
+                null, null, null, null, null, null, null,
+                null, null, null, null, null, null, null, null, 1, 20);
+
+        PageResult<ProductManagementSpuItem> result = service.managementPage(query);
+
+        assertThat(result.getList()).singleElement().satisfies(item -> {
+            assertThat(item.spuCode()).isEqualTo("SPU_HISTORICAL");
+            assertThat(item.productType()).isNull();
+            assertThat(item.productTypeName()).isNull();
+            assertThat(item.primaryCategoryName()).isNull();
+            assertThat(item.brandName()).isNull();
+            assertThat(item.skus()).singleElement().satisfies(skuItem -> {
+                assertThat(skuItem.skuCode()).isEqualTo("SKU_HISTORICAL");
+                assertThat(skuItem.fulfillmentType()).isEqualTo("DIRECT_RECHARGE");
+                assertThat(skuItem.fulfillmentTypeDisplay()).isEqualTo("虚拟直充");
+            });
+        });
+    }
 }
