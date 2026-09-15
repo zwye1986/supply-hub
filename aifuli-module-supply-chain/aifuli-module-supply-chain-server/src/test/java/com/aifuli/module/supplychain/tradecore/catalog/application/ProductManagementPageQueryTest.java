@@ -22,11 +22,13 @@ import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierOff
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferVersionMapper;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -35,6 +37,8 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -197,5 +201,66 @@ class ProductManagementPageQueryTest {
         assertThat(sku2.supplyPriceExclusive()).isEqualTo(5000L);
         assertThat(sku2.taxRateDisplay()).isEqualTo("不含税");
         assertThat(sku2.taxAmount()).isEqualTo(0L);
+    }
+
+    @Test
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    void productStatusFiltersSkuInsteadOfSpuAndFiltersReturnedSkuRows() {
+        PlatformSpuDO inactiveSpu = PlatformSpuDO.builder()
+                .id(1001L)
+                .spuCode("SPU_INACTIVE")
+                .spuName("SPU自身已下架")
+                .brandId(10L)
+                .primaryCategoryId(20L)
+                .productType("PT_CARD")
+                .status(CatalogEntityStatus.INACTIVE.getCode())
+                .updatedAt(LocalDateTime.now())
+                .build();
+        PlatformSkuDO activeSku = PlatformSkuDO.builder()
+                .id(2001L)
+                .spuId(1001L)
+                .skuCode("SKU_ACTIVE")
+                .skuName("上架规格")
+                .fulfillmentType("CARD_CODE_SECRET")
+                .status(CatalogEntityStatus.ACTIVE.getCode())
+                .build();
+
+        when(skuMapper.selectList(any())).thenReturn(List.of(activeSku));
+        when(spuMapper.selectPage(any(PageParam.class), any())).thenReturn(new PageResult<>(List.of(inactiveSpu), 1L));
+        when(brandMapper.selectBatchIds(any())).thenReturn(List.of(
+                BrandDO.builder().id(10L).brandName("测试品牌").build()));
+        when(categoryMapper.selectBatchIds(any())).thenReturn(List.of(
+                ProductCategoryDO.builder().id(20L).categoryName("测试分类").build()));
+        when(typeMapper.selectList(any())).thenReturn(List.of(
+                ProductTypeDO.builder().typeCode("PT_CARD").typeName("虚拟卡密").build()));
+        when(offerMapper.selectList(any())).thenReturn(List.of());
+
+        ProductManagementPageQuery query = new ProductManagementPageQuery(
+                null, null, null, null, null, CatalogEntityStatus.ACTIVE.getCode(), null,
+                "CARD_CODE_SECRET", null, null, null, null, null, null, null, 1, 20);
+
+        PageResult<ProductManagementSpuItem> result = service.managementPage(query);
+
+        assertThat(result.getList()).singleElement().satisfies(item -> {
+            assertThat(item.status()).isEqualTo(CatalogEntityStatus.INACTIVE.getCode());
+            assertThat(item.skus()).extracting(ProductCatalogQueryService.ProductManagementSkuItem::skuCode)
+                    .containsExactly("SKU_ACTIVE");
+        });
+
+        ArgumentCaptor<LambdaQueryWrapper<PlatformSkuDO>> skuQueryCaptor =
+                ArgumentCaptor.forClass((Class) LambdaQueryWrapper.class);
+        verify(skuMapper, times(2)).selectList(skuQueryCaptor.capture());
+        assertThat(skuQueryCaptor.getAllValues()).allSatisfy(wrapper -> {
+            assertThat(wrapper.getSqlSegment()).contains("status", "fulfillment_type");
+            assertThat(wrapper.getParamNameValuePairs().values())
+                    .contains(CatalogEntityStatus.ACTIVE.getCode(), "CARD_CODE_SECRET");
+        });
+
+        ArgumentCaptor<LambdaQueryWrapper<PlatformSpuDO>> spuQueryCaptor =
+                ArgumentCaptor.forClass((Class) LambdaQueryWrapper.class);
+        verify(spuMapper).selectPage(any(PageParam.class), spuQueryCaptor.capture());
+        spuQueryCaptor.getValue().getSqlSegment();
+        assertThat(spuQueryCaptor.getValue().getParamNameValuePairs().values())
+                .doesNotContain(CatalogEntityStatus.ACTIVE.getCode());
     }
 }

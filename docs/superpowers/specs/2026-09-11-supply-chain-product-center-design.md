@@ -32,6 +32,7 @@
 | **d22** | **权益商品绑定手机号限购** | 原型「限购绑定手机号数量（权益商品专用）」对齐原卡管 `limit_number`：限制的是履约目标手机号，不是买家 `buyerUserId`，也不是一单绑几个号。配置仍归属平台 SKU，周期复用每人限购五值。计数维度为 `采购项目 + 履约目标手机号（target.accountValue 且 accountType=MOBILE） + 平台 SKU`。仅 `DIRECT_RECHARGE` 与 `ACCOUNT_BOUND_BENEFIT` 允许开启；卡号卡密/兑换码/券链不得开启，也不扩展其无手机号目标 Schema。直充与账户绑定权益订单把规范化手机号写入 `sc_supply_chain_order.fulfillment_account_value` 供行锁内聚合；卡密类该列为空。失败、取消、全额退款释放，部分退款不释放。一期 `quantity=1` 与单履约目标不变。 | 纠正原型「每订单」误读，并对齐卡管直充账号当日限量语义 |
 | **d23** | **SKU 展示资料与商品分类映射** | 商品编辑原型中的 SKU 主图、SKU 详情图和商品描述归属平台 SKU，分别持久化为 `main_image_url`、`detail_image_urls` 与 `description`，通过 SPU+SKU 复合创建、编辑和详情接口统一保存与回显。原型「商品分类」唯一映射 `primaryCategoryId`，取值来自供应链独立库 `sc_product_category`，由 `GET /supply-chain/categories` 返回启用树，不是 system 数据字典；`productClassification` 继续作为供货范围命中的 `supply_chain_product_classification` 字典标签，两者不得混用。库存字段本轮保持既有只读占位，不扩展库存写能力。 | 补齐 SKU 展示字段并消除两个“商品分类”的契约歧义 |
 | **d24** | **标准履约手机号服务端规范化** | 标准履约 `buyerUserId` 和 `accountType=MOBILE` 的目标账号统一由服务端规范化为中国大陆 11 位手机号：接受裸号码、`+86`、`0086` 前缀及首尾空白，持久化、幂等指纹与限购统计一律使用去前缀后的 11 位号码；非法号码拒绝受理。调用方无需预先规范化，但完整手机号仍禁止写日志。公开履约数量继续固定为 `quantity=1`。 | 防止同一手机号因格式差异绕过项目级限购 |
+| **d25** | **商品列表筛选字典与 SKU 状态口径** | system 数据字典新增 `supply_chain_fulfillment_type`（兑换方式）和 `supply_chain_sku_status`（商品状态）。`GET /supply-chain/products/management-page` 的 `status` 明确定义为 SKU 状态；SKU 级筛选命中任一未归档 SKU 后保留所属 SPU，并只返回符合 SKU 状态、兑换方式及市场价条件的 SKU 行。 | 对齐商品列表原型，消除 SPU/SKU 状态歧义 |
 
 ---
 
@@ -462,8 +463,8 @@ PRD 8.4.1 的列表 Tab 支持从 `GET /supply-chain/product-types` 动态拉取
   * `productType` (String, 可选): 商品类型编码（如 `PT_CARD`）
   * `categoryId` (Long, 可选): 商品主分类 ID
   * `brandId` (Long, 可选): 品牌 ID
-  * `status` (Short, 可选): SPU 状态（0-草稿，10-已上架，20-已下架）
-  * `fulfillmentType` (String, 可选): 兑换方式（如 `CARD_CODE_SECRET`）
+  * `status` (Short, 可选): SKU 状态（0-草稿，10-已上架，20-已下架；字典 `supply_chain_sku_status`）
+  * `fulfillmentType` (String, 可选): 兑换方式（`CARD_CODE_SECRET` 卡号卡密、`DIRECT_RECHARGE` 直充；字典 `supply_chain_fulfillment_type`）
   * `marketPriceMin` / `marketPriceMax` (Long, 可选): 市场价区间（单位：分）
   * `supplyPriceMin` / `supplyPriceMax` (Long, 可选): 供货价区间（单位：分）
   * `supplierCode` (String, 可选): 供应商编码
@@ -498,6 +499,21 @@ PRD 8.4.1 的列表 Tab 支持从 `GET /supply-chain/product-types` 动态拉取
     * `totalInventory` (Long): 总库存（来源库存事实快照，无库存管理默认0）
     * `fulfillmentType` (String): 兑换方式编码与名称
     * `status` (Short): SKU 状态（0草稿，10已上架，20已下架）
+
+SKU 级条件 `status`、`fulfillmentType`、`marketPriceMin`、`marketPriceMax` 必须同时用于候选 SPU
+预过滤和返回 SKU 明细过滤。一个 SPU 只要存在至少一个符合全部 SKU 级条件的未归档 SKU 即可进入分页；响应中
+不得夹带不符合这些条件的兄弟 SKU。SPU 自身的 `status` 字段继续按原值返回，但不参与商品状态筛选。
+
+system-server 通过追加变更集 `006-product-list-filter-dictionaries` 写入以下筛选字典，按字典类型以及
+`dict_type + value` 幂等新增或同步已知项，不删除管理员额外数据：
+
+| 字典类型 | 值 | 标签 |
+| --- | --- | --- |
+| `supply_chain_fulfillment_type` | `CARD_CODE_SECRET` | 卡号卡密 |
+| `supply_chain_fulfillment_type` | `DIRECT_RECHARGE` | 直充 |
+| `supply_chain_sku_status` | `0` | 草稿 |
+| `supply_chain_sku_status` | `10` | 上架 |
+| `supply_chain_sku_status` | `20` | 下架 |
 
 #### 4.1.10 批量上下架接口：`PUT /supply-chain/products/batch-status`
 * **设计目的**：支撑商品列表页表头「批量上架」与「批量下架」按钮，支持多选 SPU 或多选 SKU 进行批量状态流转，并在下架时统一打上 `MANUAL_UNSHELVE` 标记。

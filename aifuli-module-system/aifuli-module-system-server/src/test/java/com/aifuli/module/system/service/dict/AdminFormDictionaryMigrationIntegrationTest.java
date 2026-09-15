@@ -76,9 +76,9 @@ class AdminFormDictionaryMigrationIntegrationTest {
     }
 
     @Test
-    void migrationWritesTwelveDictionariesOnlyOnce() throws Exception {
+    void migrationWritesFourteenDictionariesOnlyOnce() throws Exception {
         updateLiquibase();
-        assertEquals(12, queryCount("""
+        assertEquals(14, queryCount("""
                 SELECT COUNT(*) FROM system_dict_type
                 WHERE type IN (
                     'supply_chain_sellable_category', 'supply_chain_product_type',
@@ -86,10 +86,11 @@ class AdminFormDictionaryMigrationIntegrationTest {
                     'supply_chain_cooperation_mode', 'supply_chain_distributor_type',
                     'supply_chain_supply_preference', 'supply_chain_buyer_status',
                     'supply_chain_supply_mode', 'supply_chain_invoice_title_type',
-                    'supply_chain_project_type', 'supply_chain_project_status')
+                    'supply_chain_project_type', 'supply_chain_project_status',
+                    'supply_chain_fulfillment_type', 'supply_chain_sku_status')
                   AND deleted = b'0'
                 """));
-        assertEquals(49, queryCount("""
+        assertEquals(54, queryCount("""
                 SELECT COUNT(*) FROM system_dict_data
                 WHERE dict_type IN (
                     'supply_chain_sellable_category', 'supply_chain_product_type',
@@ -97,7 +98,8 @@ class AdminFormDictionaryMigrationIntegrationTest {
                     'supply_chain_cooperation_mode', 'supply_chain_distributor_type',
                     'supply_chain_supply_preference', 'supply_chain_buyer_status',
                     'supply_chain_supply_mode', 'supply_chain_invoice_title_type',
-                    'supply_chain_project_type', 'supply_chain_project_status')
+                    'supply_chain_project_type', 'supply_chain_project_status',
+                    'supply_chain_fulfillment_type', 'supply_chain_sku_status')
                   AND deleted = b'0'
                 """));
         assertEquals(1, queryCount("""
@@ -157,9 +159,30 @@ class AdminFormDictionaryMigrationIntegrationTest {
                 SELECT COUNT(*) FROM DATABASECHANGELOG
                 WHERE ID = '005-project-list-dictionaries' AND AUTHOR = 'supply-chain'
                 """));
+        assertEquals(2, queryCount("""
+                SELECT COUNT(*) FROM system_dict_data
+                WHERE dict_type = 'supply_chain_fulfillment_type' AND deleted = b'0'
+                """));
+        assertEquals("卡号卡密", queryText("""
+                SELECT label FROM system_dict_data
+                WHERE dict_type = 'supply_chain_fulfillment_type'
+                  AND value = 'CARD_CODE_SECRET' AND deleted = b'0'
+                """));
+        assertEquals(3, queryCount("""
+                SELECT COUNT(*) FROM system_dict_data
+                WHERE dict_type = 'supply_chain_sku_status' AND deleted = b'0'
+                """));
+        assertEquals("上架", queryText("""
+                SELECT label FROM system_dict_data
+                WHERE dict_type = 'supply_chain_sku_status' AND value = '10' AND deleted = b'0'
+                """));
+        assertEquals(1, queryCount("""
+                SELECT COUNT(*) FROM DATABASECHANGELOG
+                WHERE ID = '006-product-list-filter-dictionaries' AND AUTHOR = 'supply-chain'
+                """));
 
         updateLiquibase();
-        assertEquals(12, queryCount("""
+        assertEquals(14, queryCount("""
                 SELECT COUNT(*) FROM system_dict_type
                 WHERE type IN (
                     'supply_chain_sellable_category', 'supply_chain_product_type',
@@ -167,10 +190,11 @@ class AdminFormDictionaryMigrationIntegrationTest {
                     'supply_chain_cooperation_mode', 'supply_chain_distributor_type',
                     'supply_chain_supply_preference', 'supply_chain_buyer_status',
                     'supply_chain_supply_mode', 'supply_chain_invoice_title_type',
-                    'supply_chain_project_type', 'supply_chain_project_status')
+                    'supply_chain_project_type', 'supply_chain_project_status',
+                    'supply_chain_fulfillment_type', 'supply_chain_sku_status')
                   AND deleted = b'0'
                 """));
-        assertEquals(49, queryCount("""
+        assertEquals(54, queryCount("""
                 SELECT COUNT(*) FROM system_dict_data
                 WHERE dict_type IN (
                     'supply_chain_sellable_category', 'supply_chain_product_type',
@@ -178,7 +202,8 @@ class AdminFormDictionaryMigrationIntegrationTest {
                     'supply_chain_cooperation_mode', 'supply_chain_distributor_type',
                     'supply_chain_supply_preference', 'supply_chain_buyer_status',
                     'supply_chain_supply_mode', 'supply_chain_invoice_title_type',
-                    'supply_chain_project_type', 'supply_chain_project_status')
+                    'supply_chain_project_type', 'supply_chain_project_status',
+                    'supply_chain_fulfillment_type', 'supply_chain_sku_status')
                   AND deleted = b'0'
                 """));
         assertEquals(1, queryCount("""
@@ -196,6 +221,10 @@ class AdminFormDictionaryMigrationIntegrationTest {
         assertEquals(1, queryCount("""
                 SELECT COUNT(*) FROM DATABASECHANGELOG
                 WHERE ID = '005-project-list-dictionaries' AND AUTHOR = 'supply-chain'
+                """));
+        assertEquals(1, queryCount("""
+                SELECT COUNT(*) FROM DATABASECHANGELOG
+                WHERE ID = '006-product-list-filter-dictionaries' AND AUTHOR = 'supply-chain'
                 """));
     }
 

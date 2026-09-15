@@ -288,13 +288,11 @@ public class ProductCatalogQueryService {
 
         Set<Long> candidateSpuIds = null;
 
-        // 1. 履约方式 / 市场价区间预过滤
-        if (fulfillmentType != null || query.marketPriceMin() != null || query.marketPriceMax() != null) {
-            LambdaQueryWrapper<PlatformSkuDO> skuWrapper = new LambdaQueryWrapper<PlatformSkuDO>()
-                    .ne(PlatformSkuDO::getStatus, CatalogEntityStatus.ARCHIVED.getCode())
-                    .eq(fulfillmentType != null, PlatformSkuDO::getFulfillmentType, fulfillmentType)
-                    .ge(query.marketPriceMin() != null, PlatformSkuDO::getMarketPrice, query.marketPriceMin())
-                    .le(query.marketPriceMax() != null, PlatformSkuDO::getMarketPrice, query.marketPriceMax());
+        // 1. SKU 商品状态 / 兑换方式 / 市场价区间预过滤。
+        // 设计见 docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#419-管理端商品列表聚合查询get-supply-chainproductsmanagement-page
+        if (query.status() != null || fulfillmentType != null
+                || query.marketPriceMin() != null || query.marketPriceMax() != null) {
+            LambdaQueryWrapper<PlatformSkuDO> skuWrapper = managementSkuFilter(query, fulfillmentType);
             List<PlatformSkuDO> matchedSkus = skuMapper.selectList(skuWrapper);
             Set<Long> skuSpuIds = matchedSkus.stream().map(PlatformSkuDO::getSpuId).filter(Objects::nonNull).collect(Collectors.toSet());
             candidateSpuIds = intersect(candidateSpuIds, skuSpuIds);
@@ -358,7 +356,6 @@ public class ProductCatalogQueryService {
                 .eq(query.brandId() != null, PlatformSpuDO::getBrandId, query.brandId())
                 .eq(query.categoryId() != null, PlatformSpuDO::getPrimaryCategoryId, query.categoryId())
                 .eq(hasText(productType), PlatformSpuDO::getProductType, productType)
-                .eq(query.status() != null, PlatformSpuDO::getStatus, query.status())
                 .eq(hasText(query.unshelveMode()), PlatformSpuDO::getUnshelveMode, query.unshelveMode())
                 .ge(query.updateTimeStart() != null, PlatformSpuDO::getUpdatedAt, query.updateTimeStart())
                 .le(query.updateTimeEnd() != null, PlatformSpuDO::getUpdatedAt, query.updateTimeEnd())
@@ -394,9 +391,8 @@ public class ProductCatalogQueryService {
                 : typeMapper.selectList(new LambdaQueryWrapper<ProductTypeDO>().in(ProductTypeDO::getTypeCode, types))
                 .stream().collect(Collectors.toMap(ProductTypeDO::getTypeCode, ProductTypeDO::getTypeName, (a, b) -> a));
 
-        List<PlatformSkuDO> skus = skuMapper.selectList(new LambdaQueryWrapper<PlatformSkuDO>()
+        List<PlatformSkuDO> skus = skuMapper.selectList(managementSkuFilter(query, fulfillmentType)
                 .in(PlatformSkuDO::getSpuId, spuIds)
-                .ne(PlatformSkuDO::getStatus, CatalogEntityStatus.ARCHIVED.getCode())
                 .orderByAsc(PlatformSkuDO::getId));
         Map<Long, List<PlatformSkuDO>> spuSkuMap = skus.stream().collect(Collectors.groupingBy(PlatformSkuDO::getSpuId));
 
@@ -521,6 +517,21 @@ public class ProductCatalogQueryService {
             case "EXPRESS" -> "物流配送";
             default -> fulfillmentType;
         };
+    }
+
+    /**
+     * 商品列表中的商品状态、兑换方式和市场价都归属于 SKU；候选 SPU 与返回明细必须复用同一组条件，
+     * 避免命中一个 SKU 后把不符合筛选条件的兄弟 SKU 一并返回。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#419-管理端商品列表聚合查询get-supply-chainproductsmanagement-page}。
+     */
+    private static LambdaQueryWrapper<PlatformSkuDO> managementSkuFilter(
+            ProductManagementPageQuery query, String fulfillmentType) {
+        return new LambdaQueryWrapper<PlatformSkuDO>()
+                .ne(PlatformSkuDO::getStatus, CatalogEntityStatus.ARCHIVED.getCode())
+                .eq(query.status() != null, PlatformSkuDO::getStatus, query.status())
+                .eq(fulfillmentType != null, PlatformSkuDO::getFulfillmentType, fulfillmentType)
+                .ge(query.marketPriceMin() != null, PlatformSkuDO::getMarketPrice, query.marketPriceMin())
+                .le(query.marketPriceMax() != null, PlatformSkuDO::getMarketPrice, query.marketPriceMax());
     }
 
     private static Set<Long> intersect(Set<Long> existing, Set<Long> candidate) {

@@ -201,6 +201,24 @@ class ProductCenterContractTest {
         assertRecordComponentsDocumented(com.aifuli.module.supplychain.tradecore.catalog.application.ProductCatalogQueryService.SupplierSimpleInfo.class);
     }
 
+    /** 商品列表两个字典筛选参数必须明确 SKU 状态口径及对应字典类型。 */
+    @Test
+    void managementPageDocumentsSkuStatusAndFulfillmentDictionaries() {
+        Method managementPage = Arrays.stream(ProductAdminController.class.getDeclaredMethods())
+                .filter(method -> method.getName().equals("managementPage"))
+                .findFirst()
+                .orElseThrow();
+        Map<String, String> descriptions = Arrays.stream(managementPage.getParameters())
+                .collect(java.util.stream.Collectors.toMap(
+                        java.lang.reflect.Parameter::getName,
+                        parameter -> parameter.getAnnotation(Parameter.class).description()));
+
+        assertThat(descriptions.get("status"))
+                .contains("SKU商品状态", "supply_chain_sku_status");
+        assertThat(descriptions.get("fulfillmentType"))
+                .contains("CARD_CODE_SECRET", "DIRECT_RECHARGE", "supply_chain_fulfillment_type");
+    }
+
     @Test
     void legacyMasterDataCatalogEndpointsAreDeprecated() throws NoSuchMethodException {
         Method legacyBrandMethod = M1MasterDataAdminController.class.getMethod(
