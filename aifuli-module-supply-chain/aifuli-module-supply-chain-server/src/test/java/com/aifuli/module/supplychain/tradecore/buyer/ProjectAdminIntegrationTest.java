@@ -15,7 +15,9 @@ import com.aifuli.module.supplychain.tradecore.buyer.application.ProjectAdminCom
 import com.aifuli.module.supplychain.tradecore.buyer.application.ProjectAdminCommandService.CreateProjectCommand;
 import com.aifuli.module.supplychain.tradecore.buyer.application.ProjectAdminCommandService.UpdateProjectCommand;
 import com.aifuli.module.supplychain.tradecore.buyer.application.ProjectAdminQueryService;
+import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerProductDO;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.ProjectListingDO;
+import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerProductMapper;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.ProjectListingMapper;
 import com.aifuli.module.supplychain.tradecore.buyer.domain.ProjectListingStatus;
 import com.aifuli.module.supplychain.tradecore.catalog.application.BuyerProductCommandService;
@@ -26,10 +28,14 @@ import com.aifuli.module.supplychain.tradecore.catalog.application.ProjectListin
 import com.aifuli.module.supplychain.tradecore.catalog.application.ProjectListingCommandService.ListingLine;
 import com.aifuli.module.supplychain.tradecore.catalog.application.ProjectListingQueryService;
 import com.aifuli.module.supplychain.tradecore.catalog.application.SettlementPriceResolver;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerProductL2OverrideDO;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerProductL2OverrideVersionDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSettlementPriceDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSettlementPriceVersionDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProjectListingVersionDO;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerProductL2OverrideMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerProductL2OverrideVersionMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceVersionMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
@@ -59,15 +65,22 @@ import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BUYER_PRODUCT_NOT_FOUND;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PROJECT_BUYER_IMMUTABLE;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PROJECT_LISTING_NOT_FOUND;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PROJECT_SKU_NOT_IN_BUYER_CATALOG;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * 项目商品必须先是分销商品；冻结价不随后续 L2 回放；启用后归属不可改。
- * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#72-项目商品}。
+ * 项目商品归属、L2/L3 批量定价、冻结版本、事务回滚与并发行锁的真实 MySQL 集成门禁。
+ * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#6-测试策略}。
  */
 class ProjectAdminIntegrationTest {
 
@@ -98,7 +111,7 @@ class ProjectAdminIntegrationTest {
     }
 
     @Test
-    void projectSkuRequiresBuyerProductAndFreezeIgnoresLaterL2() {
+    void projectAndBatchPricingPersistIsolationRollbackAndConcurrency() throws Exception {
         try (ConfigurableApplicationContext context = applicationContext()) {
             BuyerAdminCommandService buyers = context.getBean(BuyerAdminCommandService.class);
             BuyerAdminQueryService buyerQueries = context.getBean(BuyerAdminQueryService.class);
@@ -184,6 +197,9 @@ class ProjectAdminIntegrationTest {
             assertThat(listingVersionMapper.selectById(version1Id).getBuyerSettlementUnitPrice())
                     .isEqualTo(L1_CENTS);
 
+            verifyBatchPricingDatabaseSemantics(context, buyerA, buyerB, projectCode,
+                    buyerProductCodes.getFirst(), listingCode);
+
             assertThatThrownBy(() -> projects.update(new UpdateProjectCommand(
                     projectCode, "福利项目", buyerB, "WELFARE",
                     LocalDate.of(2026, 9, 1), LocalDate.of(2026, 12, 31),
@@ -192,6 +208,204 @@ class ProjectAdminIntegrationTest {
                     .extracting(ex -> ((ServiceException) ex).getCode())
                     .isEqualTo(PROJECT_BUYER_IMMUTABLE.getCode());
             assertThat(L2_CENTS).isEqualTo(Math.round(L1_CENTS * (L2_PERCENT / 100.0d)) + L2_AMOUNT_CENTS);
+        }
+    }
+
+    /**
+     * 在真实 MySQL 事务与行锁上验证 L2/L3 批量定价，不以 Mock Mapper 代替数据库原子性。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#6-测试策略}。
+     */
+    private static void verifyBatchPricingDatabaseSemantics(ConfigurableApplicationContext context,
+                                                             String buyerA, String buyerB,
+                                                             String projectA, String buyerProductA100Code,
+                                                             String listingA) throws Exception {
+        BuyerProductCommandService products = context.getBean(BuyerProductCommandService.class);
+        BuyerProductMapper productMapper = context.getBean(BuyerProductMapper.class);
+        BuyerProductL2OverrideMapper l2OverrideMapper = context.getBean(BuyerProductL2OverrideMapper.class);
+        BuyerProductL2OverrideVersionMapper l2VersionMapper =
+                context.getBean(BuyerProductL2OverrideVersionMapper.class);
+        ProjectAdminCommandService projects = context.getBean(ProjectAdminCommandService.class);
+        ProjectListingCommandService listings = context.getBean(ProjectListingCommandService.class);
+        ProjectListingQueryService listingQuery = context.getBean(ProjectListingQueryService.class);
+        ProjectListingMapper listingMapper = context.getBean(ProjectListingMapper.class);
+        ProjectListingVersionMapper listingVersionMapper = context.getBean(ProjectListingVersionMapper.class);
+
+        insertL1(context, "MOVIE_200", 19_800L);
+        String buyerProductA200Code = products.addProducts(buyerA, List.of(
+                new ProductLine("MOVIE_200", L2AdjustMode.FOLLOW_TEMPLATE, null, null, null)), 1L).getFirst();
+        String buyerProductB100Code = products.addProducts(buyerB, List.of(
+                new ProductLine("MOVIE_100", L2AdjustMode.FOLLOW_TEMPLATE, null, null, null)), 1L).getFirst();
+        BuyerProductDO buyerProductA100 = productMapper.selectByCode(buyerProductA100Code);
+        BuyerProductDO buyerProductA200 = productMapper.selectByCode(buyerProductA200Code);
+
+        BuyerProductL2OverrideDO l2BeforePreview =
+                l2OverrideMapper.selectByBuyerProductId(buyerProductA100.getId());
+        int l2VersionCountBeforePreview = l2VersionMapper
+                .selectByBuyerProductId(buyerProductA100.getId()).size();
+        var l2Previews = products.previewL2Batch(buyerA,
+                List.of(buyerProductA100Code, buyerProductA200Code), L2AdjustMode.CUSTOM, 80, 20L);
+        assertThat(l2Previews).hasSize(2);
+        assertThat(l2Previews.getFirst().currentL2PriceCents()).isEqualTo(L2_CENTS);
+        assertThat(l2Previews.getFirst().previewL2PriceCents()).isEqualTo(7_860L);
+        assertThat(l2Previews.get(1).currentL2PriceCents()).isEqualTo(19_800L);
+        assertThat(l2Previews.get(1).previewL2PriceCents()).isEqualTo(15_860L);
+        assertThat(l2VersionMapper.selectByBuyerProductId(buyerProductA100.getId()))
+                .hasSize(l2VersionCountBeforePreview);
+        assertThat(l2OverrideMapper.selectByBuyerProductId(buyerProductA100.getId()).getCurrentVersionId())
+                .isEqualTo(l2BeforePreview.getCurrentVersionId());
+        assertThat(l2OverrideMapper.selectByBuyerProductId(buyerProductA200.getId())).isNull();
+
+        Integer thresholdBeforeRollback = buyerProductA100.getDisplayThresholdPercent();
+        assertThatThrownBy(() -> products.patchL2Batch(buyerA,
+                List.of(buyerProductA100Code, buyerProductB100Code),
+                L2AdjustMode.CUSTOM, 70, 0L, 9, 1L))
+                .isInstanceOf(ServiceException.class)
+                .extracting(ex -> ((ServiceException) ex).getCode())
+                .isEqualTo(BUYER_PRODUCT_NOT_FOUND.getCode());
+        assertThat(l2VersionMapper.selectByBuyerProductId(buyerProductA100.getId()))
+                .hasSize(l2VersionCountBeforePreview);
+        assertThat(l2OverrideMapper.selectByBuyerProductId(buyerProductA100.getId()).getCurrentVersionId())
+                .isEqualTo(l2BeforePreview.getCurrentVersionId());
+        assertThat(productMapper.selectByCode(buyerProductA100Code).getDisplayThresholdPercent())
+                .isEqualTo(thresholdBeforeRollback);
+
+        products.patchL2Batch(buyerA, List.of(buyerProductA100Code, buyerProductA200Code),
+                L2AdjustMode.CUSTOM, 80, 20L, 7, 1L);
+        assertCurrentL2(l2OverrideMapper, l2VersionMapper, productMapper.selectByCode(buyerProductA100Code),
+                L2AdjustMode.CUSTOM, 7_860L);
+        assertCurrentL2(l2OverrideMapper, l2VersionMapper, productMapper.selectByCode(buyerProductA200Code),
+                L2AdjustMode.CUSTOM, 15_860L);
+        assertThat(productMapper.selectByCode(buyerProductA100Code).getDisplayThresholdPercent()).isEqualTo(7);
+        assertThat(productMapper.selectByCode(buyerProductA200Code).getDisplayThresholdPercent()).isEqualTo(7);
+
+        products.patchL2Batch(buyerA, List.of(buyerProductA200Code),
+                L2AdjustMode.EQUAL_L1, null, null, null, 1L);
+        assertCurrentL2(l2OverrideMapper, l2VersionMapper, productMapper.selectByCode(buyerProductA200Code),
+                L2AdjustMode.EQUAL_L1, 19_800L);
+        int a200HistorySize = l2VersionMapper.selectByBuyerProductId(buyerProductA200.getId()).size();
+        products.patchL2Batch(buyerA, List.of(buyerProductA200Code),
+                L2AdjustMode.FOLLOW_TEMPLATE, null, null, null, 1L);
+        assertThat(l2OverrideMapper.selectByBuyerProductId(buyerProductA200.getId()).getCurrentVersionId()).isNull();
+        assertThat(l2VersionMapper.selectByBuyerProductId(buyerProductA200.getId())).hasSize(a200HistorySize);
+
+        String projectB = projects.create(new CreateProjectCommand(
+                "福利项目B", buyerA, "WELFARE",
+                LocalDate.of(2026, 9, 1), LocalDate.of(2026, 12, 31),
+                null, "说明", "ACTIVE", 1L));
+        String listingB = listings.addProducts(projectB, List.of(
+                new ListingLine("MOVIE_100", L3AdjustMode.FOLLOW_L2, null, null)), 1L).getFirst();
+        ProjectListingDO listingABeforePreview = listingMapper.selectByCode(listingA);
+        int listingAVersionCountBeforePreview = listingVersionMapper
+                .selectByListingId(listingABeforePreview.getId()).size();
+        var l3Previews = listings.previewL3Batch(projectA, List.of(listingA),
+                L3AdjustMode.EQUAL_L1, null, null);
+        assertThat(l3Previews).singleElement().satisfies(preview -> {
+            assertThat(preview.currentFinalPriceCents()).isEqualTo(8_820L);
+            assertThat(preview.previewFinalPriceCents()).isEqualTo(L1_CENTS);
+            assertThat(preview.previewPriceSource()).isEqualTo(PriceSource.L3);
+        });
+        assertThat(listingVersionMapper.selectByListingId(listingABeforePreview.getId()))
+                .hasSize(listingAVersionCountBeforePreview);
+        assertThat(listingMapper.selectByCode(listingA).getCurrentVersionId())
+                .isEqualTo(listingABeforePreview.getCurrentVersionId());
+
+        ProjectListingDO listingBBeforeRollback = listingMapper.selectByCode(listingB);
+        assertThatThrownBy(() -> listings.patchL3Batch(projectA, List.of(listingA, listingB),
+                L3AdjustMode.CUSTOM, 70, 0L, 1L))
+                .isInstanceOf(ServiceException.class)
+                .extracting(ex -> ((ServiceException) ex).getCode())
+                .isEqualTo(PROJECT_LISTING_NOT_FOUND.getCode());
+        assertThat(listingVersionMapper.selectByListingId(listingABeforePreview.getId()))
+                .hasSize(listingAVersionCountBeforePreview);
+        assertThat(listingMapper.selectByCode(listingA).getCurrentVersionId())
+                .isEqualTo(listingABeforePreview.getCurrentVersionId());
+        assertThat(listingMapper.selectByCode(listingB).getCurrentVersionId())
+                .isEqualTo(listingBBeforeRollback.getCurrentVersionId());
+
+        listings.patchL3Batch(projectA, List.of(listingA), L3AdjustMode.CUSTOM, 75, 0L, 1L);
+        listings.patchL3Batch(projectB, List.of(listingB), L3AdjustMode.EQUAL_L1, null, null, 1L);
+        assertThat(listingQuery.page(projectA, 1, 20).getList().getFirst().finalPriceCents()).isEqualTo(7_350L);
+        assertThat(listingQuery.page(projectB, 1, 20).getList().getFirst().finalPriceCents()).isEqualTo(L1_CENTS);
+
+        listings.patchL3Batch(projectB, List.of(listingB), L3AdjustMode.FOLLOW_L2, null, null, 1L);
+        ProjectListingDO frozenListingB = listingMapper.selectByCode(listingB);
+        Long frozenListingBVersionId = frozenListingB.getCurrentVersionId();
+        assertThat(listingVersionMapper.selectById(frozenListingBVersionId).getBuyerSettlementUnitPrice())
+                .isEqualTo(7_860L);
+        products.patchL2Batch(buyerA, List.of(buyerProductA100Code),
+                L2AdjustMode.CUSTOM, 70, 0L, null, 1L);
+        assertThat(listingMapper.selectByCode(listingB).getCurrentVersionId()).isEqualTo(frozenListingBVersionId);
+        assertThat(listingVersionMapper.selectById(frozenListingBVersionId).getBuyerSettlementUnitPrice())
+                .isEqualTo(7_860L);
+        var projectBRow = listingQuery.page(projectB, 1, 20).getList().getFirst();
+        assertThat(projectBRow.distPriceCents()).isEqualTo(6_860L);
+        assertThat(projectBRow.finalPriceCents()).isEqualTo(7_860L);
+        assertThat(projectBRow.priceSource()).isEqualTo(PriceSource.L2.name());
+
+        verifyConcurrentProjectPricing(listings, listingMapper, listingVersionMapper, projectA, listingA);
+    }
+
+    private static void assertCurrentL2(BuyerProductL2OverrideMapper overrideMapper,
+                                        BuyerProductL2OverrideVersionMapper versionMapper,
+                                        BuyerProductDO product, L2AdjustMode expectedMode,
+                                        long expectedPriceCents) {
+        BuyerProductL2OverrideDO identity = overrideMapper.selectByBuyerProductId(product.getId());
+        BuyerProductL2OverrideVersionDO version = versionMapper.selectById(identity.getCurrentVersionId());
+        assertThat(version.getAdjustMode()).isEqualTo(expectedMode.name());
+        assertThat(version.getResolvedUnitPriceCents()).isEqualTo(expectedPriceCents);
+    }
+
+    private static void verifyConcurrentProjectPricing(ProjectListingCommandService listings,
+                                                       ProjectListingMapper listingMapper,
+                                                       ProjectListingVersionMapper listingVersionMapper,
+                                                       String projectCode, String listingCode) throws Exception {
+        ProjectListingDO before = listingMapper.selectByCode(listingCode);
+        List<ProjectListingVersionDO> beforeVersions = listingVersionMapper.selectByListingId(before.getId());
+        CountDownLatch ready = new CountDownLatch(2);
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> first = executor.submit(() -> {
+                ready.countDown();
+                await(start);
+                listings.patchL3Batch(projectCode, List.of(listingCode),
+                        L3AdjustMode.CUSTOM, 60, 0L, 11L);
+            });
+            Future<?> second = executor.submit(() -> {
+                ready.countDown();
+                await(start);
+                listings.patchL3Batch(projectCode, List.of(listingCode),
+                        L3AdjustMode.CUSTOM, 55, 0L, 12L);
+            });
+            assertThat(ready.await(10, TimeUnit.SECONDS)).isTrue();
+            start.countDown();
+            first.get(30, TimeUnit.SECONDS);
+            second.get(30, TimeUnit.SECONDS);
+        } finally {
+            executor.shutdownNow();
+            assertThat(executor.awaitTermination(10, TimeUnit.SECONDS)).isTrue();
+        }
+
+        List<ProjectListingVersionDO> afterVersions = listingVersionMapper.selectByListingId(before.getId());
+        assertThat(afterVersions).hasSize(beforeVersions.size() + 2);
+        for (int index = 0; index < afterVersions.size(); index++) {
+            assertThat(afterVersions.get(index).getVersionNo()).isEqualTo(index + 1);
+        }
+        ProjectListingDO after = listingMapper.selectByCode(listingCode);
+        ProjectListingVersionDO current = listingVersionMapper.selectById(after.getCurrentVersionId());
+        assertThat(current.getId()).isEqualTo(afterVersions.getLast().getId());
+        assertThat(current.getBuyerSettlementUnitPrice()).isIn(5_390L, 5_880L);
+        assertThat(current.getSettlementPriceLevel()).isEqualTo(PriceSource.L3.name());
+    }
+
+    private static void await(CountDownLatch latch) {
+        try {
+            if (!latch.await(10, TimeUnit.SECONDS)) {
+                throw new IllegalStateException("等待并发定价起跑信号超时");
+            }
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("等待并发定价起跑信号被中断", interrupted);
         }
     }
 

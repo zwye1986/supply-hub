@@ -514,3 +514,4 @@ PRD 8.4.1 的列表 Tab 支持从 `GET /supply-chain/product-types` 动态拉取
 3. 分类详情用例必须通过 `CategoryQueryService` 读取真实数据，并按实际 Jackson 序列化属性验证响应仅包含 d16 锁定的九个业务字段，不得出现 `id`、`version`、`createdBy`、`updatedBy`。
 4. 商品中心契约测试除检查源码注解外，还必须通过 Swagger `ModelConverters` 验证最终生成的 Schema 属性及中文说明，避免注解存在但 Knife4j 模型不可见。
 5. 集成与契约门禁统一通过 Maven profile `supply-chain-integration` 执行；本批不修改 DDL，Liquibase 只验证现有变更集可在空库完整执行。
+6. `ProjectAdminIntegrationTest` 必须在真实 MySQL 8.4 上直接调用 L2/L3 批量试算与保存应用服务，并验证：试算零写入；同一分销商的不同项目可冻结不同 L3；混入其它分销商商品或其它项目 listing 时整批回滚；`FOLLOW_TEMPLATE` / `FOLLOW_L2`、`EQUAL_L1`、`CUSTOM` 的版本与指针语义；后续 L2 变更不回放既有项目版本；同一项目并发改价由项目行锁串行化，版本号连续且当前指针指向最终版本；管理查询与冻结版本一致。
