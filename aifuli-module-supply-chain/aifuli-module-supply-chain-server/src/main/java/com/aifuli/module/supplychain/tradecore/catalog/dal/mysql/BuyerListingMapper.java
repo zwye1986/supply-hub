@@ -21,4 +21,15 @@ public interface BuyerListingMapper extends BaseMapperX<BuyerListingDO> {
         return selectOne(BuyerListingDO::getBuyerId, buyerId,
                 BuyerListingDO::getBuyerSkuCode, buyerSkuCode);
     }
+
+    /**
+     * 悲观锁锁定采购商上架记录，防止并发重开与受理冲突。
+     *
+     * <p>设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#35-sku-限购计算并发与释放规则}。</p>
+     */
+    default BuyerListingDO selectByBuyerAndSkuCodeForUpdate(Long buyerId, String buyerSkuCode) {
+        return selectOneForUpdate(new LambdaQueryWrapper<BuyerListingDO>()
+                .eq(BuyerListingDO::getBuyerId, buyerId)
+                .eq(BuyerListingDO::getBuyerSkuCode, buyerSkuCode));
+    }
 }

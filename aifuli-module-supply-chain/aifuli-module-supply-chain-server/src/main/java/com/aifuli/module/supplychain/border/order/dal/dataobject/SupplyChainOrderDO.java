@@ -18,6 +18,8 @@ public class SupplyChainOrderDO {
     private String orderNo;
     private String orderType;
     private Long buyerId;
+    /** 采购项目内部主键；历史订单及非项目场景可为空 */
+    private Long projectId;
     private String buyerCodeSnapshot;
     private String buyerNameSnapshot;
     private String buyerUserId;

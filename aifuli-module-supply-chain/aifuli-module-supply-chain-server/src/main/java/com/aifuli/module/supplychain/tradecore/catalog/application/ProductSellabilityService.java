@@ -32,13 +32,22 @@ public class ProductSellabilityService {
         return requireSellable(sku);
     }
 
+    /**
+     * 校验调用方已加载的平台 SKU，避免需要悲观锁的交易链路重新读取 SKU 并破坏锁后快照顺序。
+     *
+     * <p>设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#35-sku-限购计算并发与释放规则}。</p>
+     */
+    public SellableProduct requireSellable(PlatformSkuDO sku) {
+        return requireSellableInternal(sku);
+    }
+
     public boolean isSellable(PlatformSkuDO sku, PlatformSpuDO spu) {
         return sku != null && spu != null
                 && sku.getStatus() != null && sku.getStatus() == CatalogEntityStatus.ACTIVE.getCode()
                 && spu.getStatus() != null && spu.getStatus() == CatalogEntityStatus.ACTIVE.getCode();
     }
 
-    private SellableProduct requireSellable(PlatformSkuDO sku) {
+    private SellableProduct requireSellableInternal(PlatformSkuDO sku) {
         PlatformSpuDO spu = sku == null || sku.getSpuId() == null ? null : spuMapper.selectById(sku.getSpuId());
         if (!isSellable(sku, spu)) {
             throw exception(SKU_NOT_SALEABLE);

@@ -202,7 +202,9 @@ public class ProductAdminController {
     private SaveSpuCommand toCommand(SpuSaveReqVO request) {
         List<SaveSkuLine> skus = request.skus.stream().map(line -> new SaveSkuLine(line.skuCode, line.skuName,
                 line.fulfillmentType, line.faceValue, line.marketPrice, line.suggestedSalePrice,
-                line.taxIncluded, line.taxRate, line.minQuantity, line.maxQuantity, line.status)).toList();
+                line.taxIncluded, line.taxRate, line.minQuantity, line.maxQuantity,
+                line.userLimitEnabled, line.userLimitPeriod, line.userLimitQuantity,
+                line.orderLimitEnabled, line.status)).toList();
         return new SaveSpuCommand(request.spuCode, request.spuName, request.subtitle, request.brandId,
                 request.primaryCategoryId, request.secondaryCategoryIds, request.sellableCategory,
                 request.productType, request.productClassification, request.coverUrl, request.sliderImageUrls,
@@ -227,8 +229,8 @@ public class ProductAdminController {
         @Size(max = 2000) @Schema(description = "使用说明") private String useInstruction;
         @Schema(description = "图文详情") private String description;
         @Size(max = 32) @Schema(description = "配送模式；默认 VIRTUAL") private String deliveryType;
-        @Positive @Schema(description = "SPU 最低起购量；默认1") private Long minQuantity;
-        @Positive @Schema(description = "SPU 单次最高购买量；默认9999999") private Long maxQuantity;
+        @Positive @Schema(description = "SPU默认单次最低起购量") private Long minQuantity;
+        @Positive @Schema(description = "SPU默认单次最高限购量") private Long maxQuantity;
         @Schema(description = "状态：0草稿，10启用，20停用；默认10") private Short status;
         @Valid @NotEmpty @Schema(description = "至少一个 SKU") private List<SkuItemSaveReqVO> skus;
     }
@@ -245,8 +247,14 @@ public class ProductAdminController {
         @Schema(description = "是否含税：1含税，0不含税；仅记录展示，不参与价格计算") private Boolean taxIncluded;
         @DecimalMin("0.0000") @DecimalMax("1.0000")
         @Schema(description = "税率，如0.0600表示6%；仅记录展示，不参与价格计算") private BigDecimal taxRate;
-        @Positive @Schema(description = "SKU 最低起购量；默认1") private Long minQuantity;
-        @Positive @Schema(description = "SKU 单次最高购买量；默认9999999") private Long maxQuantity;
+        @Positive @Schema(description = "SKU单次最小起购数量") private Long minQuantity;
+        @Positive @Schema(description = "SKU单次最大限购数量") private Long maxQuantity;
+        @Schema(description = "是否启用每人限购：1启用，0停用") private Boolean userLimitEnabled;
+        @Size(max = 16)
+        @Schema(description = "每人限购周期：LIFETIME终身，YEAR每年，MONTH每月，WEEK每周，DAY每天")
+        private String userLimitPeriod;
+        @Positive @Schema(description = "每人每周期最多购买数量") private Long userLimitQuantity;
+        @Schema(description = "是否启用每订单限购：1启用，0停用") private Boolean orderLimitEnabled;
         @Schema(description = "SKU 状态；默认继承 SPU") private Short status;
     }
 

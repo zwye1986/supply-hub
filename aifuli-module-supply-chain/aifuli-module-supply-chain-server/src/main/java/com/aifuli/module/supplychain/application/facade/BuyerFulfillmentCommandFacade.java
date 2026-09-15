@@ -16,6 +16,8 @@ import com.aifuli.module.supplychain.infrastructure.identity.BusinessNoGenerator
 import com.aifuli.module.supplychain.infrastructure.identity.BusinessNoPrefixes;
 import com.aifuli.module.supplychain.infrastructure.security.EnvelopeCryptoPort;
 import com.aifuli.module.supplychain.infrastructure.security.HmacFingerprintPort;
+import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerProjectAccessResolver;
+import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerProjectAccessResolver.ProjectSnapshot;
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerResolver;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -50,6 +52,7 @@ public class BuyerFulfillmentCommandFacade {
     private final SupplyChainDatabaseClock databaseClock;
 
     private final BuyerResolver buyerResolver;
+    private final BuyerProjectAccessResolver projectAccessResolver;
     private final FulfillmentTargetSchemaRegistry targetSchemaRegistry;
     private final EnvelopeCryptoPort envelopeCrypto;
     private final HmacFingerprintPort hmacFingerprint;
@@ -64,16 +67,18 @@ public class BuyerFulfillmentCommandFacade {
      * 详见 {@code docs/superpowers/specs/2026-08-07-supply-chain-phase1-detailed-design.md#7.2-标准履约受理}。</p>
      */
     public FulfillmentAcceptanceReceiptRespDTO acceptFulfillment(AcceptFulfillmentReqDTO request) {
-        log.info("[履约][facade] acceptFulfillment 入口 sourceSystem={}, externalTenantId={}, buyerOrderNo={}, buyerSkuCode={}, quantity={}",
-                request.getSourceSystem(), request.getExternalTenantId(), request.getBuyerOrderNo(),
-                request.getBuyerSkuCode(), request.getQuantity());
+        log.info("[履约][facade] acceptFulfillment 入口 sourceSystem={}, externalTenantId={}, projectCode={}, buyerOrderNo={}, buyerSkuCode={}, quantity={}",
+                request.getSourceSystem(), request.getExternalTenantId(), request.getProjectCode(),
+                request.getBuyerOrderNo(), request.getBuyerSkuCode(), request.getQuantity());
         requireBasicRequest(request);
         LocalDateTime now = databaseClock.now();
         BuyerResolver.BuyerSnapshot buyer = buyerResolver.resolve(
                 request.getSourceSystem(), request.getExternalTenantId(), now);
+        ProjectSnapshot project = projectAccessResolver.requireActiveByCode(request.getProjectCode(), buyer.id());
         TargetSchemaSnapshot targetSchema = lifecycle.resolveTargetSchema(buyer.id(), request.getBuyerSkuCode());
         String requestId = businessNoGenerator.next(BusinessNoPrefixes.REQ);
-        FulfillmentAcceptanceLifecycle.PreparedAcceptance prepared = prepare(request, buyer, targetSchema, requestId);
+        FulfillmentAcceptanceLifecycle.PreparedAcceptance prepared = prepare(
+                request, buyer, project.projectId(), targetSchema, requestId);
         FulfillmentAcceptanceLifecycle.ClaimResult claim;
         try {
             claim = lifecycle.claim(prepared);
@@ -103,7 +108,7 @@ public class BuyerFulfillmentCommandFacade {
 
     private FulfillmentAcceptanceLifecycle.PreparedAcceptance prepare(
             AcceptFulfillmentReqDTO request, BuyerResolver.BuyerSnapshot buyer,
-            TargetSchemaSnapshot targetSchema, String traceId) {
+            Long projectId, TargetSchemaSnapshot targetSchema, String traceId) {
         FulfillmentTargetDTO target = request.getTarget();
         byte[] targetCanonical = canonicalTarget(target, targetSchema);
         byte[] targetDigest = hmacFingerprint.fingerprint(FulfillmentTargetFields.FINGERPRINT_PURPOSE, targetCanonical);
@@ -128,7 +133,7 @@ public class BuyerFulfillmentCommandFacade {
         byte[] buyerOrderDigest = sha256((request.getBuyerOrderNo() + '|'
                 + request.getBuyerUserId()).getBytes(StandardCharsets.UTF_8));
         return new FulfillmentAcceptanceLifecycle.PreparedAcceptance(
-                buyer.id(), buyer.buyerCode(), buyer.buyerName(), request.getBuyerOrderNo(),
+                projectId, buyer.id(), buyer.buyerCode(), buyer.buyerName(), request.getBuyerOrderNo(),
                 request.getBuyerUserId(), request.getBuyerSkuCode(),
                 Math.toIntExact(request.getListingVersion()), request.getQuantity(),
                 targetSchema.schemaCode(), targetSchema.schemaVersion(),
@@ -153,6 +158,7 @@ public class BuyerFulfillmentCommandFacade {
                                     byte[] targetDigest, boolean includeListingVersion) {
         Map<String, Object> canonical = new TreeMap<>();
         canonical.put("buyerOrderNo", request.getBuyerOrderNo());
+        canonical.put("projectCode", request.getProjectCode());
         canonical.put("buyerUserId", request.getBuyerUserId());
         canonical.put("buyerSkuCode", request.getBuyerSkuCode());
         canonical.put("quantity", request.getQuantity());
@@ -185,7 +191,7 @@ public class BuyerFulfillmentCommandFacade {
         Objects.requireNonNull(request.getPaidAt(), "Paid time is required");
         if (blank(request.getSourceSystem()) || blank(request.getExternalTenantId())
                 || blank(request.getBuyerOrderNo()) || blank(request.getBuyerUserId())
-                || blank(request.getBuyerSkuCode())
+                || blank(request.getBuyerSkuCode()) || blank(request.getProjectCode())
                 || request.getListingVersion() <= 0 || request.getListingVersion() > Integer.MAX_VALUE
                 || request.getQuantity() <= 0) {
             throw new IllegalArgumentException("Fulfillment request is incomplete");
@@ -203,6 +209,7 @@ public class BuyerFulfillmentCommandFacade {
         response.setOrderNo(snapshot.orderNo());
         response.setOrderStatus(snapshot.orderNo() == null ? null : SupplyChainOrderStatus.PROCESSING);
         response.setFulfillmentRequestNo(snapshot.fulfillmentRequestNo());
+        response.setRejectionCode(snapshot.rejectionCode());
         response.setSupplierCode(snapshot.supplierCode());
         response.setSupplierName(snapshot.supplierName());
         response.setAcceptedAt(snapshot.acceptedAt() == null ? null

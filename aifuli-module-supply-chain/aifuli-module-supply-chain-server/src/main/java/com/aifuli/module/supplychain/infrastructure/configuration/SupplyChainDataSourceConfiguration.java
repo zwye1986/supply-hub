@@ -16,6 +16,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
 import org.springframework.jdbc.support.JdbcTransactionManager;
 import org.springframework.transaction.annotation.EnableTransactionManagement;
 
@@ -68,6 +69,10 @@ public class SupplyChainDataSourceConfiguration {
         configuration.setMapUnderscoreToCamelCase(true);
         factory.setConfiguration(configuration);
         factory.setDataSource(dataSource);
+        // 供应链独立 SqlSessionFactory 不经过宿主 MyBatis 自动配置，需显式加载本模块复杂聚合查询 XML。
+        // 设计见 docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#35-sku-限购计算并发与释放规则。
+        factory.setMapperLocations(new PathMatchingResourcePatternResolver()
+                .getResources("classpath*:mapper/**/*.xml"));
         MybatisPlusInterceptor interceptor = new MybatisPlusInterceptor();
         interceptor.addInnerInterceptor(new PaginationInnerInterceptor());
         interceptor.addInnerInterceptor(new OptimisticLockerInnerInterceptor());

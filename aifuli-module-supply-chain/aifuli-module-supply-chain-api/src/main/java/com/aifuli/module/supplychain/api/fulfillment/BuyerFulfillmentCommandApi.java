@@ -20,7 +20,8 @@ public interface BuyerFulfillmentCommandApi {
 
     @PostMapping(PREFIX + "/accept")
     @Operation(summary = "受理标准商品履约",
-            description = "一期只接受单商品、数量一和 CNY 结算；受理成功不表示供应商已完成履约")
+            description = "一期只接受单商品、数量一和 CNY 结算；projectCode 用于项目级 SKU 限购隔离；"
+                    + "受理成功不表示供应商已完成履约")
     CommonResult<FulfillmentAcceptanceReceiptRespDTO> acceptFulfillment(
             @Parameter(description = "标准商品履约受理请求", required = true)
             @Valid @RequestBody AcceptFulfillmentReqDTO request);

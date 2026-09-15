@@ -18,8 +18,8 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
- * 采购项目只读校验单元测试：只放行启用且归属当前采购商的项目；
- * 项目缺失、停用、归属不符统一返回 001，不向调用方泄露项目事实。
+ * 采购项目只读校验单元测试：按主键访问只放行启用且归属当前采购商的项目，
+ * 项目缺失、停用、归属不符统一返回 001；按编码访问时映射 PROJECT_NOT_FOUND。
  *
  * <p>设计见
  * {@code docs/superpowers/specs/2026-08-22-instore-project-member-entry-design.md#9-业务流程}。</p>
@@ -49,6 +49,49 @@ class BuyerProjectAccessResolverTest {
         ProjectSnapshot snapshot = resolver.requireActive(PROJECT_ID, BUYER_ID);
 
         assertThat(snapshot).isEqualTo(new ProjectSnapshot(PROJECT_ID, PROJECT_CODE, BUYER_ID));
+    }
+
+    @Test
+    void requireActiveByCodeReturnsSnapshotForActiveProjectOfBuyer() {
+        when(projectMapper.selectByProjectCode(PROJECT_CODE))
+                .thenReturn(project(BuyerProjectStatus.ACTIVE.getCode()));
+
+        ProjectSnapshot snapshot = resolver.requireActiveByCode(PROJECT_CODE, BUYER_ID);
+
+        assertThat(snapshot).isEqualTo(new ProjectSnapshot(PROJECT_ID, PROJECT_CODE, BUYER_ID));
+    }
+
+    @Test
+    void requireActiveByCodeRejectsProjectOfAnotherBuyer() {
+        BuyerProjectDO otherBuyerProject = project(BuyerProjectStatus.ACTIVE.getCode());
+        otherBuyerProject.setBuyerId(9999L);
+        when(projectMapper.selectByProjectCode(PROJECT_CODE)).thenReturn(otherBuyerProject);
+
+        assertThatThrownBy(() -> resolver.requireActiveByCode(PROJECT_CODE, BUYER_ID))
+                .isInstanceOf(ServiceException.class)
+                .extracting(error -> ((ServiceException) error).getCode())
+                .isEqualTo(SupplyChainErrorCodeConstants.PROJECT_NOT_FOUND.getCode());
+    }
+
+    @Test
+    void requireActiveByCodeRejectsBlankCodeWithoutDatabaseAccess() {
+        assertThatThrownBy(() -> resolver.requireActiveByCode("  ", BUYER_ID))
+                .isInstanceOf(ServiceException.class)
+                .extracting(error -> ((ServiceException) error).getCode())
+                .isEqualTo(SupplyChainErrorCodeConstants.PROJECT_NOT_FOUND.getCode());
+
+        verifyNoInteractions(projectMapper);
+    }
+
+    @Test
+    void requireActiveByCodeRejectsSuspendedProject() {
+        when(projectMapper.selectByProjectCode(PROJECT_CODE))
+                .thenReturn(project(BuyerProjectStatus.SUSPENDED.getCode()));
+
+        assertThatThrownBy(() -> resolver.requireActiveByCode(PROJECT_CODE, BUYER_ID))
+                .isInstanceOf(ServiceException.class)
+                .extracting(error -> ((ServiceException) error).getCode())
+                .isEqualTo(SupplyChainErrorCodeConstants.PROJECT_NOT_FOUND.getCode());
     }
 
     @Test

@@ -29,11 +29,13 @@ import java.util.List;
 
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_CANNOT_DELETE_HAS_SUPPLIER_OFFER;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_CONCURRENT_UPDATE;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_PURCHASE_LIMIT_CONFIG_INVALID;
 import static com.aifuli.framework.common.exception.util.ServiceExceptionUtil.exception;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
@@ -132,6 +134,91 @@ class ProductCatalogCommandServiceTest {
         assertThat(captor.getValue().getSuggestedSalePrice()).isEqualTo(1_800L);
     }
 
+    /** 开启每人限购时，周期与正整数数量必须同时提供。 */
+    @Test
+    void rejectsIncompletePersonalPurchaseLimitConfiguration() {
+        givenUpdateWithOneOmittedSku();
+        ProductCatalogCommandService.SaveSkuLine invalid = new ProductCatalogCommandService.SaveSkuLine(
+                "SKU_KEEP", "保留SKU", FulfillmentType.CARD_CODE_SECRET.code(), 100L, 0L, 0L,
+                false, null, 1L, 10L, true, null, 2L, true,
+                CatalogEntityStatus.DRAFT.getCode());
+
+        assertThatThrownBy(() -> service.updateProduct(SPU_CODE, saveCommand(invalid)))
+                .isInstanceOf(ServiceException.class)
+                .extracting(ex -> ((ServiceException) ex).getCode())
+                .isEqualTo(PRODUCT_PURCHASE_LIMIT_CONFIG_INVALID.getCode());
+    }
+
+    /** 未知周期必须拒绝，避免把非法窗口写入 SKU。 */
+    @Test
+    void rejectsUnknownPersonalPurchaseLimitPeriod() {
+        givenUpdateWithOneOmittedSku();
+        ProductCatalogCommandService.SaveSkuLine invalid = new ProductCatalogCommandService.SaveSkuLine(
+                "SKU_KEEP", "保留SKU", FulfillmentType.CARD_CODE_SECRET.code(), 100L, 0L, 0L,
+                false, null, 1L, 10L, true, "QUARTER", 2L, true,
+                CatalogEntityStatus.DRAFT.getCode());
+
+        assertThatThrownBy(() -> service.updateProduct(SPU_CODE, saveCommand(invalid)))
+                .isInstanceOf(ServiceException.class)
+                .extracting(ex -> ((ServiceException) ex).getCode())
+                .isEqualTo(PRODUCT_PURCHASE_LIMIT_CONFIG_INVALID.getCode());
+    }
+
+    /** 关闭每人限购时不得残留周期或数量。 */
+    @Test
+    void closingPersonalPurchaseLimitRejectsLeftoverPeriodOrQuantity() {
+        givenUpdateWithOneOmittedSku();
+        ProductCatalogCommandService.SaveSkuLine invalid = new ProductCatalogCommandService.SaveSkuLine(
+                "SKU_KEEP", "保留SKU", FulfillmentType.CARD_CODE_SECRET.code(), 100L, 0L, 0L,
+                false, null, 1L, 10L, false, "MONTH", null, false,
+                CatalogEntityStatus.DRAFT.getCode());
+
+        assertThatThrownBy(() -> service.updateProduct(SPU_CODE, saveCommand(invalid)))
+                .isInstanceOf(ServiceException.class)
+                .extracting(ex -> ((ServiceException) ex).getCode())
+                .isEqualTo(PRODUCT_PURCHASE_LIMIT_CONFIG_INVALID.getCode());
+    }
+
+    /** 兼容编辑请求未携带四个新增字段时，必须保留原 SKU 限购配置。 */
+    @Test
+    void omittedPurchaseLimitFieldsPreserveExistingSkuConfiguration() {
+        givenUpdateWithOneOmittedSku();
+
+        service.updateProduct(SPU_CODE, saveCommand());
+
+        ArgumentCaptor<PlatformSkuDO> captor = ArgumentCaptor.forClass(PlatformSkuDO.class);
+        verify(skuMapper, atLeastOnce()).updateById(captor.capture());
+        assertThat(captor.getAllValues()).filteredOn(sku -> "SKU_KEEP".equals(sku.getSkuCode()))
+                .singleElement().satisfies(sku -> {
+                    assertThat(sku.getUserLimitEnabled()).isTrue();
+                    assertThat(sku.getUserLimitPeriod()).isEqualTo("MONTH");
+                    assertThat(sku.getUserLimitQuantity()).isEqualTo(2L);
+                    assertThat(sku.getOrderLimitEnabled()).isTrue();
+                });
+    }
+
+    /** 显式关闭每人限购时，服务端必须把周期和数量规范化为空。 */
+    @Test
+    void disablingPersonalPurchaseLimitClearsPeriodAndQuantity() {
+        givenUpdateWithOneOmittedSku();
+        ProductCatalogCommandService.SaveSkuLine disabled = new ProductCatalogCommandService.SaveSkuLine(
+                "SKU_KEEP", "保留SKU", FulfillmentType.CARD_CODE_SECRET.code(), 100L, 0L, 0L,
+                false, null, 1L, 10L, false, null, null, false,
+                CatalogEntityStatus.DRAFT.getCode());
+
+        service.updateProduct(SPU_CODE, saveCommand(disabled));
+
+        ArgumentCaptor<PlatformSkuDO> captor = ArgumentCaptor.forClass(PlatformSkuDO.class);
+        verify(skuMapper, atLeastOnce()).updateById(captor.capture());
+        assertThat(captor.getAllValues()).filteredOn(sku -> "SKU_KEEP".equals(sku.getSkuCode()))
+                .singleElement().satisfies(sku -> {
+                    assertThat(sku.getUserLimitEnabled()).isFalse();
+                    assertThat(sku.getUserLimitPeriod()).isNull();
+                    assertThat(sku.getUserLimitQuantity()).isNull();
+                    assertThat(sku.getOrderLimitEnabled()).isFalse();
+                });
+    }
+
     /** 构造：SPU 下挂 keep 与 omitted 两个启用 SKU，更新请求只保留 keep。 */
     private PlatformSkuDO givenUpdateWithOneOmittedSku() {
         LocalDateTime now = LocalDateTime.now();
@@ -148,6 +235,8 @@ class ProductCatalogCommandServiceTest {
                 .thenReturn(ProductTypeDO.builder().typeCode("EQUITY_PRODUCT").build());
 
         PlatformSkuDO keep = PlatformSkuDO.builder().id(10L).spuId(1L).skuCode("SKU_KEEP")
+                .userLimitEnabled(true).userLimitPeriod("MONTH").userLimitQuantity(2L)
+                .orderLimitEnabled(true)
                 .status(CatalogEntityStatus.ACTIVE.getCode()).build();
         PlatformSkuDO omitted = PlatformSkuDO.builder().id(11L).spuId(1L).skuCode("SKU_OMITTED")
                 .status(CatalogEntityStatus.ACTIVE.getCode()).build();
@@ -160,6 +249,11 @@ class ProductCatalogCommandServiceTest {
         ProductCatalogCommandService.SaveSkuLine keepLine = new ProductCatalogCommandService.SaveSkuLine(
                 "SKU_KEEP", "保留SKU", FulfillmentType.CARD_CODE_SECRET.code(), 100L, 0L, 0L, 1L, 10L,
                 CatalogEntityStatus.DRAFT.getCode());
+        return saveCommand(keepLine);
+    }
+
+    private ProductCatalogCommandService.SaveSpuCommand saveCommand(
+            ProductCatalogCommandService.SaveSkuLine keepLine) {
         return new ProductCatalogCommandService.SaveSpuCommand(SPU_CODE, "商品", null, 2L, 3L, null,
                 SellableCategory.EQUITY.name(), "EQUITY_PRODUCT", ProductClassification.VIRTUAL_CARD.name(),
                 null, null, null, null, null, 1L, 10L,

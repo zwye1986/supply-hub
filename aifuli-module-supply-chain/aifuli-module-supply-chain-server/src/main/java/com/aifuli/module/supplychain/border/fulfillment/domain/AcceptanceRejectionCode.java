@@ -26,7 +26,11 @@ public enum AcceptanceRejectionCode {
     /** 采购商资金账户未开户。 */
     BUYER_ACCOUNT_NOT_OPENED("采购商资金账户未开户"),
     /** 采购商可用余额不足；一期不受理路径抛出，保留给二期恢复余额门槛。 */
-    BUYER_BALANCE_INSUFFICIENT("采购商可用余额不足");
+    BUYER_BALANCE_INSUFFICIENT("采购商可用余额不足"),
+    /** 当前项目下该用户购买数量已达到 SKU 周期限购上限。 */
+    USER_PURCHASE_LIMIT_EXCEEDED("当前项目下该用户购买数量已达到SKU周期限购上限"),
+    /** 本次购买数量超过 SKU 每订单限购上限。 */
+    ORDER_PURCHASE_LIMIT_EXCEEDED("本次购买数量超过SKU每订单限购上限");
 
     /** 中文说明，与错误目录 / DDL rejection_code 语义一致。 */
     private final String chineseName;

@@ -34,9 +34,9 @@ public class BuyerFulfillmentCommandApiImpl implements BuyerFulfillmentCommandAp
     @Override
     public CommonResult<FulfillmentAcceptanceReceiptRespDTO> acceptFulfillment(
             AcceptFulfillmentReqDTO request) {
-        log.info("[履约][rpc] acceptFulfillment 入口 sourceSystem={}, externalTenantId={}, buyerOrderNo={}, buyerSkuCode={}, quantity={}",
-                request.getSourceSystem(), request.getExternalTenantId(), request.getBuyerOrderNo(),
-                request.getBuyerSkuCode(), request.getQuantity());
+        log.info("[履约][rpc] acceptFulfillment 入口 sourceSystem={}, externalTenantId={}, projectCode={}, buyerOrderNo={}, buyerSkuCode={}, quantity={}",
+                request.getSourceSystem(), request.getExternalTenantId(), request.getProjectCode(),
+                request.getBuyerOrderNo(), request.getBuyerSkuCode(), request.getQuantity());
         FulfillmentAcceptanceReceiptRespDTO response = facade.acceptFulfillment(request);
         log.info("[履约][rpc] acceptFulfillment 出口 businessNo={}, receiptStatus={}, orderNo={}",
                 response.getBusinessNo(), response.getReceiptStatus(), response.getOrderNo());

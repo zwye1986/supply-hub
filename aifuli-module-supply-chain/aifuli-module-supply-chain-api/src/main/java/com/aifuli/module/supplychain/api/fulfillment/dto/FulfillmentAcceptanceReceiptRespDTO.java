@@ -37,6 +37,9 @@ public class FulfillmentAcceptanceReceiptRespDTO implements Serializable {
             example = "FR_01K1XXXXXXXXXXXXXXXXXXXXXX")
     private String fulfillmentRequestNo;
 
+    @Schema(description = "拒绝原因稳定错误码，处理中或已受理时为空", example = "USER_PURCHASE_LIMIT_EXCEEDED")
+    private String rejectionCode;
+
     @Schema(description = "列表展示供应商编码；尚未路由时为空", example = "QNM")
     private String supplierCode;
 

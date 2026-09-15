@@ -16,6 +16,8 @@ public class FulfillmentAcceptanceReceiptDO {
     private Long id;
     private String receiptNo;
     private Long buyerId;
+    /** 采购项目内部主键；历史受理回执可为空 */
+    private Long projectId;
     private String buyerOrderNo;
     private String buyerUserId;
     private String buyerSkuCode;

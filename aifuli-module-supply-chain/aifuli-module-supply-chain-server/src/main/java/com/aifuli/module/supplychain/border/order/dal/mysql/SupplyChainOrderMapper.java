@@ -5,11 +5,29 @@ import com.aifuli.module.supplychain.border.order.dal.dataobject.SupplyChainOrde
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import org.apache.ibatis.annotations.Mapper;
+import org.apache.ibatis.annotations.Param;
 
 import java.time.LocalDateTime;
 
 @Mapper
 public interface SupplyChainOrderMapper extends BaseMapperX<SupplyChainOrderDO> {
+
+    /**
+     * 聚合限购窗口内仍占用额度的标准商品数量。聚合 SQL 放在 XML，避免在 Java 中加载全部历史订单。
+     * 失败、取消和全额退款状态通过参数化枚举码排除，禁止在 SQL 中散落业务魔法值。
+     *
+     * <p>设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#35-sku-限购计算并发与释放规则}。</p>
+     */
+    Long sumEffectivePurchaseQuantity(
+            @Param("orderType") String orderType,
+            @Param("projectId") Long projectId,
+            @Param("buyerUserId") String buyerUserId,
+            @Param("platformSkuId") Long platformSkuId,
+            @Param("startInclusive") LocalDateTime startInclusive,
+            @Param("endExclusive") LocalDateTime endExclusive,
+            @Param("failedStatus") short failedStatus,
+            @Param("cancelledStatus") short cancelledStatus,
+            @Param("fullyRefundedStatus") short fullyRefundedStatus);
 
     /** 按供应链采购单号查询总订单，用于 DETAIL 入口只读加载。 */
     default SupplyChainOrderDO selectByOrderNo(String orderNo) {

@@ -37,6 +37,14 @@ public class PlatformSkuDO {
     private Long minQuantity;
     /** SKU单次最大限购数量 */
     private Long maxQuantity;
+    /** 是否启用每人限购：1启用，0停用 */
+    private Boolean userLimitEnabled;
+    /** 每人限购周期：LIFETIME终身，YEAR每年，MONTH每月，WEEK每周，DAY每天 */
+    private String userLimitPeriod;
+    /** 每人每周期最多购买数量 */
+    private Long userLimitQuantity;
+    /** 是否启用每订单限购：1启用，0停用 */
+    private Boolean orderLimitEnabled;
     private String currency;
     private String targetSchemaCode;
     private Integer targetSchemaVersion;

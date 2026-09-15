@@ -28,6 +28,7 @@
 | **d18** | **旧品牌创建接口终止写入** | 品牌创建统一使用 `POST /supply-chain/brands`。已废弃的 `POST /supply-chain/master-data/brands` 不再委托应用服务、不再执行参数校验或数据库写入，而是固定返回稳定业务错误 `BRAND_LEGACY_API_DEPRECATED`（`1_050_001_106`，不可重试），提示调用方迁移至新接口。其他 M1 兼容接口不受本决策影响。 | 关闭旧品牌入口绕过 Logo 必填约束的写入旁路 |
 | **d19** | **商品管理列表端管理端聚合读模型与批量上下架** | 针对运营管理端原型中「SPU 嵌套多 SKU 展开展示」与复杂多维检索诉求：<br>1. 新增管理端聚合读接口 `GET /supply-chain/products/management-page`，整页一次批量拉取 SPU、SKU、生效 Offer 及供应商信息在内存组装，返回包含市场价、销售建议价、供货价、不含税供货价、税率、税额、供应商名称列表、总库存、兑换方式、下架方式的聚合模型。<br>2. 新增批量上下架接口 `PUT /supply-chain/products/batch-status`，支持批量上架、下架并记录 `unshelve_mode`（`MANUAL_UNSHELVE`）。<br>3. `030` 变更集：`sc_platform_spu` 增加 `unshelve_mode`；`sc_platform_sku` 增加 `tax_rate`；存量商品类型回填默认 icon 图标；为 `sc_platform_spu` 补充 `idx_sc_platform_spu_type_status` 复合索引；商品类型卡片双指标重构为数据库 `GROUP BY` 聚合，彻底消除大数据量下的内存风险。 | 支撑商品列表管理端原型与批量操作 |
 | **d20** | **分销商/项目分层批量定价与税务元数据隔离** | 分销价必须落在 `分销商 + 分销商品`（L2）作用域，项目价必须落在 `分销商下的项目 + 项目商品`（L3）作用域；同一分销商的不同项目允许形成不同价格，禁止新增平台全局“分销价”。批量试算为只读操作，批量保存复用既有不可变价格版本表并在单事务内全量成功或回滚。`tax_included` 与 `tax_rate` 归属平台 SKU，只记录和展示，不得作为 `SettlementPriceResolver`、L1/L2/L3、服务费或利润率的计算入参；`031` 变更集补充含税标识并收紧字段注释。 | 明确定价作用域并防止税务展示字段污染结算价格 |
+| **d21** | **SKU 限购配置与项目级交易校验** | 限购配置归属平台 SKU。每人限购支持 `LIFETIME`（终身）、`YEAR`（每年）、`MONTH`（每月）、`WEEK`（每周）、`DAY`（每天）五种自然周期，计数维度固定为 `采购项目 + 用户标识（规范化手机号） + 平台 SKU`；每订单限购限制本次请求购买数量。标准履约请求新增必填 `projectCode`，由服务端校验项目属于已解析采购商，禁止把采购商 ID 或外部租户标识替代项目 ID。并发受理在 SKU 行锁内统计有效订单并校验额度；订单失败、取消或全额退款后通过订单状态投影自然退出计数，释放额度。现有一期 `quantity=1` 与单履约目标契约保持不变。 | 对齐商品编辑原型限购区并形成可并发校验闭环 |
 
 ---
 
@@ -190,6 +191,29 @@ ALTER TABLE sc_platform_sku
 
 `tax_included` 与 `tax_rate` 不进入任何价格版本表，也不进入 `SettlementPriceResolver`。管理列表中的不含税供货价与税额仅是展示投影，不得回写、覆盖或改变市场价、销售建议价、L1 平台价、L2 分销商价、L3 项目价及最终结算价。
 
+### 2.10 SKU 限购与标准履约项目归属（032 Changeset）
+
+```sql
+ALTER TABLE sc_platform_sku
+    ADD COLUMN user_limit_enabled TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否启用每人限购：1启用，0停用',
+    ADD COLUMN user_limit_period VARCHAR(16) NULL COMMENT '每人限购周期：LIFETIME终身，YEAR每年，MONTH每月，WEEK每周，DAY每天',
+    ADD COLUMN user_limit_quantity BIGINT NULL COMMENT '每人每周期最多购买数量',
+    ADD COLUMN order_limit_enabled TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否启用每订单限购：1启用，0停用';
+
+ALTER TABLE sc_fulfillment_acceptance_receipt
+    ADD COLUMN project_id BIGINT NULL COMMENT '采购项目内部主键；历史受理回执可为空';
+
+ALTER TABLE sc_supply_chain_order
+    ADD COLUMN project_id BIGINT NULL COMMENT '采购项目内部主键；历史订单及非项目场景可为空';
+```
+
+`032` 保留标准履约回执与总订单既有的 `(buyer_id, buyer_order_no)` 幂等唯一键，避免未写项目主键的
+O2O 等既有订单失去唯一约束；`projectCode` 进入请求指纹，因此同一采购商业务单号切换项目仍按幂等冲突
+处理。历史记录的 `project_id` 保持为空，避免从采购商或外部租户错误推导项目；所有新标准履约订单必须
+写入请求中 `projectCode` 解析得到的项目主键。SKU 限购配置约束如下：关闭每人限购时周期和数量均为空；开启时
+周期必须属于上述五值且数量大于零。每订单限购复用 SKU 的 `max_quantity` 作为数量上限，开关关闭时
+该值仅保留兼容展示语义。
+
 ---
 
 ## 3. 核心业务规则与状态机设计
@@ -260,6 +284,26 @@ PRD 8.4.1 的列表 Tab 支持从 `GET /supply-chain/product-types` 动态拉取
 | `JD` | 京东 | `JD` | 无 | 无 |
 
 `MOVIE`、`DINING` 如保持启用，可与其他普通类型一样按 `typeCode` 生成通用 Tab；本期不提供 `MOVIE_FAST`、`MOVIE_SLOW` 等细分 Tab，也不引入电影速度属性、点餐扩展过滤或专属履约分支。
+
+### 3.5 SKU 限购计算、并发与释放规则
+
+1. 限购只读取平台 SKU 当前配置，不复制到 SPU。每人限购关闭时不统计历史订单；开启时以供应链数据库
+   `Asia/Shanghai` 当前时间确定自然日、ISO 自然周（周一开始）、自然月、自然年或终身窗口。
+2. 用户标识继续使用标准履约契约中的 `buyerUserId`，其业务值由调用方提供规范化手机号；该敏感值不得
+   写入日志。项目必须通过新增的 `projectCode` 解析，并校验项目属于当前外部租户解析出的采购商。Facade
+   通过 `BuyerProjectAccessResolver` 获取最小项目快照，不得直接依赖项目 Mapper 或 DO。
+3. 计入额度的订单必须同时满足：`CARD` 标准商品、项目/用户/SKU 相同、受理时间落在配置窗口内、
+   主状态不是失败或取消、售后状态不是全部退款。部分退款不释放一期数量为 1 的整件额度。
+4. 受理事务先以锁定读取得采购商 Listing，再立即锁定其 `sc_platform_sku` 行；这两个锁定读必须发生在
+   Listing 版本、库存、SPU 状态及历史订单聚合等任何一致性读之前。这样 MySQL `REPEATABLE READ` 的
+   快照只会在取得 SKU 锁后建立，等待同一 SKU 锁的后续事务能够看到前序事务已提交的新订单，并串行越过
+   “统计 + 插入”临界区；禁止在普通查询已经建立旧快照后才补锁，也禁止仅依赖无锁 `COUNT/SUM` 导致
+   额度超卖。聚合查询使用供应链模块自有
+   Mapper XML；独立 `supplyChainSqlSessionFactory` 显式加载 `classpath*:mapper/**/*.xml`，不依赖宿主
+   默认 MyBatis 自动配置，也不影响其它七个独立进程的数据源或 Mapper。
+5. 超过每人额度返回可重试拒绝 `USER_PURCHASE_LIMIT_EXCEEDED`；当失败、取消或全额退款释放额度后，
+   调用方可携带上一回执版本按相同业务键重试。超过每订单额度返回最终拒绝
+   `ORDER_PURCHASE_LIMIT_EXCEEDED`。一期仍先遵守 `quantity=1`，不扩展多件履约或多目标 Schema。
 
 ---
 
@@ -433,6 +477,18 @@ PRD 8.4.1 的列表 Tab 支持从 `GET /supply-chain/product-types` 动态拉取
 
 试算与保存均按路径中的 `buyerCode` / `projectCode` 校验资源归属，禁止仅凭商品编码跨作用域改价。`taxIncluded`、`taxRate` 不出现在上述定价请求中，也不参与试算结果。
 
+#### 4.1.13 SKU 限购保存、回显与标准履约校验
+
+* SKU 保存项新增 `userLimitEnabled`、`userLimitPeriod`、`userLimitQuantity`、`orderLimitEnabled`；
+  `maxQuantity` 在 `orderLimitEnabled=true` 时作为每订单购买数量上限。详情接口回显相同字段。
+* `userLimitPeriod` 仅允许 `LIFETIME`、`YEAR`、`MONTH`、`WEEK`、`DAY`。每人限购开启时周期和正整数
+  上限必填；关闭时服务端规范化为空。存量未携带新字段的编辑请求保留原配置，避免兼容调用静默关闭限购。
+* `POST /rpc-api/supply-chain/buyer/fulfillment/accept` 请求新增必填 `projectCode`。服务端按
+  `sourceSystem + externalTenantId` 解析采购商，再校验项目归属；`projectCode` 进入请求指纹，既有
+  `(buyerId, buyerOrderNo)` 幂等键保持不变。受理事务在建单前完成每订单和每人额度校验。回执响应新增 `rejectionCode`，受理成功时为空，
+  拒绝时返回稳定拒绝码；限购分别返回 `USER_PURCHASE_LIMIT_EXCEEDED` 或
+  `ORDER_PURCHASE_LIMIT_EXCEEDED`，禁止只返回笼统状态导致调用方无法判断重试条件。
+
 ---
 
 ### 4.2 商品分类管理：`CategoryAdminController`
@@ -513,5 +569,6 @@ PRD 8.4.1 的列表 Tab 支持从 `GET /supply-chain/product-types` 动态拉取
 2. 标品池价格用例必须让 `face_value`、`market_price`、`suggested_sale_price` 与当前 L1 四个金额彼此不同，并断言 `suggestPriceCents` 取 L1、兼容字段 `marketPriceCents` 取 `suggested_sale_price`。
 3. 分类详情用例必须通过 `CategoryQueryService` 读取真实数据，并按实际 Jackson 序列化属性验证响应仅包含 d16 锁定的九个业务字段，不得出现 `id`、`version`、`createdBy`、`updatedBy`。
 4. 商品中心契约测试除检查源码注解外，还必须通过 Swagger `ModelConverters` 验证最终生成的 Schema 属性及中文说明，避免注解存在但 Knife4j 模型不可见。
-5. 集成与契约门禁统一通过 Maven profile `supply-chain-integration` 执行；本批不修改 DDL，Liquibase 只验证现有变更集可在空库完整执行。
+5. 集成与契约门禁统一通过 Maven profile `supply-chain-integration` 执行；空库必须完整执行全部 Liquibase 变更集（含 `032`）。
 6. `ProjectAdminIntegrationTest` 必须在真实 MySQL 8.4 上直接调用 L2/L3 批量试算与保存应用服务，并验证：试算零写入；同一分销商的不同项目可冻结不同 L3；混入其它分销商商品或其它项目 listing 时整批回滚；`FOLLOW_TEMPLATE` / `FOLLOW_L2`、`EQUAL_L1`、`CUSTOM` 的版本与指针语义；后续 L2 变更不回放既有项目版本；同一项目并发改价由项目行锁串行化，版本号连续且当前指针指向最终版本；管理查询与冻结版本一致。
+7. `FulfillmentAcceptanceIntegrationTest` 必须覆盖：标准履约回执与总订单写入 `project_id`；非法 `projectCode` 返回 `PROJECT_NOT_FOUND`；同一项目不同手机号独立计数；每人限购超限拒绝；失败/取消/全额退款释放额度且部分退款不释放；SKU 行锁下并发不超卖；公开契约保持 `quantity=1`。`ORDER_PURCHASE_LIMIT_EXCEEDED` 由 `SkuPurchaseLimitServiceTest` 覆盖，不通过放开公开数量契约验证。

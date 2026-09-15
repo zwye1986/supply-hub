@@ -101,6 +101,7 @@ class ProductManagementPageQueryTest {
                 .marketPrice(2000L)
                 .suggestedSalePrice(2014L)
                 .taxRate(new BigDecimal("0.0600"))
+                .taxIncluded(true)
                 .fulfillmentType("CARD_CODE_SECRET")
                 .status(CatalogEntityStatus.INACTIVE.getCode())
                 .build();
@@ -112,7 +113,8 @@ class ProductManagementPageQueryTest {
                 .skuName("季卡")
                 .marketPrice(4800L)
                 .suggestedSalePrice(5406L)
-                .taxRate(null) // 不征税
+                .taxIncluded(false)
+                .taxRate(null) // 不含税
                 .fulfillmentType("CARD_CODE_SECRET")
                 .status(CatalogEntityStatus.INACTIVE.getCode())
                 .build();
@@ -188,12 +190,12 @@ class ProductManagementPageQueryTest {
         assertThat(sku1.suppliers().get(0).supplierName()).isEqualTo("腾讯会员供应商");
         assertThat(sku1.fulfillmentTypeDisplay()).isEqualTo("卡号卡密");
 
-        // 季卡（不征税）
+        // 季卡（不含税）
         var sku2 = spuItem.skus().get(1);
         assertThat(sku2.skuCode()).isEqualTo("SKU_SEASON");
         assertThat(sku2.supplyPrice()).isEqualTo(5000L);
         assertThat(sku2.supplyPriceExclusive()).isEqualTo(5000L);
-        assertThat(sku2.taxRateDisplay()).isEqualTo("不征税");
+        assertThat(sku2.taxRateDisplay()).isEqualTo("不含税");
         assertThat(sku2.taxAmount()).isEqualTo(0L);
     }
 }

@@ -9,11 +9,14 @@ import com.aifuli.module.supplychain.application.facade.BuyerFulfillmentCommandF
 import com.aifuli.module.supplychain.border.fulfillment.application.AcceptanceFailureInjector;
 import com.aifuli.module.supplychain.border.fulfillment.application.FulfillmentAcceptanceLifecycle;
 import com.aifuli.module.supplychain.border.fulfillment.application.FulfillmentTargetSchemaRegistry;
+import com.aifuli.module.supplychain.border.fulfillment.application.SkuPurchaseLimitService;
 import com.aifuli.module.supplychain.border.fulfillment.domain.AcceptanceRejectionCode;
 import com.aifuli.module.supplychain.border.fulfillment.domain.FulfillmentOutboxCodes;
 import com.aifuli.module.supplychain.border.fulfillment.domain.FulfillmentTargetFields;
 import com.aifuli.module.supplychain.border.order.domain.CardOrderSummaryPolicy;
 import com.aifuli.module.supplychain.border.order.domain.OrderSummaryPolicyRegistry;
+import com.aifuli.module.supplychain.api.order.dto.SupplyChainAftersaleStatus;
+import com.aifuli.module.supplychain.api.order.dto.SupplyChainOrderStatus;
 import com.aifuli.module.supplychain.infrastructure.configuration.SupplyChainDataSourceConfiguration;
 import com.aifuli.module.supplychain.infrastructure.identity.BusinessNoGenerator;
 import com.aifuli.module.supplychain.infrastructure.identity.UlidGenerator;
@@ -28,7 +31,11 @@ import com.aifuli.module.supplychain.tradecore.account.dal.dataobject.BuyerAccou
 import com.aifuli.module.supplychain.tradecore.account.dal.mysql.BuyerAccountMapper;
 import com.aifuli.module.supplychain.tradecore.account.domain.Money;
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerCommandService;
+import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerProjectAccessResolver;
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerResolver;
+import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerProjectDO;
+import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerProjectMapper;
+import com.aifuli.module.supplychain.tradecore.buyer.domain.BuyerProjectStatus;
 import com.aifuli.module.supplychain.tradecore.catalog.application.BuyerListingPublicationService;
 import com.aifuli.module.supplychain.tradecore.catalog.application.ProductCatalogCommandService;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerListingAvailabilityDO;
@@ -90,8 +97,12 @@ import java.util.concurrent.Future;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PROJECT_NOT_FOUND;
 
 class FulfillmentAcceptanceIntegrationTest {
+
+    private static final String PROJECT_A = "PRJ_LIMIT_A";
+    private static final String PROJECT_B = "PRJ_LIMIT_B";
 
     private static final MySQLContainer<?> MYSQL = new MySQLContainer<>("mysql:8.4")
             .withDatabaseName("supply_chain").withUsername("supply_chain").withPassword("supply_chain");
@@ -150,12 +161,27 @@ class FulfillmentAcceptanceIntegrationTest {
                     .isEqualTo(1);
             assertThat(jdbc.queryForObject("SELECT detail_version FROM sc_supply_chain_order", Long.class))
                     .isEqualTo(1L);
+            Long projectAId = jdbc.queryForObject(
+                    "SELECT id FROM sc_buyer_project WHERE project_code=?", Long.class, PROJECT_A);
+            assertThat(jdbc.queryForObject(
+                    "SELECT project_id FROM sc_fulfillment_acceptance_receipt WHERE buyer_order_no=?",
+                    Long.class, first.getBuyerOrderNo())).isEqualTo(projectAId);
+            assertThat(jdbc.queryForObject(
+                    "SELECT project_id FROM sc_supply_chain_order WHERE buyer_order_no=?",
+                    Long.class, first.getBuyerOrderNo())).isEqualTo(projectAId);
 
             AcceptFulfillmentReqDTO conflicting = copy(first);
             conflicting.setBuyerUserId("another-user");
             assertThatThrownBy(() -> facade.acceptFulfillment(conflicting))
                     .isInstanceOf(ServiceException.class)
                     .extracting("code").isEqualTo(1_050_001_012);
+            assertCounts(jdbc, 1, 1, 1, 1, 1, 1);
+
+            AcceptFulfillmentReqDTO unknownProject = request("C-PROJECT-MISSING", 1L);
+            unknownProject.setProjectCode("PRJ_NOT_EXIST");
+            assertThatThrownBy(() -> facade.acceptFulfillment(unknownProject))
+                    .isInstanceOf(ServiceException.class)
+                    .extracting("code").isEqualTo(PROJECT_NOT_FOUND.getCode());
             assertCounts(jdbc, 1, 1, 1, 1, 1, 1);
 
             AcceptFulfillmentReqDTO invalidQuantity = request("C-QTY", 1L);
@@ -237,9 +263,62 @@ class FulfillmentAcceptanceIntegrationTest {
             assertThat(count(jdbc, "sc_supply_chain_order")).isEqualTo(3L);
             assertThat(count(jdbc, "sc_fund_reservation")).isEqualTo(3L);
 
+            configureDailyLimit(context, 3L);
+            AcceptFulfillmentReqDTO anotherProject = request("C-PROJECT-B", 2L);
+            anotherProject.setProjectCode(PROJECT_B);
+            assertThat(facade.acceptFulfillment(anotherProject).getReceiptStatus())
+                    .isEqualTo(FulfillmentReceiptStatus.ACCEPTED);
+
+            AcceptFulfillmentReqDTO otherPhone = request("C-LIMIT-OTHER-PHONE", 2L);
+            otherPhone.setBuyerUserId("13900139000");
+            assertThat(facade.acceptFulfillment(otherPhone).getReceiptStatus())
+                    .isEqualTo(FulfillmentReceiptStatus.ACCEPTED);
+
+            AcceptFulfillmentReqDTO afterCancel = request("C-LIMIT-CANCEL", 2L);
+            assertUserLimitRejected(facade.acceptFulfillment(afterCancel));
+            jdbc.update("UPDATE sc_supply_chain_order SET order_status=? WHERE buyer_order_no=?",
+                    SupplyChainOrderStatus.CANCELLED.getCode(), "C-CONCURRENT");
+            afterCancel.setPreviousReceiptVersion(receiptVersion(jdbc, afterCancel.getBuyerOrderNo()));
+            assertThat(facade.acceptFulfillment(afterCancel).getReceiptStatus())
+                    .isEqualTo(FulfillmentReceiptStatus.ACCEPTED);
+
+            AcceptFulfillmentReqDTO afterFailure = request("C-LIMIT-FAILURE", 2L);
+            assertUserLimitRejected(facade.acceptFulfillment(afterFailure));
+            jdbc.update("UPDATE sc_supply_chain_order SET order_status=? WHERE buyer_order_no=?",
+                    SupplyChainOrderStatus.FAILED.getCode(), "C-LISTING-RETRY");
+            afterFailure.setPreviousReceiptVersion(receiptVersion(jdbc, afterFailure.getBuyerOrderNo()));
+            assertThat(facade.acceptFulfillment(afterFailure).getReceiptStatus())
+                    .isEqualTo(FulfillmentReceiptStatus.ACCEPTED);
+
+            AcceptFulfillmentReqDTO afterRefund = request("C-LIMIT-REFUND", 2L);
+            assertUserLimitRejected(facade.acceptFulfillment(afterRefund));
+            jdbc.update("UPDATE sc_supply_chain_order SET aftersale_status=? WHERE buyer_order_no=?",
+                    SupplyChainAftersaleStatus.FULLY_REFUNDED.getCode(), "C-BALANCE");
+            afterRefund.setPreviousReceiptVersion(receiptVersion(jdbc, afterRefund.getBuyerOrderNo()));
+            assertThat(facade.acceptFulfillment(afterRefund).getReceiptStatus())
+                    .isEqualTo(FulfillmentReceiptStatus.ACCEPTED);
+
+            AcceptFulfillmentReqDTO afterPartialRefund = request("C-LIMIT-PARTIAL", 2L);
+            assertUserLimitRejected(facade.acceptFulfillment(afterPartialRefund));
+            jdbc.update("UPDATE sc_supply_chain_order SET aftersale_status=? WHERE buyer_order_no=?",
+                    SupplyChainAftersaleStatus.PARTIALLY_REFUNDED.getCode(), "C-LIMIT-CANCEL");
+            afterPartialRefund.setPreviousReceiptVersion(
+                    receiptVersion(jdbc, afterPartialRefund.getBuyerOrderNo()));
+            assertUserLimitRejected(facade.acceptFulfillment(afterPartialRefund));
+
+            configureDailyLimit(context, 4L);
+            List<FulfillmentAcceptanceReceiptRespDTO> limitRace = concurrentlyIndexed(10,
+                    index -> facade.acceptFulfillment(request("C-LIMIT-RACE-" + index, 2L)));
+            assertThat(limitRace).filteredOn(response ->
+                    response.getReceiptStatus() == FulfillmentReceiptStatus.ACCEPTED).hasSize(1);
+            assertThat(limitRace).filteredOn(response ->
+                    response.getReceiptStatus() == FulfillmentReceiptStatus.REJECTED_RETRYABLE)
+                    .hasSize(9).allSatisfy(FulfillmentAcceptanceIntegrationTest::assertUserLimitRejected);
+
             jdbc.update("DELETE FROM sc_buyer_account WHERE buyer_id = ?", fixture.buyerId());
-            FulfillmentAcceptanceReceiptRespDTO missingAccount =
-                    facade.acceptFulfillment(request("C-NO-ACCOUNT", 2L));
+            AcceptFulfillmentReqDTO withoutAccount = request("C-NO-ACCOUNT", 2L);
+            withoutAccount.setProjectCode(PROJECT_B);
+            FulfillmentAcceptanceReceiptRespDTO missingAccount = facade.acceptFulfillment(withoutAccount);
             assertThat(missingAccount.getReceiptStatus()).isEqualTo(FulfillmentReceiptStatus.REJECTED_RETRYABLE);
             assertThat(rejection(jdbc, "C-NO-ACCOUNT"))
                     .isEqualTo(AcceptanceRejectionCode.BUYER_ACCOUNT_NOT_OPENED.name());
@@ -279,6 +358,8 @@ class FulfillmentAcceptanceIntegrationTest {
 
         Long buyerId = context.getBean(com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerMapper.class)
                 .selectByBuyerCode("WUSHENG").getId();
+        insertActiveProject(context.getBean(BuyerProjectMapper.class), PROJECT_A, buyerId, now);
+        insertActiveProject(context.getBean(BuyerProjectMapper.class), PROJECT_B, buyerId, now);
         context.getBean(BuyerAccountOpeningService.class).open(
                 new BuyerAccountOpeningService.OpeningBalanceCommand(
                         "WUSHENG", Money.cny(25_000L), 1L, "evidence://opening",
@@ -385,8 +466,9 @@ class FulfillmentAcceptanceIntegrationTest {
         AcceptFulfillmentReqDTO request = new AcceptFulfillmentReqDTO();
         request.setSourceSystem("AIFULI_MALL");
         request.setExternalTenantId("tenant-wusheng");
+        request.setProjectCode(PROJECT_A);
         request.setBuyerOrderNo(buyerOrderNo);
-        request.setBuyerUserId("member-1024");
+        request.setBuyerUserId("13800138000");
         request.setBuyerSkuCode("WS-TELCO-100");
         request.setListingVersion(listingVersion);
         request.setQuantity(1L);
@@ -403,6 +485,7 @@ class FulfillmentAcceptanceIntegrationTest {
         AcceptFulfillmentReqDTO target = new AcceptFulfillmentReqDTO();
         target.setSourceSystem(source.getSourceSystem());
         target.setExternalTenantId(source.getExternalTenantId());
+        target.setProjectCode(source.getProjectCode());
         target.setBuyerOrderNo(source.getBuyerOrderNo());
         target.setBuyerUserId(source.getBuyerUserId());
         target.setBuyerSkuCode(source.getBuyerSkuCode());
@@ -439,6 +522,30 @@ class FulfillmentAcceptanceIntegrationTest {
         }
     }
 
+    private static List<FulfillmentAcceptanceReceiptRespDTO> concurrentlyIndexed(
+            int count, IndexedThrowingSupplier<FulfillmentAcceptanceReceiptRespDTO> supplier) throws Exception {
+        try (ExecutorService executor = Executors.newFixedThreadPool(count)) {
+            CountDownLatch ready = new CountDownLatch(count);
+            CountDownLatch start = new CountDownLatch(1);
+            List<Future<FulfillmentAcceptanceReceiptRespDTO>> futures = new ArrayList<>();
+            for (int index = 0; index < count; index++) {
+                int current = index;
+                futures.add(executor.submit(() -> {
+                    ready.countDown();
+                    start.await();
+                    return supplier.get(current);
+                }));
+            }
+            ready.await();
+            start.countDown();
+            List<FulfillmentAcceptanceReceiptRespDTO> results = new ArrayList<>();
+            for (Future<FulfillmentAcceptanceReceiptRespDTO> future : futures) {
+                results.add(future.get());
+            }
+            return results;
+        }
+    }
+
     private static void assertCounts(JdbcTemplate jdbc, long receipts, long orders, long requests,
                                      long rounds, long bOrders, long operations) {
         assertThat(count(jdbc, "sc_fulfillment_acceptance_receipt")).isEqualTo(receipts);
@@ -456,6 +563,44 @@ class FulfillmentAcceptanceIntegrationTest {
     private static String rejection(JdbcTemplate jdbc, String buyerOrderNo) {
         return jdbc.queryForObject("SELECT rejection_code FROM sc_fulfillment_acceptance_receipt "
                 + "WHERE buyer_order_no=?", String.class, buyerOrderNo);
+    }
+
+    private static long receiptVersion(JdbcTemplate jdbc, String buyerOrderNo) {
+        return jdbc.queryForObject("SELECT version FROM sc_fulfillment_acceptance_receipt "
+                + "WHERE buyer_order_no=?", Long.class, buyerOrderNo);
+    }
+
+    private static void assertUserLimitRejected(FulfillmentAcceptanceReceiptRespDTO response) {
+        assertThat(response.getReceiptStatus()).isEqualTo(FulfillmentReceiptStatus.REJECTED_RETRYABLE);
+        assertThat(response.getRejectionCode())
+                .isEqualTo(AcceptanceRejectionCode.USER_PURCHASE_LIMIT_EXCEEDED.name());
+    }
+
+    private static void configureDailyLimit(ConfigurableApplicationContext context, long quantity) {
+        PlatformSkuMapper mapper = context.getBean(PlatformSkuMapper.class);
+        PlatformSkuDO sku = mapper.selectByCode("TELCO_100");
+        sku.setUserLimitEnabled(true);
+        sku.setUserLimitPeriod("DAY");
+        sku.setUserLimitQuantity(quantity);
+        sku.setOrderLimitEnabled(true);
+        assertThat(mapper.updateById(sku)).isEqualTo(1);
+    }
+
+    private static void insertActiveProject(BuyerProjectMapper mapper, String projectCode,
+                                            Long buyerId, LocalDateTime now) {
+        BuyerProjectDO project = BuyerProjectDO.builder()
+                .projectCode(projectCode)
+                .projectName(projectCode)
+                .buyerId(buyerId)
+                .catalogMode("MANAGED")
+                .status(BuyerProjectStatus.ACTIVE.getCode())
+                .version(0L)
+                .createdBy(1L)
+                .createdAt(now)
+                .updatedBy(1L)
+                .updatedAt(now)
+                .build();
+        assertThat(mapper.insert(project)).isEqualTo(1);
     }
 
     private ConfigurableApplicationContext applicationContext() {
@@ -489,11 +634,12 @@ class FulfillmentAcceptanceIntegrationTest {
     @Configuration(proxyBeanMethods = false)
     @Import({SupplyChainDataSourceConfiguration.class, UlidGenerator.class, BusinessNoGenerator.class,
             OutboxEventRepository.class, BuyerCommandService.class, BuyerResolver.class,
+            BuyerProjectAccessResolver.class,
             ProductCatalogCommandService.class, ProductCenterTestConfiguration.class, BuyerListingPublicationService.class,
             BuyerAccountOpeningService.class, FundReservationService.class, AccountLedgerWriter.class,
             RoutingPolicyPublicationService.class, SupplierRoutingApplicationService.class,
             ClosedJsonSchemaValidator.class, FulfillmentTargetSchemaRegistry.class,
-            AesGcmEnvelopeCrypto.class, FulfillmentAcceptanceLifecycle.class,
+            AesGcmEnvelopeCrypto.class, SkuPurchaseLimitService.class, FulfillmentAcceptanceLifecycle.class,
             OrderSummaryPolicyRegistry.class, CardOrderSummaryPolicy.class,
             BuyerFulfillmentCommandFacade.class})
     static class TestConfiguration {
@@ -536,6 +682,11 @@ class FulfillmentAcceptanceIntegrationTest {
     @FunctionalInterface
     private interface ThrowingSupplier<T> {
         T get() throws Exception;
+    }
+
+    @FunctionalInterface
+    private interface IndexedThrowingSupplier<T> {
+        T get(int index) throws Exception;
     }
 
     private record Fixture(Long buyerId, String listingNo, SupplierDO supplier) {

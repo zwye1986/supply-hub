@@ -11,6 +11,7 @@ import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatu
 import io.swagger.v3.core.converter.ModelConverters;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import org.junit.jupiter.api.Test;
@@ -63,7 +64,24 @@ class ProductCenterContractTest {
         assertThat(Arrays.stream(ProductAdminController.SkuItemSaveReqVO.class.getDeclaredFields())
                 .map(field -> field.getName()))
                 .doesNotContain("targetSchemaCode", "targetSchemaVersion", "resultSchemaCode", "resultSchemaVersion")
-                .contains("fulfillmentType", "taxIncluded", "taxRate");
+                .contains("fulfillmentType", "taxIncluded", "taxRate",
+                        "userLimitEnabled", "userLimitPeriod", "userLimitQuantity", "orderLimitEnabled");
+    }
+
+    /** SKU 限购请求字段注释必须与 DDL COMMENT 使用同一表述。 */
+    @Test
+    void skuPurchaseLimitRequestCommentsMatchDdl() throws Exception {
+        assertThat(ProductAdminController.SkuItemSaveReqVO.class.getDeclaredField("maxQuantity")
+                .getAnnotation(Schema.class).description()).isEqualTo("SKU单次最大限购数量");
+        assertThat(ProductAdminController.SkuItemSaveReqVO.class.getDeclaredField("userLimitEnabled")
+                .getAnnotation(Schema.class).description()).isEqualTo("是否启用每人限购：1启用，0停用");
+        assertThat(ProductAdminController.SkuItemSaveReqVO.class.getDeclaredField("userLimitPeriod")
+                .getAnnotation(Schema.class).description())
+                .isEqualTo("每人限购周期：LIFETIME终身，YEAR每年，MONTH每月，WEEK每周，DAY每天");
+        assertThat(ProductAdminController.SkuItemSaveReqVO.class.getDeclaredField("userLimitQuantity")
+                .getAnnotation(Schema.class).description()).isEqualTo("每人每周期最多购买数量");
+        assertThat(ProductAdminController.SkuItemSaveReqVO.class.getDeclaredField("orderLimitEnabled")
+                .getAnnotation(Schema.class).description()).isEqualTo("是否启用每订单限购：1启用，0停用");
     }
 
     /** 税务字段必须停留在 SKU 展示元数据契约，不能混入 L2/L3 定价请求。 */

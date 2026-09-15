@@ -109,7 +109,9 @@ public class ProductCatalogQueryService {
                 .map(sku -> new SkuDetail(sku.getSkuCode(), sku.getSkuName(), sku.getFulfillmentType(),
                         sku.getFaceValue(), sku.getMarketPrice(), sku.getSuggestedSalePrice(),
                         sku.getTaxIncluded(), sku.getTaxRate(), sku.getMinQuantity(),
-                        sku.getMaxQuantity(), sku.getTargetSchemaCode(), sku.getTargetSchemaVersion(),
+                        sku.getMaxQuantity(), sku.getUserLimitEnabled(), sku.getUserLimitPeriod(),
+                        sku.getUserLimitQuantity(), sku.getOrderLimitEnabled(),
+                        sku.getTargetSchemaCode(), sku.getTargetSchemaVersion(),
                         sku.getResultSchemaCode(), sku.getResultSchemaVersion(), sku.getStatus(),
                         sellabilityService.isSellable(sku, spu)))
                 .toList();
@@ -254,6 +256,10 @@ public class ProductCatalogQueryService {
             @Schema(description = "税率，如0.0600表示6%；仅记录展示，不参与价格计算") BigDecimal taxRate,
             @Schema(description = "SKU单次最小起购数量") Long minQuantity,
             @Schema(description = "SKU单次最大限购数量") Long maxQuantity,
+            @Schema(description = "是否启用每人限购：1启用，0停用") Boolean userLimitEnabled,
+            @Schema(description = "每人限购周期：LIFETIME终身，YEAR每年，MONTH每月，WEEK每周，DAY每天") String userLimitPeriod,
+            @Schema(description = "每人每周期最多购买数量") Long userLimitQuantity,
+            @Schema(description = "是否启用每订单限购：1启用，0停用") Boolean orderLimitEnabled,
             @Schema(description = "履约目标封闭Schema编码") String targetSchemaCode,
             @Schema(description = "履约目标Schema版本") Integer targetSchemaVersion,
             @Schema(description = "履约结果封闭Schema编码") String resultSchemaCode,

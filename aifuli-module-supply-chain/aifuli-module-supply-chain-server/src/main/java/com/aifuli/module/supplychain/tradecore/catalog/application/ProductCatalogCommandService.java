@@ -26,6 +26,7 @@ import com.aifuli.module.supplychain.tradecore.catalog.domain.CategoryVisibility
 import com.aifuli.module.supplychain.tradecore.catalog.domain.DeliveryType;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.FulfillmentType;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.ListingAvailability;
+import com.aifuli.module.supplychain.tradecore.catalog.domain.PurchaseLimitPeriod;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.UnshelveMode;
 import com.aifuli.module.supplychain.tradecore.profile.domain.ClosedEnums;
 import com.aifuli.module.supplychain.tradecore.profile.domain.ProductClassification;
@@ -59,6 +60,7 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_CONCURRENT_UPDATE;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_CURRENCY_INVALID;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_QUANTITY_RANGE_INVALID;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_PURCHASE_LIMIT_CONFIG_INVALID;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_SCHEMA_INVALID;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_SKU_CODE_DUPLICATE;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_SKU_FIELD_INVALID;
@@ -498,10 +500,13 @@ public class ProductCatalogCommandService {
                 .taxIncluded(Boolean.TRUE.equals(line.taxIncluded())).taxRate(line.taxRate())
                 .minQuantity(defaultLong(line.minQuantity(), DEFAULT_MIN_QUANTITY))
                 .maxQuantity(defaultLong(line.maxQuantity(), DEFAULT_MAX_QUANTITY))
+                .userLimitEnabled(false).userLimitPeriod(null).userLimitQuantity(null)
+                .orderLimitEnabled(Boolean.TRUE.equals(line.orderLimitEnabled()))
                 .currency(CURRENCY_CNY).targetSchemaCode(schema.targetSchemaCode())
                 .targetSchemaVersion(schema.targetSchemaVersion()).resultSchemaCode(schema.resultSchemaCode())
                 .resultSchemaVersion(schema.resultSchemaVersion()).status(status.getCode()).version(0L)
                 .createdBy(operatorId).createdAt(now).updatedBy(operatorId).updatedAt(now).build();
+        applyUserLimit(sku, line, false);
         skuMapper.insert(sku);
     }
 
@@ -521,6 +526,10 @@ public class ProductCatalogCommandService {
         }
         sku.setMinQuantity(defaultLong(line.minQuantity(), DEFAULT_MIN_QUANTITY));
         sku.setMaxQuantity(defaultLong(line.maxQuantity(), DEFAULT_MAX_QUANTITY));
+        applyUserLimit(sku, line, true);
+        if (line.orderLimitEnabled() != null) {
+            sku.setOrderLimitEnabled(line.orderLimitEnabled());
+        }
         sku.setCurrency(CURRENCY_CNY);
         sku.setTargetSchemaCode(schema.targetSchemaCode());
         sku.setTargetSchemaVersion(schema.targetSchemaVersion());
@@ -541,6 +550,7 @@ public class ProductCatalogCommandService {
         validateTaxMetadata(Boolean.TRUE.equals(line.taxIncluded()), line.taxRate());
         FulfillmentType fulfillmentType = FulfillmentType.fromCode(line.fulfillmentType());
         validateQuantity(line.minQuantity(), line.maxQuantity());
+        validatePurchaseLimitInput(line);
         boolean explicitSchemaPresent = hasText(line.targetSchemaCode()) || line.targetSchemaVersion() != null
                 || hasText(line.resultSchemaCode()) || line.resultSchemaVersion() != null;
         if (!explicitSchemaPresent) {
@@ -550,6 +560,51 @@ public class ProductCatalogCommandService {
                 line.resultSchemaVersion(), active);
         return new SchemaDefinition(blankToNull(line.targetSchemaCode()), line.targetSchemaVersion(),
                 line.resultSchemaCode().trim(), line.resultSchemaVersion());
+    }
+
+    /**
+     * 校验并规范化 SKU 每人限购配置。兼容编辑请求未携带四个新增字段时保留存量配置；显式关闭时
+     * 清空周期与数量，避免停用配置继续形成歧义数据。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#35-sku-限购计算并发与释放规则}。
+     */
+    private static void applyUserLimit(PlatformSkuDO sku, SaveSkuLine line, boolean preserveWhenAbsent) {
+        boolean noUserLimitFields = line.userLimitEnabled() == null
+                && line.userLimitPeriod() == null && line.userLimitQuantity() == null;
+        if (preserveWhenAbsent && noUserLimitFields) {
+            return;
+        }
+        boolean enabled = Boolean.TRUE.equals(line.userLimitEnabled());
+        sku.setUserLimitEnabled(enabled);
+        if (!enabled) {
+            sku.setUserLimitPeriod(null);
+            sku.setUserLimitQuantity(null);
+            return;
+        }
+        sku.setUserLimitPeriod(PurchaseLimitPeriod.fromCode(line.userLimitPeriod()).name());
+        sku.setUserLimitQuantity(line.userLimitQuantity());
+    }
+
+    private static void validatePurchaseLimitInput(SaveSkuLine line) {
+        boolean enabled = Boolean.TRUE.equals(line.userLimitEnabled());
+        boolean hasPeriod = hasText(line.userLimitPeriod());
+        boolean hasQuantity = line.userLimitQuantity() != null;
+        if (line.userLimitEnabled() == null && !hasPeriod && !hasQuantity) {
+            return;
+        }
+        if (!enabled) {
+            if (hasPeriod || hasQuantity) {
+                throw exception(PRODUCT_PURCHASE_LIMIT_CONFIG_INVALID);
+            }
+            return;
+        }
+        if (!hasPeriod || line.userLimitQuantity() == null || line.userLimitQuantity() <= 0) {
+            throw exception(PRODUCT_PURCHASE_LIMIT_CONFIG_INVALID);
+        }
+        try {
+            PurchaseLimitPeriod.fromCode(line.userLimitPeriod());
+        } catch (IllegalArgumentException invalidPeriod) {
+            throw exception(PRODUCT_PURCHASE_LIMIT_CONFIG_INVALID);
+        }
     }
 
     private void validateSchema(String targetCode, Integer targetVersion, String resultCode,
@@ -748,6 +803,8 @@ public class ProductCatalogCommandService {
     public record SaveSkuLine(String skuCode, String skuName, String fulfillmentType, Long faceValue,
                               Long marketPrice, Long suggestedSalePrice, Boolean taxIncluded, BigDecimal taxRate,
                               Long minQuantity, Long maxQuantity,
+                              Boolean userLimitEnabled, String userLimitPeriod, Long userLimitQuantity,
+                              Boolean orderLimitEnabled,
                               String targetSchemaCode, Integer targetSchemaVersion,
                               String resultSchemaCode, Integer resultSchemaVersion, Short status) {
         /**
@@ -758,7 +815,8 @@ public class ProductCatalogCommandService {
                            Long marketPrice, Long suggestedSalePrice, Long minQuantity, Long maxQuantity,
                            Short status) {
             this(skuCode, skuName, fulfillmentType, faceValue, marketPrice, suggestedSalePrice,
-                    false, null, minQuantity, maxQuantity, null, null, null, null, status);
+                    false, null, minQuantity, maxQuantity, null, null, null, null,
+                    null, null, null, null, status);
         }
 
         /** 商品中心复合接口携带税务展示元数据的构造器，Schema 仍由应用层注册表派生。 */
@@ -766,7 +824,19 @@ public class ProductCatalogCommandService {
                            Long marketPrice, Long suggestedSalePrice, Boolean taxIncluded, BigDecimal taxRate,
                            Long minQuantity, Long maxQuantity, Short status) {
             this(skuCode, skuName, fulfillmentType, faceValue, marketPrice, suggestedSalePrice,
-                    taxIncluded, taxRate, minQuantity, maxQuantity, null, null, null, null, status);
+                    taxIncluded, taxRate, minQuantity, maxQuantity, null, null, null, null,
+                    null, null, null, null, status);
+        }
+
+        /** 商品中心复合接口携带 SKU 限购配置，内部 Schema 仍由应用层注册表派生。 */
+        public SaveSkuLine(String skuCode, String skuName, String fulfillmentType, Long faceValue,
+                           Long marketPrice, Long suggestedSalePrice, Boolean taxIncluded, BigDecimal taxRate,
+                           Long minQuantity, Long maxQuantity, Boolean userLimitEnabled,
+                           String userLimitPeriod, Long userLimitQuantity, Boolean orderLimitEnabled,
+                           Short status) {
+            this(skuCode, skuName, fulfillmentType, faceValue, marketPrice, suggestedSalePrice,
+                    taxIncluded, taxRate, minQuantity, maxQuantity, userLimitEnabled, userLimitPeriod,
+                    userLimitQuantity, orderLimitEnabled, null, null, null, null, status);
         }
 
         /** 保留已有显式 Schema 调用方的构造契约，税务元数据缺省为不含税且税率未配置。 */
@@ -775,8 +845,18 @@ public class ProductCatalogCommandService {
                            String targetSchemaCode, Integer targetSchemaVersion,
                            String resultSchemaCode, Integer resultSchemaVersion, Short status) {
             this(skuCode, skuName, fulfillmentType, faceValue, marketPrice, suggestedSalePrice,
-                    false, null, minQuantity, maxQuantity, targetSchemaCode, targetSchemaVersion,
-                    resultSchemaCode, resultSchemaVersion, status);
+                    false, null, minQuantity, maxQuantity, null, null, null, null,
+                    targetSchemaCode, targetSchemaVersion, resultSchemaCode, resultSchemaVersion, status);
+        }
+
+        /** 保留税务字段引入前显式 Schema 的完整构造契约。 */
+        public SaveSkuLine(String skuCode, String skuName, String fulfillmentType, Long faceValue,
+                           Long marketPrice, Long suggestedSalePrice, Boolean taxIncluded, BigDecimal taxRate,
+                           Long minQuantity, Long maxQuantity, String targetSchemaCode, Integer targetSchemaVersion,
+                           String resultSchemaCode, Integer resultSchemaVersion, Short status) {
+            this(skuCode, skuName, fulfillmentType, faceValue, marketPrice, suggestedSalePrice,
+                    taxIncluded, taxRate, minQuantity, maxQuantity, null, null, null, null,
+                    targetSchemaCode, targetSchemaVersion, resultSchemaCode, resultSchemaVersion, status);
         }
     }
 

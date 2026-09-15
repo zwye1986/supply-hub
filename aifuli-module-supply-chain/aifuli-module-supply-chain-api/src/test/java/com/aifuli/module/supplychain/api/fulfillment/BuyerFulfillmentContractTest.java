@@ -1,6 +1,7 @@
 package com.aifuli.module.supplychain.api.fulfillment;
 
 import com.aifuli.module.supplychain.api.fulfillment.dto.AcceptFulfillmentReqDTO;
+import com.aifuli.module.supplychain.api.fulfillment.dto.FulfillmentAcceptanceReceiptRespDTO;
 import com.aifuli.module.supplychain.api.fulfillment.dto.FulfillmentTargetDTO;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -52,6 +53,7 @@ class BuyerFulfillmentContractTest {
         assertThat(properties).contains(
                 "sourceSystem",
                 "externalTenantId",
+                "projectCode",
                 "buyerOrderNo",
                 "buyerUserId",
                 "buyerSkuCode",
@@ -87,6 +89,13 @@ class BuyerFulfillmentContractTest {
         assertThat(violations).anyMatch(v -> v.getPropertyPath().toString().equals("target.values"));
     }
 
+    @Test
+    void receiptContractExposesStableRejectionCode() {
+        assertThat(java.util.Arrays.stream(FulfillmentAcceptanceReceiptRespDTO.class.getDeclaredFields())
+                .map(field -> field.getName()))
+                .contains("rejectionCode", "receiptStatus", "receiptVersion");
+    }
+
     private static AcceptFulfillmentReqDTO validRequest() {
         FulfillmentTargetDTO target = new FulfillmentTargetDTO();
         target.setValues(Map.of("accountType", "MOBILE", "accountValue", "13800000000"));
@@ -94,6 +103,7 @@ class BuyerFulfillmentContractTest {
         AcceptFulfillmentReqDTO request = new AcceptFulfillmentReqDTO();
         request.setSourceSystem("AIFULI_MALL");
         request.setExternalTenantId("tenant-wusheng");
+        request.setProjectCode("PRJ_01ABC");
         request.setBuyerOrderNo("C202608110001");
         request.setBuyerUserId("member-1024");
         request.setBuyerSkuCode("TELCO-100");

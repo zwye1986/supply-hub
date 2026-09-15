@@ -126,6 +126,12 @@ public interface SupplyChainErrorCodeConstants {
     ErrorCode ORDER_QUERY_TIME_RANGE_INVALID = error(1_050_001_105, "订单受理时间区间不合法");
     ErrorCode BRAND_LEGACY_API_DEPRECATED =
             error(1_050_001_106, "品牌旧接口已废弃，请使用 POST /supply-chain/brands");
+    ErrorCode PRODUCT_PURCHASE_LIMIT_CONFIG_INVALID =
+            error(1_050_001_107, "SKU限购配置不合法");
+    ErrorCode USER_PURCHASE_LIMIT_EXCEEDED =
+            error(1_050_001_108, "当前项目下该用户购买数量已达到SKU周期限购上限");
+    ErrorCode ORDER_PURCHASE_LIMIT_EXCEEDED =
+            error(1_050_001_109, "本次购买数量超过SKU每订单限购上限");
 
     /** 订单详情不可用只作为成功响应中的详情标记，不作为 CommonResult 失败码。 */
     String DETAIL_UNAVAILABLE = "DETAIL_UNAVAILABLE";
@@ -178,6 +184,9 @@ public interface SupplyChainErrorCodeConstants {
             entry(INSTORE_MEMBER_PROFILE_UNAVAILABLE, RetryDirective.RETRY_SAME_KEY),
             entry(INSTORE_ENTRY_URL_UNAVAILABLE, RetryDirective.RETRY_SAME_KEY),
             entry(INSTORE_REFUND_AMOUNT_INVALID, RetryDirective.DO_NOT_RETRY),
+            entry(PRODUCT_PURCHASE_LIMIT_CONFIG_INVALID, RetryDirective.DO_NOT_RETRY),
+            entry(USER_PURCHASE_LIMIT_EXCEEDED, RetryDirective.RETRY_SAME_KEY_AFTER_CONDITION_CHANGE),
+            entry(ORDER_PURCHASE_LIMIT_EXCEEDED, RetryDirective.DO_NOT_RETRY),
             entry(SUPPLIER_NOT_FOUND, RetryDirective.DO_NOT_RETRY),
             entry(SUPPLIER_STATUS_CONFLICT, RetryDirective.DO_NOT_RETRY),
             entry(SUPPLIER_OPENING_ALREADY_DONE, RetryDirective.DO_NOT_RETRY),

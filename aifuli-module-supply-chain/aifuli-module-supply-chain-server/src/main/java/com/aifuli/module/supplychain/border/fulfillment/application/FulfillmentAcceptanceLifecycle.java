@@ -74,6 +74,7 @@ import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * 标准商品受理回执、总订单、路由、BOrder 和资金冻结的原子编排。
@@ -107,6 +108,7 @@ public class FulfillmentAcceptanceLifecycle {
     private final BuyerListingAvailabilityMapper listingAvailabilityMapper;
     private final PlatformSkuMapper skuMapper;
     private final ProductSellabilityService productSellabilityService;
+    private final SkuPurchaseLimitService purchaseLimitService;
     private final SupplierRoutingApplicationService routingService;
     private final FundReservationService fundReservationService;
     private final OutboxEventRepository outboxRepository;
@@ -145,8 +147,9 @@ public class FulfillmentAcceptanceLifecycle {
      */
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public ClaimResult claim(PreparedAcceptance command) {
-        log.info("[履约][lifecycle] claim 入口 buyerId={}, buyerOrderNo={}, buyerSkuCode={}, quantity={}, traceId={}",
-                command.buyerId(), command.buyerOrderNo(), command.buyerSkuCode(), command.quantity(), command.traceId());
+        log.info("[履约][lifecycle] claim 入口 projectId={}, buyerId={}, buyerOrderNo={}, buyerSkuCode={}, quantity={}, traceId={}",
+                command.projectId(), command.buyerId(), command.buyerOrderNo(), command.buyerSkuCode(),
+                command.quantity(), command.traceId());
         // 首次探测不加锁：REPEATABLE READ 下对不存在唯一键 FOR UPDATE
         // 会让并发首请求同时持有间隙锁，再插入时形成死锁。唯一索引才是创建竞争裁决者。
         FulfillmentAcceptanceReceiptDO existing = receiptMapper.selectByBusinessKey(
@@ -155,7 +158,7 @@ public class FulfillmentAcceptanceLifecycle {
             LocalDateTime now = now();
             FulfillmentAcceptanceReceiptDO receipt = FulfillmentAcceptanceReceiptDO.builder()
                     .receiptNo(businessNoGenerator.next(BusinessNoPrefixes.RCP))
-                    .buyerId(command.buyerId()).buyerOrderNo(command.buyerOrderNo())
+                    .buyerId(command.buyerId()).projectId(command.projectId()).buyerOrderNo(command.buyerOrderNo())
                     .buyerUserId(command.buyerUserId()).buyerSkuCode(command.buyerSkuCode())
                     .quantity(command.quantity()).targetSchemaCode(command.targetSchemaCode())
                     .targetDigest(command.targetDigest()).invariantFingerprint(command.invariantFingerprint())
@@ -181,6 +184,10 @@ public class FulfillmentAcceptanceLifecycle {
             if (existing.getStatus() == AcceptanceReceiptStatus.PROCESSING.getCode()) {
                 return new ClaimResult(existing.getId(), true, false);
             }
+            if (isReleasedQuotaRetry(existing, command)) {
+                reopenRetryable(existing, command);
+                return new ClaimResult(existing.getId(), true, false);
+            }
             return new ClaimResult(existing.getId(), false, true);
         }
         if (!Arrays.equals(existing.getInvariantFingerprint(), command.invariantFingerprint())) {
@@ -190,11 +197,7 @@ public class FulfillmentAcceptanceLifecycle {
                 && command.previousReceiptVersion() != null
                 && command.previousReceiptVersion() == existing.getVersion()
                 && command.listingVersionNo() != existing.getListingVersionNo()) {
-            int updated = receiptMapper.reopenRetryable(existing.getId(), existing.getVersion(),
-                    command.listingVersionNo(), command.requestFingerprint(), now());
-            if (updated != 1) {
-                throw new IdempotencyConflictException();
-            }
+            reopenRetryable(existing, command);
             return new ClaimResult(existing.getId(), true, false);
         }
         throw new IdempotencyConflictException();
@@ -231,7 +234,18 @@ public class FulfillmentAcceptanceLifecycle {
         }
 
         LocalDateTime now = now();
-        ListingSnapshot listing = requireSaleableListing(command, now);
+        LockedListing locked = lockListingAndSku(command);
+        ListingSnapshot listing = requireSaleableListing(command, now, locked);
+        SkuPurchaseLimitService.Violation limitViolation = purchaseLimitService.validateLockedSku(
+                command.projectId(), command.buyerUserId(), listing.sku(), command.quantity(), now);
+        if (limitViolation == SkuPurchaseLimitService.Violation.ORDER_LIMIT_EXCEEDED) {
+            throw rejection(receiptId, listing.version().getId(), AcceptanceReceiptStatus.REJECTED_FINAL,
+                    AcceptanceRejectionCode.ORDER_PURCHASE_LIMIT_EXCEEDED);
+        }
+        if (limitViolation == SkuPurchaseLimitService.Violation.USER_LIMIT_EXCEEDED) {
+            throw rejection(receiptId, listing.version().getId(), AcceptanceReceiptStatus.REJECTED_RETRYABLE,
+                    AcceptanceRejectionCode.USER_PURCHASE_LIMIT_EXCEEDED);
+        }
         SupplierRoutingApplicationService.RoutingSnapshot routing = route(command, listing.sku(), now);
         if (!routing.decision().selected()) {
             throw rejection(receiptId, listing.version().getId(), AcceptanceReceiptStatus.REJECTED_RETRYABLE,
@@ -248,7 +262,7 @@ public class FulfillmentAcceptanceLifecycle {
         SupplyChainOrderDO order = SupplyChainOrderDO.builder()
                 .orderNo(businessNoGenerator.next(BusinessNoPrefixes.SC))
                 .orderType(SupplyChainOrderTypes.ORDER_TYPE_CARD)
-                .buyerId(command.buyerId()).buyerCodeSnapshot(command.buyerCode())
+                .buyerId(command.buyerId()).projectId(command.projectId()).buyerCodeSnapshot(command.buyerCode())
                 .buyerNameSnapshot(command.buyerName()).buyerUserId(command.buyerUserId())
                 .buyerOrderNo(command.buyerOrderNo()).acceptanceReceiptId(receiptId)
                 .displaySupplierId(selected.supplierId()).displaySupplierCode(selected.supplierCode())
@@ -364,12 +378,31 @@ public class FulfillmentAcceptanceLifecycle {
         return snapshot(receipt.getId(), true);
     }
 
-    private ListingSnapshot requireSaleableListing(PreparedAcceptance command, LocalDateTime now) {
-        BuyerListingDO listing = listingMapper.selectByBuyerAndSkuCode(command.buyerId(), command.buyerSkuCode());
+    /**
+     * 在事务建立普通查询快照前按固定顺序锁定 Listing 与平台 SKU。
+     *
+     * <p>MySQL REPEATABLE READ 会让锁前的一致性读固定历史快照；若随后才锁 SKU，等待事务仍可能看不到
+     * 前序事务刚提交的订单。这里刻意只使用锁定读，并把后续所有可售与额度查询放在锁后。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#35-sku-限购计算并发与释放规则}。</p>
+     */
+    private LockedListing lockListingAndSku(PreparedAcceptance command) {
+        BuyerListingDO listing = listingMapper.selectByBuyerAndSkuCodeForUpdate(
+                command.buyerId(), command.buyerSkuCode());
         if (listing == null) {
             throw rejection(command.receiptIdHint(), null, AcceptanceReceiptStatus.REJECTED_RETRYABLE,
                     AcceptanceRejectionCode.LISTING_VERSION_EXPIRED);
         }
+        PlatformSkuDO sku = skuMapper.selectByIdForUpdate(listing.getPlatformSkuId());
+        if (sku == null) {
+            throw rejection(command.receiptIdHint(), null, AcceptanceReceiptStatus.REJECTED_RETRYABLE,
+                    AcceptanceRejectionCode.SKU_NOT_SALEABLE);
+        }
+        return new LockedListing(listing, sku);
+    }
+
+    private ListingSnapshot requireSaleableListing(PreparedAcceptance command, LocalDateTime now,
+                                                    LockedListing locked) {
+        BuyerListingDO listing = locked.listing();
         BuyerListingVersionDO version = listingVersionMapper.selectByListingAndVersionNo(
                 listing.getId(), command.listingVersionNo());
         if (version == null || listing.getStatus() != BuyerListingStatus.PUBLISHED.getCode()
@@ -387,7 +420,7 @@ public class FulfillmentAcceptanceLifecycle {
         }
         PlatformSkuDO sku;
         try {
-            sku = productSellabilityService.requireSellableById(listing.getPlatformSkuId()).sku();
+            sku = productSellabilityService.requireSellable(locked.sku()).sku();
         } catch (ServiceException notSellable) {
             // 设计要求把不可售统一转为 SKU_NOT_SALEABLE 回执而非 HTTP 500，但必须保留原始错误码作为因果，
             // 见 docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#31-spu-与-sku-状态解耦与有效可售计算
@@ -547,6 +580,23 @@ public class FulfillmentAcceptanceLifecycle {
         command.receiptIdHint(receipt.getId());
     }
 
+    private boolean isReleasedQuotaRetry(FulfillmentAcceptanceReceiptDO receipt, PreparedAcceptance command) {
+        return receipt.getStatus() == AcceptanceReceiptStatus.REJECTED_RETRYABLE.getCode()
+                && AcceptanceRejectionCode.USER_PURCHASE_LIMIT_EXCEEDED.name().equals(receipt.getRejectionCode())
+                && command.previousReceiptVersion() != null
+                && Objects.equals(command.previousReceiptVersion(), receipt.getVersion());
+    }
+
+    private void reopenRetryable(FulfillmentAcceptanceReceiptDO receipt, PreparedAcceptance command) {
+        log.info("[履约][lifecycle] reopenRetryable 重开受理回执 receiptId={}, version={}, listingVersionNo={}",
+                receipt.getId(), receipt.getVersion(), command.listingVersionNo());
+        int updated = receiptMapper.reopenRetryable(receipt.getId(), receipt.getVersion(),
+                command.listingVersionNo(), command.requestFingerprint(), now());
+        if (updated != 1) {
+            throw new IdempotencyConflictException();
+        }
+    }
+
     private byte[] routingInputDigest(PreparedAcceptance command,
                                       SupplierRoutingApplicationService.RoutingSnapshot routing) {
         String canonical = command.buyerCode() + '|' + command.buyerSkuCode() + '|'
@@ -627,6 +677,7 @@ public class FulfillmentAcceptanceLifecycle {
     }
 
     public static final class PreparedAcceptance {
+        private final Long projectId;
         private final Long buyerId;
         private final String buyerCode;
         private final String buyerName;
@@ -648,13 +699,14 @@ public class FulfillmentAcceptanceLifecycle {
         private final String traceId;
         private long receiptIdHint;
 
-        public PreparedAcceptance(Long buyerId, String buyerCode, String buyerName,
+        public PreparedAcceptance(Long projectId, Long buyerId, String buyerCode, String buyerName,
                                   String buyerOrderNo, String buyerUserId, String buyerSkuCode,
                                   int listingVersionNo, long quantity, String targetSchemaCode,
                                   int targetSchemaVersion, byte[] targetCiphertext, byte[] targetDigest,
                                   String targetKeyVersion, boolean targetValid,
                                   byte[] invariantFingerprint, byte[] requestFingerprint,
                                   byte[] buyerOrderDigest, Long previousReceiptVersion, String traceId) {
+            this.projectId = projectId;
             this.buyerId = buyerId;
             this.buyerCode = buyerCode;
             this.buyerName = buyerName;
@@ -676,6 +728,7 @@ public class FulfillmentAcceptanceLifecycle {
             this.traceId = traceId;
         }
 
+        public Long projectId() { return projectId; }
         public Long buyerId() { return buyerId; }
         public String buyerCode() { return buyerCode; }
         public String buyerName() { return buyerName; }
@@ -728,6 +781,9 @@ public class FulfillmentAcceptanceLifecycle {
 
     private record ListingSnapshot(BuyerListingDO listing, BuyerListingVersionDO version,
                                    PlatformSkuDO sku) {
+    }
+
+    private record LockedListing(BuyerListingDO listing, PlatformSkuDO sku) {
     }
 
     private record RoutingPersistence(Long roundId, Long selectedRecordId) {

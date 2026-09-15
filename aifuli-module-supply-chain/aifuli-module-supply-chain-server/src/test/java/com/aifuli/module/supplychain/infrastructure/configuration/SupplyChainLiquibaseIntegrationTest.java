@@ -93,6 +93,12 @@ class SupplyChainLiquibaseIntegrationTest {
                         "sc_platform_spu.delivery_type",
                         "sc_platform_spu.min_quantity",
                         "sc_platform_sku.suggested_sale_price",
+                        "sc_platform_sku.user_limit_enabled",
+                        "sc_platform_sku.user_limit_period",
+                        "sc_platform_sku.user_limit_quantity",
+                        "sc_platform_sku.order_limit_enabled",
+                        "sc_fulfillment_acceptance_receipt.project_id",
+                        "sc_supply_chain_order.project_id",
                         "sc_product_category.visible");
         assertThat(firstStartup.projectAuthNonceColumnDefinitions()).containsExactly(
                 "app_id:VARCHAR:128:-:NO",
@@ -101,7 +107,7 @@ class SupplyChainLiquibaseIntegrationTest {
                 "expire_at:DATETIME:-:3:NO");
         assertThat(firstStartup.projectAuthNoncePrimaryKeyColumns())
                 .containsExactly("app_id", "nonce");
-        assertThat(firstStartup.changeSetCount()).isEqualTo(29L);
+        assertThat(firstStartup.changeSetCount()).isEqualTo(33L);
         assertThat(firstStartup.uniqueIndexes())
                 .contains("sc_instore_payment_flow.uk_sc_instore_flow_order",
                         "sc_instore_channel_user_binding.uk_sc_instore_user_binding_project",
@@ -109,7 +115,8 @@ class SupplyChainLiquibaseIntegrationTest {
                         "sc_product_category.uk_sc_category_live_parent_name",
                         "sc_product_type.uk_sc_product_type_name");
         assertThat(firstStartup.indexes())
-                .contains("sc_buyer.idx_sc_buyer_parent_created");
+                .contains("sc_buyer.idx_sc_buyer_parent_created",
+                        "sc_supply_chain_order.idx_sc_order_purchase_limit");
         assertThat(firstStartup.collations()).containsOnly("utf8mb4_0900_ai_ci");
         assertThat(firstStartup.importedKeys()).isEmpty();
         assertThat(firstStartup.duplicateChangeSets()).isEmpty();
