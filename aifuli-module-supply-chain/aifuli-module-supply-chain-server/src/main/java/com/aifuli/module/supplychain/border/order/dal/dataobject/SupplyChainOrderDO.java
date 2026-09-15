@@ -23,6 +23,8 @@ public class SupplyChainOrderDO {
     private String buyerCodeSnapshot;
     private String buyerNameSnapshot;
     private String buyerUserId;
+    /** 履约目标手机号；仅直充与账户绑定权益写入，卡密类为空 */
+    private String fulfillmentAccountValue;
     private String buyerOrderNo;
     private Long acceptanceReceiptId;
     private Long displaySupplierId;

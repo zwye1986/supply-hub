@@ -41,7 +41,7 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
 /**
  * RPC/HTTP 共用的标准履约受理门面；加密和 Schema 校验不占用数据库事务。
  *
- * <p>buyerUserId 按契约不得写入日志。详见
+ * <p>buyerUserId 与履约目标手机号按契约不得写入日志。详见
  * {@code docs/superpowers/specs/2026-08-07-supply-chain-phase1-detailed-design.md#7.2-标准履约受理}。</p>
  */
 @Slf4j
@@ -132,9 +132,10 @@ public class BuyerFulfillmentCommandFacade {
         byte[] fingerprint = sha256(canonicalRequest(request, targetSchema, targetDigest, true));
         byte[] buyerOrderDigest = sha256((request.getBuyerOrderNo() + '|'
                 + request.getBuyerUserId()).getBytes(StandardCharsets.UTF_8));
+        String fulfillmentAccountValue = FulfillmentTargetFields.mobileAccountValue(target.getValues());
         return new FulfillmentAcceptanceLifecycle.PreparedAcceptance(
                 projectId, buyer.id(), buyer.buyerCode(), buyer.buyerName(), request.getBuyerOrderNo(),
-                request.getBuyerUserId(), request.getBuyerSkuCode(),
+                request.getBuyerUserId(), fulfillmentAccountValue, request.getBuyerSkuCode(),
                 Math.toIntExact(request.getListingVersion()), request.getQuantity(),
                 targetSchema.schemaCode(), targetSchema.schemaVersion(),
                 encrypted == null ? null : encrypted.ciphertext(), targetDigest,

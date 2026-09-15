@@ -219,6 +219,131 @@ class ProductCatalogCommandServiceTest {
                 });
     }
 
+    /** 卡密 SKU 不得开启绑定手机号限购，对齐卡管卡密下单无手机号。 */
+    @Test
+    void rejectsPhoneBindLimitOnCardSecretSku() {
+        givenUpdateWithOneOmittedSku();
+        ProductCatalogCommandService.SaveSkuLine invalid = new ProductCatalogCommandService.SaveSkuLine(
+                "SKU_KEEP", "保留SKU", FulfillmentType.CARD_CODE_SECRET.code(), 100L, 0L, 0L,
+                false, null, 1L, 10L, false, null, null, false, true, "DAY", 2L,
+                CatalogEntityStatus.DRAFT.getCode());
+
+        assertThatThrownBy(() -> service.updateProduct(SPU_CODE, saveCommand(invalid)))
+                .isInstanceOf(ServiceException.class)
+                .extracting(ex -> ((ServiceException) ex).getCode())
+                .isEqualTo(PRODUCT_PURCHASE_LIMIT_CONFIG_INVALID.getCode());
+    }
+
+    /** 直充 SKU 可保存绑定手机号限购，周期复用每人限购五值。 */
+    @Test
+    void savesPhoneBindLimitOnDirectRechargeSku() {
+        givenUpdateWithOneOmittedSku();
+        ProductCatalogCommandService.SaveSkuLine recharge = new ProductCatalogCommandService.SaveSkuLine(
+                "SKU_KEEP", "保留SKU", FulfillmentType.DIRECT_RECHARGE.code(), 100L, 0L, 0L,
+                false, null, 1L, 10L, false, null, null, false, true, "DAY", 2L,
+                CatalogEntityStatus.DRAFT.getCode());
+
+        service.updateProduct(SPU_CODE, saveCommand(recharge));
+
+        ArgumentCaptor<PlatformSkuDO> captor = ArgumentCaptor.forClass(PlatformSkuDO.class);
+        verify(skuMapper, atLeastOnce()).updateById(captor.capture());
+        assertThat(captor.getAllValues()).filteredOn(sku -> "SKU_KEEP".equals(sku.getSkuCode()))
+                .singleElement().satisfies(sku -> {
+                    assertThat(sku.getFulfillmentType()).isEqualTo(FulfillmentType.DIRECT_RECHARGE.code());
+                    assertThat(sku.getPhoneBindLimitEnabled()).isTrue();
+                    assertThat(sku.getPhoneBindLimitPeriod()).isEqualTo("DAY");
+                    assertThat(sku.getPhoneBindLimitQuantity()).isEqualTo(2L);
+                });
+    }
+
+    /** 账户绑定权益 SKU 同样允许开启绑定手机号限购。 */
+    @Test
+    void savesPhoneBindLimitOnAccountBoundBenefitSku() {
+        givenUpdateWithOneOmittedSku();
+        ProductCatalogCommandService.SaveSkuLine bound = new ProductCatalogCommandService.SaveSkuLine(
+                "SKU_KEEP", "保留SKU", FulfillmentType.ACCOUNT_BOUND_BENEFIT.code(), 100L, 0L, 0L,
+                false, null, 1L, 10L, false, null, null, false, true, "MONTH", 1L,
+                CatalogEntityStatus.DRAFT.getCode());
+
+        service.updateProduct(SPU_CODE, saveCommand(bound));
+
+        ArgumentCaptor<PlatformSkuDO> captor = ArgumentCaptor.forClass(PlatformSkuDO.class);
+        verify(skuMapper, atLeastOnce()).updateById(captor.capture());
+        assertThat(captor.getAllValues()).filteredOn(sku -> "SKU_KEEP".equals(sku.getSkuCode()))
+                .singleElement().satisfies(sku -> {
+                    assertThat(sku.getPhoneBindLimitEnabled()).isTrue();
+                    assertThat(sku.getPhoneBindLimitPeriod()).isEqualTo("MONTH");
+                    assertThat(sku.getPhoneBindLimitQuantity()).isEqualTo(1L);
+                });
+    }
+
+    /** 兼容编辑请求未携带绑定手机号限购字段时，必须保留原 SKU 配置。 */
+    @Test
+    void omittedPhoneBindLimitFieldsPreserveExistingSkuConfiguration() {
+        PlatformSkuDO omitted = givenUpdateWithOneOmittedSku();
+        PlatformSkuDO keep = PlatformSkuDO.builder().id(10L).spuId(1L).skuCode("SKU_KEEP")
+                .fulfillmentType(FulfillmentType.DIRECT_RECHARGE.code())
+                .phoneBindLimitEnabled(true).phoneBindLimitPeriod("DAY").phoneBindLimitQuantity(2L)
+                .status(CatalogEntityStatus.ACTIVE.getCode()).build();
+        when(skuMapper.selectList(any())).thenReturn(List.of(keep, omitted));
+        ProductCatalogCommandService.SaveSkuLine keepLine = new ProductCatalogCommandService.SaveSkuLine(
+                "SKU_KEEP", "保留SKU", FulfillmentType.DIRECT_RECHARGE.code(), 100L, 0L, 0L, 1L, 10L,
+                CatalogEntityStatus.DRAFT.getCode());
+
+        service.updateProduct(SPU_CODE, saveCommand(keepLine));
+
+        ArgumentCaptor<PlatformSkuDO> captor = ArgumentCaptor.forClass(PlatformSkuDO.class);
+        verify(skuMapper, atLeastOnce()).updateById(captor.capture());
+        assertThat(captor.getAllValues()).filteredOn(sku -> "SKU_KEEP".equals(sku.getSkuCode()))
+                .singleElement().satisfies(sku -> {
+                    assertThat(sku.getPhoneBindLimitEnabled()).isTrue();
+                    assertThat(sku.getPhoneBindLimitPeriod()).isEqualTo("DAY");
+                    assertThat(sku.getPhoneBindLimitQuantity()).isEqualTo(2L);
+                });
+    }
+
+    /** 显式关闭绑定手机号限购时，服务端必须把周期和数量规范化为空。 */
+    @Test
+    void disablingPhoneBindLimitClearsPeriodAndQuantity() {
+        PlatformSkuDO omitted = givenUpdateWithOneOmittedSku();
+        PlatformSkuDO keep = PlatformSkuDO.builder().id(10L).spuId(1L).skuCode("SKU_KEEP")
+                .fulfillmentType(FulfillmentType.DIRECT_RECHARGE.code())
+                .phoneBindLimitEnabled(true).phoneBindLimitPeriod("DAY").phoneBindLimitQuantity(2L)
+                .status(CatalogEntityStatus.ACTIVE.getCode()).build();
+        when(skuMapper.selectList(any())).thenReturn(List.of(keep, omitted));
+        ProductCatalogCommandService.SaveSkuLine disabled = new ProductCatalogCommandService.SaveSkuLine(
+                "SKU_KEEP", "保留SKU", FulfillmentType.DIRECT_RECHARGE.code(), 100L, 0L, 0L,
+                false, null, 1L, 10L, false, null, null, false, false, null, null,
+                CatalogEntityStatus.DRAFT.getCode());
+
+        service.updateProduct(SPU_CODE, saveCommand(disabled));
+
+        ArgumentCaptor<PlatformSkuDO> captor = ArgumentCaptor.forClass(PlatformSkuDO.class);
+        verify(skuMapper, atLeastOnce()).updateById(captor.capture());
+        assertThat(captor.getAllValues()).filteredOn(sku -> "SKU_KEEP".equals(sku.getSkuCode()))
+                .singleElement().satisfies(sku -> {
+                    assertThat(sku.getPhoneBindLimitEnabled()).isFalse();
+                    assertThat(sku.getPhoneBindLimitPeriod()).isNull();
+                    assertThat(sku.getPhoneBindLimitQuantity()).isNull();
+                });
+    }
+
+    /** 履约类型改为卡密且省略绑定手机号字段时，不得把直充上已开启的限购保留下来。 */
+    @Test
+    void changingToCardSecretWhilePreservingPhoneBindLimitIsRejected() {
+        PlatformSkuDO omitted = givenUpdateWithOneOmittedSku();
+        PlatformSkuDO keep = PlatformSkuDO.builder().id(10L).spuId(1L).skuCode("SKU_KEEP")
+                .fulfillmentType(FulfillmentType.DIRECT_RECHARGE.code())
+                .phoneBindLimitEnabled(true).phoneBindLimitPeriod("DAY").phoneBindLimitQuantity(2L)
+                .status(CatalogEntityStatus.ACTIVE.getCode()).build();
+        when(skuMapper.selectList(any())).thenReturn(List.of(keep, omitted));
+
+        assertThatThrownBy(() -> service.updateProduct(SPU_CODE, saveCommand()))
+                .isInstanceOf(ServiceException.class)
+                .extracting(ex -> ((ServiceException) ex).getCode())
+                .isEqualTo(PRODUCT_PURCHASE_LIMIT_CONFIG_INVALID.getCode());
+    }
+
     /** 构造：SPU 下挂 keep 与 omitted 两个启用 SKU，更新请求只保留 keep。 */
     private PlatformSkuDO givenUpdateWithOneOmittedSku() {
         LocalDateTime now = LocalDateTime.now();

@@ -115,7 +115,7 @@ class ProductCenterIntegrationTest {
                     "测试详情", "VIRTUAL", 1L, 100L, CatalogEntityStatus.ACTIVE.getCode(),
                     List.of(new SaveSkuLine("PC_SKU_100", "商品中心直充100元", "DIRECT_RECHARGE",
                             10_000L, 12_000L, 9_900L, true, new BigDecimal("0.0600"), 1L, 10L,
-                            true, "MONTH", 2L, true,
+                            true, "MONTH", 2L, true, true, "DAY", 2L,
                             CatalogEntityStatus.ACTIVE.getCode())), 1L));
 
             PlatformSkuDO platformSku = skuMapper.selectByCode("PC_SKU_100");
@@ -128,6 +128,9 @@ class ProductCenterIntegrationTest {
             assertThat(platformSku.getUserLimitPeriod()).isEqualTo("MONTH");
             assertThat(platformSku.getUserLimitQuantity()).isEqualTo(2L);
             assertThat(platformSku.getOrderLimitEnabled()).isTrue();
+            assertThat(platformSku.getPhoneBindLimitEnabled()).isTrue();
+            assertThat(platformSku.getPhoneBindLimitPeriod()).isEqualTo("DAY");
+            assertThat(platformSku.getPhoneBindLimitQuantity()).isEqualTo(2L);
             assertThat(platformSku.getTargetSchemaCode()).isEqualTo("DIRECT_RECHARGE_TARGET");
             assertThat(platformSku.getTargetSchemaVersion()).isEqualTo(1);
             assertThat(platformSku.getResultSchemaCode()).isEqualTo("DIRECT_RECHARGE_RESULT");
@@ -174,6 +177,9 @@ class ProductCenterIntegrationTest {
                 assertThat(sku.userLimitPeriod()).isEqualTo("MONTH");
                 assertThat(sku.userLimitQuantity()).isEqualTo(2L);
                 assertThat(sku.orderLimitEnabled()).isTrue();
+                assertThat(sku.phoneBindLimitEnabled()).isTrue();
+                assertThat(sku.phoneBindLimitPeriod()).isEqualTo("DAY");
+                assertThat(sku.phoneBindLimitQuantity()).isEqualTo(2L);
             });
 
             commandService.changeSkuStatus("PC_SKU_100", CatalogEntityStatus.INACTIVE, 1L);

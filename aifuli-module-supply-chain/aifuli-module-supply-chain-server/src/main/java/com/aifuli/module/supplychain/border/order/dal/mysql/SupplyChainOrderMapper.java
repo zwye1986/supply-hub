@@ -35,6 +35,21 @@ public interface SupplyChainOrderMapper extends BaseMapperX<SupplyChainOrderDO> 
             @Param("cancelledStatus") short cancelledStatus,
             @Param("fullyRefundedStatus") short fullyRefundedStatus);
 
+    /**
+     * 按履约目标手机号聚合仍占用额度的标准商品数量，不得改用买家 {@code buyer_user_id}。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#35-sku-限购计算并发与释放规则}。
+     */
+    Long sumEffectivePhoneBindPurchaseQuantity(
+            @Param("orderType") String orderType,
+            @Param("projectId") Long projectId,
+            @Param("fulfillmentAccountValue") String fulfillmentAccountValue,
+            @Param("platformSkuId") Long platformSkuId,
+            @Param("startInclusive") LocalDateTime startInclusive,
+            @Param("endExclusive") LocalDateTime endExclusive,
+            @Param("failedStatus") short failedStatus,
+            @Param("cancelledStatus") short cancelledStatus,
+            @Param("fullyRefundedStatus") short fullyRefundedStatus);
+
     /** 按供应链采购单号查询总订单，用于 DETAIL 入口只读加载。 */
     default SupplyChainOrderDO selectByOrderNo(String orderNo) {
         return selectOne(new LambdaQueryWrapper<SupplyChainOrderDO>()

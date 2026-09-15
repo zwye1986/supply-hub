@@ -30,7 +30,11 @@ public enum AcceptanceRejectionCode {
     /** 当前项目下该用户购买数量已达到 SKU 周期限购上限。 */
     USER_PURCHASE_LIMIT_EXCEEDED("当前项目下该用户购买数量已达到SKU周期限购上限"),
     /** 本次购买数量超过 SKU 每订单限购上限。 */
-    ORDER_PURCHASE_LIMIT_EXCEEDED("本次购买数量超过SKU每订单限购上限");
+    ORDER_PURCHASE_LIMIT_EXCEEDED("本次购买数量超过SKU每订单限购上限"),
+    /** 当前项目下该履约手机号购买数量已达到 SKU 周期限购上限。 */
+    PHONE_BIND_PURCHASE_LIMIT_EXCEEDED("当前项目下该履约手机号购买数量已达到SKU周期限购上限"),
+    /** 绑定手机号限购要求履约目标为手机号。 */
+    PHONE_BIND_TARGET_REQUIRED("绑定手机号限购要求履约目标为手机号");
 
     /** 中文说明，与错误目录 / DDL rejection_code 语义一致。 */
     private final String chineseName;

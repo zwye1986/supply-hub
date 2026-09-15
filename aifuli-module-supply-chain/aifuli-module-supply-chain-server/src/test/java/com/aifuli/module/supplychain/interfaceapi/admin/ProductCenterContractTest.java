@@ -65,7 +65,8 @@ class ProductCenterContractTest {
                 .map(field -> field.getName()))
                 .doesNotContain("targetSchemaCode", "targetSchemaVersion", "resultSchemaCode", "resultSchemaVersion")
                 .contains("fulfillmentType", "taxIncluded", "taxRate",
-                        "userLimitEnabled", "userLimitPeriod", "userLimitQuantity", "orderLimitEnabled");
+                        "userLimitEnabled", "userLimitPeriod", "userLimitQuantity", "orderLimitEnabled",
+                        "phoneBindLimitEnabled", "phoneBindLimitPeriod", "phoneBindLimitQuantity");
     }
 
     /** SKU 限购请求字段注释必须与 DDL COMMENT 使用同一表述。 */
@@ -82,6 +83,13 @@ class ProductCenterContractTest {
                 .getAnnotation(Schema.class).description()).isEqualTo("每人每周期最多购买数量");
         assertThat(ProductAdminController.SkuItemSaveReqVO.class.getDeclaredField("orderLimitEnabled")
                 .getAnnotation(Schema.class).description()).isEqualTo("是否启用每订单限购：1启用，0停用");
+        assertThat(ProductAdminController.SkuItemSaveReqVO.class.getDeclaredField("phoneBindLimitEnabled")
+                .getAnnotation(Schema.class).description()).isEqualTo("是否启用绑定手机号限购：1启用，0停用");
+        assertThat(ProductAdminController.SkuItemSaveReqVO.class.getDeclaredField("phoneBindLimitPeriod")
+                .getAnnotation(Schema.class).description())
+                .isEqualTo("绑定手机号限购周期：LIFETIME终身，YEAR每年，MONTH每月，WEEK每周，DAY每天");
+        assertThat(ProductAdminController.SkuItemSaveReqVO.class.getDeclaredField("phoneBindLimitQuantity")
+                .getAnnotation(Schema.class).description()).isEqualTo("同一履约手机号每周期最多购买数量");
     }
 
     /** 税务字段必须停留在 SKU 展示元数据契约，不能混入 L2/L3 定价请求。 */

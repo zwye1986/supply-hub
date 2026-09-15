@@ -24,4 +24,12 @@ public enum FulfillmentType {
         }
         throw new IllegalArgumentException("Unknown fulfillment type: " + code);
     }
+
+    /**
+     * 绑定手机号限购仅适用于下单携带履约手机号的权益类型。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#35-sku-限购计算并发与释放规则}。
+     */
+    public boolean supportsPhoneBindLimit() {
+        return this == DIRECT_RECHARGE || this == ACCOUNT_BOUND_BENEFIT;
+    }
 }

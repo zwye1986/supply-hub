@@ -111,6 +111,8 @@ public class ProductCatalogQueryService {
                         sku.getTaxIncluded(), sku.getTaxRate(), sku.getMinQuantity(),
                         sku.getMaxQuantity(), sku.getUserLimitEnabled(), sku.getUserLimitPeriod(),
                         sku.getUserLimitQuantity(), sku.getOrderLimitEnabled(),
+                        sku.getPhoneBindLimitEnabled(), sku.getPhoneBindLimitPeriod(),
+                        sku.getPhoneBindLimitQuantity(),
                         sku.getTargetSchemaCode(), sku.getTargetSchemaVersion(),
                         sku.getResultSchemaCode(), sku.getResultSchemaVersion(), sku.getStatus(),
                         sellabilityService.isSellable(sku, spu)))
@@ -260,6 +262,9 @@ public class ProductCatalogQueryService {
             @Schema(description = "每人限购周期：LIFETIME终身，YEAR每年，MONTH每月，WEEK每周，DAY每天") String userLimitPeriod,
             @Schema(description = "每人每周期最多购买数量") Long userLimitQuantity,
             @Schema(description = "是否启用每订单限购：1启用，0停用") Boolean orderLimitEnabled,
+            @Schema(description = "是否启用绑定手机号限购：1启用，0停用") Boolean phoneBindLimitEnabled,
+            @Schema(description = "绑定手机号限购周期：LIFETIME终身，YEAR每年，MONTH每月，WEEK每周，DAY每天") String phoneBindLimitPeriod,
+            @Schema(description = "同一履约手机号每周期最多购买数量") Long phoneBindLimitQuantity,
             @Schema(description = "履约目标封闭Schema编码") String targetSchemaCode,
             @Schema(description = "履约目标Schema版本") Integer targetSchemaVersion,
             @Schema(description = "履约结果封闭Schema编码") String resultSchemaCode,

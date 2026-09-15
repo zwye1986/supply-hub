@@ -29,6 +29,7 @@
 | **d19** | **商品管理列表端管理端聚合读模型与批量上下架** | 针对运营管理端原型中「SPU 嵌套多 SKU 展开展示」与复杂多维检索诉求：<br>1. 新增管理端聚合读接口 `GET /supply-chain/products/management-page`，整页一次批量拉取 SPU、SKU、生效 Offer 及供应商信息在内存组装，返回包含市场价、销售建议价、供货价、不含税供货价、税率、税额、供应商名称列表、总库存、兑换方式、下架方式的聚合模型。<br>2. 新增批量上下架接口 `PUT /supply-chain/products/batch-status`，支持批量上架、下架并记录 `unshelve_mode`（`MANUAL_UNSHELVE`）。<br>3. `030` 变更集：`sc_platform_spu` 增加 `unshelve_mode`；`sc_platform_sku` 增加 `tax_rate`；存量商品类型回填默认 icon 图标；为 `sc_platform_spu` 补充 `idx_sc_platform_spu_type_status` 复合索引；商品类型卡片双指标重构为数据库 `GROUP BY` 聚合，彻底消除大数据量下的内存风险。 | 支撑商品列表管理端原型与批量操作 |
 | **d20** | **分销商/项目分层批量定价与税务元数据隔离** | 分销价必须落在 `分销商 + 分销商品`（L2）作用域，项目价必须落在 `分销商下的项目 + 项目商品`（L3）作用域；同一分销商的不同项目允许形成不同价格，禁止新增平台全局“分销价”。批量试算为只读操作，批量保存复用既有不可变价格版本表并在单事务内全量成功或回滚。`tax_included` 与 `tax_rate` 归属平台 SKU，只记录和展示，不得作为 `SettlementPriceResolver`、L1/L2/L3、服务费或利润率的计算入参；`031` 变更集补充含税标识并收紧字段注释。 | 明确定价作用域并防止税务展示字段污染结算价格 |
 | **d21** | **SKU 限购配置与项目级交易校验** | 限购配置归属平台 SKU。每人限购支持 `LIFETIME`（终身）、`YEAR`（每年）、`MONTH`（每月）、`WEEK`（每周）、`DAY`（每天）五种自然周期，计数维度固定为 `采购项目 + 用户标识（规范化手机号） + 平台 SKU`；每订单限购限制本次请求购买数量。标准履约请求新增必填 `projectCode`，由服务端校验项目属于已解析采购商，禁止把采购商 ID 或外部租户标识替代项目 ID。并发受理在 SKU 行锁内统计有效订单并校验额度；订单失败、取消或全额退款后通过订单状态投影自然退出计数，释放额度。现有一期 `quantity=1` 与单履约目标契约保持不变。 | 对齐商品编辑原型限购区并形成可并发校验闭环 |
+| **d22** | **权益商品绑定手机号限购** | 原型「限购绑定手机号数量（权益商品专用）」对齐原卡管 `limit_number`：限制的是履约目标手机号，不是买家 `buyerUserId`，也不是一单绑几个号。配置仍归属平台 SKU，周期复用每人限购五值。计数维度为 `采购项目 + 履约目标手机号（target.accountValue 且 accountType=MOBILE） + 平台 SKU`。仅 `DIRECT_RECHARGE` 与 `ACCOUNT_BOUND_BENEFIT` 允许开启；卡号卡密/兑换码/券链不得开启，也不扩展其无手机号目标 Schema。直充与账户绑定权益订单把规范化手机号写入 `sc_supply_chain_order.fulfillment_account_value` 供行锁内聚合；卡密类该列为空。失败、取消、全额退款释放，部分退款不释放。一期 `quantity=1` 与单履约目标不变。 | 纠正原型「每订单」误读，并对齐卡管直充账号当日限量语义 |
 
 ---
 
@@ -214,6 +215,27 @@ O2O 等既有订单失去唯一约束；`projectCode` 进入请求指纹，因�
 周期必须属于上述五值且数量大于零。每订单限购复用 SKU 的 `max_quantity` 作为数量上限，开关关闭时
 该值仅保留兼容展示语义。
 
+### 2.11 权益商品绑定手机号限购（033 Changeset）
+
+```sql
+ALTER TABLE sc_platform_sku
+    ADD COLUMN phone_bind_limit_enabled TINYINT(1) NOT NULL DEFAULT 0
+        COMMENT '是否启用绑定手机号限购：1启用，0停用',
+    ADD COLUMN phone_bind_limit_period VARCHAR(16) NULL
+        COMMENT '绑定手机号限购周期：LIFETIME终身，YEAR每年，MONTH每月，WEEK每周，DAY每天',
+    ADD COLUMN phone_bind_limit_quantity BIGINT NULL
+        COMMENT '同一履约手机号每周期最多购买数量';
+
+ALTER TABLE sc_supply_chain_order
+    ADD COLUMN fulfillment_account_value VARCHAR(128) NULL
+        COMMENT '履约目标手机号；仅直充与账户绑定权益写入，卡密类为空';
+```
+
+关闭绑定手机号限购时周期和数量必须为空；开启时周期必须属于五值、数量大于零，且
+`fulfillment_type IN ('DIRECT_RECHARGE', 'ACCOUNT_BOUND_BENEFIT')`。历史订单该列可为空，不回填。
+新受理在目标为 `accountType=MOBILE` 时写入 `accountValue` 的规范化值，长度不超过 128；日志不得输出该列。
+新增索引 `idx_sc_order_phone_bind_limit (project_id, platform_sku_id, fulfillment_account_value, created_at)`。
+
 ---
 
 ## 3. 核心业务规则与状态机设计
@@ -302,8 +324,17 @@ PRD 8.4.1 的列表 Tab 支持从 `GET /supply-chain/product-types` 动态拉取
    Mapper XML；独立 `supplyChainSqlSessionFactory` 显式加载 `classpath*:mapper/**/*.xml`，不依赖宿主
    默认 MyBatis 自动配置，也不影响其它七个独立进程的数据源或 Mapper。
 5. 超过每人额度返回可重试拒绝 `USER_PURCHASE_LIMIT_EXCEEDED`；当失败、取消或全额退款释放额度后，
-   调用方可携带上一回执版本按相同业务键重试。超过每订单额度返回最终拒绝
-   `ORDER_PURCHASE_LIMIT_EXCEEDED`。一期仍先遵守 `quantity=1`，不扩展多件履约或多目标 Schema。
+  调用方可携带上一回执版本按相同业务键重试。超过每订单额度返回最终拒绝
+  `ORDER_PURCHASE_LIMIT_EXCEEDED`。一期仍先遵守 `quantity=1`，不扩展多件履约或多目标 Schema。
+6. 绑定手机号限购只读取平台 SKU 当前配置。关闭时不按履约号统计。开启时周期窗口与每人限购相同，计数键为
+  `project_id + fulfillment_account_value + platform_sku_id`，不得改用 `buyerUserId`。代买时买家号与履约号
+  可以不同，必须按履约号拦截。
+7. 仅 `DIRECT_RECHARGE` 与 `ACCOUNT_BOUND_BENEFIT` 允许开启；管理端对卡密、兑换码、券链开启时返回
+  `PRODUCT_PURCHASE_LIMIT_CONFIG_INVALID`。受理时若已开启但目标不是 `accountType=MOBILE` 或手机号为空，
+  返回最终拒绝 `PHONE_BIND_TARGET_REQUIRED`。超过履约号额度返回可重试拒绝
+  `PHONE_BIND_PURCHASE_LIMIT_EXCEEDED`。
+8. 直充与账户绑定权益订单无论开关是否开启，只要目标是手机号就写入 `fulfillment_account_value`，以便后续
+  打开限购时历史有效订单仍可计入；卡密类保持空值，不把 `buyerUserId` 回填进该列。
 
 ---
 
@@ -479,15 +510,21 @@ PRD 8.4.1 的列表 Tab 支持从 `GET /supply-chain/product-types` 动态拉取
 
 #### 4.1.13 SKU 限购保存、回显与标准履约校验
 
-* SKU 保存项新增 `userLimitEnabled`、`userLimitPeriod`、`userLimitQuantity`、`orderLimitEnabled`；
+* SKU 保存项新增 `userLimitEnabled`、`userLimitPeriod`、`userLimitQuantity`、`orderLimitEnabled`、
+  `phoneBindLimitEnabled`、`phoneBindLimitPeriod`、`phoneBindLimitQuantity`；
   `maxQuantity` 在 `orderLimitEnabled=true` 时作为每订单购买数量上限。详情接口回显相同字段。
-* `userLimitPeriod` 仅允许 `LIFETIME`、`YEAR`、`MONTH`、`WEEK`、`DAY`。每人限购开启时周期和正整数
-  上限必填；关闭时服务端规范化为空。存量未携带新字段的编辑请求保留原配置，避免兼容调用静默关闭限购。
+* `userLimitPeriod` 与 `phoneBindLimitPeriod` 仅允许 `LIFETIME`、`YEAR`、`MONTH`、`WEEK`、`DAY`。
+  每人限购或绑定手机号限购开启时，各自的周期和正整数上限必填；关闭时服务端规范化为空。绑定手机号限购
+  仅允许 `DIRECT_RECHARGE` 与 `ACCOUNT_BOUND_BENEFIT`。存量未携带新字段的编辑请求保留原配置，避免兼容
+  调用静默关闭限购。
 * `POST /rpc-api/supply-chain/buyer/fulfillment/accept` 请求新增必填 `projectCode`。服务端按
   `sourceSystem + externalTenantId` 解析采购商，再校验项目归属；`projectCode` 进入请求指纹，既有
-  `(buyerId, buyerOrderNo)` 幂等键保持不变。受理事务在建单前完成每订单和每人额度校验。回执响应新增 `rejectionCode`，受理成功时为空，
-  拒绝时返回稳定拒绝码；限购分别返回 `USER_PURCHASE_LIMIT_EXCEEDED` 或
-  `ORDER_PURCHASE_LIMIT_EXCEEDED`，禁止只返回笼统状态导致调用方无法判断重试条件。
+  `(buyerId, buyerOrderNo)` 幂等键保持不变。受理事务在建单前完成每订单、每人与绑定手机号额度校验。
+  Facade 从目标 DTO 提取手机号传入 Lifecycle，不得解密目标密文，也不得依赖订单 DAL。
+  回执响应新增 `rejectionCode`，受理成功时为空，拒绝时返回稳定拒绝码；限购分别返回
+  `USER_PURCHASE_LIMIT_EXCEEDED`、`ORDER_PURCHASE_LIMIT_EXCEEDED`、
+  `PHONE_BIND_PURCHASE_LIMIT_EXCEEDED` 或 `PHONE_BIND_TARGET_REQUIRED`，禁止只返回笼统状态导致调用方
+  无法判断重试条件。
 
 ---
 
@@ -569,6 +606,10 @@ PRD 8.4.1 的列表 Tab 支持从 `GET /supply-chain/product-types` 动态拉取
 2. 标品池价格用例必须让 `face_value`、`market_price`、`suggested_sale_price` 与当前 L1 四个金额彼此不同，并断言 `suggestPriceCents` 取 L1、兼容字段 `marketPriceCents` 取 `suggested_sale_price`。
 3. 分类详情用例必须通过 `CategoryQueryService` 读取真实数据，并按实际 Jackson 序列化属性验证响应仅包含 d16 锁定的九个业务字段，不得出现 `id`、`version`、`createdBy`、`updatedBy`。
 4. 商品中心契约测试除检查源码注解外，还必须通过 Swagger `ModelConverters` 验证最终生成的 Schema 属性及中文说明，避免注解存在但 Knife4j 模型不可见。
-5. 集成与契约门禁统一通过 Maven profile `supply-chain-integration` 执行；空库必须完整执行全部 Liquibase 变更集（含 `032`）。
+5. 集成与契约门禁统一通过 Maven profile `supply-chain-integration` 执行；空库必须完整执行全部 Liquibase 变更集（含 `033`）。
 6. `ProjectAdminIntegrationTest` 必须在真实 MySQL 8.4 上直接调用 L2/L3 批量试算与保存应用服务，并验证：试算零写入；同一分销商的不同项目可冻结不同 L3；混入其它分销商商品或其它项目 listing 时整批回滚；`FOLLOW_TEMPLATE` / `FOLLOW_L2`、`EQUAL_L1`、`CUSTOM` 的版本与指针语义；后续 L2 变更不回放既有项目版本；同一项目并发改价由项目行锁串行化，版本号连续且当前指针指向最终版本；管理查询与冻结版本一致。
-7. `FulfillmentAcceptanceIntegrationTest` 必须覆盖：标准履约回执与总订单写入 `project_id`；非法 `projectCode` 返回 `PROJECT_NOT_FOUND`；同一项目不同手机号独立计数；每人限购超限拒绝；失败/取消/全额退款释放额度且部分退款不释放；SKU 行锁下并发不超卖；公开契约保持 `quantity=1`。`ORDER_PURCHASE_LIMIT_EXCEEDED` 由 `SkuPurchaseLimitServiceTest` 覆盖，不通过放开公开数量契约验证。
+7. `FulfillmentAcceptanceIntegrationTest` 必须覆盖：标准履约回执与总订单写入 `project_id` 与直充
+   `fulfillment_account_value`；非法 `projectCode` 返回 `PROJECT_NOT_FOUND`；同一项目不同买家号但同一履约
+   手机号共享绑定手机号额度；同一买家号不同履约手机号独立计数；每人限购超限拒绝；绑定手机号限购超限拒绝；
+   失败/取消/全额退款释放额度且部分退款不释放；SKU 行锁下并发不超卖；公开契约保持 `quantity=1`。
+   `ORDER_PURCHASE_LIMIT_EXCEEDED` 由 `SkuPurchaseLimitServiceTest` 覆盖，不通过放开公开数量契约验证。

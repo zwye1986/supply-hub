@@ -6,7 +6,7 @@ import java.time.LocalDateTime;
 import java.time.temporal.TemporalAdjusters;
 
 /**
- * SKU 每人限购的自然周期。
+ * SKU 限购的自然周期。
  *
  * <p>周期边界使用供应链数据库统一的 Asia/Shanghai 本地时间，ISO 自然周从周一开始。
  * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#35-sku-限购计算并发与释放规则}。</p>

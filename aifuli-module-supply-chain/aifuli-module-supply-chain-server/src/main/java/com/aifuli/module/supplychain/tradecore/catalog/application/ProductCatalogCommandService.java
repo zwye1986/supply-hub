@@ -502,11 +502,13 @@ public class ProductCatalogCommandService {
                 .maxQuantity(defaultLong(line.maxQuantity(), DEFAULT_MAX_QUANTITY))
                 .userLimitEnabled(false).userLimitPeriod(null).userLimitQuantity(null)
                 .orderLimitEnabled(Boolean.TRUE.equals(line.orderLimitEnabled()))
+                .phoneBindLimitEnabled(false).phoneBindLimitPeriod(null).phoneBindLimitQuantity(null)
                 .currency(CURRENCY_CNY).targetSchemaCode(schema.targetSchemaCode())
                 .targetSchemaVersion(schema.targetSchemaVersion()).resultSchemaCode(schema.resultSchemaCode())
                 .resultSchemaVersion(schema.resultSchemaVersion()).status(status.getCode()).version(0L)
                 .createdBy(operatorId).createdAt(now).updatedBy(operatorId).updatedAt(now).build();
         applyUserLimit(sku, line, false);
+        applyPhoneBindLimit(sku, line, false);
         skuMapper.insert(sku);
     }
 
@@ -527,6 +529,7 @@ public class ProductCatalogCommandService {
         sku.setMinQuantity(defaultLong(line.minQuantity(), DEFAULT_MIN_QUANTITY));
         sku.setMaxQuantity(defaultLong(line.maxQuantity(), DEFAULT_MAX_QUANTITY));
         applyUserLimit(sku, line, true);
+        applyPhoneBindLimit(sku, line, true);
         if (line.orderLimitEnabled() != null) {
             sku.setOrderLimitEnabled(line.orderLimitEnabled());
         }
@@ -584,7 +587,41 @@ public class ProductCatalogCommandService {
         sku.setUserLimitQuantity(line.userLimitQuantity());
     }
 
+    /**
+     * 校验并规范化 SKU 绑定手机号限购。省略字段时保留存量；显式关闭时清空周期与数量；
+     * 仅直充与账户绑定权益允许开启。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#35-sku-限购计算并发与释放规则}。
+     */
+    private static void applyPhoneBindLimit(PlatformSkuDO sku, SaveSkuLine line, boolean preserveWhenAbsent) {
+        boolean noPhoneBindFields = line.phoneBindLimitEnabled() == null
+                && line.phoneBindLimitPeriod() == null && line.phoneBindLimitQuantity() == null;
+        if (preserveWhenAbsent && noPhoneBindFields) {
+            if (Boolean.TRUE.equals(sku.getPhoneBindLimitEnabled())
+                    && !FulfillmentType.fromCode(sku.getFulfillmentType()).supportsPhoneBindLimit()) {
+                throw exception(PRODUCT_PURCHASE_LIMIT_CONFIG_INVALID);
+            }
+            return;
+        }
+        boolean enabled = Boolean.TRUE.equals(line.phoneBindLimitEnabled());
+        sku.setPhoneBindLimitEnabled(enabled);
+        if (!enabled) {
+            sku.setPhoneBindLimitPeriod(null);
+            sku.setPhoneBindLimitQuantity(null);
+            return;
+        }
+        if (!FulfillmentType.fromCode(sku.getFulfillmentType()).supportsPhoneBindLimit()) {
+            throw exception(PRODUCT_PURCHASE_LIMIT_CONFIG_INVALID);
+        }
+        sku.setPhoneBindLimitPeriod(PurchaseLimitPeriod.fromCode(line.phoneBindLimitPeriod()).name());
+        sku.setPhoneBindLimitQuantity(line.phoneBindLimitQuantity());
+    }
+
     private static void validatePurchaseLimitInput(SaveSkuLine line) {
+        validateUserLimitInput(line);
+        validatePhoneBindLimitInput(line);
+    }
+
+    private static void validateUserLimitInput(SaveSkuLine line) {
         boolean enabled = Boolean.TRUE.equals(line.userLimitEnabled());
         boolean hasPeriod = hasText(line.userLimitPeriod());
         boolean hasQuantity = line.userLimitQuantity() != null;
@@ -602,6 +639,30 @@ public class ProductCatalogCommandService {
         }
         try {
             PurchaseLimitPeriod.fromCode(line.userLimitPeriod());
+        } catch (IllegalArgumentException invalidPeriod) {
+            throw exception(PRODUCT_PURCHASE_LIMIT_CONFIG_INVALID);
+        }
+    }
+
+    private static void validatePhoneBindLimitInput(SaveSkuLine line) {
+        boolean enabled = Boolean.TRUE.equals(line.phoneBindLimitEnabled());
+        boolean hasPeriod = hasText(line.phoneBindLimitPeriod());
+        boolean hasQuantity = line.phoneBindLimitQuantity() != null;
+        if (line.phoneBindLimitEnabled() == null && !hasPeriod && !hasQuantity) {
+            return;
+        }
+        if (!enabled) {
+            if (hasPeriod || hasQuantity) {
+                throw exception(PRODUCT_PURCHASE_LIMIT_CONFIG_INVALID);
+            }
+            return;
+        }
+        if (!hasPeriod || line.phoneBindLimitQuantity() == null || line.phoneBindLimitQuantity() <= 0
+                || !FulfillmentType.fromCode(line.fulfillmentType()).supportsPhoneBindLimit()) {
+            throw exception(PRODUCT_PURCHASE_LIMIT_CONFIG_INVALID);
+        }
+        try {
+            PurchaseLimitPeriod.fromCode(line.phoneBindLimitPeriod());
         } catch (IllegalArgumentException invalidPeriod) {
             throw exception(PRODUCT_PURCHASE_LIMIT_CONFIG_INVALID);
         }
@@ -805,6 +866,7 @@ public class ProductCatalogCommandService {
                               Long minQuantity, Long maxQuantity,
                               Boolean userLimitEnabled, String userLimitPeriod, Long userLimitQuantity,
                               Boolean orderLimitEnabled,
+                              Boolean phoneBindLimitEnabled, String phoneBindLimitPeriod, Long phoneBindLimitQuantity,
                               String targetSchemaCode, Integer targetSchemaVersion,
                               String resultSchemaCode, Integer resultSchemaVersion, Short status) {
         /**
@@ -815,7 +877,7 @@ public class ProductCatalogCommandService {
                            Long marketPrice, Long suggestedSalePrice, Long minQuantity, Long maxQuantity,
                            Short status) {
             this(skuCode, skuName, fulfillmentType, faceValue, marketPrice, suggestedSalePrice,
-                    false, null, minQuantity, maxQuantity, null, null, null, null,
+                    false, null, minQuantity, maxQuantity, null, null, null, null, null, null, null,
                     null, null, null, null, status);
         }
 
@@ -824,7 +886,7 @@ public class ProductCatalogCommandService {
                            Long marketPrice, Long suggestedSalePrice, Boolean taxIncluded, BigDecimal taxRate,
                            Long minQuantity, Long maxQuantity, Short status) {
             this(skuCode, skuName, fulfillmentType, faceValue, marketPrice, suggestedSalePrice,
-                    taxIncluded, taxRate, minQuantity, maxQuantity, null, null, null, null,
+                    taxIncluded, taxRate, minQuantity, maxQuantity, null, null, null, null, null, null, null,
                     null, null, null, null, status);
         }
 
@@ -836,7 +898,20 @@ public class ProductCatalogCommandService {
                            Short status) {
             this(skuCode, skuName, fulfillmentType, faceValue, marketPrice, suggestedSalePrice,
                     taxIncluded, taxRate, minQuantity, maxQuantity, userLimitEnabled, userLimitPeriod,
-                    userLimitQuantity, orderLimitEnabled, null, null, null, null, status);
+                    userLimitQuantity, orderLimitEnabled, null, null, null, null, null, null, null, status);
+        }
+
+        /** 商品中心复合接口携带每人、每订单与绑定手机号限购配置，内部 Schema 仍由应用层注册表派生。 */
+        public SaveSkuLine(String skuCode, String skuName, String fulfillmentType, Long faceValue,
+                           Long marketPrice, Long suggestedSalePrice, Boolean taxIncluded, BigDecimal taxRate,
+                           Long minQuantity, Long maxQuantity, Boolean userLimitEnabled,
+                           String userLimitPeriod, Long userLimitQuantity, Boolean orderLimitEnabled,
+                           Boolean phoneBindLimitEnabled, String phoneBindLimitPeriod, Long phoneBindLimitQuantity,
+                           Short status) {
+            this(skuCode, skuName, fulfillmentType, faceValue, marketPrice, suggestedSalePrice,
+                    taxIncluded, taxRate, minQuantity, maxQuantity, userLimitEnabled, userLimitPeriod,
+                    userLimitQuantity, orderLimitEnabled, phoneBindLimitEnabled, phoneBindLimitPeriod,
+                    phoneBindLimitQuantity, null, null, null, null, status);
         }
 
         /** 保留已有显式 Schema 调用方的构造契约，税务元数据缺省为不含税且税率未配置。 */
@@ -845,7 +920,7 @@ public class ProductCatalogCommandService {
                            String targetSchemaCode, Integer targetSchemaVersion,
                            String resultSchemaCode, Integer resultSchemaVersion, Short status) {
             this(skuCode, skuName, fulfillmentType, faceValue, marketPrice, suggestedSalePrice,
-                    false, null, minQuantity, maxQuantity, null, null, null, null,
+                    false, null, minQuantity, maxQuantity, null, null, null, null, null, null, null,
                     targetSchemaCode, targetSchemaVersion, resultSchemaCode, resultSchemaVersion, status);
         }
 
@@ -855,7 +930,7 @@ public class ProductCatalogCommandService {
                            Long minQuantity, Long maxQuantity, String targetSchemaCode, Integer targetSchemaVersion,
                            String resultSchemaCode, Integer resultSchemaVersion, Short status) {
             this(skuCode, skuName, fulfillmentType, faceValue, marketPrice, suggestedSalePrice,
-                    taxIncluded, taxRate, minQuantity, maxQuantity, null, null, null, null,
+                    taxIncluded, taxRate, minQuantity, maxQuantity, null, null, null, null, null, null, null,
                     targetSchemaCode, targetSchemaVersion, resultSchemaCode, resultSchemaVersion, status);
         }
     }

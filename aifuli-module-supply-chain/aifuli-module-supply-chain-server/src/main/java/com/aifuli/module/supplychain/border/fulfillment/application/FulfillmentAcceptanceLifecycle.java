@@ -237,7 +237,8 @@ public class FulfillmentAcceptanceLifecycle {
         LockedListing locked = lockListingAndSku(command);
         ListingSnapshot listing = requireSaleableListing(command, now, locked);
         SkuPurchaseLimitService.Violation limitViolation = purchaseLimitService.validateLockedSku(
-                command.projectId(), command.buyerUserId(), listing.sku(), command.quantity(), now);
+                command.projectId(), command.buyerUserId(), command.fulfillmentAccountValue(),
+                listing.sku(), command.quantity(), now);
         if (limitViolation == SkuPurchaseLimitService.Violation.ORDER_LIMIT_EXCEEDED) {
             throw rejection(receiptId, listing.version().getId(), AcceptanceReceiptStatus.REJECTED_FINAL,
                     AcceptanceRejectionCode.ORDER_PURCHASE_LIMIT_EXCEEDED);
@@ -245,6 +246,14 @@ public class FulfillmentAcceptanceLifecycle {
         if (limitViolation == SkuPurchaseLimitService.Violation.USER_LIMIT_EXCEEDED) {
             throw rejection(receiptId, listing.version().getId(), AcceptanceReceiptStatus.REJECTED_RETRYABLE,
                     AcceptanceRejectionCode.USER_PURCHASE_LIMIT_EXCEEDED);
+        }
+        if (limitViolation == SkuPurchaseLimitService.Violation.PHONE_BIND_TARGET_REQUIRED) {
+            throw rejection(receiptId, listing.version().getId(), AcceptanceReceiptStatus.REJECTED_FINAL,
+                    AcceptanceRejectionCode.PHONE_BIND_TARGET_REQUIRED);
+        }
+        if (limitViolation == SkuPurchaseLimitService.Violation.PHONE_BIND_LIMIT_EXCEEDED) {
+            throw rejection(receiptId, listing.version().getId(), AcceptanceReceiptStatus.REJECTED_RETRYABLE,
+                    AcceptanceRejectionCode.PHONE_BIND_PURCHASE_LIMIT_EXCEEDED);
         }
         SupplierRoutingApplicationService.RoutingSnapshot routing = route(command, listing.sku(), now);
         if (!routing.decision().selected()) {
@@ -264,6 +273,7 @@ public class FulfillmentAcceptanceLifecycle {
                 .orderType(SupplyChainOrderTypes.ORDER_TYPE_CARD)
                 .buyerId(command.buyerId()).projectId(command.projectId()).buyerCodeSnapshot(command.buyerCode())
                 .buyerNameSnapshot(command.buyerName()).buyerUserId(command.buyerUserId())
+                .fulfillmentAccountValue(command.fulfillmentAccountValue())
                 .buyerOrderNo(command.buyerOrderNo()).acceptanceReceiptId(receiptId)
                 .displaySupplierId(selected.supplierId()).displaySupplierCode(selected.supplierCode())
                 .displaySupplierName(selected.supplierName()).buyerSettlementAmount(buyerAmount)
@@ -582,7 +592,8 @@ public class FulfillmentAcceptanceLifecycle {
 
     private boolean isReleasedQuotaRetry(FulfillmentAcceptanceReceiptDO receipt, PreparedAcceptance command) {
         return receipt.getStatus() == AcceptanceReceiptStatus.REJECTED_RETRYABLE.getCode()
-                && AcceptanceRejectionCode.USER_PURCHASE_LIMIT_EXCEEDED.name().equals(receipt.getRejectionCode())
+                && (AcceptanceRejectionCode.USER_PURCHASE_LIMIT_EXCEEDED.name().equals(receipt.getRejectionCode())
+                || AcceptanceRejectionCode.PHONE_BIND_PURCHASE_LIMIT_EXCEEDED.name().equals(receipt.getRejectionCode()))
                 && command.previousReceiptVersion() != null
                 && Objects.equals(command.previousReceiptVersion(), receipt.getVersion());
     }
@@ -683,6 +694,7 @@ public class FulfillmentAcceptanceLifecycle {
         private final String buyerName;
         private final String buyerOrderNo;
         private final String buyerUserId;
+        private final String fulfillmentAccountValue;
         private final String buyerSkuCode;
         private final int listingVersionNo;
         private final long quantity;
@@ -700,7 +712,8 @@ public class FulfillmentAcceptanceLifecycle {
         private long receiptIdHint;
 
         public PreparedAcceptance(Long projectId, Long buyerId, String buyerCode, String buyerName,
-                                  String buyerOrderNo, String buyerUserId, String buyerSkuCode,
+                                  String buyerOrderNo, String buyerUserId, String fulfillmentAccountValue,
+                                  String buyerSkuCode,
                                   int listingVersionNo, long quantity, String targetSchemaCode,
                                   int targetSchemaVersion, byte[] targetCiphertext, byte[] targetDigest,
                                   String targetKeyVersion, boolean targetValid,
@@ -712,6 +725,7 @@ public class FulfillmentAcceptanceLifecycle {
             this.buyerName = buyerName;
             this.buyerOrderNo = buyerOrderNo;
             this.buyerUserId = buyerUserId;
+            this.fulfillmentAccountValue = fulfillmentAccountValue;
             this.buyerSkuCode = buyerSkuCode;
             this.listingVersionNo = listingVersionNo;
             this.quantity = quantity;
@@ -734,6 +748,7 @@ public class FulfillmentAcceptanceLifecycle {
         public String buyerName() { return buyerName; }
         public String buyerOrderNo() { return buyerOrderNo; }
         public String buyerUserId() { return buyerUserId; }
+        public String fulfillmentAccountValue() { return fulfillmentAccountValue; }
         public String buyerSkuCode() { return buyerSkuCode; }
         public int listingVersionNo() { return listingVersionNo; }
         public long quantity() { return quantity; }

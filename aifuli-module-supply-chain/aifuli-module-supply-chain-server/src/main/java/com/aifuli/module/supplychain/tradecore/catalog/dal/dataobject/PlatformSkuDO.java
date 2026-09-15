@@ -1,6 +1,8 @@
 package com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject;
 
+import com.baomidou.mybatisplus.annotation.FieldStrategy;
 import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import com.baomidou.mybatisplus.annotation.Version;
@@ -39,12 +41,28 @@ public class PlatformSkuDO {
     private Long maxQuantity;
     /** 是否启用每人限购：1启用，0停用 */
     private Boolean userLimitEnabled;
-    /** 每人限购周期：LIFETIME终身，YEAR每年，MONTH每月，WEEK每周，DAY每天 */
+    /**
+     * 每人限购周期：LIFETIME终身，YEAR每年，MONTH每月，WEEK每周，DAY每天。
+     * 关闭限购时必须把周期写成 NULL 以满足 CHECK，因此更新策略为 ALWAYS。
+     */
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private String userLimitPeriod;
     /** 每人每周期最多购买数量 */
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private Long userLimitQuantity;
     /** 是否启用每订单限购：1启用，0停用 */
     private Boolean orderLimitEnabled;
+    /** 是否启用绑定手机号限购：1启用，0停用 */
+    private Boolean phoneBindLimitEnabled;
+    /**
+     * 绑定手机号限购周期：LIFETIME终身，YEAR每年，MONTH每月，WEEK每周，DAY每天。
+     * 关闭限购时必须把周期写成 NULL 以满足 CHECK，因此更新策略为 ALWAYS。
+     */
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
+    private String phoneBindLimitPeriod;
+    /** 同一履约手机号每周期最多购买数量 */
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
+    private Long phoneBindLimitQuantity;
     private String currency;
     private String targetSchemaCode;
     private Integer targetSchemaVersion;

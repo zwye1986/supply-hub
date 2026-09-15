@@ -132,6 +132,10 @@ public interface SupplyChainErrorCodeConstants {
             error(1_050_001_108, "当前项目下该用户购买数量已达到SKU周期限购上限");
     ErrorCode ORDER_PURCHASE_LIMIT_EXCEEDED =
             error(1_050_001_109, "本次购买数量超过SKU每订单限购上限");
+    ErrorCode PHONE_BIND_PURCHASE_LIMIT_EXCEEDED =
+            error(1_050_001_110, "当前项目下该履约手机号购买数量已达到SKU周期限购上限");
+    ErrorCode PHONE_BIND_TARGET_REQUIRED =
+            error(1_050_001_111, "绑定手机号限购要求履约目标为手机号");
 
     /** 订单详情不可用只作为成功响应中的详情标记，不作为 CommonResult 失败码。 */
     String DETAIL_UNAVAILABLE = "DETAIL_UNAVAILABLE";
@@ -187,6 +191,8 @@ public interface SupplyChainErrorCodeConstants {
             entry(PRODUCT_PURCHASE_LIMIT_CONFIG_INVALID, RetryDirective.DO_NOT_RETRY),
             entry(USER_PURCHASE_LIMIT_EXCEEDED, RetryDirective.RETRY_SAME_KEY_AFTER_CONDITION_CHANGE),
             entry(ORDER_PURCHASE_LIMIT_EXCEEDED, RetryDirective.DO_NOT_RETRY),
+            entry(PHONE_BIND_PURCHASE_LIMIT_EXCEEDED, RetryDirective.RETRY_SAME_KEY_AFTER_CONDITION_CHANGE),
+            entry(PHONE_BIND_TARGET_REQUIRED, RetryDirective.DO_NOT_RETRY),
             entry(SUPPLIER_NOT_FOUND, RetryDirective.DO_NOT_RETRY),
             entry(SUPPLIER_STATUS_CONFLICT, RetryDirective.DO_NOT_RETRY),
             entry(SUPPLIER_OPENING_ALREADY_DONE, RetryDirective.DO_NOT_RETRY),

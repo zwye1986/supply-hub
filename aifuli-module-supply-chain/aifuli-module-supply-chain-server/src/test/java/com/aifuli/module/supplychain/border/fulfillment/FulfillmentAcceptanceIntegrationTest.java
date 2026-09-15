@@ -169,6 +169,9 @@ class FulfillmentAcceptanceIntegrationTest {
             assertThat(jdbc.queryForObject(
                     "SELECT project_id FROM sc_supply_chain_order WHERE buyer_order_no=?",
                     Long.class, first.getBuyerOrderNo())).isEqualTo(projectAId);
+            assertThat(jdbc.queryForObject(
+                    "SELECT fulfillment_account_value FROM sc_supply_chain_order WHERE buyer_order_no=?",
+                    String.class, first.getBuyerOrderNo())).isEqualTo("13800138000");
 
             AcceptFulfillmentReqDTO conflicting = copy(first);
             conflicting.setBuyerUserId("another-user");
@@ -315,6 +318,42 @@ class FulfillmentAcceptanceIntegrationTest {
                     response.getReceiptStatus() == FulfillmentReceiptStatus.REJECTED_RETRYABLE)
                     .hasSize(9).allSatisfy(FulfillmentAcceptanceIntegrationTest::assertUserLimitRejected);
 
+            configurePhoneBindDailyLimit(context, 1L);
+            AcceptFulfillmentReqDTO phoneFirst = request("C-PHONE-BIND-A", 2L);
+            phoneFirst.setBuyerUserId("13800138000");
+            phoneFirst.setTarget(mobileTarget("13700137000"));
+            assertThat(facade.acceptFulfillment(phoneFirst).getReceiptStatus())
+                    .isEqualTo(FulfillmentReceiptStatus.ACCEPTED);
+            assertThat(jdbc.queryForObject(
+                    "SELECT fulfillment_account_value FROM sc_supply_chain_order WHERE buyer_order_no=?",
+                    String.class, "C-PHONE-BIND-A")).isEqualTo("13700137000");
+
+            AcceptFulfillmentReqDTO phoneShared = request("C-PHONE-BIND-B", 2L);
+            phoneShared.setBuyerUserId("13900139000");
+            phoneShared.setTarget(mobileTarget("13700137000"));
+            assertPhoneBindLimitRejected(facade.acceptFulfillment(phoneShared));
+
+            AcceptFulfillmentReqDTO phoneOther = request("C-PHONE-BIND-C", 2L);
+            phoneOther.setBuyerUserId("13800138000");
+            phoneOther.setTarget(mobileTarget("13600136000"));
+            assertThat(facade.acceptFulfillment(phoneOther).getReceiptStatus())
+                    .isEqualTo(FulfillmentReceiptStatus.ACCEPTED);
+            assertThat(jdbc.queryForObject(
+                    "SELECT fulfillment_account_value FROM sc_supply_chain_order WHERE buyer_order_no=?",
+                    String.class, "C-PHONE-BIND-C")).isEqualTo("13600136000");
+
+            AcceptFulfillmentReqDTO notMobile = request("C-PHONE-BIND-EXT", 2L);
+            FulfillmentTargetDTO external = new FulfillmentTargetDTO();
+            external.setValues(Map.of(
+                    FulfillmentTargetFields.ACCOUNT_TYPE, FulfillmentTargetFields.ACCOUNT_TYPE_EXTERNAL_ACCOUNT,
+                    FulfillmentTargetFields.ACCOUNT_VALUE, "ext-account-1"));
+            notMobile.setTarget(external);
+            FulfillmentAcceptanceReceiptRespDTO missingMobile = facade.acceptFulfillment(notMobile);
+            assertThat(missingMobile.getReceiptStatus()).isEqualTo(FulfillmentReceiptStatus.REJECTED_FINAL);
+            assertThat(missingMobile.getRejectionCode())
+                    .isEqualTo(AcceptanceRejectionCode.PHONE_BIND_TARGET_REQUIRED.name());
+
+            disablePhoneBindLimit(context);
             jdbc.update("DELETE FROM sc_buyer_account WHERE buyer_id = ?", fixture.buyerId());
             AcceptFulfillmentReqDTO withoutAccount = request("C-NO-ACCOUNT", 2L);
             withoutAccount.setProjectCode(PROJECT_B);
@@ -473,12 +512,16 @@ class FulfillmentAcceptanceIntegrationTest {
         request.setListingVersion(listingVersion);
         request.setQuantity(1L);
         request.setPaidAt(OffsetDateTime.now(ZoneOffset.UTC));
+        request.setTarget(mobileTarget("13800138000"));
+        return request;
+    }
+
+    private static FulfillmentTargetDTO mobileTarget(String accountValue) {
         FulfillmentTargetDTO target = new FulfillmentTargetDTO();
         target.setValues(Map.of(
                 FulfillmentTargetFields.ACCOUNT_TYPE, FulfillmentTargetFields.ACCOUNT_TYPE_MOBILE,
-                FulfillmentTargetFields.ACCOUNT_VALUE, "13800138000"));
-        request.setTarget(target);
-        return request;
+                FulfillmentTargetFields.ACCOUNT_VALUE, accountValue));
+        return target;
     }
 
     private static AcceptFulfillmentReqDTO copy(AcceptFulfillmentReqDTO source) {
@@ -576,6 +619,12 @@ class FulfillmentAcceptanceIntegrationTest {
                 .isEqualTo(AcceptanceRejectionCode.USER_PURCHASE_LIMIT_EXCEEDED.name());
     }
 
+    private static void assertPhoneBindLimitRejected(FulfillmentAcceptanceReceiptRespDTO response) {
+        assertThat(response.getReceiptStatus()).isEqualTo(FulfillmentReceiptStatus.REJECTED_RETRYABLE);
+        assertThat(response.getRejectionCode())
+                .isEqualTo(AcceptanceRejectionCode.PHONE_BIND_PURCHASE_LIMIT_EXCEEDED.name());
+    }
+
     private static void configureDailyLimit(ConfigurableApplicationContext context, long quantity) {
         PlatformSkuMapper mapper = context.getBean(PlatformSkuMapper.class);
         PlatformSkuDO sku = mapper.selectByCode("TELCO_100");
@@ -583,6 +632,27 @@ class FulfillmentAcceptanceIntegrationTest {
         sku.setUserLimitPeriod("DAY");
         sku.setUserLimitQuantity(quantity);
         sku.setOrderLimitEnabled(true);
+        assertThat(mapper.updateById(sku)).isEqualTo(1);
+    }
+
+    private static void configurePhoneBindDailyLimit(ConfigurableApplicationContext context, long quantity) {
+        PlatformSkuMapper mapper = context.getBean(PlatformSkuMapper.class);
+        PlatformSkuDO sku = mapper.selectByCode("TELCO_100");
+        sku.setUserLimitEnabled(false);
+        sku.setUserLimitPeriod(null);
+        sku.setUserLimitQuantity(null);
+        sku.setPhoneBindLimitEnabled(true);
+        sku.setPhoneBindLimitPeriod("DAY");
+        sku.setPhoneBindLimitQuantity(quantity);
+        assertThat(mapper.updateById(sku)).isEqualTo(1);
+    }
+
+    private static void disablePhoneBindLimit(ConfigurableApplicationContext context) {
+        PlatformSkuMapper mapper = context.getBean(PlatformSkuMapper.class);
+        PlatformSkuDO sku = mapper.selectByCode("TELCO_100");
+        sku.setPhoneBindLimitEnabled(false);
+        sku.setPhoneBindLimitPeriod(null);
+        sku.setPhoneBindLimitQuantity(null);
         assertThat(mapper.updateById(sku)).isEqualTo(1);
     }
 

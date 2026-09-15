@@ -204,7 +204,8 @@ public class ProductAdminController {
                 line.fulfillmentType, line.faceValue, line.marketPrice, line.suggestedSalePrice,
                 line.taxIncluded, line.taxRate, line.minQuantity, line.maxQuantity,
                 line.userLimitEnabled, line.userLimitPeriod, line.userLimitQuantity,
-                line.orderLimitEnabled, line.status)).toList();
+                line.orderLimitEnabled, line.phoneBindLimitEnabled, line.phoneBindLimitPeriod,
+                line.phoneBindLimitQuantity, line.status)).toList();
         return new SaveSpuCommand(request.spuCode, request.spuName, request.subtitle, request.brandId,
                 request.primaryCategoryId, request.secondaryCategoryIds, request.sellableCategory,
                 request.productType, request.productClassification, request.coverUrl, request.sliderImageUrls,
@@ -255,6 +256,11 @@ public class ProductAdminController {
         private String userLimitPeriod;
         @Positive @Schema(description = "每人每周期最多购买数量") private Long userLimitQuantity;
         @Schema(description = "是否启用每订单限购：1启用，0停用") private Boolean orderLimitEnabled;
+        @Schema(description = "是否启用绑定手机号限购：1启用，0停用") private Boolean phoneBindLimitEnabled;
+        @Size(max = 16)
+        @Schema(description = "绑定手机号限购周期：LIFETIME终身，YEAR每年，MONTH每月，WEEK每周，DAY每天")
+        private String phoneBindLimitPeriod;
+        @Positive @Schema(description = "同一履约手机号每周期最多购买数量") private Long phoneBindLimitQuantity;
         @Schema(description = "SKU 状态；默认继承 SPU") private Short status;
     }
 

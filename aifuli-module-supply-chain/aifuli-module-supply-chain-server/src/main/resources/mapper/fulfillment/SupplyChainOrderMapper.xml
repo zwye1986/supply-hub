@@ -22,4 +22,21 @@
           AND created_at &lt; #{endExclusive}
         </if>
     </select>
+
+    <select id="sumEffectivePhoneBindPurchaseQuantity" resultType="java.lang.Long">
+        SELECT COALESCE(SUM(quantity), 0)
+        FROM sc_supply_chain_order
+        WHERE order_type = #{orderType}
+          AND project_id = #{projectId}
+          AND fulfillment_account_value = #{fulfillmentAccountValue}
+          AND platform_sku_id = #{platformSkuId}
+          AND order_status NOT IN (#{failedStatus}, #{cancelledStatus})
+          AND aftersale_status != #{fullyRefundedStatus}
+        <if test="startInclusive != null">
+          AND created_at &gt;= #{startInclusive}
+        </if>
+        <if test="endExclusive != null">
+          AND created_at &lt; #{endExclusive}
+        </if>
+    </select>
 </mapper>
