@@ -5,6 +5,8 @@ import io.swagger.v3.core.converter.ModelConverters;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
 import org.junit.jupiter.api.Test;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -77,6 +79,21 @@ class CategoryAdminContractTest {
                     assertThat(document).as("分类 Path 参数 %s 缺少 @Parameter", parameter.getName()).isNotNull();
                     assertThat(document.description()).isNotBlank();
                 });
+    }
+
+    /** 分类保存契约必须接收并约束详情回显所需的商品类型与分类描述。 */
+    @Test
+    void categorySaveRequestDefinesProductTypeAndDescription() throws NoSuchFieldException {
+        var productType = CategoryAdminController.CategorySaveReqVO.class.getDeclaredField("productType");
+        assertThat(productType.isAnnotationPresent(NotBlank.class)).isTrue();
+        assertThat(productType.getAnnotation(Size.class).max()).isEqualTo(32);
+        assertThat(productType.getAnnotation(io.swagger.v3.oas.annotations.media.Schema.class).description())
+                .isEqualTo("商品类型编码，由sc_product_type动态维护");
+
+        var description = CategoryAdminController.CategorySaveReqVO.class.getDeclaredField("description");
+        assertThat(description.getAnnotation(Size.class).max()).isEqualTo(200);
+        assertThat(description.getAnnotation(io.swagger.v3.oas.annotations.media.Schema.class).description())
+                .isEqualTo("分类描述");
     }
 
     private record GetMappingAlias(String[] paths) {
