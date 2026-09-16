@@ -68,7 +68,7 @@ public class CategoryAdminController {
     public CommonResult<List<ManagementCategoryNode>> managementTree(
             @Parameter(description = "分类编码或名称模糊搜索", example = "电子")
             @RequestParam(required = false) String keyword,
-            @Parameter(description = "分类状态：0草稿，10启用，20停用", example = "10")
+            @Parameter(description = "分类状态：0草稿，10启用，20禁用；字典 supply_chain_category_status", example = "10")
             @RequestParam(required = false) Short status) {
         return success(queryService.managementTree(keyword, status));
     }
@@ -141,6 +141,6 @@ public class CategoryAdminController {
         private String parentCategoryCode;
         @Schema(description = "同级排序") private Integer sort;
         @Schema(description = "前端展示可见性：1显示，0隐藏") private Short visible;
-        @Schema(description = "创建状态：0草稿，10启用") private Short status;
+        @Schema(description = "创建状态：0草稿，10启用；字典 supply_chain_category_status") private Short status;
     }
 }

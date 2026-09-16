@@ -229,7 +229,7 @@ public class CategoryQueryService {
             @Schema(description = "父类目内部主键，逻辑引用本表id") Long parentId,
             @Schema(description = "同级排序") Integer sort,
             @Schema(description = "前端展示可见性: 1-显示, 0-隐藏") Short visible,
-            @Schema(description = "管理状态：0草稿，10启用，20停用，90已归档") Short status,
+            @Schema(description = "管理状态：0草稿，10启用，20禁用，90已归档；字典 supply_chain_category_status") Short status,
             @Schema(description = "自身及全部祖先均显示时为true") boolean effectiveVisible,
             @Schema(description = "未归档关联SPU数量") long productCount,
             @Schema(description = "直接子类目") List<ManagementCategoryNode> children) {
@@ -245,7 +245,7 @@ public class CategoryQueryService {
             @Schema(description = "类目层级，从1开始") Short categoryLevel,
             @Schema(description = "同级排序") Integer sort,
             @Schema(description = "前端展示可见性：1显示，0隐藏") Short visible,
-            @Schema(description = "管理状态：0草稿，10启用，20停用，90已归档") Short status,
+            @Schema(description = "管理状态：0草稿，10启用，20禁用，90已归档；字典 supply_chain_category_status") Short status,
             @Schema(description = "分类创建时间，Asia/Shanghai") LocalDateTime createdAt,
             @Schema(description = "分类最后更新时间，Asia/Shanghai") LocalDateTime updatedAt) {
     }

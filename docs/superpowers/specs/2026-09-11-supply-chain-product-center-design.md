@@ -650,6 +650,8 @@ system-server 通过追加变更集 `006-product-list-filter-dictionaries` 写�
 
 ## 5. 跨模块依赖与供销对接机制保证
 
+### 5.1 跨模块依赖收拢与供销一致性
+
 1. **跨模块依赖收拢**：
    - 抽取 `ProductDeletionValidator`，注入：
      - `SupplierOfferMapper` (`tradecore.supply`)
@@ -668,10 +670,30 @@ system-server 通过追加变更集 `006-product-list-filter-dictionaries` 写�
 5. **状态与删除拦截闭环**：
    - 平台 SPU/SKU 被停用时，外部选品池立即过滤不可选；供应商报价创建/发布、分销商品加入、采购商上架发布以及履约受理均通过 `ProductSellabilityService` 拒绝继续流转。
    - 只要有任意未归档的 `SupplierOffer`、`BuyerProduct`、`ProjectListing` 或 `BuyerListing` 引用，严禁删除。
-6. **动态商品类型一致性**：
-   - `ProductTypeValidationService` 是 `productType` 准入的唯一入口；`ProductCatalogCommandService`、`SupplierSupplyScopeService`、`BuyerAdminCommandService` 及兼容接口不得再调用 `ClosedEnums.parseRequired(ProductTypeTag.class, ...)`。
+
+### 5.2 动态商品类型一致性
+
+6. `ProductTypeValidationService` 是 `productType` 准入的唯一入口；`ProductCatalogCommandService`、`SupplierSupplyScopeService`、`BuyerAdminCommandService` 及兼容接口不得再调用 `ClosedEnums.parseRequired(ProductTypeTag.class, ...)`。
    - 新增业务关系时，`ProductTypeValidationService.requireActiveForUpdate(typeCode)` 与类型停用操作必须锁定同一 `sc_product_type` 行，避免“校验通过后并发停用”导致新关系引用已停用类型。
    - 停用类型后禁止新增 SPU 或新增供销范围；历史 SPU 与历史范围保留可读，但不得用于新增关系。重新启用后恢复可选。
+
+### 5.3 商品中心数据字典与配置变更
+
+system-server 通过追加变更集 `007-product-type-and-category-status-dictionaries` 写入以下数据字典，按字典类型以及 `dict_type + value` 幂等新增或同步已知项，不删除管理员额外数据：
+
+| 字典类型 | 字典名称 | 值 | 标签 | 颜色类型 (color_type) | 说明 |
+| --- | --- | --- | --- | --- | --- |
+| `supply_chain_product_type_status` | 商品类型状态 | `10` | 启用 | `success` | 对应 CatalogEntityStatus.ACTIVE |
+| `supply_chain_product_type_status` | 商品类型状态 | `20` | 禁用 | `danger` | 对应 CatalogEntityStatus.INACTIVE |
+| `supply_chain_category_status` | 商品分类状态 | `0` | 草稿 | `info` | 对应 CatalogEntityStatus.DRAFT |
+| `supply_chain_category_status` | 商品分类状态 | `10` | 启用 | `success` | 对应 CatalogEntityStatus.ACTIVE |
+| `supply_chain_category_status` | 商品分类状态 | `20` | 禁用 | `danger` | 对应 CatalogEntityStatus.INACTIVE |
+
+* **幂等写入与非破坏性维护**：脚本采用 `WHERE NOT EXISTS` 插入新记录，并使用 `JOIN` 关联更新既有记录的名称、标签、排序、颜色类型与备注，支持重复执行且不删除管理员手工维护的扩展项。
+* **状态码口径对齐**：
+  - 商品类型状态仅支持 `10`（启用）与 `20`（禁用），归档状态 `90` 仅作为内部逻辑删除标识，严禁作为业务选项字典暴露；彻底纠偏历史注释中误写「0草稿」的笔误。
+  - 商品分类状态支持 `0`（草稿）、`10`（启用）与 `20`（禁用）。
+  - OpenAPI/Swagger 参数描述与模型 DTO 字段必须统一补充对应字典标识 `supply_chain_product_type_status` 与 `supply_chain_category_status`。
 
 ## 6. 测试策略
 

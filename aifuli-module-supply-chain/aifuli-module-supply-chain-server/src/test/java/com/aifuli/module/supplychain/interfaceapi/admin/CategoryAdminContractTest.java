@@ -1,9 +1,12 @@
 package com.aifuli.module.supplychain.interfaceapi.admin;
 
+import com.aifuli.module.supplychain.tradecore.catalog.application.CategoryQueryService;
 import com.aifuli.module.supplychain.tradecore.catalog.application.CategoryQueryService.CategoryDetail;
+import com.aifuli.module.supplychain.tradecore.catalog.application.CategoryQueryService.ManagementCategoryNode;
 import io.swagger.v3.core.converter.ModelConverters;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
@@ -92,8 +95,51 @@ class CategoryAdminContractTest {
 
         var description = CategoryAdminController.CategorySaveReqVO.class.getDeclaredField("description");
         assertThat(description.getAnnotation(Size.class).max()).isEqualTo(200);
-        assertThat(description.getAnnotation(io.swagger.v3.oas.annotations.media.Schema.class).description())
+        assertThat(description.getAnnotation(Schema.class).description())
                 .isEqualTo("分类描述");
+    }
+
+    /**
+     * 分类管理树参数、保存请求与响应模型必须明确状态字典。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#53-商品中心数据字典与配置变更}。
+     */
+    @Test
+    @SuppressWarnings("rawtypes")
+    void categoryDocumentsStatusDictionary() throws Exception {
+        Method managementTreeMethod = Arrays.stream(CategoryAdminController.class.getDeclaredMethods())
+                .filter(method -> method.getName().equals("managementTree"))
+                .findFirst()
+                .orElseThrow();
+        Map<String, String> paramDescriptions = Arrays.stream(managementTreeMethod.getParameters())
+                .filter(p -> p.isAnnotationPresent(Parameter.class))
+                .collect(java.util.stream.Collectors.toMap(
+                        java.lang.reflect.Parameter::getName,
+                        p -> p.getAnnotation(Parameter.class).description()));
+
+        assertThat(paramDescriptions.get("status"))
+                .contains("supply_chain_category_status", "0草稿", "10启用", "20禁用");
+
+        var saveStatusField = CategoryAdminController.CategorySaveReqVO.class.getDeclaredField("status");
+        assertThat(saveStatusField.getAnnotation(Schema.class).description())
+                .contains("supply_chain_category_status");
+
+        Map<String, io.swagger.v3.oas.models.media.Schema> detailSchemas =
+                ModelConverters.getInstance().readAll(CategoryDetail.class);
+        io.swagger.v3.oas.models.media.Schema<?> detailSchema = detailSchemas.get("CategoryDetail");
+        assertThat(detailSchema).isNotNull();
+        io.swagger.v3.oas.models.media.Schema<?> detailStatusProperty =
+                (io.swagger.v3.oas.models.media.Schema<?>) detailSchema.getProperties().get("status");
+        assertThat(detailStatusProperty.getDescription())
+                .contains("supply_chain_category_status");
+
+        Map<String, io.swagger.v3.oas.models.media.Schema> managementNodeSchemas =
+                ModelConverters.getInstance().readAll(ManagementCategoryNode.class);
+        io.swagger.v3.oas.models.media.Schema<?> nodeSchema = managementNodeSchemas.get("ManagementCategoryNode");
+        assertThat(nodeSchema).isNotNull();
+        io.swagger.v3.oas.models.media.Schema<?> nodeStatusProperty =
+                (io.swagger.v3.oas.models.media.Schema<?>) nodeSchema.getProperties().get("status");
+        assertThat(nodeStatusProperty.getDescription())
+                .contains("supply_chain_category_status");
     }
 
     private record GetMappingAlias(String[] paths) {

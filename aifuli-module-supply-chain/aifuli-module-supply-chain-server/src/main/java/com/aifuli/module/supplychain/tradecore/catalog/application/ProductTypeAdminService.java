@@ -261,7 +261,7 @@ public class ProductTypeAdminService {
             @Schema(description = "商品类型名称") String typeName,
             @Schema(description = "商品类型图标地址") String iconUrl,
             @Schema(description = "展示排序值，越小越靠前") Integer sort,
-            @Schema(description = "管理状态：10启用，20停用，90已归档") Short status,
+            @Schema(description = "管理状态：10启用，20禁用，90已归档；字典 supply_chain_product_type_status") Short status,
             @Schema(description = "商品类型详细描述") String description,
             @Schema(description = "类型内部备注与说明") String remark,
             @Schema(description = "引用该类型的未归档SPU数量（兼容旧接口，等同于spuCount，新接入方请使用spuCount）") long productCount,

@@ -238,6 +238,41 @@ class ProductCenterContractTest {
                 .contains("CARD_CODE_SECRET", "DIRECT_RECHARGE", "supply_chain_fulfillment_type");
     }
 
+    /**
+     * 商品类型管理端 OpenAPI 参数与模型字段必须明确状态口径及对应字典类型，且去除历史笔误（如0草稿）。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#53-商品中心数据字典与配置变更}。
+     */
+    @Test
+    @SuppressWarnings("rawtypes")
+    void productTypeDocumentsStatusDictionary() throws Exception {
+        Method pageMethod = Arrays.stream(ProductTypeAdminController.class.getDeclaredMethods())
+                .filter(method -> method.getName().equals("page"))
+                .findFirst()
+                .orElseThrow();
+        Map<String, String> paramDescriptions = Arrays.stream(pageMethod.getParameters())
+                .filter(p -> p.isAnnotationPresent(Parameter.class))
+                .collect(java.util.stream.Collectors.toMap(
+                        java.lang.reflect.Parameter::getName,
+                        p -> p.getAnnotation(Parameter.class).description()));
+
+        assertThat(paramDescriptions.get("status"))
+                .contains("supply_chain_product_type_status", "10启用", "20禁用")
+                .doesNotContain("0草稿", "草稿");
+
+        var saveStatusField = ProductTypeAdminController.ProductTypeSaveReqVO.class.getDeclaredField("status");
+        assertThat(saveStatusField.getAnnotation(Schema.class).description())
+                .contains("supply_chain_product_type_status");
+
+        Map<String, io.swagger.v3.oas.models.media.Schema> schemas =
+                ModelConverters.getInstance().readAll(ProductTypeView.class);
+        io.swagger.v3.oas.models.media.Schema<?> productTypeViewSchema = schemas.get("ProductTypeView");
+        assertThat(productTypeViewSchema).isNotNull();
+        io.swagger.v3.oas.models.media.Schema<?> statusProperty =
+                (io.swagger.v3.oas.models.media.Schema<?>) productTypeViewSchema.getProperties().get("status");
+        assertThat(statusProperty.getDescription())
+                .contains("supply_chain_product_type_status");
+    }
+
     @Test
     void legacyMasterDataCatalogEndpointsAreDeprecated() throws NoSuchMethodException {
         Method legacyBrandMethod = M1MasterDataAdminController.class.getMethod(
