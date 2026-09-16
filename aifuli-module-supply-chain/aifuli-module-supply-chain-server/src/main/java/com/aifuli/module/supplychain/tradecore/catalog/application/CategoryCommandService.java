@@ -58,8 +58,10 @@ public class CategoryCommandService {
     public String create(CreateCommand command) {
         ProductCategoryDO parent = hasText(command.parentCategoryCode())
                 ? requireLive(command.parentCategoryCode(), true) : null;
-        String productType = hasText(command.productType())
-                ? productTypeValidationService.requireActiveForUpdate(command.productType()).getTypeCode() : null;
+        List<String> validatedTypeCodes = validateAndResolveTypeCodes(command.typeCodes(), command.productType());
+        String productType = validatedTypeCodes.isEmpty()
+                ? (hasText(command.productType()) ? command.productType().trim() : null)
+                : validatedTypeCodes.get(0);
         String code = hasText(command.categoryCode()) ? command.categoryCode().trim()
                 : businessNoGenerator.next(BusinessNoPrefixes.CAT);
         short level = checkedLevel(parent == null ? ROOT_LEVEL : parent.getCategoryLevel().intValue() + 1);
@@ -68,7 +70,9 @@ public class CategoryCommandService {
         LocalDateTime now = databaseClock.now();
         ProductCategoryDO category = ProductCategoryDO.builder()
                 .categoryCode(code).categoryName(command.categoryName().trim())
-                .productType(productType).description(trimToNull(command.description()))
+                .productType(productType)
+                .typeCodes(validatedTypeCodes.isEmpty() ? null : validatedTypeCodes)
+                .description(trimToNull(command.description()))
                 .parentId(parent == null ? null : parent.getId()).categoryLevel(level)
                 .sort(command.sort() == null ? 0 : command.sort())
                 .visible(command.visible() == null ? CategoryVisibility.VISIBLE.getCode() : command.visible())
@@ -76,8 +80,8 @@ public class CategoryCommandService {
                 .version(0L).createdBy(command.operatorId()).createdAt(now)
                 .updatedBy(command.operatorId()).updatedAt(now).build();
         insertOrDuplicate(category);
-        log.info("创建商品分类 categoryCode={} productType={} parentCategoryCode={} operatorId={}",
-                code, productType, command.parentCategoryCode(), command.operatorId());
+        log.info("创建商品分类 categoryCode={} productType={} typeCodes={} parentCategoryCode={} operatorId={}",
+                code, productType, validatedTypeCodes, command.parentCategoryCode(), command.operatorId());
         return code;
     }
 
@@ -89,12 +93,21 @@ public class CategoryCommandService {
      */
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public void update(String categoryCode, UpdateCommand command) {
-        log.info("更新商品分类 categoryCode={} productType={} parentCategoryCode={} operatorId={}",
-                categoryCode, command.productType(), command.parentCategoryCode(), command.operatorId());
+        log.info("更新商品分类 categoryCode={} productType={} typeCodes={} parentCategoryCode={} operatorId={}",
+                categoryCode, command.productType(), command.typeCodes(), command.parentCategoryCode(), command.operatorId());
         ProductCategoryDO category = requireLive(categoryCode, true);
-        String productType = hasText(command.productType())
-                ? productTypeValidationService.requireActiveForUpdate(command.productType()).getTypeCode()
-                : category.getProductType();
+        boolean hasExplicitType = (command.typeCodes() != null && !command.typeCodes().isEmpty()) || hasText(command.productType());
+        List<String> validatedTypeCodes;
+        String productType;
+        if (hasExplicitType) {
+            validatedTypeCodes = validateAndResolveTypeCodes(command.typeCodes(), command.productType());
+            productType = validatedTypeCodes.isEmpty()
+                    ? (hasText(command.productType()) ? command.productType().trim() : null)
+                    : validatedTypeCodes.get(0);
+        } else {
+            validatedTypeCodes = category.getTypeCodes();
+            productType = category.getProductType();
+        }
         boolean moveParent = command.parentCategoryCode() != null;
         ProductCategoryDO parent = moveParent && hasText(command.parentCategoryCode())
                 ? requireLive(command.parentCategoryCode(), true) : null;
@@ -113,6 +126,7 @@ public class CategoryCommandService {
         requireNameAvailableUnderParent(command.categoryName().trim(), targetParentId, category.getId());
         category.setCategoryName(command.categoryName().trim());
         category.setProductType(productType);
+        category.setTypeCodes(validatedTypeCodes);
         category.setDescription(trimToNull(command.description()));
         category.setParentId(targetParentId);
         category.setCategoryLevel(newLevel);
@@ -267,6 +281,25 @@ public class CategoryCommandService {
         if (count != 1) throw exception(PRODUCT_CONCURRENT_UPDATE);
     }
 
+    private List<String> validateAndResolveTypeCodes(List<String> typeCodes, String productType) {
+        List<String> rawCodes = new ArrayList<>();
+        if (typeCodes != null && !typeCodes.isEmpty()) {
+            rawCodes.addAll(typeCodes);
+        } else if (hasText(productType)) {
+            rawCodes.add(productType);
+        }
+        List<String> validated = new ArrayList<>();
+        for (String raw : rawCodes) {
+            if (hasText(raw)) {
+                var typeDO = productTypeValidationService.requireActiveForUpdate(raw);
+                if (!validated.contains(typeDO.getTypeCode())) {
+                    validated.add(typeDO.getTypeCode());
+                }
+            }
+        }
+        return validated;
+    }
+
     private static boolean hasText(String value) {
         return value != null && !value.isBlank();
     }
@@ -278,12 +311,27 @@ public class CategoryCommandService {
         return value.trim();
     }
 
-    public record CreateCommand(String categoryCode, String categoryName, String productType, String description,
+    public record CreateCommand(String categoryCode, String categoryName, String productType,
+                                List<String> typeCodes, String description,
                                 String parentCategoryCode, Integer sort, Short visible, Short status,
                                 Long operatorId) {
+        public CreateCommand(String categoryCode, String categoryName, String productType, String description,
+                             String parentCategoryCode, Integer sort, Short visible, Short status,
+                             Long operatorId) {
+            this(categoryCode, categoryName, productType,
+                    hasText(productType) ? List.of(productType) : null,
+                    description, parentCategoryCode, sort, visible, status, operatorId);
+        }
     }
 
-    public record UpdateCommand(String categoryName, String productType, String description,
-                                String parentCategoryCode, Integer sort, Short visible, Long operatorId) {
+    public record UpdateCommand(String categoryName, String productType, List<String> typeCodes,
+                                String description, String parentCategoryCode, Integer sort, Short visible,
+                                Long operatorId) {
+        public UpdateCommand(String categoryName, String productType, String description,
+                             String parentCategoryCode, Integer sort, Short visible, Long operatorId) {
+            this(categoryName, productType,
+                    hasText(productType) ? List.of(productType) : null,
+                    description, parentCategoryCode, sort, visible, operatorId);
+        }
     }
 }

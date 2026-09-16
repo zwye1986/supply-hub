@@ -136,6 +136,8 @@ public interface SupplyChainErrorCodeConstants {
             error(1_050_001_110, "当前项目下该履约手机号购买数量已达到SKU周期限购上限");
     ErrorCode PHONE_BIND_TARGET_REQUIRED =
             error(1_050_001_111, "绑定手机号限购要求履约目标为手机号");
+    ErrorCode CATEGORY_PRODUCT_TYPE_REQUIRED =
+            error(1_050_001_112, "商品类型不能为空");
 
     /** 订单详情不可用只作为成功响应中的详情标记，不作为 CommonResult 失败码。 */
     String DETAIL_UNAVAILABLE = "DETAIL_UNAVAILABLE";
@@ -251,7 +253,8 @@ public interface SupplyChainErrorCodeConstants {
             entry(PRODUCT_CURRENCY_INVALID, RetryDirective.DO_NOT_RETRY),
             entry(SUPPLY_CHAIN_ORDER_NOT_FOUND, RetryDirective.DO_NOT_RETRY),
             entry(ORDER_QUERY_TIME_RANGE_INVALID, RetryDirective.DO_NOT_RETRY),
-            entry(BRAND_LEGACY_API_DEPRECATED, RetryDirective.DO_NOT_RETRY));
+            entry(BRAND_LEGACY_API_DEPRECATED, RetryDirective.DO_NOT_RETRY),
+            entry(CATEGORY_PRODUCT_TYPE_REQUIRED, RetryDirective.DO_NOT_RETRY));
 
     static RetryDirective retryDirective(int errorCode) {
         return RETRY_DIRECTIVES.getOrDefault(errorCode, RetryDirective.DO_NOT_RETRY);

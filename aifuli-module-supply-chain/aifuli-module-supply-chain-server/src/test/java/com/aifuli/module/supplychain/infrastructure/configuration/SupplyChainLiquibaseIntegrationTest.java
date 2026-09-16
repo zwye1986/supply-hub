@@ -109,6 +109,7 @@ class SupplyChainLiquibaseIntegrationTest {
                         "sc_platform_sku.description",
                         "sc_product_category.product_type",
                         "sc_product_category.description",
+                        "sc_product_category.type_codes",
                         "sc_fulfillment_acceptance_receipt.project_id",
                         "sc_supply_chain_order.project_id",
                         "sc_supply_chain_order.pricing_quote_id",
@@ -132,7 +133,7 @@ class SupplyChainLiquibaseIntegrationTest {
                 "expire_at:DATETIME:-:3:NO");
         assertThat(firstStartup.projectAuthNoncePrimaryKeyColumns())
                 .containsExactly("app_id", "nonce");
-        assertThat(firstStartup.changeSetCount()).isEqualTo(37L);
+        assertThat(firstStartup.changeSetCount()).isEqualTo(38L);
         assertThat(firstStartup.uniqueIndexes())
                 .contains("sc_instore_payment_flow.uk_sc_instore_flow_order",
                         "sc_instore_channel_user_binding.uk_sc_instore_user_binding_project",

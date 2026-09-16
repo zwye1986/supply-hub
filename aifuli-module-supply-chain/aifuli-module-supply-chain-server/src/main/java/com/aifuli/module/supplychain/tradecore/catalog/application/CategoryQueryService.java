@@ -120,10 +120,14 @@ public class CategoryQueryService {
         Map<Long, ManagementCategoryNode> byId = new LinkedHashMap<>();
         for (ProductCategoryDO row : rows) {
             if (retainedIds.contains(row.getId())) {
+                List<String> typeCodes = resolveTypeCodes(row);
+                String productType = resolveProductType(row, typeCodes);
                 byId.put(row.getId(), new ManagementCategoryNode(row.getId(), row.getCategoryCode(),
-                        row.getCategoryName(), row.getCategoryLevel(), row.getParentId(), row.getSort(),
+                        row.getCategoryName(), productType, typeCodes, row.getDescription(), row.getDescription(),
+                        row.getCategoryLevel(), row.getParentId(), row.getSort(),
                         row.getVisible(), row.getStatus(), effectiveVisible(row, rowById, visibilityCache),
-                        productCounts.getOrDefault(row.getId(), 0L), new ArrayList<>()));
+                        productCounts.getOrDefault(row.getId(), 0L), row.getCreatedAt(), row.getUpdatedAt(),
+                        new ArrayList<>()));
             }
         }
         log.info("查询商品分类管理树 totalRows={}, retainedRows={}", rows.size(), retainedIds.size());
@@ -152,9 +156,29 @@ public class CategoryQueryService {
         if (category == null || category.getStatus() == CatalogEntityStatus.ARCHIVED.getCode()) {
             throw exception(CATEGORY_NOT_FOUND);
         }
-        return new CategoryDetail(category.getCategoryCode(), category.getCategoryName(), category.getProductType(),
-                category.getDescription(), category.getParentId(), category.getCategoryLevel(), category.getSort(),
-                category.getVisible(), category.getStatus(), category.getCreatedAt(), category.getUpdatedAt());
+        List<String> typeCodes = resolveTypeCodes(category);
+        String productType = resolveProductType(category, typeCodes);
+        return new CategoryDetail(category.getCategoryCode(), category.getCategoryName(), productType,
+                typeCodes, category.getDescription(), category.getDescription(), category.getParentId(),
+                category.getCategoryLevel(), category.getSort(), category.getVisible(), category.getStatus(),
+                category.getCreatedAt(), category.getUpdatedAt());
+    }
+
+    private static List<String> resolveTypeCodes(ProductCategoryDO category) {
+        if (category.getTypeCodes() != null && !category.getTypeCodes().isEmpty()) {
+            return category.getTypeCodes();
+        }
+        if (category.getProductType() != null && !category.getProductType().isBlank()) {
+            return List.of(category.getProductType().trim());
+        }
+        return List.of();
+    }
+
+    private static String resolveProductType(ProductCategoryDO category, List<String> typeCodes) {
+        if (category.getProductType() != null && !category.getProductType().isBlank()) {
+            return category.getProductType().trim();
+        }
+        return (typeCodes != null && !typeCodes.isEmpty()) ? typeCodes.get(0) : null;
     }
 
     /**
@@ -225,6 +249,10 @@ public class CategoryQueryService {
             @Schema(description = "商品类目内部主键") Long id,
             @Schema(description = "平台类目永久编码") String categoryCode,
             @Schema(description = "类目名称") String categoryName,
+            @Schema(description = "商品类型编码，由sc_product_type动态维护（兼容单值）") String productType,
+            @Schema(description = "商品类型编码列表，由sc_product_type动态维护") List<String> typeCodes,
+            @Schema(description = "分类描述") String description,
+            @Schema(description = "分类描述/备注") String remark,
             @Schema(description = "类目层级，从1开始") Short categoryLevel,
             @Schema(description = "父类目内部主键，逻辑引用本表id") Long parentId,
             @Schema(description = "同级排序") Integer sort,
@@ -232,6 +260,8 @@ public class CategoryQueryService {
             @Schema(description = "管理状态：0草稿，10启用，20禁用，90已归档；字典 supply_chain_category_status") Short status,
             @Schema(description = "自身及全部祖先均显示时为true") boolean effectiveVisible,
             @Schema(description = "未归档关联SPU数量") long productCount,
+            @Schema(description = "创建时间，Asia/Shanghai") LocalDateTime createdAt,
+            @Schema(description = "更新时间，Asia/Shanghai") LocalDateTime updatedAt,
             @Schema(description = "直接子类目") List<ManagementCategoryNode> children) {
     }
 
@@ -239,8 +269,10 @@ public class CategoryQueryService {
     public record CategoryDetail(
             @Schema(description = "平台类目永久编码") String categoryCode,
             @Schema(description = "类目名称") String categoryName,
-            @Schema(description = "商品类型编码，由sc_product_type动态维护") String productType,
+            @Schema(description = "商品类型编码，由sc_product_type动态维护（兼容单值）") String productType,
+            @Schema(description = "商品类型编码列表，由sc_product_type动态维护") List<String> typeCodes,
             @Schema(description = "分类描述") String description,
+            @Schema(description = "分类描述/备注") String remark,
             @Schema(description = "父类目内部主键，逻辑引用本表id") Long parentId,
             @Schema(description = "类目层级，从1开始") Short categoryLevel,
             @Schema(description = "同级排序") Integer sort,

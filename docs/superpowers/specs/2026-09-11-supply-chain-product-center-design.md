@@ -253,6 +253,9 @@ ALTER TABLE sc_platform_sku
 完整 SKU 行语义处理：字段传空即清空原值。`detail_image_urls` 使用 MyBatis JSON TypeHandler 显式映射为
 有序字符串列表。该变更不新增库存列、不改变管理列表中 `totalInventory` 的既有投影。
 
+| **d26** | **分类商品类型与描述** | `sc_product_category` 补充 `product_type` 与 `description`。 | 补齐分类编辑回显 |
+| **d27** | **分类多商品类型与原型字段对齐** | 严格对齐管理端原型与前端分类表单：<br>1. `sc_product_category` 增加 `type_codes JSON`，存储商品类型编码列表；原 `product_type` 保留作为首选/主商品类型，并通过 `idx_sc_category_product_type` 保持高效检索。<br>2. 保存请求 `CategorySaveReqVO` 接收原型字段 `typeCodes: string[]`（商品类型多选）与 `remark: string`（描述别名），同时完全兼容存量单值 `productType` 与 `description`；在保存时至少提供一项商品类型，并通过 `ProductTypeValidationService` 统一校验所有类型均为启用状态。<br>3. 详情 DTO `CategoryDetail` 与管理树节点 `ManagementCategoryNode` 双向回显 `typeCodes` 与 `productType`、`remark` 与 `description`，彻底消除前后端参数名与单多选分歧。变更由 `037` 变更集执行。 | 支撑分类管理原型多选商品类型与描述回显 |
+
 ### 2.13 分类商品类型与描述（036 Changeset）
 
 ```sql
@@ -269,9 +272,28 @@ ALTER TABLE sc_product_category
 人工编辑后的分类一定绑定一个启用商品类型。`description` 是最长 200 字的可选展示说明，空白值统一保存为
 `NULL`。详情 DTO 的两个字段说明与上述 DDL COMMENT 保持一致。
 
+### 2.14 分类多商品类型与原型别名（037 Changeset）
+
+```sql
+ALTER TABLE sc_product_category
+    ADD COLUMN type_codes JSON NULL
+        COMMENT '商品类型编码列表(JSON数组)，由sc_product_type动态维护' AFTER product_type;
+
+UPDATE sc_product_category
+    SET type_codes = JSON_ARRAY(product_type)
+    WHERE product_type IS NOT NULL AND type_codes IS NULL;
+```
+
+针对管理端原型及前端表单中商品类型多选（`typeCodes`）与分类描述（`remark`）：
+1. `sc_product_category` 增加 `type_codes JSON`，使用 MyBatis Plus `JacksonTypeHandler` 映射为有序字符串列表。
+2. 保存请求 `CategorySaveReqVO` 统一接收 `typeCodes` 与 `productType`（任一非空即可），以及 `remark` 与 `description`；`productType` 字段解除强制 `@NotBlank`，避免多选参数 `typeCodes` 提交时因 `productType` 缺失导致 400 校验错误。
+3. `CategoryCommandService` 在事务内遍历校验 `typeCodes` 中的每个商品类型均存在且处于 `ACTIVE` 状态；`product_type` 冗余持久化为列表首项，保证存量基于 `product_type` 的查询与索引不受影响。
+4. `CategoryDetail` 与 `ManagementCategoryNode` 同时输出 `typeCodes` 与 `productType`，以及 `description` 与 `remark`，实现原型参数与存量 API 100% 双向兼容。
+
 ---
 
 ## 3. 核心业务规则与状态机设计
+
 
 ### 3.1 SPU 与 SKU 状态解耦与有效可售计算
 * **物理状态 (`status`)**：使用代码中现有标准枚举 [`CatalogEntityStatus`](file:///Users/mac/Documents/codeSpace/supply-hub/aifuli-module-supply-chain/aifuli-module-supply-chain-server/src/main/java/com/aifuli/module/supplychain/tradecore/catalog/domain/CatalogEntityStatus.java)：
@@ -329,9 +351,10 @@ ALTER TABLE sc_product_category
   - 若存在有效子分类（`status != 90`），拒绝删除（`CATEGORY_HAS_CHILDREN`）。
   - 若存在未归档 SPU 引用该分类（作为 `primary_category_id` 或在 `secondary_category_ids` 中），拒绝删除（`CATEGORY_HAS_PRODUCTS`）。
 * **商品类型与描述**：
-  - 新增、编辑分类时必须提交 `productType`，其值是 `sc_product_type.type_code`，不得使用类型名称或 system 字典值替代；仅启用类型可建立新的分类关联。
-  - 已绑定类型后即使类型被停用，分类详情仍按原编码回显；后续再次编辑分类时必须选择当前启用类型。
-  - `description` 最长 200 字，空字符串与纯空白统一保存为 `NULL`；历史数据的 `productType`、`description` 为空时原样返回 `null`，不得推断填充。
+  - 新增、编辑分类时可提交原型多选参数 `typeCodes`（或兼容单选 `productType`，任一提供即可，至少包含一个有效且启用的商品类型编码，由 `sc_product_type` 维护）；仅启用类型可建立新的分类关联。
+  - 多选类型持久化至 `sc_product_category.type_codes`（JSON 数组），首个类型冗余同步至 `product_type` 保障存量索引与查询；编辑时不传或传空数组保持原商品类型不变。
+  - 已绑定类型后即使类型被停用，分类详情仍按原编码回显；后续再次显式变更分类商品类型时必须选择当前启用类型。
+  - `description` 与原型别名 `remark` 互为别名兼容，最长 200 字，空字符串与纯空白统一保存为 `NULL`；历史数据的 `productType`、`typeCodes`、`description` 为空时原样返回 `null`，不得推断填充。
 
 ### 3.4 列表 Tab 复合解构映射与动态来源
 PRD 8.4.1 的列表 Tab 支持从 `GET /supply-chain/product-types` 动态拉取卡片标签。普通类型以 `typeCode` 作为 `tabCode` 并直接过滤 `productType`；仅以下复合 Tab 需要服务端解构：
@@ -606,10 +629,10 @@ system-server 通过追加变更集 `006-product-list-filter-dictionaries` 写�
 后端由新建的 `CategoryCommandService`（写）与已有的 `CategoryQueryService`（读）支撑。
 
 * `GET /supply-chain/categories`：保留存量启用类目选项树契约，仅返回 `status=ACTIVE` 的节点。
-* `GET /supply-chain/categories/management-tree`：商品中心管理树，支持 `keyword`（编码或名称模糊匹配）与 `status`（分类状态）入参；采用「树枝保留模式」（子节点命中筛选条件时向上保留所有祖先节点以维持树形层级结构，剪除非命中且无命中后代的分支），返回符合条件的未归档节点及 `children`、关联商品计数、`visible`、`status`、`effectiveVisible`。
-* `GET /supply-chain/categories/{categoryCode}`：分类详情，返回专用 `CategoryDetail`，其中 `productType` 为动态商品类型编码、`description` 为分类描述；不得直接暴露数据库 DO、乐观锁版本或操作人 ID。
-* `POST /supply-chain/categories`：创建分类（支持自动生成 `CAT_`+ULID、上级类目挂载、启用商品类型绑定、分类描述、同一父级下名称唯一校验、显示控制）。
-* `PUT /supply-chain/categories/{categoryCode}`：更新分类（名称、商品类型、分类描述、排序、显示状态）。`parentCategoryCode` 按 3.3 节三态语义处理：`null` 不变更父级、`""` 显式挂到根、非空编码挂到该父级；仅在实际变更父级时校验防循环挂载，并在事务内递归重算整棵子树的 `category_level`。同一父级下名称唯一校验对所有更新请求生效。
+* `GET /supply-chain/categories/management-tree`：商品中心管理树，支持 `keyword`（编码或名称模糊匹配）与 `status`（分类状态）入参；采用「树枝保留模式」（子节点命中筛选条件时向上保留所有祖先节点以维持树形层级结构，剪除非命中且无命中后代的分支），返回符合条件的未归档节点及 `children`、关联商品计数、`visible`、`status`、`effectiveVisible`，节点扩展回显 `productType`、`typeCodes`、`description`、`remark`、`createdAt` 与 `updatedAt`（支撑原型表格「更新时间」列动态渲染）。
+* `GET /supply-chain/categories/{categoryCode}`：分类详情，返回专用 `CategoryDetail`，同时返回 `productType`、`typeCodes`（商品类型编码数组）、`description` 与 `remark`；不得直接暴露数据库 DO、乐观锁版本或操作人 ID。
+* `POST /supply-chain/categories`：创建分类（支持自动生成 `CAT_`+ULID、上级类目挂载、原型多选 `typeCodes` 与单选 `productType` 兼容、`remark` 与 `description` 描述兼容、启用商品类型绑定校验、同一父级下名称唯一校验、显示控制）。
+* `PUT /supply-chain/categories/{categoryCode}`：更新分类（名称、商品类型多选/单选、分类描述/备注、排序、显示状态）。`parentCategoryCode` 按 3.3 节三态语义处理：`null` 不变更父级、`""` 显式挂到根、非空编码挂到该父级；仅在实际变更父级时校验防循环挂载，并在事务内递归重算整棵子树的 `category_level`。同一父级下名称唯一校验对所有更新请求生效。
 * `PUT /supply-chain/categories/{categoryCode}/status`：启用/停用分类状态。
 * `DELETE /supply-chain/categories/{categoryCode}`：删除分类（强校验子类目与未归档 SPU 引用）。
 

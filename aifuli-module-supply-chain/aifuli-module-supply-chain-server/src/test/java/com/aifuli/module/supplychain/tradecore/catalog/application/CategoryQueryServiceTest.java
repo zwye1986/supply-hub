@@ -112,7 +112,29 @@ class CategoryQueryServiceTest {
         CategoryQueryService.CategoryDetail detail = service.detail("CAT_EQUITY_CARD");
 
         assertThat(detail).isEqualTo(new CategoryQueryService.CategoryDetail(
-                "CAT_EQUITY_CARD", "权益卡券", "EQUITY_PRODUCT", "权益卡券分类", 1L, (short) 3, 20,
+                "CAT_EQUITY_CARD", "权益卡券", "EQUITY_PRODUCT", List.of("EQUITY_PRODUCT"), "权益卡券分类", "权益卡券分类", 1L, (short) 3, 20,
+                CategoryVisibility.VISIBLE.getCode(), CatalogEntityStatus.ACTIVE.getCode(), createdAt, updatedAt));
+    }
+
+    @Test
+    void detailMapsMultipleTypeCodesAndRemark() {
+        LocalDateTime createdAt = LocalDateTime.of(2026, 9, 11, 10, 0);
+        LocalDateTime updatedAt = LocalDateTime.of(2026, 9, 12, 11, 30);
+        ProductCategoryDO row = category(7L, 1L, (short) 3, CategoryVisibility.VISIBLE,
+                "CAT_MULTI", "多类型分类");
+        row.setSort(10);
+        row.setProductType("EQUITY_PRODUCT");
+        row.setTypeCodes(List.of("EQUITY_PRODUCT", "MOVIE", "DINING"));
+        row.setDescription("分类备注说明");
+        row.setCreatedAt(createdAt);
+        row.setUpdatedAt(updatedAt);
+        when(categoryMapper.selectByCode("CAT_MULTI")).thenReturn(row);
+
+        CategoryQueryService.CategoryDetail detail = service.detail("CAT_MULTI");
+
+        assertThat(detail).isEqualTo(new CategoryQueryService.CategoryDetail(
+                "CAT_MULTI", "多类型分类", "EQUITY_PRODUCT", List.of("EQUITY_PRODUCT", "MOVIE", "DINING"),
+                "分类备注说明", "分类备注说明", 1L, (short) 3, 10,
                 CategoryVisibility.VISIBLE.getCode(), CatalogEntityStatus.ACTIVE.getCode(), createdAt, updatedAt));
     }
 
@@ -196,6 +218,32 @@ class CategoryQueryServiceTest {
         List<CategoryQueryService.ManagementCategoryNode> empty =
                 service.managementTree("不存在", (short) 99);
         assertThat(empty).isEmpty();
+    }
+
+    @Test
+    void managementTreeIncludesTypeCodesRemarkAndTimestamps() {
+        LocalDateTime createdAt = LocalDateTime.of(2026, 9, 16, 10, 0);
+        LocalDateTime updatedAt = LocalDateTime.of(2026, 9, 16, 12, 30);
+        ProductCategoryDO row = category(1L, null, (short) 1, CategoryVisibility.VISIBLE,
+                CatalogEntityStatus.ACTIVE, "CAT_1", "数码");
+        row.setProductType("EQUITY_PRODUCT");
+        row.setTypeCodes(List.of("EQUITY_PRODUCT", "MOVIE"));
+        row.setDescription("数码备注说明");
+        row.setCreatedAt(createdAt);
+        row.setUpdatedAt(updatedAt);
+        stubCategories(row);
+
+        List<CategoryQueryService.ManagementCategoryNode> roots = service.managementTree();
+
+        assertThat(roots).singleElement().satisfies(node -> {
+            assertThat(node.categoryCode()).isEqualTo("CAT_1");
+            assertThat(node.productType()).isEqualTo("EQUITY_PRODUCT");
+            assertThat(node.typeCodes()).containsExactly("EQUITY_PRODUCT", "MOVIE");
+            assertThat(node.description()).isEqualTo("数码备注说明");
+            assertThat(node.remark()).isEqualTo("数码备注说明");
+            assertThat(node.createdAt()).isEqualTo(createdAt);
+            assertThat(node.updatedAt()).isEqualTo(updatedAt);
+        });
     }
 
     private void assertCategoryNotFound(String categoryCode) {

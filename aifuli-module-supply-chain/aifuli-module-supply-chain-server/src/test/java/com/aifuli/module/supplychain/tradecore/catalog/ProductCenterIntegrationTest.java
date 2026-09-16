@@ -97,7 +97,8 @@ class ProductCenterIntegrationTest {
                     "PC_BRAND", "商品中心测试品牌", "PC品牌", null, "https://example.com/logo.png",
                     "商品中心测试品牌说明", 0, CatalogEntityStatus.ACTIVE.getCode(), 1L));
             String categoryCode = categoryService.create(new CategoryCommandService.CreateCommand(
-                    "PC_CATEGORY", "商品中心测试分类", "EQUITY_PRODUCT", "商品中心测试分类描述", null, 0, (short) 1,
+                    "PC_CATEGORY", "商品中心测试分类", null, List.of("EQUITY_PRODUCT", "MOVIE", "DINING"),
+                    "商品中心测试分类描述", null, 0, (short) 1,
                     CatalogEntityStatus.ACTIVE.getCode(), 1L));
             Long brandId = brandMapper.selectByCode(brandCode).getId();
             Long categoryId = categoryService.detail(categoryCode).getId();
@@ -106,14 +107,43 @@ class ProductCenterIntegrationTest {
             assertThat(categoryDetail.categoryCode()).isEqualTo(categoryCode);
             assertThat(categoryDetail.categoryName()).isEqualTo("商品中心测试分类");
             assertThat(categoryDetail.productType()).isEqualTo("EQUITY_PRODUCT");
+            assertThat(categoryDetail.typeCodes()).containsExactly("EQUITY_PRODUCT", "MOVIE", "DINING");
             assertThat(categoryDetail.description()).isEqualTo("商品中心测试分类描述");
+            assertThat(categoryDetail.remark()).isEqualTo("商品中心测试分类描述");
             JsonNode categoryJson = objectMapper.valueToTree(categoryDetail);
             Set<String> categoryFields = new HashSet<>();
             categoryJson.fieldNames().forEachRemaining(categoryFields::add);
             assertThat(categoryFields).containsExactlyInAnyOrder(
-                    "categoryCode", "categoryName", "productType", "description", "parentId", "categoryLevel",
-                    "sort", "visible", "status", "createdAt", "updatedAt");
+                    "categoryCode", "categoryName", "productType", "typeCodes", "description", "remark", "parentId",
+                    "categoryLevel", "sort", "visible", "status", "createdAt", "updatedAt");
             assertThat(categoryFields).doesNotContain("id", "version", "createdBy", "updatedBy");
+
+            List<CategoryQueryService.ManagementCategoryNode> treeNodes = categoryQueryService.managementTree();
+            assertThat(treeNodes).extracting(CategoryQueryService.ManagementCategoryNode::categoryCode)
+                    .contains(categoryCode);
+            CategoryQueryService.ManagementCategoryNode treeNode = treeNodes.stream()
+                    .filter(n -> categoryCode.equals(n.categoryCode())).findFirst().orElseThrow();
+            assertThat(treeNode.productType()).isEqualTo("EQUITY_PRODUCT");
+            assertThat(treeNode.typeCodes()).containsExactly("EQUITY_PRODUCT", "MOVIE", "DINING");
+            assertThat(treeNode.remark()).isEqualTo("商品中心测试分类描述");
+            assertThat(treeNode.createdAt()).isNotNull();
+            assertThat(treeNode.updatedAt()).isNotNull();
+
+            // 测试编辑多商品类型与清空描述
+            categoryService.update(categoryCode, new CategoryCommandService.UpdateCommand(
+                    "商品中心测试分类已更新", null, List.of("MOVIE", "DINING"), "更新后备注", null, 1, (short) 1, 1L));
+            CategoryQueryService.CategoryDetail updatedDetail = categoryQueryService.detail(categoryCode);
+            assertThat(updatedDetail.categoryName()).isEqualTo("商品中心测试分类已更新");
+            assertThat(updatedDetail.productType()).isEqualTo("MOVIE");
+            assertThat(updatedDetail.typeCodes()).containsExactly("MOVIE", "DINING");
+            assertThat(updatedDetail.remark()).isEqualTo("更新后备注");
+
+            categoryService.update(categoryCode, new CategoryCommandService.UpdateCommand(
+                    "商品中心测试分类已更新", null, null, null, null, null, null, 1L));
+            CategoryQueryService.CategoryDetail clearedDescDetail = categoryQueryService.detail(categoryCode);
+            assertThat(clearedDescDetail.description()).isNull();
+            assertThat(clearedDescDetail.remark()).isNull();
+            assertThat(clearedDescDetail.typeCodes()).containsExactly("MOVIE", "DINING");
 
             String spuCode = commandService.createProduct(new SaveSpuCommand(
                     "PC_SPU", "商品中心虚拟直充", "复合保存回归", brandId, categoryId, List.of(),

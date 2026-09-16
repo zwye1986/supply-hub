@@ -60,7 +60,110 @@ class CategoryCommandServiceTest {
         ArgumentCaptor<ProductCategoryDO> captor = ArgumentCaptor.forClass(ProductCategoryDO.class);
         verify(categoryMapper).insert(captor.capture());
         assertThat(captor.getValue().getProductType()).isEqualTo("EQUITY_PRODUCT");
+        assertThat(captor.getValue().getTypeCodes()).containsExactly("EQUITY_PRODUCT");
         assertThat(captor.getValue().getDescription()).isEqualTo("分类说明");
+    }
+
+    @Test
+    void createPersistsMultipleTypeCodesAndRemark() {
+        LocalDateTime now = LocalDateTime.of(2026, 9, 16, 10, 0);
+        when(generator.next(BusinessNoPrefixes.CAT)).thenReturn("CAT_002");
+        when(clock.now()).thenReturn(now);
+        when(categoryMapper.selectCount(any())).thenReturn(0L);
+        when(productTypeValidationService.requireActiveForUpdate("EQUITY_PRODUCT"))
+                .thenReturn(ProductTypeDO.builder().typeCode("EQUITY_PRODUCT").build());
+        when(productTypeValidationService.requireActiveForUpdate("MOVIE"))
+                .thenReturn(ProductTypeDO.builder().typeCode("MOVIE").build());
+        when(productTypeValidationService.requireActiveForUpdate("DINING"))
+                .thenReturn(ProductTypeDO.builder().typeCode("DINING").build());
+        when(categoryMapper.insert(any(ProductCategoryDO.class))).thenReturn(1);
+
+        service.create(new CategoryCommandService.CreateCommand(
+                null, "多类型分类", null, List.of("EQUITY_PRODUCT", "MOVIE", "DINING"), "多类型说明", null, 0, (short) 1,
+                CatalogEntityStatus.ACTIVE.getCode(), 1L));
+
+        ArgumentCaptor<ProductCategoryDO> captor = ArgumentCaptor.forClass(ProductCategoryDO.class);
+        verify(categoryMapper, org.mockito.Mockito.atLeastOnce()).insert(captor.capture());
+        ProductCategoryDO last = captor.getAllValues().get(captor.getAllValues().size() - 1);
+        assertThat(last.getProductType()).isEqualTo("EQUITY_PRODUCT");
+        assertThat(last.getTypeCodes()).containsExactly("EQUITY_PRODUCT", "MOVIE", "DINING");
+        assertThat(last.getDescription()).isEqualTo("多类型说明");
+    }
+
+    @Test
+    void updatePersistsMultipleTypeCodes() {
+        ProductCategoryDO child = ProductCategoryDO.builder()
+                .id(20L)
+                .categoryCode("CAT_CHILD")
+                .status(CatalogEntityStatus.ACTIVE.getCode())
+                .parentId(10L)
+                .categoryLevel((short) 2)
+                .sort(5)
+                .visible((short) 1)
+                .build();
+        when(categoryMapper.selectByCodeForUpdate("CAT_CHILD")).thenReturn(child);
+        when(categoryMapper.selectCount(any())).thenReturn(0L);
+        when(categoryMapper.updateById(any(ProductCategoryDO.class))).thenReturn(1);
+        when(clock.now()).thenReturn(LocalDateTime.now());
+        when(productTypeValidationService.requireActiveForUpdate("MOVIE"))
+                .thenReturn(ProductTypeDO.builder().typeCode("MOVIE").build());
+        when(productTypeValidationService.requireActiveForUpdate("DINING"))
+                .thenReturn(ProductTypeDO.builder().typeCode("DINING").build());
+
+        service.update("CAT_CHILD", new CategoryCommandService.UpdateCommand(
+                "更新多类型", null, List.of("MOVIE", "DINING"), "更新说明", null, null, null, 1L));
+
+        assertThat(child.getProductType()).isEqualTo("MOVIE");
+        assertThat(child.getTypeCodes()).containsExactly("MOVIE", "DINING");
+        assertThat(child.getDescription()).isEqualTo("更新说明");
+    }
+
+    @Test
+    void createFiltersDuplicatesInTypeCodes() {
+        LocalDateTime now = LocalDateTime.of(2026, 9, 16, 10, 0);
+        when(generator.next(BusinessNoPrefixes.CAT)).thenReturn("CAT_003");
+        when(clock.now()).thenReturn(now);
+        when(categoryMapper.selectCount(any())).thenReturn(0L);
+        when(productTypeValidationService.requireActiveForUpdate("EQUITY_PRODUCT"))
+                .thenReturn(ProductTypeDO.builder().typeCode("EQUITY_PRODUCT").build());
+        when(productTypeValidationService.requireActiveForUpdate("MOVIE"))
+                .thenReturn(ProductTypeDO.builder().typeCode("MOVIE").build());
+        when(categoryMapper.insert(any(ProductCategoryDO.class))).thenReturn(1);
+
+        service.create(new CategoryCommandService.CreateCommand(
+                null, "去重分类", null, List.of("EQUITY_PRODUCT", "EQUITY_PRODUCT", "MOVIE"), "去重说明", null, 0, (short) 1,
+                CatalogEntityStatus.ACTIVE.getCode(), 1L));
+
+        ArgumentCaptor<ProductCategoryDO> captor = ArgumentCaptor.forClass(ProductCategoryDO.class);
+        verify(categoryMapper, org.mockito.Mockito.atLeastOnce()).insert(captor.capture());
+        ProductCategoryDO last = captor.getAllValues().get(captor.getAllValues().size() - 1);
+        assertThat(last.getProductType()).isEqualTo("EQUITY_PRODUCT");
+        assertThat(last.getTypeCodes()).containsExactly("EQUITY_PRODUCT", "MOVIE");
+    }
+
+    @Test
+    void updateClearsDescriptionWhenBlank() {
+        ProductCategoryDO child = ProductCategoryDO.builder()
+                .id(20L)
+                .categoryCode("CAT_CHILD")
+                .status(CatalogEntityStatus.ACTIVE.getCode())
+                .parentId(10L)
+                .categoryLevel((short) 2)
+                .description("原有旧说明")
+                .productType("EQUITY_PRODUCT")
+                .typeCodes(List.of("EQUITY_PRODUCT"))
+                .build();
+        when(categoryMapper.selectByCodeForUpdate("CAT_CHILD")).thenReturn(child);
+        when(categoryMapper.selectCount(any())).thenReturn(0L);
+        when(categoryMapper.updateById(any(ProductCategoryDO.class))).thenReturn(1);
+        when(clock.now()).thenReturn(LocalDateTime.now());
+
+        service.update("CAT_CHILD", new CategoryCommandService.UpdateCommand(
+                "清空说明分类", null, null, "   ", null, null, null, 1L));
+
+        assertThat(child.getDescription()).isNull();
+        assertThat(child.getProductType()).isEqualTo("EQUITY_PRODUCT");
+        assertThat(child.getTypeCodes()).containsExactly("EQUITY_PRODUCT");
     }
 
     @Test
