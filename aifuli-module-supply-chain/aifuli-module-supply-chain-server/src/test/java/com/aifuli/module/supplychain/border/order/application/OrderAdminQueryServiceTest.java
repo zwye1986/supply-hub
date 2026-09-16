@@ -76,6 +76,10 @@ class OrderAdminQueryServiceTest {
         assertThat(result.getList().getFirst().orderType()).isEqualTo(SupplyChainOrderType.CARD);
         assertThat(result.getList().getFirst().orderStatus()).isEqualTo(SupplyChainOrderStatus.PROCESSING);
         assertThat(result.getList().getFirst().aftersaleStatus()).isEqualTo(SupplyChainAftersaleStatus.NONE);
+        assertThat(result.getList().getFirst().salesUnitPriceCents()).isEqualTo(10_000L);
+        assertThat(result.getList().getFirst().productSubtotalCents()).isEqualTo(10_000L);
+        assertThat(result.getList().getFirst().serviceFeeCents()).isEqualTo(100L);
+        assertThat(result.getList().getFirst().userPayableAmountCents()).isEqualTo(10_100L);
         verifyNoInteractions(fulfillmentMapper, o2oMapper, instoreMapper, flowMapper);
     }
 
@@ -198,7 +202,9 @@ class OrderAdminQueryServiceTest {
                 .buyerCodeSnapshot("BYR_1").buyerNameSnapshot("分销商")
                 .buyerOrderNo(type.equals(SupplyChainOrderTypes.ORDER_TYPE_O2O) ? null : "BUYER_1")
                 .displaySupplierCode("SPL_1").displaySupplierName("供应商")
-                .buyerSettlementAmount(100L).currency("CNY").skuCodeSnapshot("SKU_1")
+                .buyerSettlementAmount(100L).salesUnitPriceCents(10_000L).productSubtotalCents(10_000L)
+                .serviceFeeCents(100L).userPayableAmountCents(10_100L)
+                .currency("CNY").skuCodeSnapshot("SKU_1")
                 .skuNameSnapshot("商品").quantity(1L).orderStatus(SupplyChainOrderStatus.PROCESSING.getCode())
                 .aftersaleStatus(SupplyChainAftersaleStatus.NONE.getCode()).businessStage("PROCESSING")
                 .detailType(detailType).detailVersion(1L).createdAt(NOW).updatedAt(NOW).build();

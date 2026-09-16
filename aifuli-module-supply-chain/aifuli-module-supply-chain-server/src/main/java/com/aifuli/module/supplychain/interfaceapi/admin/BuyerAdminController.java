@@ -22,6 +22,11 @@ import com.aifuli.module.supplychain.tradecore.catalog.application.BuyerProductC
 import com.aifuli.module.supplychain.tradecore.catalog.application.BuyerProductCommandService.ProductLine;
 import com.aifuli.module.supplychain.tradecore.catalog.application.BuyerProductQueryService;
 import com.aifuli.module.supplychain.tradecore.catalog.application.BuyerProductQueryService.BuyerProductListItem;
+import com.aifuli.module.supplychain.interfaceapi.admin.pricing.GenericPricingAdminVos.FormulaRuleReqVO;
+import com.aifuli.module.supplychain.interfaceapi.admin.pricing.GenericPricingAdminVos.ServiceFeeRuleReqVO;
+import com.aifuli.module.supplychain.interfaceapi.admin.pricing.GenericPricingRequestMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericBatchPricingService;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericBatchPricingService.PricingPreview;
 import com.aifuli.module.supplychain.tradecore.profile.domain.ClosedEnums;
 import com.aifuli.module.supplychain.tradecore.profile.domain.L2AdjustMode;
 import io.swagger.v3.oas.annotations.Operation;
@@ -51,6 +56,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.LocalDateTime;
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.UUID;
 
@@ -83,6 +89,7 @@ public class BuyerAdminController {
     private final BuyerAdminQueryService queryService;
     private final BuyerProductCommandService productCommandService;
     private final BuyerProductQueryService productQueryService;
+    private final GenericBatchPricingService genericPricingService;
     private final BuyerInvoiceService invoiceService;
 
     @GetMapping
@@ -257,27 +264,24 @@ public class BuyerAdminController {
 
     @PostMapping("/{buyerCode}/products/pricing/preview")
     @PreAuthorize(BUYER_QUERY_EXPRESSION)
-    @Operation(summary = "批量试算分销商商品L2价格",
-            description = "只读试算当前分销商作用域内的L2有效价，不写价格版本；税务元数据不参与计算。")
-    public CommonResult<List<L2PricingPreview>> previewProductPricing(
+    @Operation(summary = "批量试算分销商通用定价",
+            description = "只读试算当前分销商作用域内的分销价、销售价、服务费与利润隐藏；税务仅校验展示属性，不参与金额计算。")
+    public CommonResult<List<PricingPreview>> previewProductPricing(
             @Parameter(description = "采购商永久业务编码") @PathVariable String buyerCode,
             @Valid @RequestBody BuyerProductBatchPricingReqVO request) {
-        return success(productCommandService.previewL2Batch(buyerCode, request.getBuyerProductCodes(),
-                ClosedEnums.parseRequired(L2AdjustMode.class, request.getL2AdjustMode()),
-                request.getPercent(), request.getAmountCents()));
+        return success(genericPricingService.previewBuyer(buyerCode, request.getBuyerProductCodes(),
+                GenericPricingRequestMapper.toBuyerConfig(request)));
     }
 
     @PutMapping("/{buyerCode}/products/pricing")
     @PreAuthorize(BUYER_UPDATE_EXPRESSION)
-    @Operation(summary = "批量保存分销商商品L2价格",
-            description = "仅更新路径分销商下选中商品的L2价格版本；单事务全量成功或回滚，税务元数据不参与计算。")
+    @Operation(summary = "批量保存分销商通用定价",
+            description = "仅更新路径分销商下选中商品的通用定价版本；单事务全量成功或回滚，税务仅用于结算展示。")
     public CommonResult<Boolean> updateProductPricing(
             @Parameter(description = "采购商永久业务编码") @PathVariable String buyerCode,
             @Valid @RequestBody BuyerProductBatchPricingReqVO request) {
-        productCommandService.patchL2Batch(buyerCode, request.getBuyerProductCodes(),
-                ClosedEnums.parseRequired(L2AdjustMode.class, request.getL2AdjustMode()),
-                request.getPercent(), request.getAmountCents(), request.getDisplayThresholdPercent(),
-                getLoginUserId());
+        genericPricingService.saveBuyer(buyerCode, request.getBuyerProductCodes(),
+                GenericPricingRequestMapper.toBuyerConfig(request), getLoginUserId());
         return success(true);
     }
 
@@ -515,21 +519,25 @@ public class BuyerAdminController {
     }
 
     @Data
-    @Schema(description = "分销商商品L2批量定价请求")
+    @Schema(description = "分销商SKU通用批量定价请求")
     public static class BuyerProductBatchPricingReqVO {
         @NotEmpty
-        @Size(max = 200)
+        @Size(max = GenericBatchPricingService.MAX_BATCH)
         @Schema(description = "当前分销商下的分销商品编码列表", requiredMode = Schema.RequiredMode.REQUIRED)
         private List<@NotBlank String> buyerProductCodes;
-        @NotBlank
-        @Schema(description = "L2调价方式：FOLLOW_TEMPLATE（继承L1）/ EQUAL_L1 / CUSTOM",
-                requiredMode = Schema.RequiredMode.REQUIRED)
-        private String l2AdjustMode;
-        @Schema(description = "CUSTOM时的整数百分比，100等于L1")
-        private Integer percent;
-        @Schema(description = "CUSTOM时加减的CNY分")
-        private Long amountCents;
-        @Schema(description = "利润空间低于该百分比时C端隐藏，本批不消费")
-        private Integer displayThresholdPercent;
+        @Valid @Schema(description = "分销价规则", requiredMode = Schema.RequiredMode.REQUIRED)
+        private FormulaRuleReqVO distributionRule;
+        @Valid @Schema(description = "销售价规则", requiredMode = Schema.RequiredMode.REQUIRED)
+        private FormulaRuleReqVO salesRule;
+        @Valid @Schema(description = "服务费规则", requiredMode = Schema.RequiredMode.REQUIRED)
+        private ServiceFeeRuleReqVO serviceFeeRule;
+        @Schema(description = "分销区利润隐藏阈值百分数，0到100，最多2位小数")
+        private BigDecimal distributionHideThresholdPercent;
+        @Schema(description = "销售区利润隐藏阈值百分数，0到100，最多2位小数")
+        private BigDecimal salesHideThresholdPercent;
+        @Schema(description = "是否含税；仅用于结算展示。须与 taxRateCode 同时提交", requiredMode = Schema.RequiredMode.REQUIRED)
+        private Boolean taxIncluded;
+        @NotBlank @Schema(description = "system动态字典supply_chain_tax_rate的启用值")
+        private String taxRateCode;
     }
 }

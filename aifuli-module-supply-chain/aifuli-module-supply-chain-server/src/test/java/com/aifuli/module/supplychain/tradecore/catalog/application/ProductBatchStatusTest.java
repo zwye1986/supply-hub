@@ -16,6 +16,7 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSpuMapp
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProductCategoryMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.UnshelveMode;
+import org.springframework.context.ApplicationEventPublisher;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
@@ -39,6 +40,7 @@ import static org.mockito.Mockito.*;
 class ProductBatchStatusTest {
 
     private final SupplyChainDatabaseClock clock = mock(SupplyChainDatabaseClock.class);
+    private final ApplicationEventPublisher eventPublisher = mock(ApplicationEventPublisher.class);
     private final BrandMapper brandMapper = mock(BrandMapper.class);
     private final ProductCategoryMapper categoryMapper = mock(ProductCategoryMapper.class);
     private final PlatformSpuMapper spuMapper = mock(PlatformSpuMapper.class);
@@ -56,7 +58,7 @@ class ProductBatchStatusTest {
     private final PlatformSkuSchemaRegistry skuSchemaRegistry = new PlatformSkuSchemaRegistry(targetSchemaRegistry);
 
     private final ProductCatalogCommandService service = new ProductCatalogCommandService(
-            clock, brandMapper, categoryMapper, spuMapper, skuMapper, buyerMapper, buyerListingMapper,
+            clock, eventPublisher, brandMapper, categoryMapper, spuMapper, skuMapper, buyerMapper, buyerListingMapper,
             availabilityMapper, generator, brandAdminService, categoryCommandService,
             productTypeValidationService, sellabilityService, deletionValidator, targetSchemaRegistry,
             skuSchemaRegistry);

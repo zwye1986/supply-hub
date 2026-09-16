@@ -23,6 +23,8 @@ import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierDelivery
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierFileRefMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierIntegrationModeMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierMapper;
+import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.PricingDependencyChangedEvent;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierSettlementAccountMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierSettlementLedgerMapper;
 import com.aifuli.module.supplychain.tradecore.supply.domain.DeliveryRegionType;
@@ -32,6 +34,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.charset.StandardCharsets;
@@ -76,6 +79,8 @@ public class SupplierProfileCommandService {
     private static final String FILE_LIMIT_MESSAGE = "最多5个文件";
 
     private final SupplierMapper supplierMapper;
+    private final SupplierOfferMapper supplierOfferMapper;
+    private final ApplicationEventPublisher eventPublisher;
     private final SupplierContactMapper contactMapper;
     private final SupplierDeliveryRegionMapper regionMapper;
     private final SupplierSettlementAccountMapper settlementAccountMapper;
@@ -217,6 +222,12 @@ public class SupplierProfileCommandService {
         if (supplierMapper.updateById(supplier) != 1) {
             throw exception(SUPPLIER_STATUS_CONFLICT);
         }
+        // 供应商状态属于“最低有效供货价”的有效性条件；按SKU去重后同步切换价格版本与可售状态。
+        // 设计见 docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#3-供货价与利润隐藏。
+        supplierOfferMapper.selectPublishedBySupplier(supplier.getId()).stream()
+                .map(offer -> offer.getPlatformSkuId())
+                .distinct()
+                .forEach(id -> eventPublisher.publishEvent(new PricingDependencyChangedEvent(id)));
     }
 
     private SupplierDO requireForUpdate(String supplierCode) {

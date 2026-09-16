@@ -42,7 +42,7 @@
 | `createdTo` | LocalDateTime | 受理时间上界，包含；早于 `createdFrom` 时拒绝 |
 | `pageNo/pageSize` | Integer | 默认 1/20，沿用框架分页上限 |
 
-响应行全部来自 `sc_supply_chain_order`，字段为：`orderNo/orderType/buyerCode/buyerName/buyerOrderNo/supplierCode/supplierName/buyerSettlementAmount/currency/skuCode/skuName/quantity/orderStatus/aftersaleStatus/businessStage/detailType/detailVersion/createdAt/updatedAt/completedAt`。状态对外返回枚举名，不返回数据库短整型码。
+响应行全部来自 `sc_supply_chain_order`，字段为：`orderNo/orderType/buyerCode/buyerName/buyerOrderNo/supplierCode/supplierName/buyerSettlementAmount/salesUnitPriceCents/productSubtotalCents/serviceFeeCents/userPayableAmountCents/currency/skuCode/skuName/quantity/orderStatus/aftersaleStatus/businessStage/detailType/detailVersion/createdAt/updatedAt/completedAt`。标准商品展示冻结的服务费与用户实付；O2O/INSTORE 这些字段为空。状态对外返回枚举名，不返回数据库短整型码。
 
 ### 3.2 订单详情
 

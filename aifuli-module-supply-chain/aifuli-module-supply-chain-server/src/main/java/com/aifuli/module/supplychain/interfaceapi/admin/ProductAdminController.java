@@ -254,9 +254,9 @@ public class ProductAdminController {
         @NotNull @Min(0) @Schema(description = "面值，CNY分") private Long faceValue;
         @Min(0) @Schema(description = "市场价，CNY分；默认0") private Long marketPrice;
         @Min(0) @Schema(description = "销售建议价，CNY分；默认0") private Long suggestedSalePrice;
-        @Schema(description = "是否含税：1含税，0不含税；仅记录展示，不参与价格计算") private Boolean taxIncluded;
+        @Schema(description = "是否含税：1含税，0不含税；仅记录展示，不参与价格计算；标准商品结算以分销商/项目通用定价为准") private Boolean taxIncluded;
         @DecimalMin("0.0000") @DecimalMax("1.0000")
-        @Schema(description = "税率，如0.0600表示6%；仅记录展示，不参与价格计算") private BigDecimal taxRate;
+        @Schema(description = "税率，如0.0600表示6%；仅记录展示，不参与价格计算；标准商品结算以分销商/项目通用定价为准") private BigDecimal taxRate;
         @Positive @Schema(description = "SKU单次最小起购数量") private Long minQuantity;
         @Positive @Schema(description = "SKU单次最大限购数量") private Long maxQuantity;
         @Schema(description = "是否启用每人限购：1启用，0停用") private Boolean userLimitEnabled;
@@ -295,12 +295,12 @@ public class ProductAdminController {
         @Schema(description = "平台SKU永久业务编码列表", requiredMode = Schema.RequiredMode.REQUIRED)
         private List<@NotBlank String> skuCodes;
         @NotNull
-        @Schema(description = "是否含税：1含税，0不含税；仅记录展示，不参与价格计算",
+        @Schema(description = "是否含税：1含税，0不含税；仅记录展示，不参与价格计算；标准商品结算以分销商/项目通用定价为准",
                 requiredMode = Schema.RequiredMode.REQUIRED)
         private Boolean taxIncluded;
         @DecimalMin("0.0000")
         @DecimalMax("1.0000")
-        @Schema(description = "税率，如0.0600表示6%；仅记录展示，不参与价格计算", example = "0.0600")
+        @Schema(description = "税率，如0.0600表示6%；仅记录展示，不参与价格计算；标准商品结算以分销商/项目通用定价为准", example = "0.0600")
         private BigDecimal taxRate;
     }
 }

@@ -54,6 +54,9 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapp
 import com.aifuli.module.supplychain.tradecore.catalog.domain.BuyerListingStatus;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.ListingAvailability;
 import com.aifuli.module.supplychain.tradecore.catalog.application.ProductSellabilityService;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.QuoteConsumptionContext;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.StandardPricingQuoteService;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.StandardPricingQuoteService.FrozenQuote;
 import com.aifuli.framework.common.exception.ServiceException;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -109,6 +112,7 @@ public class FulfillmentAcceptanceLifecycle {
     private final PlatformSkuMapper skuMapper;
     private final ProductSellabilityService productSellabilityService;
     private final SkuPurchaseLimitService purchaseLimitService;
+    private final StandardPricingQuoteService pricingQuoteService;
     private final SupplierRoutingApplicationService routingService;
     private final FundReservationService fundReservationService;
     private final OutboxEventRepository outboxRepository;
@@ -236,6 +240,9 @@ public class FulfillmentAcceptanceLifecycle {
         LocalDateTime now = now();
         LockedListing locked = lockListingAndSku(command);
         ListingSnapshot listing = requireSaleableListing(command, now, locked);
+        FrozenQuote frozenQuote = pricingQuoteService.requireForFulfillment(new QuoteConsumptionContext(
+                command.pricingQuoteToken(), command.buyerId(), command.projectId(), listing.sku().getId(),
+                command.buyerOrderNo(), command.buyerUserId(), command.quantity(), command.paidAt()));
         SkuPurchaseLimitService.Violation limitViolation = purchaseLimitService.validateLockedSku(
                 command.projectId(), command.buyerUserId(), command.fulfillmentAccountValue(),
                 listing.sku(), command.quantity(), now);
@@ -261,7 +268,7 @@ public class FulfillmentAcceptanceLifecycle {
                     AcceptanceRejectionCode.NO_ROUTABLE_SUPPLIER);
         }
         RoutingCandidate selected = routing.decision().selectedCandidate();
-        long buyerAmount = Math.multiplyExact(listing.version().getBuyerSettlementUnitPrice(), command.quantity());
+        long buyerAmount = Math.multiplyExact(frozenQuote.distributionUnitPriceCents(), command.quantity());
         OrderSummaryFact summaryFact = new OrderSummaryFact(SupplyChainOrderTypes.ORDER_TYPE_CARD,
                 SupplyChainOrderTypes.DETAIL_TYPE_FULFILLMENT, (short) 0,
                 command.quantity(), 0L, null);
@@ -271,12 +278,20 @@ public class FulfillmentAcceptanceLifecycle {
         SupplyChainOrderDO order = SupplyChainOrderDO.builder()
                 .orderNo(businessNoGenerator.next(BusinessNoPrefixes.SC))
                 .orderType(SupplyChainOrderTypes.ORDER_TYPE_CARD)
-                .buyerId(command.buyerId()).projectId(command.projectId()).buyerCodeSnapshot(command.buyerCode())
+                .buyerId(command.buyerId()).projectId(command.projectId())
+                .pricingQuoteId(frozenQuote.quoteId()).pricingVersionId(frozenQuote.pricingVersionId())
+                .buyerCodeSnapshot(command.buyerCode())
                 .buyerNameSnapshot(command.buyerName()).buyerUserId(command.buyerUserId())
                 .fulfillmentAccountValue(command.fulfillmentAccountValue())
                 .buyerOrderNo(command.buyerOrderNo()).acceptanceReceiptId(receiptId)
                 .displaySupplierId(selected.supplierId()).displaySupplierCode(selected.supplierCode())
                 .displaySupplierName(selected.supplierName()).buyerSettlementAmount(buyerAmount)
+                .salesUnitPriceCents(frozenQuote.salesUnitPriceCents())
+                .productSubtotalCents(frozenQuote.productSubtotalCents())
+                .serviceFeeCents(frozenQuote.serviceFeeCents())
+                .userPayableAmountCents(frozenQuote.userPayableAmountCents())
+                .refundableServiceFeeCents(frozenQuote.serviceFeeCents())
+                .taxMetadataJson(frozenQuote.taxMetadataJson())
                 .currency(Money.CURRENCY_CNY).platformSkuId(listing.sku().getId())
                 .skuCodeSnapshot(listing.sku().getSkuCode()).skuNameSnapshot(listing.sku().getSkuName())
                 .quantity(command.quantity()).buyerOrderDigest(command.buyerOrderDigest())
@@ -285,6 +300,7 @@ public class FulfillmentAcceptanceLifecycle {
                 .detailVersion(0L).requestFingerprint(command.requestFingerprint())
                 .version(0L).createdAt(now).updatedAt(now).build();
         orderMapper.insert(order);
+        pricingQuoteService.markConsumed(frozenQuote.quoteId(), order.getId(), now);
         inject(AcceptanceFailureInjector.Stage.ORDER_INSERTED);
 
         FulfillmentRequestDO fulfillmentRequest = FulfillmentRequestDO.builder()
@@ -698,6 +714,8 @@ public class FulfillmentAcceptanceLifecycle {
         private final String buyerSkuCode;
         private final int listingVersionNo;
         private final long quantity;
+        private final String pricingQuoteToken;
+        private final LocalDateTime paidAt;
         private final String targetSchemaCode;
         private final int targetSchemaVersion;
         private final byte[] targetCiphertext;
@@ -714,7 +732,8 @@ public class FulfillmentAcceptanceLifecycle {
         public PreparedAcceptance(Long projectId, Long buyerId, String buyerCode, String buyerName,
                                   String buyerOrderNo, String buyerUserId, String fulfillmentAccountValue,
                                   String buyerSkuCode,
-                                  int listingVersionNo, long quantity, String targetSchemaCode,
+                                  int listingVersionNo, long quantity, String pricingQuoteToken,
+                                  LocalDateTime paidAt, String targetSchemaCode,
                                   int targetSchemaVersion, byte[] targetCiphertext, byte[] targetDigest,
                                   String targetKeyVersion, boolean targetValid,
                                   byte[] invariantFingerprint, byte[] requestFingerprint,
@@ -729,6 +748,8 @@ public class FulfillmentAcceptanceLifecycle {
             this.buyerSkuCode = buyerSkuCode;
             this.listingVersionNo = listingVersionNo;
             this.quantity = quantity;
+            this.pricingQuoteToken = pricingQuoteToken;
+            this.paidAt = paidAt;
             this.targetSchemaCode = targetSchemaCode;
             this.targetSchemaVersion = targetSchemaVersion;
             this.targetCiphertext = targetCiphertext == null ? null : targetCiphertext.clone();
@@ -752,6 +773,8 @@ public class FulfillmentAcceptanceLifecycle {
         public String buyerSkuCode() { return buyerSkuCode; }
         public int listingVersionNo() { return listingVersionNo; }
         public long quantity() { return quantity; }
+        public String pricingQuoteToken() { return pricingQuoteToken; }
+        public LocalDateTime paidAt() { return paidAt; }
         public String targetSchemaCode() { return targetSchemaCode; }
         public int targetSchemaVersion() { return targetSchemaVersion; }
         public byte[] targetCiphertext() { return targetCiphertext == null ? null : targetCiphertext.clone(); }

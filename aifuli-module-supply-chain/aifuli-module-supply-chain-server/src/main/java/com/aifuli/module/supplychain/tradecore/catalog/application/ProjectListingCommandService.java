@@ -22,12 +22,15 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSe
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSettlementPriceVersionDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProjectListingVersionDO;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProjectSkuPricingDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerProductL2OverrideMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerProductL2OverrideVersionMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceVersionMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProjectListingVersionMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProjectSkuPricingMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericPricingCalculator.PricingStatus;
 import com.aifuli.module.supplychain.tradecore.profile.domain.L3AdjustMode;
 import com.aifuli.module.supplychain.tradecore.profile.domain.ListingPriceSource;
 import com.aifuli.module.supplychain.tradecore.profile.domain.PriceSource;
@@ -69,6 +72,7 @@ public class ProjectListingCommandService {
     private final PlatformSkuMapper skuMapper;
     private final ProjectListingMapper listingMapper;
     private final ProjectListingVersionMapper listingVersionMapper;
+    private final ProjectSkuPricingMapper projectPricingMapper;
     private final PlatformSettlementPriceMapper l1Mapper;
     private final PlatformSettlementPriceVersionMapper l1VersionMapper;
     private final BuyerProductL2OverrideMapper overrideMapper;
@@ -187,6 +191,7 @@ public class ProjectListingCommandService {
             existing.setUpdatedBy(operatorId);
             existing.setUpdatedAt(now);
             publishVersion(existing, product, mode, line.percent(), line.amountCents(), operatorId, now);
+            ensureUnpricedIdentity(existing.getId(), now);
             return existing.getListingCode();
         }
         String code = businessNoGenerator.next(BusinessNoPrefixes.PLT);
@@ -212,10 +217,29 @@ public class ProjectListingCommandService {
             raced.setUpdatedBy(operatorId);
             raced.setUpdatedAt(now);
             publishVersion(raced, product, mode, line.percent(), line.amountCents(), operatorId, now);
+            ensureUnpricedIdentity(raced.getId(), now);
             return raced.getListingCode();
         }
         publishVersion(listing, product, mode, line.percent(), line.amountCents(), operatorId, now);
+        ensureUnpricedIdentity(listing.getId(), now);
         return code;
+    }
+
+    /**
+     * 新建或复活项目商品时写入通用定价身份，未配置规则前保持 UNPRICED。
+     * 设计见 {@code docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#1-范围与不变量}。
+     */
+    private void ensureUnpricedIdentity(Long listingId, LocalDateTime now) {
+        if (projectPricingMapper.selectByListingId(listingId) != null) {
+            return;
+        }
+        projectPricingMapper.insert(ProjectSkuPricingDO.builder()
+                .listingId(listingId)
+                .pricingStatus(PricingStatus.UNPRICED.name())
+                .version(0L)
+                .createdAt(now)
+                .updatedAt(now)
+                .build());
     }
 
     /**

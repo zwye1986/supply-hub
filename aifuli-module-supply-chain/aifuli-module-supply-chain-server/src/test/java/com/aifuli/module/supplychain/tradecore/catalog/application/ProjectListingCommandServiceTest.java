@@ -25,12 +25,16 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSp
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProjectListingVersionDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerProductL2OverrideMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerProductL2OverrideVersionMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerSkuPricingMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceVersionMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSpuMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProjectListingVersionMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProjectSkuPricingMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProjectSkuPricingDO;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericPricingCalculator.PricingStatus;
 import com.aifuli.module.supplychain.tradecore.profile.domain.L2AdjustMode;
 import com.aifuli.module.supplychain.tradecore.profile.domain.L3AdjustMode;
 import com.aifuli.module.supplychain.tradecore.profile.domain.ListingPriceSource;
@@ -70,6 +74,8 @@ class ProjectListingCommandServiceTest {
     private final PlatformSpuMapper spuMapper = mock(PlatformSpuMapper.class);
     private final ProjectListingMapper listingMapper = mock(ProjectListingMapper.class);
     private final ProjectListingVersionMapper listingVersionMapper = mock(ProjectListingVersionMapper.class);
+    private final ProjectSkuPricingMapper projectPricingMapper = mock(ProjectSkuPricingMapper.class);
+    private final BuyerSkuPricingMapper buyerPricingMapper = mock(BuyerSkuPricingMapper.class);
     private final PlatformSettlementPriceMapper l1Mapper = mock(PlatformSettlementPriceMapper.class);
     private final PlatformSettlementPriceVersionMapper l1VersionMapper =
             mock(PlatformSettlementPriceVersionMapper.class);
@@ -89,12 +95,14 @@ class ProjectListingCommandServiceTest {
         SettlementPriceResolver resolver = new SettlementPriceResolver();
         service = new ProjectListingCommandService(
                 databaseClock, projectMapper, buyerMapper, productMapper, skuMapper, listingMapper, listingVersionMapper,
-                l1Mapper, l1VersionMapper, overrideMapper, overrideVersionMapper,
+                projectPricingMapper, l1Mapper, l1VersionMapper, overrideMapper, overrideVersionMapper,
                 businessNoGenerator, resolver);
         buyerProducts = new BuyerProductCommandService(
                 databaseClock, buyerMapper, productMapper, l1Mapper, l1VersionMapper,
-                overrideMapper, overrideVersionMapper, businessNoGenerator, resolver,
+                overrideMapper, overrideVersionMapper, buyerPricingMapper, businessNoGenerator, resolver,
                 new ProductSellabilityService(skuMapper, spuMapper));
+        when(projectPricingMapper.selectByListingId(any())).thenReturn(ProjectSkuPricingDO.builder()
+                .id(1L).listingId(80L).pricingStatus("UNPRICED").build());
         when(businessNoGenerator.next(BusinessNoPrefixes.PLT)).thenReturn(LISTING_CODE);
         when(projectMapper.selectByProjectCodeForUpdate(PROJECT_CODE)).thenReturn(BuyerProjectDO.builder()
                 .id(9L).projectCode(PROJECT_CODE).buyerId(5L).build());
@@ -163,6 +171,23 @@ class ProjectListingCommandServiceTest {
         assertThat(frozen.getL3AdjustMode()).isEqualTo(L3AdjustMode.FOLLOW_L2.name());
         assertThat(frozen.getCurrency()).isEqualTo(Money.CURRENCY_CNY);
         verify(listingVersionMapper, never()).updateById(any(ProjectListingVersionDO.class));
+    }
+
+    @Test
+    void addProductsWritesUnpricedIdentityWhenMissing() {
+        when(projectPricingMapper.selectByListingId(any())).thenReturn(null);
+        when(projectPricingMapper.insert(any(ProjectSkuPricingDO.class))).thenReturn(1);
+        stubLiveBuyerProduct();
+        stubL1(L1_CENTS);
+        when(overrideMapper.selectByBuyerProductId(77L)).thenReturn(null);
+
+        service.addProducts(PROJECT_CODE, List.of(follow("MOVIE_100")), 1L);
+
+        ArgumentCaptor<ProjectSkuPricingDO> identity = ArgumentCaptor.forClass(ProjectSkuPricingDO.class);
+        verify(projectPricingMapper).insert(identity.capture());
+        assertThat(identity.getValue().getListingId()).isEqualTo(80L);
+        assertThat(identity.getValue().getPricingStatus()).isEqualTo(PricingStatus.UNPRICED.name());
+        assertThat(identity.getValue().getCurrentVersionId()).isNull();
     }
 
     @Test

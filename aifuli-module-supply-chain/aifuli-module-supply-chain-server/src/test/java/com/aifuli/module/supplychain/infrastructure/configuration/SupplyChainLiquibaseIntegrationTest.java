@@ -62,6 +62,9 @@ class SupplyChainLiquibaseIntegrationTest {
                         "sc_supplier_supply_scope_mode", "sc_supplier_integration_mode",
                         "sc_supplier_file_ref", "sc_buyer_contact", "sc_buyer_product",
                         "sc_project_listing", "sc_platform_settlement_price_version",
+                        "sc_buyer_sku_pricing", "sc_buyer_sku_pricing_version",
+                        "sc_project_sku_pricing", "sc_project_sku_pricing_version",
+                        "sc_standard_pricing_quote",
                         "sc_supplier_settlement_account", "sc_supplier_settlement_ledger",
                         "sc_supplier_invoice", "sc_buyer_invoice", "sc_product_type")
                 .doesNotContain("sc_inventory_asset", "sc_supply_reservation");
@@ -105,6 +108,14 @@ class SupplyChainLiquibaseIntegrationTest {
                         "sc_platform_sku.description",
                         "sc_fulfillment_acceptance_receipt.project_id",
                         "sc_supply_chain_order.project_id",
+                        "sc_supply_chain_order.pricing_quote_id",
+                        "sc_supply_chain_order.pricing_version_id",
+                        "sc_supply_chain_order.sales_unit_price_cents",
+                        "sc_supply_chain_order.product_subtotal_cents",
+                        "sc_supply_chain_order.service_fee_cents",
+                        "sc_supply_chain_order.user_payable_amount_cents",
+                        "sc_supply_chain_order.refundable_service_fee_cents",
+                        "sc_supply_chain_order.tax_metadata_json",
                         "sc_supply_chain_order.fulfillment_account_value",
                         "sc_product_category.visible");
         assertThat(firstStartup.projectAuthNonceColumnDefinitions()).containsExactly(
@@ -114,13 +125,16 @@ class SupplyChainLiquibaseIntegrationTest {
                 "expire_at:DATETIME:-:3:NO");
         assertThat(firstStartup.projectAuthNoncePrimaryKeyColumns())
                 .containsExactly("app_id", "nonce");
-        assertThat(firstStartup.changeSetCount()).isEqualTo(35L);
+        assertThat(firstStartup.changeSetCount()).isEqualTo(36L);
         assertThat(firstStartup.uniqueIndexes())
                 .contains("sc_instore_payment_flow.uk_sc_instore_flow_order",
                         "sc_instore_channel_user_binding.uk_sc_instore_user_binding_project",
                         "sc_brand.uk_sc_brand_name",
                         "sc_product_category.uk_sc_category_live_parent_name",
-                        "sc_product_type.uk_sc_product_type_name");
+                        "sc_product_type.uk_sc_product_type_name",
+                        "sc_buyer_sku_pricing.uk_sc_buyer_sku_pricing_product",
+                        "sc_project_sku_pricing.uk_sc_project_sku_pricing_listing",
+                        "sc_standard_pricing_quote.uk_sc_standard_quote_token");
         assertThat(firstStartup.indexes())
                 .contains("sc_buyer.idx_sc_buyer_parent_created",
                         "sc_supply_chain_order.idx_sc_order_purchase_limit",
@@ -162,14 +176,14 @@ class SupplyChainLiquibaseIntegrationTest {
                         FROM information_schema.COLUMNS
                         WHERE TABLE_SCHEMA = DATABASE()
                           AND TABLE_NAME LIKE 'sc\\_%'
-                        """)).isEqualTo(105L);
+                        """)).isEqualTo(110L);
                 assertThat(queryLong(connection, """
                         SELECT COUNT(*)
                         FROM information_schema.COLUMNS
                         WHERE TABLE_SCHEMA = DATABASE()
                           AND TABLE_NAME LIKE 'sc\\_%'
                           AND DATA_TYPE = 'datetime'
-                        """)).isEqualTo(256L);
+                        """)).isEqualTo(267L);
                 assertThat(queryLong(connection, """
                         SELECT COUNT(*)
                         FROM information_schema.COLUMNS

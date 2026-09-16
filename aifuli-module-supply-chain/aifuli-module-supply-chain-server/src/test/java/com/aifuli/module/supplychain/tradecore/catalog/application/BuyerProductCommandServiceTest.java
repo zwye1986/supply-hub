@@ -2,6 +2,7 @@ package com.aifuli.module.supplychain.tradecore.catalog.application;
 
 import com.aifuli.framework.common.exception.ServiceException;
 import com.aifuli.module.supplychain.infrastructure.identity.BusinessNoGenerator;
+import com.aifuli.module.supplychain.infrastructure.identity.BusinessNoPrefixes;
 import com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerDO;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerProductDO;
@@ -16,13 +17,16 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSe
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSettlementPriceVersionDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSpuDO;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerSkuPricingDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerProductL2OverrideMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerProductL2OverrideVersionMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerSkuPricingMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceVersionMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSpuMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericPricingCalculator.PricingStatus;
 import com.aifuli.module.supplychain.tradecore.profile.domain.L2AdjustMode;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -59,6 +63,7 @@ class BuyerProductCommandServiceTest {
     private final BuyerProductL2OverrideMapper overrideMapper = mock(BuyerProductL2OverrideMapper.class);
     private final BuyerProductL2OverrideVersionMapper overrideVersionMapper =
             mock(BuyerProductL2OverrideVersionMapper.class);
+    private final BuyerSkuPricingMapper buyerPricingMapper = mock(BuyerSkuPricingMapper.class);
     private final BusinessNoGenerator businessNoGenerator = mock(BusinessNoGenerator.class);
     private final SupplyChainDatabaseClock databaseClock = mock(SupplyChainDatabaseClock.class);
     private BuyerProductCommandService service;
@@ -68,7 +73,7 @@ class BuyerProductCommandServiceTest {
         when(databaseClock.now()).thenReturn(LocalDateTime.of(2026, 9, 4, 11, 0));
         service = new BuyerProductCommandService(
                 databaseClock, buyerMapper, productMapper, l1Mapper, l1VersionMapper,
-                overrideMapper, overrideVersionMapper, businessNoGenerator,
+                overrideMapper, overrideVersionMapper, buyerPricingMapper, businessNoGenerator,
                 new SettlementPriceResolver(), new ProductSellabilityService(skuMapper, spuMapper));
         when(buyerMapper.selectByBuyerCodeForUpdate("BYR_A")).thenReturn(
                 BuyerDO.builder().id(5L).buyerCode("BYR_A").build());
@@ -216,6 +221,26 @@ class BuyerProductCommandServiceTest {
         verify(overrideVersionMapper, times(2)).insert(versions.capture());
         assertThat(versions.getAllValues()).allSatisfy(version ->
                 assertThat(version.getResolvedUnitPriceCents()).isEqualTo(900L));
+    }
+
+    @Test
+    void addProductsWritesUnpricedIdentity() {
+        when(productMapper.selectByBuyerAndSku(5L, 11L)).thenReturn(null);
+        when(businessNoGenerator.next(BusinessNoPrefixes.BPD)).thenReturn("BPD_NEW");
+        when(productMapper.insert(any(BuyerProductDO.class))).thenAnswer(inv -> {
+            BuyerProductDO row = inv.getArgument(0);
+            row.setId(88L);
+            return 1;
+        });
+        when(buyerPricingMapper.selectByBuyerProductId(88L)).thenReturn(null);
+
+        service.addProducts("BYR_A", List.of(follow("MOVIE_100")), 1L);
+
+        ArgumentCaptor<BuyerSkuPricingDO> identity = ArgumentCaptor.forClass(BuyerSkuPricingDO.class);
+        verify(buyerPricingMapper).insert(identity.capture());
+        assertThat(identity.getValue().getBuyerProductId()).isEqualTo(88L);
+        assertThat(identity.getValue().getPricingStatus()).isEqualTo(PricingStatus.UNPRICED.name());
+        assertThat(identity.getValue().getCurrentVersionId()).isNull();
     }
 
     private void stubLiveProduct() {

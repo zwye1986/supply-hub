@@ -58,6 +58,7 @@ class BuyerFulfillmentContractTest {
                 "buyerUserId",
                 "buyerSkuCode",
                 "listingVersion",
+                "pricingQuoteToken",
                 "quantity",
                 "target",
                 "paidAt");
@@ -108,6 +109,7 @@ class BuyerFulfillmentContractTest {
         request.setBuyerUserId("13800138000");
         request.setBuyerSkuCode("TELCO-100");
         request.setListingVersion(42L);
+        request.setPricingQuoteToken("8a849b77e8cd4b7eb12fe6fc3ea5c2ee");
         request.setQuantity(1L);
         request.setTarget(target);
         request.setPaidAt(OffsetDateTime.parse("2026-08-11T10:30:00+08:00"));

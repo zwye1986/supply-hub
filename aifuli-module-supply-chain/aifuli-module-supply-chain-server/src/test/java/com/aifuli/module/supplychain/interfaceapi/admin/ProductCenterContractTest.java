@@ -1,6 +1,7 @@
 package com.aifuli.module.supplychain.interfaceapi.admin;
 
 import com.aifuli.framework.common.exception.ServiceException;
+import com.aifuli.module.supplychain.interfaceapi.admin.pricing.GenericPricingAdminVos;
 import com.aifuli.module.supplychain.tradecore.catalog.application.BrandAdminService.BrandView;
 import com.aifuli.module.supplychain.tradecore.catalog.application.ProductCatalogCommandService;
 import com.aifuli.module.supplychain.tradecore.catalog.application.ProductCatalogQueryService.SkuDetail;
@@ -117,15 +118,33 @@ class ProductCenterContractTest {
                 .getAnnotation(Schema.class).description()).isEqualTo("同一履约手机号每周期最多购买数量");
     }
 
-    /** 税务字段必须停留在 SKU 展示元数据契约，不能混入 L2/L3 定价请求。 */
+    /** 平台 SKU 保留旧展示元数据；通用定价按分销商/项目维度使用含税标志与动态税率字典码。 */
     @Test
-    void taxMetadataIsSeparatedFromLayeredPricingRequests() {
+    void taxMetadataIsSeparatedFromLayeredPricingRequests() throws Exception {
         assertThat(fieldNames(ProductAdminController.SkuTaxMetadataBatchReqVO.class))
                 .containsExactlyInAnyOrder("skuCodes", "taxIncluded", "taxRate");
         assertThat(fieldNames(BuyerAdminController.BuyerProductBatchPricingReqVO.class))
-                .doesNotContain("taxIncluded", "taxRate");
+                .contains("taxIncluded", "taxRateCode")
+                .doesNotContain("taxRate");
         assertThat(fieldNames(ProjectAdminController.ProjectProductBatchPricingReqVO.class))
-                .doesNotContain("taxIncluded", "taxRate");
+                .contains("taxInherited", "taxMetadata")
+                .doesNotContain("taxRate");
+        assertThat(fieldNames(GenericPricingAdminVos.TaxMetadataReqVO.class))
+                .containsExactlyInAnyOrder("taxIncluded", "taxRateCode");
+        assertThat(BuyerAdminController.BuyerProductBatchPricingReqVO.class.getDeclaredField("taxIncluded").getType())
+                .isEqualTo(Boolean.class);
+        assertThat(BuyerAdminController.BuyerProductBatchPricingReqVO.class.getDeclaredField("taxIncluded")
+                .getAnnotation(NotNull.class)).isNull();
+        assertThat(GenericPricingAdminVos.TaxMetadataReqVO.class.getDeclaredField("taxIncluded").getType())
+                .isEqualTo(Boolean.class);
+        assertThat(GenericPricingAdminVos.TaxMetadataReqVO.class.getDeclaredField("taxIncluded")
+                .getAnnotation(NotNull.class)).isNull();
+        assertThat(ProductAdminController.SkuItemSaveReqVO.class.getDeclaredField("taxIncluded")
+                .getAnnotation(Schema.class).description())
+                .isEqualTo("是否含税：1含税，0不含税；仅记录展示，不参与价格计算；标准商品结算以分销商/项目通用定价为准");
+        assertThat(ProductAdminController.SkuItemSaveReqVO.class.getDeclaredField("taxRate")
+                .getAnnotation(Schema.class).description())
+                .isEqualTo("税率，如0.0600表示6%；仅记录展示，不参与价格计算；标准商品结算以分销商/项目通用定价为准");
     }
 
     /** 所有管理端写入口都不得要求页面决定内部 Schema 编码或版本。 */

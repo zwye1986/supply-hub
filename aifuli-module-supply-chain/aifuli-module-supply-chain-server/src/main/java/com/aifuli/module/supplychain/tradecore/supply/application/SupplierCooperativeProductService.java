@@ -15,6 +15,7 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlem
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSpuMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.PricingDependencyChangedEvent;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierOfferDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierSupplyScopeDO;
@@ -30,6 +31,7 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
@@ -73,6 +75,7 @@ public class SupplierCooperativeProductService {
     private final PlatformSettlementPriceMapper priceMapper;
     private final PlatformSettlementPriceVersionMapper priceVersionMapper;
     private final BusinessNoGenerator businessNoGenerator;
+    private final ApplicationEventPublisher eventPublisher;
 
     /**
      * 批量新增合作商品，状态直接 {@link OfferStatus#PUBLISHED}。供货上限为空时继承命中的供货配置；
@@ -129,6 +132,7 @@ public class SupplierCooperativeProductService {
         offer.setUpdatedBy(operatorId);
         offer.setUpdatedAt(databaseClock.now());
         offerMapper.updateById(offer);
+        eventPublisher.publishEvent(new PricingDependencyChangedEvent(offer.getPlatformSkuId()));
     }
 
     /**
@@ -174,6 +178,9 @@ public class SupplierCooperativeProductService {
         offer.setUpdatedBy(operatorId);
         offer.setUpdatedAt(databaseClock.now());
         offerMapper.updateById(offer);
+        // 已发布版本仍然保留，但 RETIRED 身份不再属于最低有效供货价候选，必须同步生成新价格版本。
+        // 设计见 docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#5-版本继承与可售状态。
+        eventPublisher.publishEvent(new PricingDependencyChangedEvent(offer.getPlatformSkuId()));
     }
 
     /**

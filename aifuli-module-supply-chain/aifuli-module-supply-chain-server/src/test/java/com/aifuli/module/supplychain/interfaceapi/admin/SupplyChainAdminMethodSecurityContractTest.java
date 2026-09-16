@@ -275,6 +275,7 @@ class SupplyChainAdminMethodSecurityContractTest {
                     mock(BuyerAdminQueryService.class),
                     mock(BuyerProductCommandService.class),
                     mock(BuyerProductQueryService.class),
+                    mock(com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericBatchPricingService.class),
                     mock(BuyerInvoiceService.class));
         }
 

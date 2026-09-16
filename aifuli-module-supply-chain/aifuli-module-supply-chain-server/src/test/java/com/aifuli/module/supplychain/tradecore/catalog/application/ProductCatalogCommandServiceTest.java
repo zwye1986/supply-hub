@@ -18,6 +18,7 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSpuMapp
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProductCategoryMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.FulfillmentType;
+import org.springframework.context.ApplicationEventPublisher;
 import com.aifuli.module.supplychain.tradecore.profile.domain.ProductClassification;
 import com.aifuli.module.supplychain.tradecore.profile.domain.SellableCategory;
 import org.junit.jupiter.api.Test;
@@ -53,6 +54,7 @@ class ProductCatalogCommandServiceTest {
     private static final String SPU_CODE = "SPU_1";
 
     private final SupplyChainDatabaseClock clock = mock(SupplyChainDatabaseClock.class);
+    private final ApplicationEventPublisher eventPublisher = mock(ApplicationEventPublisher.class);
     private final BrandMapper brandMapper = mock(BrandMapper.class);
     private final ProductCategoryMapper categoryMapper = mock(ProductCategoryMapper.class);
     private final PlatformSpuMapper spuMapper = mock(PlatformSpuMapper.class);
@@ -71,7 +73,7 @@ class ProductCatalogCommandServiceTest {
     private final PlatformSkuSchemaRegistry skuSchemaRegistry = new PlatformSkuSchemaRegistry(targetSchemaRegistry);
 
     private final ProductCatalogCommandService service = new ProductCatalogCommandService(
-            clock, brandMapper, categoryMapper, spuMapper, skuMapper, buyerMapper, listingMapper,
+            clock, eventPublisher, brandMapper, categoryMapper, spuMapper, skuMapper, buyerMapper, listingMapper,
             availabilityMapper, generator, brandAdminService, categoryCommandService,
             productTypeValidationService, sellabilityService, deletionValidator, targetSchemaRegistry,
             skuSchemaRegistry);

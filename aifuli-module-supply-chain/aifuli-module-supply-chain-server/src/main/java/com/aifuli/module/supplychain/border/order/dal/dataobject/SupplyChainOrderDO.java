@@ -20,6 +20,10 @@ public class SupplyChainOrderDO {
     private Long buyerId;
     /** 采购项目内部主键；历史订单及非项目场景可为空 */
     private Long projectId;
+    /** 标准商品报价凭证主键；O2O/INSTORE为空 */
+    private Long pricingQuoteId;
+    /** 冻结的项目SKU综合定价版本主键 */
+    private Long pricingVersionId;
     private String buyerCodeSnapshot;
     private String buyerNameSnapshot;
     private String buyerUserId;
@@ -31,6 +35,18 @@ public class SupplyChainOrderDO {
     private String displaySupplierCode;
     private String displaySupplierName;
     private Long buyerSettlementAmount;
+    /** 冻结的商品销售单价，单位CNY分 */
+    private Long salesUnitPriceCents;
+    /** 冻结的商品小计，单位CNY分 */
+    private Long productSubtotalCents;
+    /** 冻结的平台服务费，单位CNY分 */
+    private Long serviceFeeCents;
+    /** 冻结的用户应付总额，单位CNY分 */
+    private Long userPayableAmountCents;
+    /** 后续标准售后可全额退还的服务费快照，单位CNY分 */
+    private Long refundableServiceFeeCents;
+    /** 冻结的税务展示属性JSON */
+    private String taxMetadataJson;
     private String currency;
     private Long platformSkuId;
     private String skuCodeSnapshot;

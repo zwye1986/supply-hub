@@ -148,6 +148,8 @@ public class BuyerFulfillmentCommandFacade {
                 projectId, buyer.id(), buyer.buyerCode(), buyer.buyerName(), request.getBuyerOrderNo(),
                 normalizedBuyerUserId, fulfillmentAccountValue, request.getBuyerSkuCode(),
                 Math.toIntExact(request.getListingVersion()), request.getQuantity(),
+                request.getPricingQuoteToken(),
+                request.getPaidAt().atZoneSameInstant(java.time.ZoneId.of("Asia/Shanghai")).toLocalDateTime(),
                 targetSchema.schemaCode(), targetSchema.schemaVersion(),
                 encrypted == null ? null : encrypted.ciphertext(), targetDigest,
                 encrypted == null ? null : encrypted.keyVersion(), targetValid,
@@ -175,6 +177,7 @@ public class BuyerFulfillmentCommandFacade {
         canonical.put("buyerUserId", normalizedBuyerUserId);
         canonical.put("buyerSkuCode", request.getBuyerSkuCode());
         canonical.put("quantity", request.getQuantity());
+        canonical.put("pricingQuoteToken", request.getPricingQuoteToken());
         canonical.put("targetSchemaCode", targetSchema.schemaCode());
         canonical.put("targetSchemaVersion", targetSchema.schemaVersion());
         canonical.put("targetDigest", java.util.HexFormat.of().formatHex(targetDigest));
@@ -205,6 +208,7 @@ public class BuyerFulfillmentCommandFacade {
         if (blank(request.getSourceSystem()) || blank(request.getExternalTenantId())
                 || blank(request.getBuyerOrderNo()) || blank(request.getBuyerUserId())
                 || blank(request.getBuyerSkuCode()) || blank(request.getProjectCode())
+                || blank(request.getPricingQuoteToken())
                 || request.getListingVersion() <= 0 || request.getListingVersion() > Integer.MAX_VALUE
                 || request.getQuantity() <= 0) {
             throw new IllegalArgumentException("Fulfillment request is incomplete");

@@ -46,6 +46,9 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerListingMap
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.FulfillmentType;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.QuoteConsumptionContext;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.StandardPricingQuoteService;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.StandardPricingQuoteService.FrozenQuote;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.ListingAvailability;
 import com.aifuli.module.supplychain.tradecore.ledger.application.AccountLedgerWriter;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.CredentialSlotDO;
@@ -97,6 +100,9 @@ import java.util.concurrent.Future;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PROJECT_NOT_FOUND;
 
 class FulfillmentAcceptanceIntegrationTest {
@@ -522,6 +528,7 @@ class FulfillmentAcceptanceIntegrationTest {
         request.setBuyerUserId("13800138000");
         request.setBuyerSkuCode("WS-TELCO-100");
         request.setListingVersion(listingVersion);
+        request.setPricingQuoteToken("quote-" + buyerOrderNo);
         request.setQuantity(1L);
         request.setPaidAt(OffsetDateTime.now(ZoneOffset.UTC));
         request.setTarget(mobileTarget("13800138000"));
@@ -545,6 +552,7 @@ class FulfillmentAcceptanceIntegrationTest {
         target.setBuyerUserId(source.getBuyerUserId());
         target.setBuyerSkuCode(source.getBuyerSkuCode());
         target.setListingVersion(source.getListingVersion());
+        target.setPricingQuoteToken(source.getPricingQuoteToken());
         target.setQuantity(source.getQuantity());
         target.setPaidAt(source.getPaidAt());
         target.setPreviousReceiptVersion(source.getPreviousReceiptVersion());
@@ -733,6 +741,26 @@ class FulfillmentAcceptanceIntegrationTest {
         @Bean
         MutableFailureInjector failureInjector() {
             return new MutableFailureInjector();
+        }
+
+        /**
+         * 既有履约集成测试聚焦受理原子性，报价签发/绑定由独立定价测试覆盖；这里冻结与原目录价等价的快照。
+         * 设计见 {@code docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#7-项目报价凭证与标准履约}。
+         */
+        @Bean
+        StandardPricingQuoteService pricingQuoteService() {
+            StandardPricingQuoteService service = mock(StandardPricingQuoteService.class);
+            when(service.requireForFulfillment(any(QuoteConsumptionContext.class)))
+                    .thenAnswer(invocation -> {
+                        QuoteConsumptionContext context = invocation.getArgument(0);
+                        long quantity = context.quantity();
+                        return new FrozenQuote(1L, 1L, 9_800L, 10_000L,
+                                Math.multiplyExact(10_000L, quantity), 0L,
+                                Math.multiplyExact(10_000L, quantity),
+                                "{\"taxIncluded\":false,\"taxRateCode\":\"NON_TAXABLE\",\"taxRateLabel\":\"不征税\"}",
+                                false, null);
+                    });
+            return service;
         }
     }
 

@@ -57,6 +57,12 @@ public class AcceptFulfillmentReqDTO implements Serializable {
     @Positive(message = "采购商商品版本必须为正数")
     private Long listingVersion;
 
+    @Schema(description = "标准商品项目报价凭证；绑定项目、用户、SKU、数量与采购商订单号",
+            requiredMode = Schema.RequiredMode.REQUIRED)
+    @NotBlank(message = "标准商品报价凭证不能为空")
+    @Size(max = 64, message = "标准商品报价凭证不能超过 64 个字符")
+    private String pricingQuoteToken;
+
     @Schema(description = "履约数量；一期固定为 1", requiredMode = Schema.RequiredMode.REQUIRED,
             example = "1")
     @NotNull(message = "履约数量不能为空")

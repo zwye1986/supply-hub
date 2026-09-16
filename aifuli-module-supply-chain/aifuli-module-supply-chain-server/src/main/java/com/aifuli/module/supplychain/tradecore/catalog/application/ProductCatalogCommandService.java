@@ -28,6 +28,7 @@ import com.aifuli.module.supplychain.tradecore.catalog.domain.FulfillmentType;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.ListingAvailability;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.PurchaseLimitPeriod;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.UnshelveMode;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.PricingDependencyChangedEvent;
 import com.aifuli.module.supplychain.tradecore.profile.domain.ClosedEnums;
 import com.aifuli.module.supplychain.tradecore.profile.domain.ProductClassification;
 import com.aifuli.module.supplychain.tradecore.profile.domain.SellableCategory;
@@ -36,6 +37,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
@@ -73,6 +75,7 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
 public class ProductCatalogCommandService {
 
     private final SupplyChainDatabaseClock databaseClock;
+    private final ApplicationEventPublisher eventPublisher;
 
     private static final String TRANSACTION_MANAGER = "supplyChainTransactionManager";
     private static final String CURRENCY_CNY = "CNY";
@@ -424,6 +427,7 @@ public class ProductCatalogCommandService {
         Map<String, PlatformSkuDO> byCode = new HashMap<>();
         existing.forEach(sku -> byCode.put(sku.getSkuCode(), sku));
         Set<String> requested = new HashSet<>();
+        Set<Long> priceDependencyChangedSkuIds = new LinkedHashSet<>();
         LocalDateTime now = now();
         for (SaveSkuLine line : command.skus()) {
             String code = hasText(line.skuCode()) ? line.skuCode().trim()
@@ -435,8 +439,14 @@ public class ProductCatalogCommandService {
             if (sku == null) {
                 insertValidatedSku(spu, code, line, skuStatus, schema, command.operatorId(), now);
             } else {
+                Long previousMarketPrice = sku.getMarketPrice();
+                Long previousSuggestedSalePrice = sku.getSuggestedSalePrice();
                 applySku(sku, line, skuStatus, schema, command.operatorId(), now);
                 requireUpdated(skuMapper.updateById(sku));
+                if (!java.util.Objects.equals(previousMarketPrice, sku.getMarketPrice())
+                        || !java.util.Objects.equals(previousSuggestedSalePrice, sku.getSuggestedSalePrice())) {
+                    priceDependencyChangedSkuIds.add(sku.getId());
+                }
             }
         }
         for (PlatformSkuDO sku : existing) {
@@ -449,6 +459,9 @@ public class ProductCatalogCommandService {
                 }
             }
         }
+        // 基础价是公式依赖。主数据写入完成后，在同一事务中为所有已定价分销商/项目生成新不可变版本。
+        // 设计见 docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#5-版本继承与可售状态。
+        priceDependencyChangedSkuIds.forEach(id -> eventPublisher.publishEvent(new PricingDependencyChangedEvent(id)));
     }
 
     /**

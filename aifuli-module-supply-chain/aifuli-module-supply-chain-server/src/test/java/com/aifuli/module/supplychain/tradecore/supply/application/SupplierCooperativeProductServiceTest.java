@@ -36,6 +36,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import org.springframework.context.ApplicationEventPublisher;
 
 /**
  * 合作商品新增即上架、状态仅 PUBLISHED↔SUSPENDED、改价不写版本表。
@@ -52,6 +53,7 @@ class SupplierCooperativeProductServiceTest {
     private final PlatformSpuMapper spuMapper = mock(PlatformSpuMapper.class);
     private final BusinessNoGenerator businessNoGenerator = mock(BusinessNoGenerator.class);
     private final SupplyChainDatabaseClock databaseClock = mock(SupplyChainDatabaseClock.class);
+    private final ApplicationEventPublisher eventPublisher = mock(ApplicationEventPublisher.class);
     private SupplierCooperativeProductService service;
 
     @BeforeEach
@@ -62,7 +64,7 @@ class SupplierCooperativeProductServiceTest {
                 skuMapper, spuMapper,
                 mock(PlatformSettlementPriceMapper.class),
                 mock(PlatformSettlementPriceVersionMapper.class),
-                businessNoGenerator);
+                businessNoGenerator, eventPublisher);
     }
 
     @Test

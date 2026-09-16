@@ -11,13 +11,16 @@ import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerProductMappe
 import com.aifuli.module.supplychain.tradecore.buyer.domain.BuyerProductStatus;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerProductL2OverrideDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerProductL2OverrideVersionDO;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerSkuPricingDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSettlementPriceDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSettlementPriceVersionDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerProductL2OverrideMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerProductL2OverrideVersionMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerSkuPricingMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceVersionMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericPricingCalculator.PricingStatus;
 import com.aifuli.module.supplychain.tradecore.profile.domain.L2AdjustMode;
 import com.aifuli.module.supplychain.tradecore.profile.domain.PriceSource;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -59,6 +62,7 @@ public class BuyerProductCommandService {
     private final PlatformSettlementPriceVersionMapper l1VersionMapper;
     private final BuyerProductL2OverrideMapper overrideMapper;
     private final BuyerProductL2OverrideVersionMapper overrideVersionMapper;
+    private final BuyerSkuPricingMapper buyerPricingMapper;
     private final BusinessNoGenerator businessNoGenerator;
     private final SettlementPriceResolver settlementPriceResolver;
     private final ProductSellabilityService productSellabilityService;
@@ -185,6 +189,7 @@ public class BuyerProductCommandService {
             if (mode != L2AdjustMode.FOLLOW_TEMPLATE) {
                 applyL2Override(existing, sku, mode, line.percent(), line.amountCents(), operatorId, now);
             }
+            ensureUnpricedIdentity(existing.getId(), now);
             return existing.getBuyerProductCode();
         }
         String code = businessNoGenerator.next(BusinessNoPrefixes.BPD);
@@ -206,7 +211,25 @@ public class BuyerProductCommandService {
             throw exception(BUYER_PRODUCT_DUPLICATE);
         }
         applyL2Override(product, sku, mode, line.percent(), line.amountCents(), operatorId, now);
+        ensureUnpricedIdentity(product.getId(), now);
         return code;
+    }
+
+    /**
+     * 新建或复活分销商品时写入通用定价身份，未配置规则前保持 UNPRICED。
+     * 设计见 {@code docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#1-范围与不变量}。
+     */
+    private void ensureUnpricedIdentity(Long buyerProductId, LocalDateTime now) {
+        if (buyerPricingMapper.selectByBuyerProductId(buyerProductId) != null) {
+            return;
+        }
+        buyerPricingMapper.insert(BuyerSkuPricingDO.builder()
+                .buyerProductId(buyerProductId)
+                .pricingStatus(PricingStatus.UNPRICED.name())
+                .version(0L)
+                .createdAt(now)
+                .updatedAt(now)
+                .build());
     }
 
     /**

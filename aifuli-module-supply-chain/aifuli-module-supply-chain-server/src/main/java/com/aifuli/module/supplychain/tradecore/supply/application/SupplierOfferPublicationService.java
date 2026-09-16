@@ -13,6 +13,7 @@ import com.aifuli.module.supplychain.supplieradapter.metadata.SupplierConnectorC
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuDO;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.FulfillmentType;
 import com.aifuli.module.supplychain.tradecore.catalog.application.ProductSellabilityService;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.PricingDependencyChangedEvent;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.InventorySourceDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierConnectorDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierConnectorVersionDO;
@@ -37,6 +38,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
@@ -73,6 +75,7 @@ public class SupplierOfferPublicationService {
     private final OutboxEventRepository outboxRepository;
     private final ObjectMapper objectMapper;
     private final ProductSellabilityService productSellabilityService;
+    private final ApplicationEventPublisher eventPublisher;
 
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public String createRemoteOnDemandInventory(CreateInventorySourceCommand command) {
@@ -201,6 +204,7 @@ public class SupplierOfferPublicationService {
                 new OfferPublishedPayload(offer.getOfferNo(), version.getId(), versionNo,
                         offer.getPlatformSkuId(), offer.getSupplierId()),
                 command.traceId(), command.correlationId(), command.causationId(), now);
+        eventPublisher.publishEvent(new PricingDependencyChangedEvent(offer.getPlatformSkuId()));
         return new PublishResult(offer.getOfferNo(), version.getId(), versionNo, nextAggregateVersion);
     }
 
