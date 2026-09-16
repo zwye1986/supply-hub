@@ -124,7 +124,10 @@ class SupplyChainAdminPermissionContractTest {
                 Map.entry("update", CATEGORY_UPDATE_EXPRESSION),
                 Map.entry("status", CATEGORY_UPDATE_STATUS_EXPRESSION),
                 Map.entry("delete", CATEGORY_DELETE_EXPRESSION)));
-        assertMethodPermissions(PlatformSkuAdminController.class, Map.of("page", PLATFORM_SKU_QUERY_EXPRESSION));
+        assertMethodPermissions(PlatformSkuAdminController.class, Map.of(
+                "page", PLATFORM_SKU_QUERY_EXPRESSION,
+                "previewPricing", PLATFORM_SKU_QUERY_EXPRESSION,
+                "savePricing", PRODUCT_UPDATE_EXPRESSION));
     }
 
     @Test

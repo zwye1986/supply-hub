@@ -35,6 +35,7 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProjectSkuPrici
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProjectSkuPricingDO;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
 import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericPricingCalculator.PricingStatus;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.ProjectListingPricingInitializationEvent;
 import com.aifuli.module.supplychain.tradecore.profile.domain.L2AdjustMode;
 import com.aifuli.module.supplychain.tradecore.profile.domain.L3AdjustMode;
 import com.aifuli.module.supplychain.tradecore.profile.domain.ListingPriceSource;
@@ -42,6 +43,7 @@ import com.aifuli.module.supplychain.tradecore.profile.domain.PriceSource;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.context.ApplicationEventPublisher;
 
 import java.util.List;
 import java.time.LocalDateTime;
@@ -84,6 +86,7 @@ class ProjectListingCommandServiceTest {
             mock(BuyerProductL2OverrideVersionMapper.class);
     private final BusinessNoGenerator businessNoGenerator = mock(BusinessNoGenerator.class);
     private final SupplyChainDatabaseClock databaseClock = mock(SupplyChainDatabaseClock.class);
+    private final ApplicationEventPublisher eventPublisher = mock(ApplicationEventPublisher.class);
     private ProjectListingCommandService service;
     private BuyerProductCommandService buyerProducts;
     private ProjectListingDO storedListing;
@@ -94,15 +97,16 @@ class ProjectListingCommandServiceTest {
         when(databaseClock.now()).thenReturn(LocalDateTime.of(2026, 9, 4, 11, 0));
         SettlementPriceResolver resolver = new SettlementPriceResolver();
         service = new ProjectListingCommandService(
-                databaseClock, projectMapper, buyerMapper, productMapper, skuMapper, listingMapper, listingVersionMapper,
+                databaseClock, eventPublisher, projectMapper, buyerMapper, productMapper, skuMapper,
+                listingMapper, listingVersionMapper,
                 projectPricingMapper, l1Mapper, l1VersionMapper, overrideMapper, overrideVersionMapper,
                 businessNoGenerator, resolver);
         buyerProducts = new BuyerProductCommandService(
-                databaseClock, buyerMapper, productMapper, l1Mapper, l1VersionMapper,
+                databaseClock, eventPublisher, buyerMapper, productMapper, l1Mapper, l1VersionMapper,
                 overrideMapper, overrideVersionMapper, buyerPricingMapper, businessNoGenerator, resolver,
                 new ProductSellabilityService(skuMapper, spuMapper));
         when(projectPricingMapper.selectByListingId(any())).thenReturn(ProjectSkuPricingDO.builder()
-                .id(1L).listingId(80L).pricingStatus("UNPRICED").build());
+                .id(1L).listingId(80L).pricingStatus(PricingStatus.UNPRICED.name()).build());
         when(businessNoGenerator.next(BusinessNoPrefixes.PLT)).thenReturn(LISTING_CODE);
         when(projectMapper.selectByProjectCodeForUpdate(PROJECT_CODE)).thenReturn(BuyerProjectDO.builder()
                 .id(9L).projectCode(PROJECT_CODE).buyerId(5L).build());
@@ -188,6 +192,11 @@ class ProjectListingCommandServiceTest {
         assertThat(identity.getValue().getListingId()).isEqualTo(80L);
         assertThat(identity.getValue().getPricingStatus()).isEqualTo(PricingStatus.UNPRICED.name());
         assertThat(identity.getValue().getCurrentVersionId()).isNull();
+        ArgumentCaptor<ProjectListingPricingInitializationEvent> event =
+                ArgumentCaptor.forClass(ProjectListingPricingInitializationEvent.class);
+        verify(eventPublisher).publishEvent(event.capture());
+        assertThat(event.getValue().listingId()).isEqualTo(80L);
+        assertThat(event.getValue().operatorId()).isEqualTo(1L);
     }
 
     @Test

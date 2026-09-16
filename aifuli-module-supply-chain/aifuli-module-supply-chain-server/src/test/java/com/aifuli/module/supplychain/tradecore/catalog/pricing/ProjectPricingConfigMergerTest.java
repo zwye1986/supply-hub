@@ -17,20 +17,20 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * 项目五组配置继承合并的纯逻辑门禁。
+ * 下游五组配置逐层继承合并的纯逻辑门禁，同一规则同时用于商品默认→分销商及分销商→项目。
  * 设计见 {@code docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#5-版本继承与可售状态}。
  */
 class ProjectPricingConfigMergerTest {
 
     @Test
-    void inheritsAllGroupsFromBuyerWhenProjectDoesNotOverride() {
+    void inheritsAllGroupsFromParentWhenDownstreamDoesNotOverride() {
         PricingConfig parent = parent();
         PricingConfig merged = ProjectPricingConfigMerger.merge(parent, ProjectOverrides.allInherited());
         assertThat(merged).isEqualTo(parent);
     }
 
     @Test
-    void overridesSalesOnlyAndKeepsOtherBuyerGroups() {
+    void overridesSalesOnlyAndKeepsOtherParentGroups() {
         FormulaRule projectSales = new FormulaRule(PriceMode.CUSTOM, PriceBase.MARKET_PRICE,
                 new BigDecimal("120"), FixedOperator.ADD, BigDecimal.ZERO);
         PricingConfig merged = ProjectPricingConfigMerger.merge(parent(),
@@ -47,7 +47,7 @@ class ProjectPricingConfigMergerTest {
         assertThatThrownBy(() -> ProjectPricingConfigMerger.merge(parent(),
                 new ProjectOverrides(false, null, true, null, true, null, true, null, true, null)))
                 .isInstanceOf(NullPointerException.class)
-                .hasMessageContaining("project override config is required");
+                .hasMessageContaining("downstream override config is required");
     }
 
     private static PricingConfig parent() {

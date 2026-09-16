@@ -270,7 +270,7 @@ public class BuyerAdminController {
             @Parameter(description = "采购商永久业务编码") @PathVariable String buyerCode,
             @Valid @RequestBody BuyerProductBatchPricingReqVO request) {
         return success(genericPricingService.previewBuyer(buyerCode, request.getBuyerProductCodes(),
-                GenericPricingRequestMapper.toBuyerConfig(request)));
+                GenericPricingRequestMapper.toBuyerOverrides(request)));
     }
 
     @PutMapping("/{buyerCode}/products/pricing")
@@ -281,7 +281,7 @@ public class BuyerAdminController {
             @Parameter(description = "采购商永久业务编码") @PathVariable String buyerCode,
             @Valid @RequestBody BuyerProductBatchPricingReqVO request) {
         genericPricingService.saveBuyer(buyerCode, request.getBuyerProductCodes(),
-                GenericPricingRequestMapper.toBuyerConfig(request), getLoginUserId());
+                GenericPricingRequestMapper.toBuyerOverrides(request), getLoginUserId());
         return success(true);
     }
 
@@ -525,19 +525,29 @@ public class BuyerAdminController {
         @Size(max = GenericBatchPricingService.MAX_BATCH)
         @Schema(description = "当前分销商下的分销商品编码列表", requiredMode = Schema.RequiredMode.REQUIRED)
         private List<@NotBlank String> buyerProductCodes;
-        @Valid @Schema(description = "分销价规则", requiredMode = Schema.RequiredMode.REQUIRED)
+        @Schema(description = "true时继承商品默认分销价")
+        private boolean distributionInherited;
+        @Valid @Schema(description = "分销价覆盖规则")
         private FormulaRuleReqVO distributionRule;
-        @Valid @Schema(description = "销售价规则", requiredMode = Schema.RequiredMode.REQUIRED)
+        @Schema(description = "true时继承商品默认销售价")
+        private boolean salesInherited;
+        @Valid @Schema(description = "销售价覆盖规则")
         private FormulaRuleReqVO salesRule;
-        @Valid @Schema(description = "服务费规则", requiredMode = Schema.RequiredMode.REQUIRED)
+        @Schema(description = "true时继承商品默认服务费")
+        private boolean serviceFeeInherited;
+        @Valid @Schema(description = "服务费覆盖规则")
         private ServiceFeeRuleReqVO serviceFeeRule;
+        @Schema(description = "true时继承商品默认利润隐藏阈值")
+        private boolean hideInherited;
         @Schema(description = "分销区利润隐藏阈值百分数，0到100，最多2位小数")
         private BigDecimal distributionHideThresholdPercent;
         @Schema(description = "销售区利润隐藏阈值百分数，0到100，最多2位小数")
         private BigDecimal salesHideThresholdPercent;
-        @Schema(description = "是否含税；仅用于结算展示。须与 taxRateCode 同时提交", requiredMode = Schema.RequiredMode.REQUIRED)
+        @Schema(description = "true时继承商品默认税务且不得携带税务字段")
+        private boolean taxInherited;
+        @Schema(description = "是否含税；覆盖时须与 taxRateCode 同时提交")
         private Boolean taxIncluded;
-        @NotBlank @Schema(description = "system动态字典supply_chain_tax_rate的启用值")
+        @Schema(description = "system动态字典supply_chain_tax_rate的启用值")
         private String taxRateCode;
     }
 }

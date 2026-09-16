@@ -57,7 +57,7 @@ class GenericPricingRequestMapperTest {
         request.setSalesRule(direct());
         request.setServiceFeeRule(fee());
         request.setTaxRateCode(PricingTaxRateCodes.NON_TAXABLE);
-        assertThatThrownBy(() -> GenericPricingRequestMapper.toBuyerConfig(request))
+        assertThatThrownBy(() -> GenericPricingRequestMapper.toBuyerOverrides(request))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("together");
     }

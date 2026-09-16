@@ -2,6 +2,7 @@ package com.aifuli.module.supplychain.interfaceapi.admin.pricing;
 
 import com.aifuli.module.supplychain.interfaceapi.admin.BuyerAdminController.BuyerProductBatchPricingReqVO;
 import com.aifuli.module.supplychain.interfaceapi.admin.ProjectAdminController.ProjectProductBatchPricingReqVO;
+import com.aifuli.module.supplychain.interfaceapi.admin.PlatformSkuAdminController.PlatformSkuBatchPricingReqVO;
 import com.aifuli.module.supplychain.interfaceapi.admin.pricing.GenericPricingAdminVos.FormulaRuleReqVO;
 import com.aifuli.module.supplychain.interfaceapi.admin.pricing.GenericPricingAdminVos.HideRuleReqVO;
 import com.aifuli.module.supplychain.interfaceapi.admin.pricing.GenericPricingAdminVos.ServiceFeeRuleReqVO;
@@ -26,13 +27,26 @@ public final class GenericPricingRequestMapper {
     private GenericPricingRequestMapper() {
     }
 
-    public static PricingConfig toBuyerConfig(BuyerProductBatchPricingReqVO request) {
+    public static PricingConfig toPlatformConfig(PlatformSkuBatchPricingReqVO request) {
         PricingTaxGroupValidator.requireComplete(request.getTaxIncluded(), request.getTaxRateCode());
         return new PricingConfig(toFormula(request.getDistributionRule(), true),
                 toFormula(request.getSalesRule(), true),
                 toServiceFee(request.getServiceFeeRule(), true),
                 new HideRule(request.getDistributionHideThresholdPercent(), request.getSalesHideThresholdPercent()),
                 new TaxMetadata(request.getTaxIncluded(), request.getTaxRateCode(), null));
+    }
+
+    public static ProjectOverrides toBuyerOverrides(BuyerProductBatchPricingReqVO request) {
+        PricingTaxGroupValidator.requireProjectGroup(request.isTaxInherited(),
+                request.getTaxIncluded() != null || request.getTaxRateCode() != null,
+                request.getTaxIncluded(), request.getTaxRateCode());
+        return new ProjectOverrides(request.isDistributionInherited(), toFormula(request.getDistributionRule(), false),
+                request.isSalesInherited(), toFormula(request.getSalesRule(), false),
+                request.isServiceFeeInherited(), toServiceFee(request.getServiceFeeRule(), false),
+                request.isHideInherited(), request.isHideInherited() ? null
+                : new HideRule(request.getDistributionHideThresholdPercent(), request.getSalesHideThresholdPercent()),
+                request.isTaxInherited(), request.isTaxInherited() ? null
+                : new TaxMetadata(request.getTaxIncluded(), request.getTaxRateCode(), null));
     }
 
     public static ProjectOverrides toProjectOverrides(ProjectProductBatchPricingReqVO request) {

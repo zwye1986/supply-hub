@@ -281,7 +281,9 @@ class SupplyChainAdminMethodSecurityContractTest {
 
         @Bean
         PlatformSkuAdminController platformSkuAdminController() {
-            return new PlatformSkuAdminController(mock(PlatformSkuQueryService.class));
+            return new PlatformSkuAdminController(
+                    mock(PlatformSkuQueryService.class),
+                    mock(com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericBatchPricingService.class));
         }
 
         @Bean

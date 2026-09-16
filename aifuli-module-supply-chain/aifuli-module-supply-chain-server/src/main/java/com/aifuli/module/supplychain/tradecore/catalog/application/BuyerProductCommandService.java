@@ -21,6 +21,7 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerSkuPricing
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceVersionMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericPricingCalculator.PricingStatus;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.BuyerProductPricingInitializationEvent;
 import com.aifuli.module.supplychain.tradecore.profile.domain.L2AdjustMode;
 import com.aifuli.module.supplychain.tradecore.profile.domain.PriceSource;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -28,6 +29,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
@@ -52,6 +54,7 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
 public class BuyerProductCommandService {
 
     private final SupplyChainDatabaseClock databaseClock;
+    private final ApplicationEventPublisher eventPublisher;
 
     private static final String TRANSACTION_MANAGER = "supplyChainTransactionManager";
     private static final int MAX_BATCH_PRODUCT_COUNT = 200;
@@ -190,6 +193,7 @@ public class BuyerProductCommandService {
                 applyL2Override(existing, sku, mode, line.percent(), line.amountCents(), operatorId, now);
             }
             ensureUnpricedIdentity(existing.getId(), now);
+            eventPublisher.publishEvent(new BuyerProductPricingInitializationEvent(existing.getId(), operatorId));
             return existing.getBuyerProductCode();
         }
         String code = businessNoGenerator.next(BusinessNoPrefixes.BPD);
@@ -212,6 +216,7 @@ public class BuyerProductCommandService {
         }
         applyL2Override(product, sku, mode, line.percent(), line.amountCents(), operatorId, now);
         ensureUnpricedIdentity(product.getId(), now);
+        eventPublisher.publishEvent(new BuyerProductPricingInitializationEvent(product.getId(), operatorId));
         return code;
     }
 

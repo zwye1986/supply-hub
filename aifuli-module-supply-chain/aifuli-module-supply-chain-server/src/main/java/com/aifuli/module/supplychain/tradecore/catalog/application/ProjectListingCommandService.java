@@ -31,6 +31,7 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapp
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProjectListingVersionMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProjectSkuPricingMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericPricingCalculator.PricingStatus;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.ProjectListingPricingInitializationEvent;
 import com.aifuli.module.supplychain.tradecore.profile.domain.L3AdjustMode;
 import com.aifuli.module.supplychain.tradecore.profile.domain.ListingPriceSource;
 import com.aifuli.module.supplychain.tradecore.profile.domain.PriceSource;
@@ -39,6 +40,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
@@ -62,6 +64,7 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
 public class ProjectListingCommandService {
 
     private final SupplyChainDatabaseClock databaseClock;
+    private final ApplicationEventPublisher eventPublisher;
 
     private static final String TRANSACTION_MANAGER = "supplyChainTransactionManager";
     private static final int MAX_BATCH_LISTING_COUNT = 200;
@@ -192,6 +195,7 @@ public class ProjectListingCommandService {
             existing.setUpdatedAt(now);
             publishVersion(existing, product, mode, line.percent(), line.amountCents(), operatorId, now);
             ensureUnpricedIdentity(existing.getId(), now);
+            eventPublisher.publishEvent(new ProjectListingPricingInitializationEvent(existing.getId(), operatorId));
             return existing.getListingCode();
         }
         String code = businessNoGenerator.next(BusinessNoPrefixes.PLT);
@@ -218,10 +222,12 @@ public class ProjectListingCommandService {
             raced.setUpdatedAt(now);
             publishVersion(raced, product, mode, line.percent(), line.amountCents(), operatorId, now);
             ensureUnpricedIdentity(raced.getId(), now);
+            eventPublisher.publishEvent(new ProjectListingPricingInitializationEvent(raced.getId(), operatorId));
             return raced.getListingCode();
         }
         publishVersion(listing, product, mode, line.percent(), line.amountCents(), operatorId, now);
         ensureUnpricedIdentity(listing.getId(), now);
+        eventPublisher.publishEvent(new ProjectListingPricingInitializationEvent(listing.getId(), operatorId));
         return code;
     }
 

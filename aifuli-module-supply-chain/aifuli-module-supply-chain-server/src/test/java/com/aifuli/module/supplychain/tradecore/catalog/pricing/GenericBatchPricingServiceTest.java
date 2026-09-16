@@ -10,12 +10,14 @@ import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerProjectMappe
 import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.ProjectListingMapper;
 import com.aifuli.module.supplychain.tradecore.buyer.domain.BuyerProductStatus;
 import com.aifuli.module.supplychain.tradecore.buyer.domain.BuyerStatus;
-import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerSkuPricingDO;
-import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerSkuPricingVersionDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuDO;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuPricingDO;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuPricingVersionDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerSkuPricingMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerSkuPricingVersionMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuPricingMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuPricingVersionMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSpuMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProjectSkuPricingMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProjectSkuPricingVersionMapper;
@@ -60,6 +62,8 @@ class GenericBatchPricingServiceTest {
     private final ProjectListingMapper listingMapper = mock(ProjectListingMapper.class);
     private final PlatformSkuMapper skuMapper = mock(PlatformSkuMapper.class);
     private final PlatformSpuMapper spuMapper = mock(PlatformSpuMapper.class);
+    private final PlatformSkuPricingMapper platformPricingMapper = mock(PlatformSkuPricingMapper.class);
+    private final PlatformSkuPricingVersionMapper platformVersionMapper = mock(PlatformSkuPricingVersionMapper.class);
     private final BuyerSkuPricingMapper buyerPricingMapper = mock(BuyerSkuPricingMapper.class);
     private final BuyerSkuPricingVersionMapper buyerVersionMapper = mock(BuyerSkuPricingVersionMapper.class);
     private final ProjectSkuPricingMapper projectPricingMapper = mock(ProjectSkuPricingMapper.class);
@@ -75,7 +79,8 @@ class GenericBatchPricingServiceTest {
     void setUp() {
         when(clock.now()).thenReturn(LocalDateTime.of(2026, 9, 16, 10, 0));
         service = new GenericBatchPricingService(buyerMapper, buyerProductMapper, projectMapper, listingMapper,
-                skuMapper, spuMapper, buyerPricingMapper, buyerVersionMapper, projectPricingMapper,
+                skuMapper, spuMapper, platformPricingMapper, platformVersionMapper,
+                buyerPricingMapper, buyerVersionMapper, projectPricingMapper,
                 projectVersionMapper, offerMapper, offerVersionMapper, supplierMapper, taxDictionary, clock,
                 new ObjectMapper());
     }
@@ -84,43 +89,36 @@ class GenericBatchPricingServiceTest {
     void recalculatePropagatesDeserializationFailureInsteadOfMarkingCalculationFailed() {
         PlatformSkuDO sku = PlatformSkuDO.builder().id(8L).skuCode("MOVIE_100").marketPrice(10_000L)
                 .suggestedSalePrice(10_000L).build();
-        BuyerProductDO product = BuyerProductDO.builder().id(1L).buyerProductCode("BPD_1")
-                .platformSkuId(8L).status(BuyerProductStatus.ACTIVE.getCode()).build();
-        BuyerSkuPricingDO identity = BuyerSkuPricingDO.builder().id(20L).buyerProductId(1L)
+        PlatformSkuPricingDO identity = PlatformSkuPricingDO.builder().platformSkuId(8L)
                 .currentVersionId(9L).pricingStatus(PricingStatus.READY.name()).version(0L).build();
-        BuyerSkuPricingVersionDO current = BuyerSkuPricingVersionDO.builder().id(9L).pricingId(20L)
-                .distributionRuleJson("{").salesRuleJson("{}").serviceFeeRuleJson("{}")
-                .hideRuleJson("{}").taxMetadataJson("{}").build();
+        PlatformSkuPricingVersionDO current = PlatformSkuPricingVersionDO.builder().id(9L).platformSkuId(8L)
+                .effectiveConfigJson("{").build();
         when(skuMapper.selectById(8L)).thenReturn(sku);
-        when(buyerProductMapper.selectActiveByPlatformSkuId(8L)).thenReturn(List.of(product));
-        when(buyerPricingMapper.selectByBuyerProductIdForUpdate(1L)).thenReturn(identity);
-        when(buyerVersionMapper.selectById(9L)).thenReturn(current);
-        when(listingMapper.selectAvailableByBuyerProductId(1L)).thenReturn(List.of());
+        when(platformPricingMapper.selectBySkuIdForUpdate(8L)).thenReturn(identity);
+        when(platformVersionMapper.selectById(9L)).thenReturn(current);
 
         assertThatThrownBy(() -> service.recalculatePlatformSku(new PricingDependencyChangedEvent(8L)))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("deserialization");
 
-        ArgumentCaptor<BuyerSkuPricingDO> updated = ArgumentCaptor.forClass(BuyerSkuPricingDO.class);
-        verify(buyerPricingMapper).updateById(updated.capture());
+        ArgumentCaptor<PlatformSkuPricingDO> updated = ArgumentCaptor.forClass(PlatformSkuPricingDO.class);
+        verify(platformPricingMapper).updateById(updated.capture());
         assertThat(updated.getAllValues())
-                .extracting(BuyerSkuPricingDO::getPricingStatus)
+                .extracting(PlatformSkuPricingDO::getPricingStatus)
                 .doesNotContain(PricingStatus.CALCULATION_FAILED.name());
     }
 
     @Test
-    void saveBuyerDoesNotPublishWhenTaxDictionaryUnavailable() {
-        when(buyerMapper.selectByBuyerCodeForUpdate("BYR_A")).thenReturn(BuyerDO.builder()
-                .id(5L).buyerCode("BYR_A").status(BuyerStatus.ACTIVE.getCode()).build());
+    void savePlatformDoesNotPublishWhenTaxDictionaryUnavailable() {
         when(taxDictionary.requireEnabled(any(), anyString()))
                 .thenThrow(new IllegalStateException("tax rate dictionary is unavailable"));
 
-        assertThatThrownBy(() -> service.saveBuyer("BYR_A", List.of("BPD_1"), config(), 1L))
+        assertThatThrownBy(() -> service.savePlatform(List.of("SKU_1"), config(), 1L))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("tax rate dictionary is unavailable");
-        verify(buyerProductMapper, never()).selectByCodeForUpdate(any());
-        verify(buyerPricingMapper, never()).insert(any(BuyerSkuPricingDO.class));
-        verify(buyerVersionMapper, never()).insert(any(BuyerSkuPricingVersionDO.class));
+        verify(skuMapper, never()).selectByCodeForUpdate(any());
+        verify(platformPricingMapper, never()).insert(any(PlatformSkuPricingDO.class));
+        verify(platformVersionMapper, never()).insert(any(PlatformSkuPricingVersionDO.class));
     }
 
     private static PricingConfig config() {

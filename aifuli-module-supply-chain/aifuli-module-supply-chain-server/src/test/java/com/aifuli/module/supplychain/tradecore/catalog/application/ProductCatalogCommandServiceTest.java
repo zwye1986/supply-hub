@@ -14,6 +14,7 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BrandMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerListingAvailabilityMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerListingMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuPricingMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSpuMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProductCategoryMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
@@ -59,6 +60,7 @@ class ProductCatalogCommandServiceTest {
     private final ProductCategoryMapper categoryMapper = mock(ProductCategoryMapper.class);
     private final PlatformSpuMapper spuMapper = mock(PlatformSpuMapper.class);
     private final PlatformSkuMapper skuMapper = mock(PlatformSkuMapper.class);
+    private final PlatformSkuPricingMapper platformSkuPricingMapper = mock(PlatformSkuPricingMapper.class);
     private final BuyerMapper buyerMapper = mock(BuyerMapper.class);
     private final BuyerListingMapper listingMapper = mock(BuyerListingMapper.class);
     private final BuyerListingAvailabilityMapper availabilityMapper = mock(BuyerListingAvailabilityMapper.class);
@@ -73,7 +75,8 @@ class ProductCatalogCommandServiceTest {
     private final PlatformSkuSchemaRegistry skuSchemaRegistry = new PlatformSkuSchemaRegistry(targetSchemaRegistry);
 
     private final ProductCatalogCommandService service = new ProductCatalogCommandService(
-            clock, eventPublisher, brandMapper, categoryMapper, spuMapper, skuMapper, buyerMapper, listingMapper,
+            clock, eventPublisher, brandMapper, categoryMapper, spuMapper, skuMapper, platformSkuPricingMapper,
+            buyerMapper, listingMapper,
             availabilityMapper, generator, brandAdminService, categoryCommandService,
             productTypeValidationService, sellabilityService, deletionValidator, targetSchemaRegistry,
             skuSchemaRegistry);

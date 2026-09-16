@@ -21,6 +21,12 @@ public class BuyerSkuPricingVersionDO {
     private Long pricingId;
     /** 定价版本号，从1递增 */
     private Integer versionNo;
+    /** 解析时引用的商品默认定价版本主键 */
+    private Long platformPricingVersionId;
+    /** 分销商五组继承开关及覆盖规则JSON */
+    private String overrideJson;
+    /** 继承合并后的完整有效配置JSON */
+    private String effectiveConfigJson;
     /** 分销价规则快照JSON */
     private String distributionRuleJson;
     /** 销售价规则快照JSON */

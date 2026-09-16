@@ -251,7 +251,9 @@ class ProjectAdminIntegrationTest {
                         new BigDecimal("1.00"), false, "服务费："),
                 new HideRule(new BigDecimal("10"), new BigDecimal("5")),
                 new TaxMetadata(false, "NON_TAXABLE", null));
-        pricing.saveBuyer(buyerA, List.of(buyerProductCode), config, 1L);
+        pricing.savePlatform(List.of(sku.getSkuCode()), config, 1L);
+        pricing.saveBuyer(buyerA, List.of(buyerProductCode),
+                GenericBatchPricingService.ProjectOverrides.allInherited(), 1L);
 
         var buyerProduct = context.getBean(BuyerProductMapper.class).selectByCode(buyerProductCode);
         var buyerIdentity = context.getBean(com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerSkuPricingMapper.class)
@@ -274,7 +276,8 @@ class ProjectAdminIntegrationTest {
 
         Long currentBeforeRejectedBatch = buyerIdentity.getCurrentVersionId();
         assertThatThrownBy(() -> pricing.saveBuyer(buyerA,
-                List.of(buyerProductCode, "BPD_NOT_BELONG_TO_CURRENT_BUYER"), config, 1L))
+                List.of(buyerProductCode, "BPD_NOT_BELONG_TO_CURRENT_BUYER"),
+                GenericBatchPricingService.ProjectOverrides.allInherited(), 1L))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThat(context.getBean(com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerSkuPricingMapper.class)
                 .selectByBuyerProductId(buyerProduct.getId()).getCurrentVersionId())

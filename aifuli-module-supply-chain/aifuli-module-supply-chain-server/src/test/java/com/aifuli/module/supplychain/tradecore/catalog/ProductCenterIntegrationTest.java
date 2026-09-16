@@ -17,11 +17,14 @@ import com.aifuli.module.supplychain.tradecore.catalog.application.ProductCatalo
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSettlementPriceDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSettlementPriceVersionDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuDO;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuPricingDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BrandMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceVersionMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuPricingMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericPricingCalculator.PricingStatus;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterAll;
@@ -84,6 +87,7 @@ class ProductCenterIntegrationTest {
             PlatformSkuQueryService platformSkuQueryService = context.getBean(PlatformSkuQueryService.class);
             BrandMapper brandMapper = context.getBean(BrandMapper.class);
             PlatformSkuMapper skuMapper = context.getBean(PlatformSkuMapper.class);
+            PlatformSkuPricingMapper platformPricingMapper = context.getBean(PlatformSkuPricingMapper.class);
             PlatformSettlementPriceMapper priceMapper = context.getBean(PlatformSettlementPriceMapper.class);
             PlatformSettlementPriceVersionMapper priceVersionMapper =
                     context.getBean(PlatformSettlementPriceVersionMapper.class);
@@ -142,6 +146,9 @@ class ProductCenterIntegrationTest {
             assertThat(platformSku.getTargetSchemaVersion()).isEqualTo(1);
             assertThat(platformSku.getResultSchemaCode()).isEqualTo("DIRECT_RECHARGE_RESULT");
             assertThat(platformSku.getResultSchemaVersion()).isEqualTo(1);
+            PlatformSkuPricingDO defaultPricing = platformPricingMapper.selectById(platformSku.getId());
+            assertThat(defaultPricing.getPricingStatus()).isEqualTo(PricingStatus.UNPRICED.name());
+            assertThat(defaultPricing.getCurrentVersionId()).isNull();
             LocalDateTime now = LocalDateTime.now();
             PlatformSettlementPriceVersionDO priceVersion = PlatformSettlementPriceVersionDO.builder()
                     .platformSkuId(platformSku.getId())

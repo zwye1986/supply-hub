@@ -27,10 +27,12 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapp
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSpuMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
 import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericPricingCalculator.PricingStatus;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.BuyerProductPricingInitializationEvent;
 import com.aifuli.module.supplychain.tradecore.profile.domain.L2AdjustMode;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.context.ApplicationEventPublisher;
 
 import java.util.List;
 import java.time.LocalDateTime;
@@ -66,13 +68,14 @@ class BuyerProductCommandServiceTest {
     private final BuyerSkuPricingMapper buyerPricingMapper = mock(BuyerSkuPricingMapper.class);
     private final BusinessNoGenerator businessNoGenerator = mock(BusinessNoGenerator.class);
     private final SupplyChainDatabaseClock databaseClock = mock(SupplyChainDatabaseClock.class);
+    private final ApplicationEventPublisher eventPublisher = mock(ApplicationEventPublisher.class);
     private BuyerProductCommandService service;
 
     @BeforeEach
     void setUp() {
         when(databaseClock.now()).thenReturn(LocalDateTime.of(2026, 9, 4, 11, 0));
         service = new BuyerProductCommandService(
-                databaseClock, buyerMapper, productMapper, l1Mapper, l1VersionMapper,
+                databaseClock, eventPublisher, buyerMapper, productMapper, l1Mapper, l1VersionMapper,
                 overrideMapper, overrideVersionMapper, buyerPricingMapper, businessNoGenerator,
                 new SettlementPriceResolver(), new ProductSellabilityService(skuMapper, spuMapper));
         when(buyerMapper.selectByBuyerCodeForUpdate("BYR_A")).thenReturn(
@@ -241,6 +244,11 @@ class BuyerProductCommandServiceTest {
         assertThat(identity.getValue().getBuyerProductId()).isEqualTo(88L);
         assertThat(identity.getValue().getPricingStatus()).isEqualTo(PricingStatus.UNPRICED.name());
         assertThat(identity.getValue().getCurrentVersionId()).isNull();
+        ArgumentCaptor<BuyerProductPricingInitializationEvent> event =
+                ArgumentCaptor.forClass(BuyerProductPricingInitializationEvent.class);
+        verify(eventPublisher).publishEvent(event.capture());
+        assertThat(event.getValue().buyerProductId()).isEqualTo(88L);
+        assertThat(event.getValue().operatorId()).isEqualTo(1L);
     }
 
     private void stubLiveProduct() {

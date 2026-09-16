@@ -12,12 +12,14 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BrandDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerListingAvailabilityDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerListingDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuDO;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuPricingDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSpuDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProductCategoryDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BrandMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerListingAvailabilityMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerListingMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuPricingMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSpuMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProductCategoryMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.BuyerListingStatus;
@@ -29,6 +31,7 @@ import com.aifuli.module.supplychain.tradecore.catalog.domain.ListingAvailabilit
 import com.aifuli.module.supplychain.tradecore.catalog.domain.PurchaseLimitPeriod;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.UnshelveMode;
 import com.aifuli.module.supplychain.tradecore.catalog.pricing.PricingDependencyChangedEvent;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericPricingCalculator.PricingStatus;
 import com.aifuli.module.supplychain.tradecore.profile.domain.ClosedEnums;
 import com.aifuli.module.supplychain.tradecore.profile.domain.ProductClassification;
 import com.aifuli.module.supplychain.tradecore.profile.domain.SellableCategory;
@@ -110,6 +113,7 @@ public class ProductCatalogCommandService {
     private final ProductCategoryMapper categoryMapper;
     private final PlatformSpuMapper spuMapper;
     private final PlatformSkuMapper skuMapper;
+    private final PlatformSkuPricingMapper platformSkuPricingMapper;
     private final BuyerMapper buyerMapper;
     private final BuyerListingMapper listingMapper;
     private final BuyerListingAvailabilityMapper availabilityMapper;
@@ -529,6 +533,11 @@ public class ProductCatalogCommandService {
         applyUserLimit(sku, line, false);
         applyPhoneBindLimit(sku, line, false);
         skuMapper.insert(sku);
+        // 每个新 SKU 必须显式拥有商品默认定价身份；没有有效版本时保持 UNPRICED，禁止用户端展示和下单。
+        // 设计见 docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#5-版本继承与可售状态。
+        platformSkuPricingMapper.insert(PlatformSkuPricingDO.builder()
+                .platformSkuId(sku.getId()).pricingStatus(PricingStatus.UNPRICED.name())
+                .version(0L).createdAt(now).updatedAt(now).build());
     }
 
     private void applySku(PlatformSkuDO sku, SaveSkuLine line, CatalogEntityStatus status, SchemaDefinition schema,

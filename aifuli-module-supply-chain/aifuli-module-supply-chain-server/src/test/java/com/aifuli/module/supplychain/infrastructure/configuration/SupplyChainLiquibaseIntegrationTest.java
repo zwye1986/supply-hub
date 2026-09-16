@@ -62,6 +62,7 @@ class SupplyChainLiquibaseIntegrationTest {
                         "sc_supplier_supply_scope_mode", "sc_supplier_integration_mode",
                         "sc_supplier_file_ref", "sc_buyer_contact", "sc_buyer_product",
                         "sc_project_listing", "sc_platform_settlement_price_version",
+                        "sc_platform_sku_pricing", "sc_platform_sku_pricing_version",
                         "sc_buyer_sku_pricing", "sc_buyer_sku_pricing_version",
                         "sc_project_sku_pricing", "sc_project_sku_pricing_version",
                         "sc_standard_pricing_quote",
@@ -116,6 +117,10 @@ class SupplyChainLiquibaseIntegrationTest {
                         "sc_supply_chain_order.user_payable_amount_cents",
                         "sc_supply_chain_order.refundable_service_fee_cents",
                         "sc_supply_chain_order.tax_metadata_json",
+                        "sc_platform_sku_pricing_version.effective_config_json",
+                        "sc_buyer_sku_pricing_version.platform_pricing_version_id",
+                        "sc_buyer_sku_pricing_version.override_json",
+                        "sc_buyer_sku_pricing_version.effective_config_json",
                         "sc_supply_chain_order.fulfillment_account_value",
                         "sc_product_category.visible");
         assertThat(firstStartup.projectAuthNonceColumnDefinitions()).containsExactly(
@@ -132,6 +137,7 @@ class SupplyChainLiquibaseIntegrationTest {
                         "sc_brand.uk_sc_brand_name",
                         "sc_product_category.uk_sc_category_live_parent_name",
                         "sc_product_type.uk_sc_product_type_name",
+                        "sc_platform_sku_pricing_version.uk_sc_platform_sku_pricing_version",
                         "sc_buyer_sku_pricing.uk_sc_buyer_sku_pricing_product",
                         "sc_project_sku_pricing.uk_sc_project_sku_pricing_listing",
                         "sc_standard_pricing_quote.uk_sc_standard_quote_token");
@@ -176,14 +182,14 @@ class SupplyChainLiquibaseIntegrationTest {
                         FROM information_schema.COLUMNS
                         WHERE TABLE_SCHEMA = DATABASE()
                           AND TABLE_NAME LIKE 'sc\\_%'
-                        """)).isEqualTo(110L);
+                        """)).isEqualTo(112L);
                 assertThat(queryLong(connection, """
                         SELECT COUNT(*)
                         FROM information_schema.COLUMNS
                         WHERE TABLE_SCHEMA = DATABASE()
                           AND TABLE_NAME LIKE 'sc\\_%'
                           AND DATA_TYPE = 'datetime'
-                        """)).isEqualTo(267L);
+                        """)).isEqualTo(271L);
                 assertThat(queryLong(connection, """
                         SELECT COUNT(*)
                         FROM information_schema.COLUMNS

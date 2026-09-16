@@ -1,23 +1,25 @@
 # 通用批量定价与项目报价详细设计
 
 本文取代 `2026-09-12-supply-chain-prd-scope-alignment-design.md` 中“本期无模板、销售价仅取平台
-SKU 建议价”的限制，并取代 `2026-09-11-supply-chain-product-center-design.md` d20 中税务信息归属
-平台 SKU 的设计。本文的“模板”是一次性应用到当前所选 SKU 的通用规则，不是可命名、复用或自动套用
+SKU 建议价”的限制。本文的“模板”是一次性应用到当前所选 SKU 的通用规则，不是可命名、复用或自动套用
 未来 SKU 的模板资产。
 
 ## 1. 范围与不变量
 
 1. 一期仅适用于标准商品（卡券、直充等）。淘宝闪购 O2O 与大润发 INSTORE 继续冻结渠道实付金额。
-2. 单次操作只允许位于一个分销商或一个项目，最多 200 个 SKU；同一事务全部成功或全部回滚。
-3. 新分销商品没有定价规则时为 `UNPRICED`，用户端不可见、不可报价、不可下单。创建分销商品时必须同步
+2. 单次操作只允许位于商品默认、一个分销商或一个项目作用域，最多 200 个 SKU；同一事务全部成功或全部回滚。
+3. 三层解析顺序为“平台商品/SKU 默认定价 → 分销商 + SKU 继承/覆盖 → 项目 + SKU 继承/覆盖”。三层均按
+   分销价、销售价、服务费、利润隐藏、税务五组配置；税务也纳入商品默认层。下游每组可整组继承或整组覆盖，
+   税务覆盖时 `taxIncluded` 与 `taxRateCode` 必须同时显式传入，继承时不得携带任一税务字段。
+4. 新平台 SKU 没有商品默认定价时为 `UNPRICED`。创建 SKU 时同步插入商品定价身份；创建分销商品时必须同步
    插入 `sc_buyer_sku_pricing` 身份行（`pricing_status=UNPRICED`，`current_version_id` 为空）；创建项目
    商品时同步插入 `sc_project_sku_pricing` 身份行。采购商目录 `availableOnly=true` 只返回分销商定价
    `READY` 的标准商品；全量目录对非 `READY` 身份标记为不可用。报价与标准履约只接受项目定价 `READY`。
-   项目默认继承分销商配置，可按分销价、销售价、服务费、利润隐藏、税务五组分别覆盖；税务组内禁止只覆盖
-   一个字段，覆盖时 `taxIncluded` 与 `taxRateCode` 必须同时显式传入，继承时不得携带任一税务覆盖字段。
-4. 持久化公式和当时计算结果。依赖变化时创建新不可变版本，不修改历史版本；已签发报价及订单继续引用
+   新建或复活下游商品时，若直接上游已有定价版本，则在同一事务立即按全继承配置生成下游版本；若上游尚未
+   定价则保持 `UNPRICED`，待上游首次保存时由级联重算自动生成。
+5. 持久化公式和当时计算结果。依赖或上游有效配置变化时逐层创建新不可变版本，不修改历史版本；已签发报价及订单继续引用
    原版本。
-5. 价格重算期间、依赖缺失、最低有效供货价为零、利润低于阈值时，仅当前分销商及其项目不可售，
+6. 价格重算期间、依赖缺失、最低有效供货价为零、利润低于阈值时，仅受影响的商品、分销商及项目定价不可售，
    不修改平台 SPU/SKU 的上下架状态。条件恢复后自动恢复。
 
 ## 2. 公式与精度
@@ -58,9 +60,8 @@ SKU 建议价”的限制，并取代 `2026-09-11-supply-chain-product-center-de
 
 ## 4. 税务展示属性
 
-税务信息只用于结算展示，不参与定价、利润、服务费或路由。分销商 + SKU 保存默认税务配置，项目可整体
-继承或整体覆盖。平台 SKU 的 `taxIncluded`/`taxRate` 仅保留商品中心历史展示，标准商品结算与报价税务
-以分销商/项目通用定价为准。税率来自 system 字典 `supply_chain_tax_rate`，供应链通过显式注册的
+税务信息只用于结算展示，不参与定价、利润、服务费或路由。平台商品/SKU 保存默认税务配置，分销商 + SKU 可整体继承或
+整体覆盖，项目 + SKU 再可整体继承或整体覆盖。有效税务解析顺序为“项目覆盖 > 分销商覆盖 > 商品默认”。税率来自 system 字典 `supply_chain_tax_rate`，供应链通过显式注册的
 `DictDataCommonApi` 实时读取启用项校验，不跨库读取 `system_*`。RPC 不可用时保存失败并整批回滚；既有
 价格读取和下单不依赖字典 RPC。
 
@@ -71,17 +72,17 @@ SKU 建议价”的限制，并取代 `2026-09-11-supply-chain-product-center-de
 
 ## 5. 版本、继承与可售状态
 
-分销商配置由 `sc_buyer_sku_pricing` 指向不可变 `sc_buyer_sku_pricing_version`；项目配置由
-`sc_project_sku_pricing` 指向不可变 `sc_project_sku_pricing_version`。项目版本同时保存每组覆盖标记、
-覆盖规则和解析后的完整有效快照，因此分销商规则或基础价格变化时，会为受影响项目生成新版本。
+商品默认配置由 `sc_platform_sku_pricing` 指向不可变 `sc_platform_sku_pricing_version`；分销商配置由 `sc_buyer_sku_pricing`
+指向不可变 `sc_buyer_sku_pricing_version`；项目配置由
+`sc_project_sku_pricing` 指向不可变 `sc_project_sku_pricing_version`。分销商与项目版本都同时保存每组继承标记、
+覆盖规则和解析后的完整有效快照，因此商品默认、分销商规则或基础价格变化时，会逐层为受影响对象生成新版本。
 
 有效配置解析顺序：
 
-- 分销价：项目覆盖 > 分销商配置；没有分销商配置即未定价，不再自动回退旧 L1。
-- 销售价：项目覆盖 > 分销商配置。
-- 服务费：项目覆盖 > 分销商配置。
-- 利润隐藏：项目覆盖 > 分销商配置；组内仍取两个输入阈值的较高者。
-- 税务：项目整体覆盖 > 分销商整体配置。
+- 分销价、销售价、服务费：项目覆盖 > 分销商覆盖 > 商品默认。
+- 利润隐藏：项目覆盖 > 分销商覆盖 > 商品默认；组内仍取两个输入阈值的较高者。
+- 税务：项目整体覆盖 > 分销商整体覆盖 > 商品默认。
+- 商品默认尚未定价时，下游继承组无法解析，该 SKU 保持 `UNPRICED`；旧 `sc_platform_settlement_price` L1 仅保留兼容，不是新三层通用定价的上游。
 
 可售状态取 `READY`、`UNPRICED`、`RECALCULATING`、`DEPENDENCY_MISSING`、`CALCULATION_FAILED`、
 `MARGIN_HIDDEN`。管理端批量保存发现负数等确定性非法结果时整批失败；仅依赖缺失允许落规则并进入不可售。
@@ -97,14 +98,16 @@ SKU 建议价”的限制，并取代 `2026-09-11-supply-chain-product-center-de
 
 ## 6. 管理端接口
 
-保留路径并升级请求：
+新增商品默认定价路径，并保留分销商/项目路径：
 
+- `POST /supply-chain/products/skus/pricing/preview`
+- `PUT /supply-chain/products/skus/pricing`
 - `POST /supply-chain/buyers/{buyerCode}/products/pricing/preview`
 - `PUT /supply-chain/buyers/{buyerCode}/products/pricing`
 - `POST /supply-chain/projects/{projectCode}/products/pricing/preview`
 - `PUT /supply-chain/projects/{projectCode}/products/pricing`
 
-分销商请求携带所选 `buyerProductCodes` 和五组配置；项目请求携带 `listingCodes`，每组包含
+商品请求携带所选 `platformSkuCodes` 和五组完整默认配置；分销商请求携带 `buyerProductCodes`，项目请求携带 `listingCodes`，两个下游层每组都包含
 `inherit=true` 或完整覆盖配置。预览不落库，逐 SKU 返回三个依赖价格、计算结果、利润率和预期可售状态。
 保存由服务端重新计算，不能信任预览结果。
 

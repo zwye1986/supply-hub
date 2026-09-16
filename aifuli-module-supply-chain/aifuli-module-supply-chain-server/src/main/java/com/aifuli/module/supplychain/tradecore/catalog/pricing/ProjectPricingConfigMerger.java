@@ -6,7 +6,8 @@ import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericPricingCal
 import java.util.Objects;
 
 /**
- * 项目五组配置相对分销商默认值的继承合并。纯函数，供预览、保存、报价与单测共用。
+ * 下游五组配置相对直接上游有效值的继承合并。分销商以商品默认层为上游，项目以分销商层为上游。
+ * 该纯函数由预览、保存、依赖重算、报价与单测共用，保证三层解析语义一致。
  * 设计见 {@code docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#5-版本继承与可售状态}。
  */
 public final class ProjectPricingConfigMerger {
@@ -15,8 +16,8 @@ public final class ProjectPricingConfigMerger {
     }
 
     public static PricingConfig merge(PricingConfig parent, ProjectOverrides override) {
-        Objects.requireNonNull(parent, "buyer pricing config is required");
-        Objects.requireNonNull(override, "project overrides are required");
+        Objects.requireNonNull(parent, "parent pricing config is required");
+        Objects.requireNonNull(override, "downstream overrides are required");
         return new PricingConfig(
                 override.distributionInherited() ? parent.distributionRule() : require(override.distributionRule()),
                 override.salesInherited() ? parent.salesRule() : require(override.salesRule()),
@@ -26,6 +27,6 @@ public final class ProjectPricingConfigMerger {
     }
 
     private static <T> T require(T value) {
-        return Objects.requireNonNull(value, "project override config is required when inherit=false");
+        return Objects.requireNonNull(value, "downstream override config is required when inherit=false");
     }
 }
