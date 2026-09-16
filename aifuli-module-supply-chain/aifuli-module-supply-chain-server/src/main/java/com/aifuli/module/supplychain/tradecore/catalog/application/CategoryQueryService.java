@@ -12,12 +12,16 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import cn.hutool.core.util.StrUtil;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 import java.util.function.Function;
 
 import static com.aifuli.framework.common.exception.util.ServiceExceptionUtil.exception;
@@ -58,28 +62,84 @@ public class CategoryQueryService {
     }
 
     /**
-     * 查询商品中心管理树。该方法不会改变 {@link #tree()} 的启用选项契约。
+     * 查询商品中心管理树（无筛选全量树重载）。
      * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#42-商品分类管理categoryadmincontroller}。
      */
     public List<ManagementCategoryNode> managementTree() {
+        return managementTree(null, null);
+    }
+
+    /**
+     * 查询商品中心管理树，支持编码/名称关键字与状态筛选。
+     * 该方法不会改变 {@link #tree()} 的启用选项契约。
+     * 采用「树枝保留模式」（Branch-Preserving Filter）：
+     * 1. 节点自身命中条件（状态一致且关键字命中名称或编码）；
+     * 2. 若子节点命中，沿祖先链向上保留所有父级节点以维持树形层级结构，剪除非命中且无命中后代的无关分支；
+     * 3. 结果集节点维持既有同级排序 (sort ASC, id ASC)。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线} d14
+     * 与 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#42-商品分类管理categoryadmincontroller}。
+     */
+    public List<ManagementCategoryNode> managementTree(String keyword, Short status) {
+        String trimmedKeyword = StrUtil.trimToNull(keyword);
+        log.info("查询商品分类管理树 keyword={}, status={}", trimmedKeyword, status);
         List<ProductCategoryDO> rows = categoryMapper.selectList(new LambdaQueryWrapper<ProductCategoryDO>()
                 .ne(ProductCategoryDO::getStatus, CatalogEntityStatus.ARCHIVED.getCode())
                 .orderByAsc(ProductCategoryDO::getSort)
                 .orderByAsc(ProductCategoryDO::getId));
         Map<Long, ProductCategoryDO> rowById = new LinkedHashMap<>();
         rows.forEach(row -> rowById.put(row.getId(), row));
+
+        boolean filterActive = trimmedKeyword != null || status != null;
+        Set<Long> retainedIds;
+        if (!filterActive) {
+            retainedIds = rowById.keySet();
+        } else {
+            retainedIds = new HashSet<>();
+            for (ProductCategoryDO row : rows) {
+                if (matchesCategory(row, trimmedKeyword, status)) {
+                    retainedIds.add(row.getId());
+                    // 向上回溯保留所有祖先节点以维持树形拓扑
+                    Long currentParentId = row.getParentId();
+                    Set<Long> traceVisited = new HashSet<>();
+                    traceVisited.add(row.getId());
+                    while (currentParentId != null && traceVisited.add(currentParentId)) {
+                        retainedIds.add(currentParentId);
+                        ProductCategoryDO parentRow = rowById.get(currentParentId);
+                        if (parentRow == null) {
+                            break;
+                        }
+                        currentParentId = parentRow.getParentId();
+                    }
+                }
+            }
+        }
+
         Map<Long, Long> productCounts = productCounts();
         // effectiveVisible 依赖祖先链，必须在建节点前算好，否则建树后还要重新替换 children 中的节点引用。
         Map<Long, Boolean> visibilityCache = new HashMap<>();
         Map<Long, ManagementCategoryNode> byId = new LinkedHashMap<>();
         for (ProductCategoryDO row : rows) {
-            byId.put(row.getId(), new ManagementCategoryNode(row.getId(), row.getCategoryCode(),
-                    row.getCategoryName(), row.getCategoryLevel(), row.getParentId(), row.getSort(),
-                    row.getVisible(), row.getStatus(), effectiveVisible(row, rowById, visibilityCache),
-                    productCounts.getOrDefault(row.getId(), 0L), new ArrayList<>()));
+            if (retainedIds.contains(row.getId())) {
+                byId.put(row.getId(), new ManagementCategoryNode(row.getId(), row.getCategoryCode(),
+                        row.getCategoryName(), row.getCategoryLevel(), row.getParentId(), row.getSort(),
+                        row.getVisible(), row.getStatus(), effectiveVisible(row, rowById, visibilityCache),
+                        productCounts.getOrDefault(row.getId(), 0L), new ArrayList<>()));
+            }
         }
-        log.info("查询商品分类管理树 rowCount={}", rows.size());
+        log.info("查询商品分类管理树 totalRows={}, retainedRows={}", rows.size(), retainedIds.size());
         return assembleTree(byId, ManagementCategoryNode::parentId, ManagementCategoryNode::children);
+    }
+
+    private static boolean matchesCategory(ProductCategoryDO row, String keyword, Short status) {
+        if (status != null && !Objects.equals(row.getStatus(), status)) {
+            return false;
+        }
+        if (keyword != null) {
+            boolean nameMatch = row.getCategoryName() != null && row.getCategoryName().contains(keyword);
+            boolean codeMatch = row.getCategoryCode() != null && row.getCategoryCode().contains(keyword);
+            return nameMatch || codeMatch;
+        }
+        return true;
     }
 
     /**

@@ -24,6 +24,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -62,9 +63,14 @@ public class CategoryAdminController {
 
     @GetMapping("/management-tree")
     @PreAuthorize(CATEGORY_QUERY_EXPRESSION)
-    @Operation(summary = "查询商品分类管理树", description = "包含草稿、停用节点、显示状态和关联商品数。")
-    public CommonResult<List<ManagementCategoryNode>> managementTree() {
-        return success(queryService.managementTree());
+    @Operation(summary = "查询商品分类管理树",
+            description = "包含草稿、停用节点、显示状态和关联商品数。支持状态与关键字筛选，采用树枝保留模式保留命中节点祖先链路。")
+    public CommonResult<List<ManagementCategoryNode>> managementTree(
+            @Parameter(description = "分类编码或名称模糊搜索", example = "电子")
+            @RequestParam(required = false) String keyword,
+            @Parameter(description = "分类状态：0草稿，10启用，20停用", example = "10")
+            @RequestParam(required = false) Short status) {
+        return success(queryService.managementTree(keyword, status));
     }
 
     @GetMapping("/{categoryCode}")

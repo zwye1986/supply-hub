@@ -21,7 +21,7 @@
 | **d11** | **复合表单契约、品牌唯一约束与 Schema 安全防线** | SPU+SKU 复合创建/编辑接口采用事务内原子保存；`sc_brand` 在 `028` DDL 中追加 `uk_sc_brand_name` 唯一索引；业务编码（`SPU_`, `SKU_`, `BRD_`, `CAT_`, `PT_`）支持「前端传入或缺省由 `BusinessNoGenerator` 自动生成」。全部管理端 SKU 写请求只暴露业务字段 `fulfillmentType`，不得要求管理前端传递内部 `targetSchemaCode/targetSchemaVersion/resultSchemaCode/resultSchemaVersion`；应用层通过 `PlatformSkuSchemaRegistry` 将封闭履约类型映射为固定的目标与结果 Schema 编码、版本并持久化，避免产生任意组合。详情响应保留四个字段作为只读诊断信息。已废弃的 `M1MasterDataAdminController` 兼容写入口也必须复用同一派生规则，不得保留旁路。 | 防止前端误配内部协议导致商品创建成功但无法履约 |
 | **d12** | **详细 Swagger/OpenAPI 文档标准** | 所有管理端 Controller、方法、Query/Path 参数、Request/Response VO 必须提供完整的 OpenAPI/Swagger 3 注解（`@Tag`、`@Operation`、`@Parameter`、`@Schema`）。VO 字段描述必须与 DDL `COMMENT` 严格一致，参数注明枚举取值、单位（CNY分）、示例值与必填约束，并在操作描述中注明前置条件与错误码映射。 | 严格落实规范 |
 | **d13** | **权限兼容与菜单授权闭环** | 新增细粒度权限必须集中定义在 `SupplyChainAdminPermissions`，方法表达式统一使用 `hasAnyPermissions('supply-chain:admin', '<细权限>')`，保持旧管理员权限为超集；同步维护供应链菜单 SQL 与权限契约测试，使细权限可实际分配。 | 防止旧管理员升级后 403 |
-| **d14** | **类目选项接口向后兼容** | 保留 `GET /supply-chain/categories` 只返回启用类目树的既有契约；新增 `GET /supply-chain/categories/management-tree` 返回包含草稿、停用节点及管理字段的全量树，避免存量下拉组件把不可用类目重新选入业务表单。 | 防止类目选项接口行为回归 |
+| **d14** | **类目选项接口向后兼容与管理树筛选** | 保留 `GET /supply-chain/categories` 只返回启用类目树的既有契约；新增 `GET /supply-chain/categories/management-tree` 返回包含草稿、停用节点及管理字段的管理树，支持状态 `status` 与关键字 `keyword` 筛选并采用树枝保留模式（保留命中节点及其祖先链路，剪除无关分支）。避免存量下拉组件把不可用类目重新选入业务表单。 | 防止类目选项接口行为回归 |
 | **d15** | **标品选品池销售价投影** | `GET /supply-chain/products/skus` 为兼容 09-02 前端契约继续返回字段名 `marketPriceCents`，但该字段的业务值固定取 `sc_platform_sku.suggested_sale_price`；不得再取 `face_value` 或 `market_price`。`face_value` 是履约面值，`market_price` 是市场划线价，二者都不是 09-12 锁定的 C 端建议售价来源。 | 修复商品中心扩展字段落地后选品池仍沿用旧面值的偏差 |
 | **d16** | **分类详情隔离持久化模型** | `GET /supply-chain/categories/{categoryCode}` 返回专用 `CategoryDetail`，保持现有业务字段但不再序列化 `ProductCategoryDO`。响应只含分类编码、名称、父分类 ID、层级、排序、可见性、状态和创建/更新时间；数据库主键、乐观锁版本及操作人 ID 不进入管理端契约。商品中心所有 Query/Path 参数补齐 `@Parameter`，所有响应 DTO 字段补齐与 DDL 语义一致的 `@Schema`。 | 防止数据库内部字段成为前端兼容包袱，并补齐 Knife4j 参数说明 |
 | **d17** | **品牌与商品类型管理模型原型对齐** | 严格按管理端原型对齐主数据能力：<br>1. `sc_brand` 增加 `short_name`（品牌简称）和 `description`（品牌介绍与说明）；`BrandSaveReqVO.logoUrl` 增加 `@NotBlank` 必填校验；`BrandView` 补充 `shortName`、`description` 并显式投影 `spuCount`。<br>2. `sc_product_type` 增加 `icon_url`（类型图标）和 `description`（类型详细描述）；`ProductTypeSaveReqVO.iconUrl` 必填，支持创建时指定 `status`（10启用/20停用，缺省10）；`ProductTypeView` 补充 `iconUrl`、`description`，并一次性聚合未归档 `spuCount` 与 `skuCount` 两项统计指标，避免 N+1 查询。变更由 `029` 变更集执行。 | 彻底对齐原型字段与卡片双指标展示 |
@@ -585,7 +585,7 @@ system-server 通过追加变更集 `006-product-list-filter-dictionaries` 写�
 后端由新建的 `CategoryCommandService`（写）与已有的 `CategoryQueryService`（读）支撑。
 
 * `GET /supply-chain/categories`：保留存量启用类目选项树契约，仅返回 `status=ACTIVE` 的节点。
-* `GET /supply-chain/categories/management-tree`：商品中心管理树，返回全部未归档节点及 `children`、关联商品计数、`visible`、`status`、`effectiveVisible`。
+* `GET /supply-chain/categories/management-tree`：商品中心管理树，支持 `keyword`（编码或名称模糊匹配）与 `status`（分类状态）入参；采用「树枝保留模式」（子节点命中筛选条件时向上保留所有祖先节点以维持树形层级结构，剪除非命中且无命中后代的分支），返回符合条件的未归档节点及 `children`、关联商品计数、`visible`、`status`、`effectiveVisible`。
 * `GET /supply-chain/categories/{categoryCode}`：分类详情，返回专用 `CategoryDetail`；不得直接暴露数据库 DO、乐观锁版本或操作人 ID。
 * `POST /supply-chain/categories`：创建分类（支持自动生成 `CAT_`+ULID、上级类目挂载、同一父级下名称唯一校验、显示控制）。
 * `PUT /supply-chain/categories/{categoryCode}`：更新分类（名称、排序、显示状态）。`parentCategoryCode` 按 3.3 节三态语义处理：`null` 不变更父级、`""` 显式挂到根、非空编码挂到该父级；仅在实际变更父级时校验防循环挂载，并在事务内递归重算整棵子树的 `category_level`。同一父级下名称唯一校验对所有更新请求生效。
