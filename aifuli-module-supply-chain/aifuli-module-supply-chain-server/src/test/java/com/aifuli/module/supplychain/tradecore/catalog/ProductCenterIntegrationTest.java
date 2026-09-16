@@ -97,7 +97,7 @@ class ProductCenterIntegrationTest {
                     "PC_BRAND", "商品中心测试品牌", "PC品牌", null, "https://example.com/logo.png",
                     "商品中心测试品牌说明", 0, CatalogEntityStatus.ACTIVE.getCode(), 1L));
             String categoryCode = categoryService.create(new CategoryCommandService.CreateCommand(
-                    "PC_CATEGORY", "商品中心测试分类", null, 0, (short) 1,
+                    "PC_CATEGORY", "商品中心测试分类", "EQUITY_PRODUCT", "商品中心测试分类描述", null, 0, (short) 1,
                     CatalogEntityStatus.ACTIVE.getCode(), 1L));
             Long brandId = brandMapper.selectByCode(brandCode).getId();
             Long categoryId = categoryService.detail(categoryCode).getId();
@@ -105,12 +105,14 @@ class ProductCenterIntegrationTest {
             CategoryQueryService.CategoryDetail categoryDetail = categoryQueryService.detail(categoryCode);
             assertThat(categoryDetail.categoryCode()).isEqualTo(categoryCode);
             assertThat(categoryDetail.categoryName()).isEqualTo("商品中心测试分类");
+            assertThat(categoryDetail.productType()).isEqualTo("EQUITY_PRODUCT");
+            assertThat(categoryDetail.description()).isEqualTo("商品中心测试分类描述");
             JsonNode categoryJson = objectMapper.valueToTree(categoryDetail);
             Set<String> categoryFields = new HashSet<>();
             categoryJson.fieldNames().forEachRemaining(categoryFields::add);
             assertThat(categoryFields).containsExactlyInAnyOrder(
-                    "categoryCode", "categoryName", "parentId", "categoryLevel", "sort", "visible", "status",
-                    "createdAt", "updatedAt");
+                    "categoryCode", "categoryName", "productType", "description", "parentId", "categoryLevel",
+                    "sort", "visible", "status", "createdAt", "updatedAt");
             assertThat(categoryFields).doesNotContain("id", "version", "createdBy", "updatedBy");
 
             String spuCode = commandService.createProduct(new SaveSpuCommand(

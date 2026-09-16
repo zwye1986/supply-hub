@@ -15,7 +15,7 @@
 | d3 | 基础设施探活与兜底 | 探测 MySQL（默认 `127.0.0.1:3306`）与 Redis（默认 `127.0.0.1:6379`）；若本地 Redis 未运行，自动在临时端口（如 `16379`）启动轻量级临时 Redis 实例，并在测试结束后清理。支持环境变量自由覆盖连接参数。 |
 | d4 | SQL 执行时序 | system 库按序执行 `sql/mysql/ruoyi-vue-pro.sql`（基线表与用户）、`script/deploy/aifuli-test/sql/system-menu-application-schema.sql`（增加 `application_code` 列）、`script/deploy/aifuli-test/sql/system-supply-chain-admin-menus.sql`（37 个权限与动态菜单树）；supply-chain 库保持空库，由进程启动时 Liquibase 自动执行全量 29 个变更集。 |
 | d5 | 进程编排与就绪探测 | 两个应用均未暴露 Actuator 健康端点（`/actuator/health` 返回 404/401），因此采用 TCP 端口轮询探测 + 日志关键标记识别作为服务就绪标准，超时时间可控（默认 60s）。 |
-| d6 | 严密契约断言 | 登录后断言返回有效 Token；分别省略 `applicationCode` 和传入未知值请求权限接口，断言两次响应完全一致且包含 37 个供应链细粒度权限与根菜单结构；使用 Token 访问 6 个供应链接口断言业务码 0；匿名访问断言 401；请求 OpenAPI 关键 Schema 精确核对 `CategoryDetail`（9 字段）与 `SkuListItem`（10 字段）的字段集合与中文说明。 |
+| d6 | 严密契约断言 | 登录后断言返回有效 Token；分别省略 `applicationCode` 和传入未知值请求权限接口，断言两次响应完全一致且包含 37 个供应链细粒度权限与根菜单结构；使用 Token 访问 6 个供应链接口断言业务码 0；匿名访问断言 401；请求 OpenAPI 关键 Schema 精确核对 `CategoryDetail`（11 字段，含 `productType`、`description`）与 `SkuListItem`（10 字段）的字段集合与中文说明。 |
 | d7 | 无条件资源清理 | 采用 bash `trap ... EXIT INT TERM` 机制，无论测试成功、断言失败、进程异常还是人为中断，均保证立即杀死已启动的服务进程、停止临时 Redis、删除临时 MySQL 库。 |
 
 ## 3. 架构拓扑与交互链路
@@ -139,7 +139,7 @@
 4. **OpenAPI 关键 Schema 校验**：
    - `GET /v3/api-docs/supply-chain-admin`
    - 断言 `components.schemas.CategoryDetail`：
-     - 字段必须且仅包含 9 个：`categoryCode`, `categoryName`, `parentId`, `categoryLevel`, `sort`, `visible`, `status`, `createdAt`, `updatedAt`。
+     - 字段必须且仅包含 11 个：`categoryCode`, `categoryName`, `productType`, `description`, `parentId`, `categoryLevel`, `sort`, `visible`, `status`, `createdAt`, `updatedAt`。
      - 严禁泄露 `id`, `version`, `createdBy`, `updatedBy`。
      - 所有字段的 `description` 必须非空。
    - 断言 `components.schemas.SkuListItem`：

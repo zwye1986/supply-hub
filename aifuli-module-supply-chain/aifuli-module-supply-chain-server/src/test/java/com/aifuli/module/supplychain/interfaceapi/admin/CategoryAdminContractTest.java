@@ -53,16 +53,16 @@ class CategoryAdminContractTest {
                 .doesNotContain("ProductCategoryDO");
 
         assertThat(Arrays.stream(CategoryDetail.class.getRecordComponents()).map(component -> component.getName()))
-                .containsExactly("categoryCode", "categoryName", "parentId", "categoryLevel", "sort", "visible",
-                        "status", "createdAt", "updatedAt");
+                .containsExactly("categoryCode", "categoryName", "productType", "description", "parentId",
+                        "categoryLevel", "sort", "visible", "status", "createdAt", "updatedAt");
         Map<String, io.swagger.v3.oas.models.media.Schema> schemas =
                 ModelConverters.getInstance().readAll(CategoryDetail.class);
         io.swagger.v3.oas.models.media.Schema<?> categorySchema = schemas.get("CategoryDetail");
         assertThat(categorySchema).as("未生成 CategoryDetail OpenAPI schema").isNotNull();
         Map<String, io.swagger.v3.oas.models.media.Schema> properties = categorySchema.getProperties();
         assertThat(properties.keySet()).containsExactlyInAnyOrder(
-                "categoryCode", "categoryName", "parentId", "categoryLevel", "sort", "visible", "status",
-                "createdAt", "updatedAt");
+                "categoryCode", "categoryName", "productType", "description", "parentId", "categoryLevel",
+                "sort", "visible", "status", "createdAt", "updatedAt");
         properties.forEach((name, property) -> {
             assertThat(property.getDescription())
                     .as("OpenAPI schema CategoryDetail.%s 缺少字段说明", name)

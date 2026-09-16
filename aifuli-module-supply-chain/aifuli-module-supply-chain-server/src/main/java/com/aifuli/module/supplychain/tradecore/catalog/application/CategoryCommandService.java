@@ -36,7 +36,8 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
 
 /**
  * 商品分类写服务，负责同级唯一、防循环和移动时整棵子树层级重算。
- * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#33-商品分类树管理无限级同级防重与层级重算}。
+ * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#33-商品分类树管理无限级同级防重与层级重算}
+ * 与 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#213-分类商品类型与描述036-changeset}。
  */
 @Slf4j
 @Service
@@ -51,11 +52,14 @@ public class CategoryCommandService {
     private final PlatformSpuMapper spuMapper;
     private final BusinessNoGenerator businessNoGenerator;
     private final SupplyChainDatabaseClock databaseClock;
+    private final ProductTypeValidationService productTypeValidationService;
 
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public String create(CreateCommand command) {
         ProductCategoryDO parent = hasText(command.parentCategoryCode())
                 ? requireLive(command.parentCategoryCode(), true) : null;
+        String productType = hasText(command.productType())
+                ? productTypeValidationService.requireActiveForUpdate(command.productType()).getTypeCode() : null;
         String code = hasText(command.categoryCode()) ? command.categoryCode().trim()
                 : businessNoGenerator.next(BusinessNoPrefixes.CAT);
         short level = checkedLevel(parent == null ? ROOT_LEVEL : parent.getCategoryLevel().intValue() + 1);
@@ -64,6 +68,7 @@ public class CategoryCommandService {
         LocalDateTime now = databaseClock.now();
         ProductCategoryDO category = ProductCategoryDO.builder()
                 .categoryCode(code).categoryName(command.categoryName().trim())
+                .productType(productType).description(trimToNull(command.description()))
                 .parentId(parent == null ? null : parent.getId()).categoryLevel(level)
                 .sort(command.sort() == null ? 0 : command.sort())
                 .visible(command.visible() == null ? CategoryVisibility.VISIBLE.getCode() : command.visible())
@@ -71,8 +76,8 @@ public class CategoryCommandService {
                 .version(0L).createdBy(command.operatorId()).createdAt(now)
                 .updatedBy(command.operatorId()).updatedAt(now).build();
         insertOrDuplicate(category);
-        log.info("创建商品分类 categoryCode={} parentCategoryCode={} operatorId={}",
-                code, command.parentCategoryCode(), command.operatorId());
+        log.info("创建商品分类 categoryCode={} productType={} parentCategoryCode={} operatorId={}",
+                code, productType, command.parentCategoryCode(), command.operatorId());
         return code;
     }
 
@@ -84,9 +89,12 @@ public class CategoryCommandService {
      */
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public void update(String categoryCode, UpdateCommand command) {
-        log.info("更新商品分类 categoryCode={} parentCategoryCode={} operatorId={}",
-                categoryCode, command.parentCategoryCode(), command.operatorId());
+        log.info("更新商品分类 categoryCode={} productType={} parentCategoryCode={} operatorId={}",
+                categoryCode, command.productType(), command.parentCategoryCode(), command.operatorId());
         ProductCategoryDO category = requireLive(categoryCode, true);
+        String productType = hasText(command.productType())
+                ? productTypeValidationService.requireActiveForUpdate(command.productType()).getTypeCode()
+                : category.getProductType();
         boolean moveParent = command.parentCategoryCode() != null;
         ProductCategoryDO parent = moveParent && hasText(command.parentCategoryCode())
                 ? requireLive(command.parentCategoryCode(), true) : null;
@@ -104,6 +112,8 @@ public class CategoryCommandService {
         int delta = newLevel - category.getCategoryLevel();
         requireNameAvailableUnderParent(command.categoryName().trim(), targetParentId, category.getId());
         category.setCategoryName(command.categoryName().trim());
+        category.setProductType(productType);
+        category.setDescription(trimToNull(command.description()));
         category.setParentId(targetParentId);
         category.setCategoryLevel(newLevel);
         category.setSort(command.sort() == null ? category.getSort() : command.sort());
@@ -261,11 +271,19 @@ public class CategoryCommandService {
         return value != null && !value.isBlank();
     }
 
-    public record CreateCommand(String categoryCode, String categoryName, String parentCategoryCode,
-                                Integer sort, Short visible, Short status, Long operatorId) {
+    private static String trimToNull(String value) {
+        if (!hasText(value)) {
+            return null;
+        }
+        return value.trim();
     }
 
-    public record UpdateCommand(String categoryName, String parentCategoryCode, Integer sort,
-                                Short visible, Long operatorId) {
+    public record CreateCommand(String categoryCode, String categoryName, String productType, String description,
+                                String parentCategoryCode, Integer sort, Short visible, Short status,
+                                Long operatorId) {
+    }
+
+    public record UpdateCommand(String categoryName, String productType, String description,
+                                String parentCategoryCode, Integer sort, Short visible, Long operatorId) {
     }
 }

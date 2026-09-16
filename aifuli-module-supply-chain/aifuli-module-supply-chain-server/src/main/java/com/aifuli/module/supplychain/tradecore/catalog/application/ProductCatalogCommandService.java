@@ -136,7 +136,7 @@ public class ProductCatalogCommandService {
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public String createCategory(CreateCategoryCommand command) {
         return categoryCommandService.create(new CategoryCommandService.CreateCommand(command.categoryCode(),
-                command.categoryName(), command.parentCategoryCode(), command.sort(),
+                command.categoryName(), null, null, command.parentCategoryCode(), command.sort(),
                 CategoryVisibility.VISIBLE.getCode(), CatalogEntityStatus.DRAFT.getCode(), command.operatorId()));
     }
 

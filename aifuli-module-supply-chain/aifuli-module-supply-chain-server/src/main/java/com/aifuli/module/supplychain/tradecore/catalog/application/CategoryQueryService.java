@@ -152,9 +152,9 @@ public class CategoryQueryService {
         if (category == null || category.getStatus() == CatalogEntityStatus.ARCHIVED.getCode()) {
             throw exception(CATEGORY_NOT_FOUND);
         }
-        return new CategoryDetail(category.getCategoryCode(), category.getCategoryName(), category.getParentId(),
-                category.getCategoryLevel(), category.getSort(), category.getVisible(), category.getStatus(),
-                category.getCreatedAt(), category.getUpdatedAt());
+        return new CategoryDetail(category.getCategoryCode(), category.getCategoryName(), category.getProductType(),
+                category.getDescription(), category.getParentId(), category.getCategoryLevel(), category.getSort(),
+                category.getVisible(), category.getStatus(), category.getCreatedAt(), category.getUpdatedAt());
     }
 
     /**
@@ -239,6 +239,8 @@ public class CategoryQueryService {
     public record CategoryDetail(
             @Schema(description = "平台类目永久编码") String categoryCode,
             @Schema(description = "类目名称") String categoryName,
+            @Schema(description = "商品类型编码，由sc_product_type动态维护") String productType,
+            @Schema(description = "分类描述") String description,
             @Schema(description = "父类目内部主键，逻辑引用本表id") Long parentId,
             @Schema(description = "类目层级，从1开始") Short categoryLevel,
             @Schema(description = "同级排序") Integer sort,

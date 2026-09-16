@@ -23,7 +23,7 @@
 | **d13** | **权限兼容与菜单授权闭环** | 新增细粒度权限必须集中定义在 `SupplyChainAdminPermissions`，方法表达式统一使用 `hasAnyPermissions('supply-chain:admin', '<细权限>')`，保持旧管理员权限为超集；同步维护供应链菜单 SQL 与权限契约测试，使细权限可实际分配。 | 防止旧管理员升级后 403 |
 | **d14** | **类目选项接口向后兼容与管理树筛选** | 保留 `GET /supply-chain/categories` 只返回启用类目树的既有契约；新增 `GET /supply-chain/categories/management-tree` 返回包含草稿、停用节点及管理字段的管理树，支持状态 `status` 与关键字 `keyword` 筛选并采用树枝保留模式（保留命中节点及其祖先链路，剪除无关分支）。避免存量下拉组件把不可用类目重新选入业务表单。 | 防止类目选项接口行为回归 |
 | **d15** | **标品选品池销售价投影** | `GET /supply-chain/products/skus` 为兼容 09-02 前端契约继续返回字段名 `marketPriceCents`，但该字段的业务值固定取 `sc_platform_sku.suggested_sale_price`；不得再取 `face_value` 或 `market_price`。`face_value` 是履约面值，`market_price` 是市场划线价，二者都不是 09-12 锁定的 C 端建议售价来源。 | 修复商品中心扩展字段落地后选品池仍沿用旧面值的偏差 |
-| **d16** | **分类详情隔离持久化模型** | `GET /supply-chain/categories/{categoryCode}` 返回专用 `CategoryDetail`，保持现有业务字段但不再序列化 `ProductCategoryDO`。响应只含分类编码、名称、父分类 ID、层级、排序、可见性、状态和创建/更新时间；数据库主键、乐观锁版本及操作人 ID 不进入管理端契约。商品中心所有 Query/Path 参数补齐 `@Parameter`，所有响应 DTO 字段补齐与 DDL 语义一致的 `@Schema`。 | 防止数据库内部字段成为前端兼容包袱，并补齐 Knife4j 参数说明 |
+| **d16** | **分类详情隔离持久化模型** | `GET /supply-chain/categories/{categoryCode}` 返回专用 `CategoryDetail`，保持现有业务字段但不再序列化 `ProductCategoryDO`。响应只含分类编码、名称、商品类型编码、分类描述、父分类 ID、层级、排序、可见性、状态和创建/更新时间；数据库主键、乐观锁版本及操作人 ID 不进入管理端契约。商品中心所有 Query/Path 参数补齐 `@Parameter`，所有响应 DTO 字段补齐与 DDL 语义一致的 `@Schema`。 | 防止数据库内部字段成为前端兼容包袱，并补齐分类编辑回显与 Knife4j 参数说明 |
 | **d17** | **品牌与商品类型管理模型原型对齐** | 严格按管理端原型对齐主数据能力：<br>1. `sc_brand` 增加 `short_name`（品牌简称）和 `description`（品牌介绍与说明）；`BrandSaveReqVO.logoUrl` 增加 `@NotBlank` 必填校验；`BrandView` 补充 `shortName`、`description` 并显式投影 `spuCount`。<br>2. `sc_product_type` 增加 `icon_url`（类型图标）和 `description`（类型详细描述）；`ProductTypeSaveReqVO.iconUrl` 必填，支持创建时指定 `status`（10启用/20停用，缺省10）；`ProductTypeView` 补充 `iconUrl`、`description`，并一次性聚合未归档 `spuCount` 与 `skuCount` 两项统计指标，避免 N+1 查询。变更由 `029` 变更集执行。 | 彻底对齐原型字段与卡片双指标展示 |
 | **d18** | **旧品牌创建接口终止写入** | 品牌创建统一使用 `POST /supply-chain/brands`。已废弃的 `POST /supply-chain/master-data/brands` 不再委托应用服务、不再执行参数校验或数据库写入，而是固定返回稳定业务错误 `BRAND_LEGACY_API_DEPRECATED`（`1_050_001_106`，不可重试），提示调用方迁移至新接口。其他 M1 兼容接口不受本决策影响。 | 关闭旧品牌入口绕过 Logo 必填约束的写入旁路 |
 | **d19** | **商品管理列表端管理端聚合读模型与批量上下架** | 针对运营管理端原型中「SPU 嵌套多 SKU 展开展示」与复杂多维检索诉求：<br>1. 新增管理端聚合读接口 `GET /supply-chain/products/management-page`，整页一次批量拉取 SPU、SKU、生效 Offer 及供应商信息在内存组装，返回包含市场价、销售建议价、供货价、不含税供货价、税率、税额、供应商名称列表、总库存、兑换方式、下架方式的聚合模型。<br>2. 新增批量上下架接口 `PUT /supply-chain/products/batch-status`，支持批量上架、下架并记录 `unshelve_mode`（`MANUAL_UNSHELVE`）。<br>3. `030` 变更集：`sc_platform_spu` 增加 `unshelve_mode`；`sc_platform_sku` 增加 `tax_rate`；存量商品类型回填默认 icon 图标；为 `sc_platform_spu` 补充 `idx_sc_platform_spu_type_status` 复合索引；商品类型卡片双指标重构为数据库 `GROUP BY` 聚合，彻底消除大数据量下的内存风险。 | 支撑商品列表管理端原型与批量操作 |
@@ -33,6 +33,7 @@
 | **d23** | **SKU 展示资料与商品分类映射** | 商品编辑原型中的 SKU 主图、SKU 详情图和商品描述归属平台 SKU，分别持久化为 `main_image_url`、`detail_image_urls` 与 `description`，通过 SPU+SKU 复合创建、编辑和详情接口统一保存与回显。原型「商品分类」唯一映射 `primaryCategoryId`，取值来自供应链独立库 `sc_product_category`，由 `GET /supply-chain/categories` 返回启用树，不是 system 数据字典；`productClassification` 继续作为供货范围命中的 `supply_chain_product_classification` 字典标签，两者不得混用。库存字段本轮保持既有只读占位，不扩展库存写能力。 | 补齐 SKU 展示字段并消除两个“商品分类”的契约歧义 |
 | **d24** | **标准履约手机号服务端规范化** | 标准履约 `buyerUserId` 和 `accountType=MOBILE` 的目标账号统一由服务端规范化为中国大陆 11 位手机号：接受裸号码、`+86`、`0086` 前缀及首尾空白，持久化、幂等指纹与限购统计一律使用去前缀后的 11 位号码；非法号码拒绝受理。调用方无需预先规范化，但完整手机号仍禁止写日志。公开履约数量继续固定为 `quantity=1`。 | 防止同一手机号因格式差异绕过项目级限购 |
 | **d25** | **商品列表筛选字典与 SKU 状态口径** | system 数据字典新增 `supply_chain_fulfillment_type`（兑换方式）和 `supply_chain_sku_status`（商品状态）。`GET /supply-chain/products/management-page` 的 `status` 明确定义为 SKU 状态；SKU 级筛选命中任一未归档 SKU 后保留所属 SPU，并只返回符合 SKU 状态、兑换方式及市场价条件的 SKU 行。 | 对齐商品列表原型，消除 SPU/SKU 状态歧义 |
+| **d26** | **分类商品类型与描述闭环** | `036-category-product-type-description.sql` 为 `sc_product_category` 增加可空 `product_type` 与 `description`。新版分类创建/编辑请求必须提交动态商品类型编码并通过 `ProductTypeValidationService` 校验其处于启用状态；分类描述最多 200 字，空字符串按 `NULL` 保存。历史分类不根据父级或 SPU 标签猜测回填，两个字段保持 `NULL`，由运营编辑后补齐。详情返回 `productType` 与 `description` 供页面完整回显。 | 修复分类编辑详情缺少商品类型和分类描述，避免只补 DTO 造成数据仍丢失 |
 
 ---
 
@@ -252,6 +253,22 @@ ALTER TABLE sc_platform_sku
 完整 SKU 行语义处理：字段传空即清空原值。`detail_image_urls` 使用 MyBatis JSON TypeHandler 显式映射为
 有序字符串列表。该变更不新增库存列、不改变管理列表中 `totalInventory` 的既有投影。
 
+### 2.13 分类商品类型与描述（036 Changeset）
+
+```sql
+ALTER TABLE sc_product_category
+    ADD COLUMN product_type VARCHAR(32) NULL
+        COMMENT '商品类型编码，由sc_product_type动态维护' AFTER category_name,
+    ADD COLUMN description VARCHAR(200) NULL COMMENT '分类描述' AFTER product_type,
+    ADD KEY idx_sc_category_product_type (product_type);
+```
+
+`product_type` 保持可空是为了兼容迁移前已经存在的分类，禁止按父分类或历史 SPU 的标签推断回填。新版
+`POST /supply-chain/categories` 与 `PUT /supply-chain/categories/{categoryCode}` 请求模型对该字段使用
+`@NotBlank`，并在事务内通过 `ProductTypeValidationService.requireActiveForUpdate` 规范化和校验；因此新增或
+人工编辑后的分类一定绑定一个启用商品类型。`description` 是最长 200 字的可选展示说明，空白值统一保存为
+`NULL`。详情 DTO 的两个字段说明与上述 DDL COMMENT 保持一致。
+
 ---
 
 ## 3. 核心业务规则与状态机设计
@@ -311,6 +328,10 @@ ALTER TABLE sc_platform_sku
 * **删除分类防断裂**：
   - 若存在有效子分类（`status != 90`），拒绝删除（`CATEGORY_HAS_CHILDREN`）。
   - 若存在未归档 SPU 引用该分类（作为 `primary_category_id` 或在 `secondary_category_ids` 中），拒绝删除（`CATEGORY_HAS_PRODUCTS`）。
+* **商品类型与描述**：
+  - 新增、编辑分类时必须提交 `productType`，其值是 `sc_product_type.type_code`，不得使用类型名称或 system 字典值替代；仅启用类型可建立新的分类关联。
+  - 已绑定类型后即使类型被停用，分类详情仍按原编码回显；后续再次编辑分类时必须选择当前启用类型。
+  - `description` 最长 200 字，空字符串与纯空白统一保存为 `NULL`；历史数据的 `productType`、`description` 为空时原样返回 `null`，不得推断填充。
 
 ### 3.4 列表 Tab 复合解构映射与动态来源
 PRD 8.4.1 的列表 Tab 支持从 `GET /supply-chain/product-types` 动态拉取卡片标签。普通类型以 `typeCode` 作为 `tabCode` 并直接过滤 `productType`；仅以下复合 Tab 需要服务端解构：
@@ -586,9 +607,9 @@ system-server 通过追加变更集 `006-product-list-filter-dictionaries` 写�
 
 * `GET /supply-chain/categories`：保留存量启用类目选项树契约，仅返回 `status=ACTIVE` 的节点。
 * `GET /supply-chain/categories/management-tree`：商品中心管理树，支持 `keyword`（编码或名称模糊匹配）与 `status`（分类状态）入参；采用「树枝保留模式」（子节点命中筛选条件时向上保留所有祖先节点以维持树形层级结构，剪除非命中且无命中后代的分支），返回符合条件的未归档节点及 `children`、关联商品计数、`visible`、`status`、`effectiveVisible`。
-* `GET /supply-chain/categories/{categoryCode}`：分类详情，返回专用 `CategoryDetail`；不得直接暴露数据库 DO、乐观锁版本或操作人 ID。
-* `POST /supply-chain/categories`：创建分类（支持自动生成 `CAT_`+ULID、上级类目挂载、同一父级下名称唯一校验、显示控制）。
-* `PUT /supply-chain/categories/{categoryCode}`：更新分类（名称、排序、显示状态）。`parentCategoryCode` 按 3.3 节三态语义处理：`null` 不变更父级、`""` 显式挂到根、非空编码挂到该父级；仅在实际变更父级时校验防循环挂载，并在事务内递归重算整棵子树的 `category_level`。同一父级下名称唯一校验对所有更新请求生效。
+* `GET /supply-chain/categories/{categoryCode}`：分类详情，返回专用 `CategoryDetail`，其中 `productType` 为动态商品类型编码、`description` 为分类描述；不得直接暴露数据库 DO、乐观锁版本或操作人 ID。
+* `POST /supply-chain/categories`：创建分类（支持自动生成 `CAT_`+ULID、上级类目挂载、启用商品类型绑定、分类描述、同一父级下名称唯一校验、显示控制）。
+* `PUT /supply-chain/categories/{categoryCode}`：更新分类（名称、商品类型、分类描述、排序、显示状态）。`parentCategoryCode` 按 3.3 节三态语义处理：`null` 不变更父级、`""` 显式挂到根、非空编码挂到该父级；仅在实际变更父级时校验防循环挂载，并在事务内递归重算整棵子树的 `category_level`。同一父级下名称唯一校验对所有更新请求生效。
 * `PUT /supply-chain/categories/{categoryCode}/status`：启用/停用分类状态。
 * `DELETE /supply-chain/categories/{categoryCode}`：删除分类（强校验子类目与未归档 SPU 引用）。
 
@@ -612,7 +633,7 @@ system-server 通过追加变更集 `006-product-list-filter-dictionaries` 写�
 * `GET /supply-chain/product-types`：商品类型卡片列表查询（返回类型编码、名称、图标地址 `iconUrl`、描述 `description`、内部备注 `remark`、排序、状态、关联的未归档 SPU 数量 `spuCount`、关联的未归档 SKU 数量 `skuCount`、创建/更新时间）。通过整页一次加载 SPU 并批量拉取关联 SKU，在内存分组聚合输出 `spuCount` 与 `skuCount`，无 N+1 查询，完全支撑原型卡片双指标展示及商品列表 Tab 动态渲染。
 * `GET /supply-chain/product-types/{typeCode}`：类型详情。
 * `POST /supply-chain/product-types`：新增商品类型（支持自动生成 `PT_`+ULID 或前端指定，名称唯一性校验，图标 `iconUrl` 必填，描述 `description`，初始状态 `status` 允许指定 10 启用或 20 停用，缺省为 10，排序，内部备注）。
-* `PUT /supply-chain/product-types/{typeCode}`：更新商品类型（名称、图标 `iconUrl` 必填、描述 `description`、排序、备注，名称防重校验）。
+* `PUT /supply-chain/product-types/{typeCode}`：更新商品类型（名称、图标 `iconUrl` 必填、描述 `description`、排序、备注、状态 `status`，名称防重校验；`status` 可选传入，传入非空值时联动变更启用/停用状态，仅允许 10 启用或 20 停用，90 归档必须走删除端点以触发引用强校验）。
 * `PUT /supply-chain/product-types/{typeCode}/status`：启用/停用商品类型（停用后新增 SPU 不可选，历史 SPU 不受影响）。
 * `DELETE /supply-chain/product-types/{typeCode}`：删除商品类型（强校验：若有未归档 SPU 引用该类型，禁止删除，抛出 `PRODUCT_TYPE_HAS_PRODUCTS`）。
 
@@ -656,7 +677,7 @@ system-server 通过追加变更集 `006-product-list-filter-dictionaries` 写�
 
 1. `ProductCenterIntegrationTest` 必须在真实 MySQL 8.4 与 Liquibase 完整表结构上覆盖 SPU/SKU 复合创建、状态独立性、分类详情投影及标品池价格读取，不得用 H2 或 Mock Mapper 代替。
 2. 标品池价格用例必须让 `face_value`、`market_price`、`suggested_sale_price` 与当前 L1 四个金额彼此不同，并断言 `suggestPriceCents` 取 L1、兼容字段 `marketPriceCents` 取 `suggested_sale_price`。
-3. 分类详情用例必须通过 `CategoryQueryService` 读取真实数据，并按实际 Jackson 序列化属性验证响应仅包含 d16 锁定的九个业务字段，不得出现 `id`、`version`、`createdBy`、`updatedBy`。
+3. 分类详情用例必须通过 `CategoryQueryService` 读取真实数据，并按实际 Jackson 序列化属性验证响应包含 d16 锁定的十一个业务字段（包括 `productType`、`description`），不得出现 `id`、`version`、`createdBy`、`updatedBy`；同时验证创建时保存的商品类型与分类描述能够完整回显。
 4. 商品中心契约测试除检查源码注解外，还必须通过 Swagger `ModelConverters` 验证最终生成的 Schema 属性及中文说明，避免注解存在但 Knife4j 模型不可见。
 5. 集成与契约门禁统一通过 Maven profile `supply-chain-integration` 执行；空库必须完整执行全部 Liquibase 变更集（含 `033`）。
 6. `ProjectAdminIntegrationTest` 必须在真实 MySQL 8.4 上直接调用 L2/L3 批量试算与保存应用服务，并验证：试算零写入；同一分销商的不同项目可冻结不同 L3；混入其它分销商商品或其它项目 listing 时整批回滚；`FOLLOW_TEMPLATE` / `FOLLOW_L2`、`EQUAL_L1`、`CUSTOM` 的版本与指针语义；后续 L2 变更不回放既有项目版本；同一项目并发改价由项目行锁串行化，版本号连续且当前指针指向最终版本；管理查询与冻结版本一致。

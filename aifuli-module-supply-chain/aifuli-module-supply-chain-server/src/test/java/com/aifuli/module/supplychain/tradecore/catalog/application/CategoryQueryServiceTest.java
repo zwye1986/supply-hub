@@ -100,6 +100,8 @@ class CategoryQueryServiceTest {
         ProductCategoryDO row = category(7L, 1L, (short) 3, CategoryVisibility.VISIBLE,
                 "CAT_EQUITY_CARD", "权益卡券");
         row.setSort(20);
+        row.setProductType("EQUITY_PRODUCT");
+        row.setDescription("权益卡券分类");
         row.setVersion(9L);
         row.setCreatedBy(1001L);
         row.setCreatedAt(createdAt);
@@ -110,7 +112,7 @@ class CategoryQueryServiceTest {
         CategoryQueryService.CategoryDetail detail = service.detail("CAT_EQUITY_CARD");
 
         assertThat(detail).isEqualTo(new CategoryQueryService.CategoryDetail(
-                "CAT_EQUITY_CARD", "权益卡券", 1L, (short) 3, 20,
+                "CAT_EQUITY_CARD", "权益卡券", "EQUITY_PRODUCT", "权益卡券分类", 1L, (short) 3, 20,
                 CategoryVisibility.VISIBLE.getCode(), CatalogEntityStatus.ACTIVE.getCode(), createdAt, updatedAt));
     }
 

@@ -132,4 +132,74 @@ class ProductTypeAdminServiceTest {
                 .extracting(ex -> ((ServiceException) ex).getCode())
                 .isEqualTo(PRODUCT_STATUS_INVALID.getCode());
     }
+
+    @Test
+    void updateSuccessfullyUpdatesFieldsAndStatus() {
+        ProductTypeDO type = ProductTypeDO.builder()
+                .id(1L)
+                .typeCode("PT_01")
+                .typeName("旧名称")
+                .iconUrl("https://example.com/old.png")
+                .sort(10)
+                .status(CatalogEntityStatus.ACTIVE.getCode())
+                .description("旧描述")
+                .remark("旧备注")
+                .build();
+        when(typeMapper.selectByCodeForUpdate("PT_01")).thenReturn(type);
+        when(typeMapper.updateById(any(ProductTypeDO.class))).thenReturn(1);
+        when(clock.now()).thenReturn(LocalDateTime.now());
+
+        ProductTypeAdminService.UpdateCommand cmd = new ProductTypeAdminService.UpdateCommand(
+                "新名称", "https://example.com/new.png", 20, CatalogEntityStatus.INACTIVE.getCode(),
+                "新描述", "新备注", 2L);
+        service.update("PT_01", cmd);
+
+        assertThat(type.getTypeName()).isEqualTo("新名称");
+        assertThat(type.getIconUrl()).isEqualTo("https://example.com/new.png");
+        assertThat(type.getSort()).isEqualTo(20);
+        assertThat(type.getStatus()).isEqualTo(CatalogEntityStatus.INACTIVE.getCode());
+        assertThat(type.getDescription()).isEqualTo("新描述");
+        assertThat(type.getRemark()).isEqualTo("新备注");
+        assertThat(type.getUpdatedBy()).isEqualTo(2L);
+    }
+
+    @Test
+    void updateAllowsNullStatusWithoutChangingExistingStatus() {
+        ProductTypeDO type = ProductTypeDO.builder()
+                .id(1L)
+                .typeCode("PT_01")
+                .typeName("旧名称")
+                .status(CatalogEntityStatus.ACTIVE.getCode())
+                .build();
+        when(typeMapper.selectByCodeForUpdate("PT_01")).thenReturn(type);
+        when(typeMapper.updateById(any(ProductTypeDO.class))).thenReturn(1);
+        when(clock.now()).thenReturn(LocalDateTime.now());
+
+        ProductTypeAdminService.UpdateCommand cmd = new ProductTypeAdminService.UpdateCommand(
+                "新名称", "https://example.com/new.png", 20, null,
+                "新描述", "新备注", 2L);
+        service.update("PT_01", cmd);
+
+        assertThat(type.getStatus()).isEqualTo(CatalogEntityStatus.ACTIVE.getCode());
+    }
+
+    @Test
+    void updateRejectsInvalidStatus() {
+        ProductTypeDO type = ProductTypeDO.builder()
+                .id(1L)
+                .typeCode("PT_01")
+                .typeName("旧名称")
+                .status(CatalogEntityStatus.ACTIVE.getCode())
+                .build();
+        when(typeMapper.selectByCodeForUpdate("PT_01")).thenReturn(type);
+
+        ProductTypeAdminService.UpdateCommand cmd = new ProductTypeAdminService.UpdateCommand(
+                "新名称", "https://example.com/new.png", 20, CatalogEntityStatus.ARCHIVED.getCode(),
+                "新描述", "新备注", 2L);
+
+        assertThatThrownBy(() -> service.update("PT_01", cmd))
+                .isInstanceOf(ServiceException.class)
+                .extracting(ex -> ((ServiceException) ex).getCode())
+                .isEqualTo(PRODUCT_STATUS_INVALID.getCode());
+    }
 }

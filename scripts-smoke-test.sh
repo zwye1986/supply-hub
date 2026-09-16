@@ -12,7 +12,7 @@
 #   3. 自动执行 system 基础表、菜单扩展与供应链 37 权限/菜单 SQL；由 Liquibase 初始化供应链 105 表。
 #   4. 登录验证并断言供应链 37 个细粒度权限全集与动态菜单树投影。
 #   5. 跨服务验证商品中心（SPU、分类树、品牌、商品类型）、标品池、订单 6 大接口的登录态（code=0）与匿名态（code=401）。
-#   6. 校验 OpenAPI 关键 Schema（CategoryDetail 9 字段且无内部主键泄露、SkuListItem 10 字段且字段说明非空）。
+#   6. 校验 OpenAPI 关键 Schema（CategoryDetail 11 字段且无内部主键泄露、SkuListItem 10 字段且字段说明非空）。
 #   7. 无论成功失败均由 trap 自动清理所有后台进程与临时数据库。
 # ==============================================================================
 
@@ -509,12 +509,12 @@ status, openapi = http_json(f"{SC_URL}/v3/api-docs/supply-chain-admin")
 assert status == 200, f"获取 OpenAPI JSON 失败: status={status}"
 schemas = openapi.get("components", {}).get("schemas", {})
 
-# 1. CategoryDetail 9 字段严格校验
+# 1. CategoryDetail 11 字段严格校验
 cat_schema = schemas.get("CategoryDetail")
 assert cat_schema is not None, "OpenAPI 中未找到 CategoryDetail Schema"
 cat_props = cat_schema.get("properties", {})
 EXPECTED_CAT_FIELDS = {
-    "categoryCode", "categoryName", "parentId", "categoryLevel",
+    "categoryCode", "categoryName", "productType", "description", "parentId", "categoryLevel",
     "sort", "visible", "status", "createdAt", "updatedAt"
 }
 assert set(cat_props.keys()) == EXPECTED_CAT_FIELDS, \
@@ -528,7 +528,7 @@ assert not leaked, f"CategoryDetail 泄露了禁止字段: {leaked}"
 for prop_name, prop_meta in cat_props.items():
     desc = prop_meta.get("description", "").strip()
     assert desc, f"CategoryDetail.{prop_name} 缺少中文描述"
-print("[OK] CategoryDetail Schema 9 字段校验通过，无内部主键泄露，且所有字段具备中文描述！")
+print("[OK] CategoryDetail Schema 11 字段校验通过，无内部主键泄露，且所有字段具备中文描述！")
 
 # 2. SkuListItem 10 字段严格校验
 sku_schema = schemas.get("SkuListItem")

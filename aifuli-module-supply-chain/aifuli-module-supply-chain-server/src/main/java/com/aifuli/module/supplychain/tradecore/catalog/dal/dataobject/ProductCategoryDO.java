@@ -21,6 +21,10 @@ public class ProductCategoryDO {
     private Long id;
     private String categoryCode;
     private String categoryName;
+    /** 商品类型编码，由sc_product_type动态维护 */
+    private String productType;
+    /** 分类描述 */
+    private String description;
     private Long parentId;
     private Short categoryLevel;
     private Integer sort;

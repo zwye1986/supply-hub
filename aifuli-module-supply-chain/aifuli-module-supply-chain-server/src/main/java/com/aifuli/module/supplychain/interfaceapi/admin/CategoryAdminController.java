@@ -87,8 +87,8 @@ public class CategoryAdminController {
     @Operation(summary = "创建商品分类", description = "categoryCode 为空时生成 CAT_+ULID；同一父级下名称唯一。")
     public CommonResult<String> create(@Valid @RequestBody CategorySaveReqVO request) {
         return success(commandService.create(new CategoryCommandService.CreateCommand(request.categoryCode,
-                request.categoryName, request.parentCategoryCode, request.sort, request.visible, request.status,
-                getLoginUserId())));
+                request.categoryName, request.productType, request.description, request.parentCategoryCode,
+                request.sort, request.visible, request.status, getLoginUserId())));
     }
 
     @PutMapping("/{categoryCode}")
@@ -101,7 +101,8 @@ public class CategoryAdminController {
             @PathVariable String categoryCode,
             @Valid @RequestBody CategorySaveReqVO request) {
         commandService.update(categoryCode, new CategoryCommandService.UpdateCommand(request.categoryName,
-                request.parentCategoryCode, request.sort, request.visible, getLoginUserId()));
+                request.productType, request.description, request.parentCategoryCode, request.sort,
+                request.visible, getLoginUserId()));
         return success(true);
     }
 
@@ -131,6 +132,9 @@ public class CategoryAdminController {
     public static class CategorySaveReqVO {
         @Size(max = 32) @Schema(description = "分类编码；创建时可空") private String categoryCode;
         @NotBlank @Size(max = 128) @Schema(description = "分类名称") private String categoryName;
+        @NotBlank @Size(max = 32)
+        @Schema(description = "商品类型编码，由sc_product_type动态维护") private String productType;
+        @Size(max = 200) @Schema(description = "分类描述") private String description;
         @Size(max = 32)
         @Schema(description = "父分类编码。创建时为空表示根分类；更新时三态：不传或 null 表示不变更父级，"
                 + "空字符串表示显式挂到根，非空编码表示挂到该父级")

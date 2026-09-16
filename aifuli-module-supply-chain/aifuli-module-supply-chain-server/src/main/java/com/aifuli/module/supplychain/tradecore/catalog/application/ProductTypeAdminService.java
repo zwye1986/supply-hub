@@ -146,12 +146,25 @@ public class ProductTypeAdminService {
         return code;
     }
 
+    /**
+     * 更新商品类型基础信息及可选状态。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#44-商品类型管理prd-87producttypeadmincontroller}。
+     *
+     * <p>当 {@code command.status()} 非空时联动校验并更新启用/停用状态；归档状态必须调用 {@link #delete(String, Long)}。</p>
+     */
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public void update(String typeCode, UpdateCommand command) {
         ProductTypeDO type = requireLive(typeCode, true);
         type.setTypeName(command.typeName().trim());
         type.setIconUrl(command.iconUrl() != null ? command.iconUrl().trim() : null);
         type.setSort(command.sort() == null ? type.getSort() : command.sort());
+        if (command.status() != null) {
+            if (command.status() != CatalogEntityStatus.ACTIVE.getCode()
+                    && command.status() != CatalogEntityStatus.INACTIVE.getCode()) {
+                throw exception(PRODUCT_STATUS_INVALID);
+            }
+            type.setStatus(command.status());
+        }
         if (command.description() != null) {
             type.setDescription(command.description().trim());
         }
@@ -162,7 +175,7 @@ public class ProductTypeAdminService {
         } catch (DuplicateKeyException duplicate) {
             throw exception(PRODUCT_TYPE_DUPLICATE);
         }
-        log.info("更新商品类型 typeCode={} operatorId={}", typeCode, command.operatorId());
+        log.info("更新商品类型 typeCode={} status={} operatorId={}", typeCode, type.getStatus(), command.operatorId());
     }
 
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
@@ -239,7 +252,7 @@ public class ProductTypeAdminService {
     }
 
     public record UpdateCommand(String typeName, String iconUrl, Integer sort,
-                                String description, String remark, Long operatorId) {
+                                Short status, String description, String remark, Long operatorId) {
     }
 
     /** 商品类型管理端投影；字段语义与 {@code sc_product_type} DDL COMMENT 一致。 */

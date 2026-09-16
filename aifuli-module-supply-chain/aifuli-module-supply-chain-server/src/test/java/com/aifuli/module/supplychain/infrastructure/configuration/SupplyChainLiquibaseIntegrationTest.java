@@ -107,6 +107,8 @@ class SupplyChainLiquibaseIntegrationTest {
                         "sc_platform_sku.main_image_url",
                         "sc_platform_sku.detail_image_urls",
                         "sc_platform_sku.description",
+                        "sc_product_category.product_type",
+                        "sc_product_category.description",
                         "sc_fulfillment_acceptance_receipt.project_id",
                         "sc_supply_chain_order.project_id",
                         "sc_supply_chain_order.pricing_quote_id",
@@ -130,7 +132,7 @@ class SupplyChainLiquibaseIntegrationTest {
                 "expire_at:DATETIME:-:3:NO");
         assertThat(firstStartup.projectAuthNoncePrimaryKeyColumns())
                 .containsExactly("app_id", "nonce");
-        assertThat(firstStartup.changeSetCount()).isEqualTo(36L);
+        assertThat(firstStartup.changeSetCount()).isEqualTo(37L);
         assertThat(firstStartup.uniqueIndexes())
                 .contains("sc_instore_payment_flow.uk_sc_instore_flow_order",
                         "sc_instore_channel_user_binding.uk_sc_instore_user_binding_project",
@@ -143,6 +145,7 @@ class SupplyChainLiquibaseIntegrationTest {
                         "sc_standard_pricing_quote.uk_sc_standard_quote_token");
         assertThat(firstStartup.indexes())
                 .contains("sc_buyer.idx_sc_buyer_parent_created",
+                        "sc_product_category.idx_sc_category_product_type",
                         "sc_supply_chain_order.idx_sc_order_purchase_limit",
                         "sc_supply_chain_order.idx_sc_order_phone_bind_limit");
         assertThat(firstStartup.collations()).containsOnly("utf8mb4_0900_ai_ci");
