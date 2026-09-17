@@ -34,6 +34,7 @@
 | **d24** | **标准履约手机号服务端规范化** | 标准履约 `buyerUserId` 和 `accountType=MOBILE` 的目标账号统一由服务端规范化为中国大陆 11 位手机号：接受裸号码、`+86`、`0086` 前缀及首尾空白，持久化、幂等指纹与限购统计一律使用去前缀后的 11 位号码；非法号码拒绝受理。调用方无需预先规范化，但完整手机号仍禁止写日志。公开履约数量继续固定为 `quantity=1`。 | 防止同一手机号因格式差异绕过项目级限购 |
 | **d25** | **商品列表筛选字典与 SKU 状态口径** | system 数据字典新增 `supply_chain_fulfillment_type`（兑换方式）和 `supply_chain_sku_status`（商品状态）。`GET /supply-chain/products/management-page` 的 `status` 明确定义为 SKU 状态；SKU 级筛选命中任一未归档 SKU 后保留所属 SPU，并只返回符合 SKU 状态、兑换方式及市场价条件的 SKU 行。 | 对齐商品列表原型，消除 SPU/SKU 状态歧义 |
 | **d26** | **分类商品类型与描述闭环** | `036-category-product-type-description.sql` 为 `sc_product_category` 增加可空 `product_type` 与 `description`。新版分类创建/编辑请求必须提交动态商品类型编码并通过 `ProductTypeValidationService` 校验其处于启用状态；分类描述最多 200 字，空字符串按 `NULL` 保存。历史分类不根据父级或 SPU 标签猜测回填，两个字段保持 `NULL`，由运营编辑后补齐。详情返回 `productType` 与 `description` 供页面完整回显。 | 修复分类编辑详情缺少商品类型和分类描述，避免只补 DTO 造成数据仍丢失 |
+| **d27** | **SKU 限购周期数据字典化** | 管理端商品编辑/限购表单中“每人限购周期”与“绑定手机号限购周期”下拉选项统一由 system 模块数据字典 `supply_chain_purchase_limit_period` 统一下发，前端不再硬编码选项；字典值与现有 `PurchaseLimitPeriod`（LIFETIME/YEAR/MONTH/WEEK/DAY）严格保持一致。后端交易与履约校验及数据库 CHECK 约束保持不变。 | 对齐系统标准字典模式，避免前端硬编码选项 |
 
 ---
 
@@ -717,6 +718,20 @@ system-server 通过追加变更集 `007-product-type-and-category-status-dictio
   - 商品类型状态仅支持 `10`（启用）与 `20`（禁用），归档状态 `90` 仅作为内部逻辑删除标识，严禁作为业务选项字典暴露；彻底纠偏历史注释中误写「0草稿」的笔误。
   - 商品分类状态支持 `0`（草稿）、`10`（启用）与 `20`（禁用）。
   - OpenAPI/Swagger 参数描述与模型 DTO 字段必须统一补充对应字典标识 `supply_chain_product_type_status` 与 `supply_chain_category_status`。
+
+system-server 通过追加变更集 `008-sku-purchase-limit-period-dictionary` 写入限购周期数据字典：
+
+| 字典类型 | 字典名称 | 值 | 标签 | 颜色类型 (color_type) | 说明 |
+| --- | --- | --- | --- | --- | --- |
+| `supply_chain_purchase_limit_period` | SKU限购周期 | `LIFETIME` | 终身 | `default` | 对应 PurchaseLimitPeriod.LIFETIME |
+| `supply_chain_purchase_limit_period` | SKU限购周期 | `YEAR` | 每年 | `default` | 对应 PurchaseLimitPeriod.YEAR |
+| `supply_chain_purchase_limit_period` | SKU限购周期 | `MONTH` | 每月 | `default` | 对应 PurchaseLimitPeriod.MONTH |
+| `supply_chain_purchase_limit_period` | SKU限购周期 | `WEEK` | 每周 | `default` | 对应 PurchaseLimitPeriod.WEEK |
+| `supply_chain_purchase_limit_period` | SKU限购周期 | `DAY` | 每天 | `default` | 对应 PurchaseLimitPeriod.DAY |
+
+* **管理端表单下拉与契约一致性**：
+  - 管理端商品编辑/限购表单中“每人限购周期”（`userLimitPeriod`）与“绑定手机号限购周期”（`phoneBindLimitPeriod`）下拉选项统一绑定 `supply_chain_purchase_limit_period` 数据字典，前端不再写死枚举。
+  - 字典值严格对应后端 `PurchaseLimitPeriod` 英文大写枚举值，数据库 `sc_platform_sku` 的 CHECK 约束与履约校验逻辑维持不变。
 
 ## 6. 测试策略
 
