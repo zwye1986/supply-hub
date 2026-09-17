@@ -35,6 +35,7 @@
 | **d25** | **商品列表筛选字典与 SKU 状态口径** | system 数据字典新增 `supply_chain_fulfillment_type`（兑换方式）和 `supply_chain_sku_status`（商品状态）。`GET /supply-chain/products/management-page` 的 `status` 明确定义为 SKU 状态；SKU 级筛选命中任一未归档 SKU 后保留所属 SPU，并只返回符合 SKU 状态、兑换方式及市场价条件的 SKU 行。 | 对齐商品列表原型，消除 SPU/SKU 状态歧义 |
 | **d26** | **分类商品类型与描述闭环** | `036-category-product-type-description.sql` 为 `sc_product_category` 增加可空 `product_type` 与 `description`。新版分类创建/编辑请求必须提交动态商品类型编码并通过 `ProductTypeValidationService` 校验其处于启用状态；分类描述最多 200 字，空字符串按 `NULL` 保存。历史分类不根据父级或 SPU 标签猜测回填，两个字段保持 `NULL`，由运营编辑后补齐。详情返回 `productType` 与 `description` 供页面完整回显。 | 修复分类编辑详情缺少商品类型和分类描述，避免只补 DTO 造成数据仍丢失 |
 | **d27** | **SKU 限购周期数据字典化** | 管理端商品编辑/限购表单中“每人限购周期”与“绑定手机号限购周期”下拉选项统一由 system 模块数据字典 `supply_chain_purchase_limit_period` 统一下发，前端不再硬编码选项；字典值与现有 `PurchaseLimitPeriod`（LIFETIME/YEAR/MONTH/WEEK/DAY）严格保持一致。后端交易与履约校验及数据库 CHECK 约束保持不变。 | 对齐系统标准字典模式，避免前端硬编码选项 |
+| **d28** | **SPU 履约方式上移与 SKU 只读继承** | 平台 SPU+SKU 复合创建/编辑接口将 `fulfillmentType`（履约方式/兑换方式）提升至 SPU 根属性，由 SPU 决定商品履约方式；SKU 保存项不再强制要求录入 `fulfillmentType`。数据库层在 `sc_platform_spu` 表新增 `fulfillment_type` 列与索引，并从关联 SKU 洗数回填；`sc_platform_sku.fulfillment_type` 继续保留并由所属 SPU 自动继承双写，保证下游订单、履约边界、路由引擎与数据库行级 CHECK 约束零破坏。SPU 分页与 Tab 过滤由 SPU 表直接等值匹配，消除关联 SKU 子查询。SPU 激活或存在有效外部引用后禁止变更 `fulfillmentType`，草稿态变更时级联更新所有草稿 SKU 及其 Schema。 | 业务模型对齐原型交互，杜绝同 SPU 下履约方式冲突，提升查询性能并保持下游零破坏 |
 
 ---
 
@@ -291,6 +292,32 @@ UPDATE sc_product_category
 3. `CategoryCommandService` 在事务内遍历校验 `typeCodes` 中的每个商品类型均存在且处于 `ACTIVE` 状态；`product_type` 冗余持久化为列表首项，保证存量基于 `product_type` 的查询与索引不受影响。
 4. `CategoryDetail` 与 `ManagementCategoryNode` 同时输出 `typeCodes` 与 `productType`，以及 `description` 与 `remark`，实现原型参数与存量 API 100% 双向兼容。
 
+### 2.15 SPU 履约方式上移（038 Changeset）
+
+```sql
+-- 变更集：038-spu-fulfillment-type.sql
+-- 平台 SPU 增加履约方式字段与状态联合索引，支撑业务交付模型与高效分页筛选。
+-- 设计见 docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#215-spu-履约方式上移038-changeset
+
+ALTER TABLE sc_platform_spu
+    ADD COLUMN fulfillment_type VARCHAR(32) NOT NULL DEFAULT 'DIRECT_RECHARGE'
+        COMMENT '履约类型：DIRECT_RECHARGE直充，VOUCHER_CODE券码，CARD_CODE_SECRET卡号卡密，VOUCHER_URL券链接，ACCOUNT_BOUND_BENEFIT账户绑定权益'
+        AFTER delivery_type,
+    ADD KEY idx_sc_spu_fulfillment_status (fulfillment_type, status);
+
+-- 存量历史 SPU 通过其挂载的未归档 SKU 履约方式进行洗数回填
+UPDATE sc_platform_spu spu
+    JOIN sc_platform_sku sku ON sku.spu_id = spu.id
+    SET spu.fulfillment_type = sku.fulfillment_type
+    WHERE sku.status != 90;
+```
+
+针对 SPU+SKU 复合表单中履约方式归属的业务优化：
+1. **SPU 根级持有与决定**：`sc_platform_spu` 增加 `fulfillment_type` 字段，作为 SPU 交付的核心属性。SPU 复合创建与更新接口将 `fulfillmentType` 提升至 SPU 根入参 `SpuSaveReqVO`；子项 `SkuItemSaveReqVO` 中的 `fulfillmentType` 改为可选/废弃。
+2. **SKU 自动继承双写（零破坏保障）**：`sc_platform_sku.fulfillment_type` 继续保留。在应用层创建或更新 SKU 时，一律强制继承所属 SPU 的 `fulfillment_type`，确保下游订单（`sc_supply_chain_order`）、履约受理（`FulfillmentAcceptanceLifecycle`）、路由规则（`StandardProductRoutingRuleDO`）以及数据库行级 CHECK 约束（`ck_sc_sku_phone_bind_limit`）完全保持无侵入、零破坏。
+3. **SPU 列表与 Tab 查询性能跃升**：SPU 分页查询 `page(SpuPageQuery)` 在按业务 Tab（如虚拟卡密、虚拟直充）或履约类型筛选时，直接在 SPU 表上做单表等值匹配，彻底消除先全表扫描 SKU 聚合 `spu_id` 的慢查询隐患。
+4. **不可变规则约束**：SPU 处于已激活（`ACTIVE`）状态或存在下游有效业务引用时，禁止修改 `fulfillment_type`（抛出 `1_050_001_113 PRODUCT_FULFILLMENT_TYPE_IMMUTABLE`）；仅草稿态允许变更，并在变更时级联更新所有草稿 SKU 的履约类型及派生的 Target/Result Schemas。
+
 ---
 
 ## 3. 核心业务规则与状态机设计
@@ -438,7 +465,7 @@ PRD 8.4.1 的列表 Tab 支持从 `GET /supply-chain/product-types` 动态拉取
 #### 4.1.2 SPU 详情查询：`GET /supply-chain/products/spus/{spuCode}`
 * **权限**：使用 `SupplyChainAdminPermissions.PRODUCT_QUERY_EXPRESSION`。
 * **响应**：`CommonResult<SpuDetailVO>`
-  * SPU 完整信息：编码、名称、副标题、品牌、主分类、辅助分类列表、三码、封面图、轮播图列表、图文详情、配送模式、起购/限购、状态。
+  * SPU 完整信息：编码、名称、副标题、品牌、主分类、辅助分类列表、三码、封面图、轮播图列表、图文详情、配送模式、履约方式（`fulfillmentType` 与 `fulfillmentTypeDisplay`）、起购/限购、状态。
   * `skus: List<SkuDetailVO>`：挂载的每个 SKU 详情（编码、名称、履约模式、面值、市场价、销售建议价、起购/限购、有效可售状态、schema 配置等）。
 
 #### 4.1.3 SPU+SKU 复合创建：`POST /supply-chain/products/spus`
@@ -446,6 +473,7 @@ PRD 8.4.1 的列表 Tab 支持从 `GET /supply-chain/product-types` 动态拉取
 * **请求体**：`SpuSaveReqVO`
   * `spuCode` (String, 可选，未传时由系统生成 `SPU_`+ULID)
   * `spuName` (String, 必填, 长度 ≤256)
+  * `fulfillmentType` (String, 必填)：兑换/履约方式（`CARD_CODE_SECRET` 卡号卡密、`DIRECT_RECHARGE` 直充、`VOUCHER_CODE` 券码、`VOUCHER_URL` 券链接、`ACCOUNT_BOUND_BENEFIT` 账户绑定权益；字典 `supply_chain_fulfillment_type`）
   * `brandId` (Long, 必填)
   * `primaryCategoryId` (Long, 必填)：原型「商品分类」字段；取值来自 `GET /supply-chain/categories` 返回的
     `sc_product_category` 启用树，不是 system 数据字典。
@@ -467,7 +495,7 @@ PRD 8.4.1 的列表 Tab 支持从 `GET /supply-chain/product-types` 动态拉取
     * `mainImageUrl` (String, 可选，长度 ≤512)：SKU 主图地址
     * `detailImageUrls` (List<String>, 可选)：SKU 详情图地址列表，单项长度 ≤512
     * `description` (String, 可选，长度 ≤200)：SKU 商品描述
-    * `fulfillmentType` (String, 必填)
+    * `fulfillmentType` (String, 可选/废弃，统一由 SPU 决定并继承；若传值则强校验必须与 SPU 一致)
     * `faceValue` (Long, 必填，单位分)
     * `marketPrice` (Long, 默认 0，分)
     * `suggestedSalePrice` (Long, 默认 0，分)
@@ -476,12 +504,12 @@ PRD 8.4.1 的列表 Tab 支持从 `GET /supply-chain/product-types` 动态拉取
     * `minQuantity` (Long, 默认 1)
     * `maxQuantity` (Long, 默认 9999999)
     * `status` (Short, 默认与 SPU 保持一致)
-  * 目标与结果 Schema 不属于前端请求契约。应用层按 `fulfillmentType` 从 `PlatformSkuSchemaRegistry` 获取并写入 SKU；当前映射版本均为 1。查询详情可返回这些字段，但前端只能只读展示，不得回传决定其取值。
+  * 目标与结果 Schema 不属于前端请求契约。应用层按 SPU 级 `fulfillmentType` 从 `PlatformSkuSchemaRegistry` 获取并写入 SKU；当前映射版本均为 1。查询详情可返回这些字段，但前端只能只读展示，不得回传决定其取值。
 * **响应**：`CommonResult<String>`（返回生成的 `spuCode`）
 
 #### 4.1.4 SPU+SKU 复合更新：`PUT /supply-chain/products/spus/{spuCode}`
 * **权限**：使用 `SupplyChainAdminPermissions.PRODUCT_UPDATE_EXPRESSION`。
-* **请求体**：`SpuUpdateReqVO`（全量属性更新，比对 SKU 列表增补新 SKU、更新已有 SKU，已移除的 SKU 若无外部引用置为停用）。
+* **请求体**：`SpuSaveReqVO`（全量属性更新，比对 SKU 列表增补新 SKU、更新已有 SKU，已移除的 SKU 若无外部引用置为停用；SPU 已激活或存在外部引用时禁止变更 `fulfillmentType`）。
 * **响应**：`CommonResult<Boolean>`
 
 #### 4.1.5 SPU 状态变更（上下架）：`PUT /supply-chain/products/spus/{spuCode}/status`

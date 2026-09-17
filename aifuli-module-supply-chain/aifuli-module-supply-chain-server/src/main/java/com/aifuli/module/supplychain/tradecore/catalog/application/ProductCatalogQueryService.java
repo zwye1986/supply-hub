@@ -68,12 +68,6 @@ public class ProductCatalogQueryService {
         TabFilter tab = resolveTab(query.tabCode());
         String productType = hasText(query.productType()) ? query.productType().trim() : tab.productType();
         String fulfillmentType = tab.fulfillmentType();
-        Set<Long> fulfillmentSpuIds = fulfillmentType == null ? Set.of() : skuMapper.selectList(
-                        new LambdaQueryWrapper<PlatformSkuDO>()
-                                .eq(PlatformSkuDO::getFulfillmentType, fulfillmentType)
-                                .ne(PlatformSkuDO::getStatus, CatalogEntityStatus.ARCHIVED.getCode()))
-                .stream().map(PlatformSkuDO::getSpuId).collect(Collectors.toSet());
-        if (fulfillmentType != null && fulfillmentSpuIds.isEmpty()) return new PageResult<>(List.of(), 0L);
         LambdaQueryWrapper<PlatformSpuDO> wrapper = new LambdaQueryWrapper<PlatformSpuDO>()
                 .ne(PlatformSpuDO::getStatus, CatalogEntityStatus.ARCHIVED.getCode())
                 .eq(query.brandId() != null, PlatformSpuDO::getBrandId, query.brandId())
@@ -83,7 +77,7 @@ public class ProductCatalogQueryService {
                 .eq(hasText(query.productClassification()), PlatformSpuDO::getProductClassification,
                         query.productClassification())
                 .eq(query.status() != null, PlatformSpuDO::getStatus, query.status())
-                .in(fulfillmentType != null, PlatformSpuDO::getId, fulfillmentSpuIds)
+                .eq(hasText(fulfillmentType), PlatformSpuDO::getFulfillmentType, fulfillmentType)
                 .and(hasText(query.keyword()), w -> w.like(PlatformSpuDO::getSpuCode, query.keyword())
                         .or().like(PlatformSpuDO::getSpuName, query.keyword())
                         .or().like(PlatformSpuDO::getSubtitle, query.keyword()))
@@ -124,6 +118,7 @@ public class ProductCatalogQueryService {
                 category == null ? null : category.getCategoryName(), spu.getSecondaryCategoryIds(),
                 spu.getSellableCategory(), spu.getProductType(), spu.getProductClassification(), spu.getCoverUrl(),
                 spu.getSliderImageUrls(), spu.getUseInstruction(), spu.getDescription(), spu.getDeliveryType(),
+                spu.getFulfillmentType(), resolveFulfillmentTypeDisplay(spu.getFulfillmentType()),
                 spu.getMinQuantity(), spu.getMaxQuantity(), spu.getStatus(), skus,
                 spu.getCreatedAt(), spu.getUpdatedAt());
     }
@@ -242,6 +237,8 @@ public class ProductCatalogQueryService {
             @Schema(description = "商品使用说明") String useInstruction,
             @Schema(description = "商品富文本详情与图文介绍") String description,
             @Schema(description = "配送履约模式：VIRTUAL虚拟发货，EXPRESS物流快递，PICKUP自提核销") String deliveryType,
+            @Schema(description = "履约类型：DIRECT_RECHARGE直充，VOUCHER_CODE券码，CARD_CODE_SECRET卡号卡密，VOUCHER_URL券链接，ACCOUNT_BOUND_BENEFIT账户绑定权益") String fulfillmentType,
+            @Schema(description = "履约方式中文展示名称") String fulfillmentTypeDisplay,
             @Schema(description = "SPU默认单次最低起购量") Long minQuantity,
             @Schema(description = "SPU默认单次最高限购量") Long maxQuantity,
             @Schema(description = "SPU管理状态：0草稿，10启用，20停用") Short status,

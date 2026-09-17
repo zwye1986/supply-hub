@@ -32,6 +32,7 @@ import java.util.List;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_CANNOT_DELETE_HAS_SUPPLIER_OFFER;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.CATEGORY_NOT_FOUND;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_CONCURRENT_UPDATE;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_FULFILLMENT_TYPE_IMMUTABLE;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_PURCHASE_LIMIT_CONFIG_INVALID;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_SKU_FIELD_INVALID;
 import static com.aifuli.framework.common.exception.util.ServiceExceptionUtil.exception;
@@ -303,6 +304,11 @@ class ProductCatalogCommandServiceTest {
     @Test
     void savesPhoneBindLimitOnDirectRechargeSku() {
         givenUpdateWithOneOmittedSku();
+        PlatformSpuDO spu = PlatformSpuDO.builder().id(1L).spuCode(SPU_CODE)
+                .fulfillmentType(FulfillmentType.DIRECT_RECHARGE.code())
+                .status(CatalogEntityStatus.ACTIVE.getCode()).build();
+        when(spuMapper.selectByCodeForUpdate(SPU_CODE)).thenReturn(spu);
+
         ProductCatalogCommandService.SaveSkuLine recharge = new ProductCatalogCommandService.SaveSkuLine(
                 "SKU_KEEP", "保留SKU", FulfillmentType.DIRECT_RECHARGE.code(), 100L, 0L, 0L,
                 false, null, 1L, 10L, false, null, null, false, true, "DAY", 2L,
@@ -325,6 +331,11 @@ class ProductCatalogCommandServiceTest {
     @Test
     void savesPhoneBindLimitOnAccountBoundBenefitSku() {
         givenUpdateWithOneOmittedSku();
+        PlatformSpuDO spu = PlatformSpuDO.builder().id(1L).spuCode(SPU_CODE)
+                .fulfillmentType(FulfillmentType.ACCOUNT_BOUND_BENEFIT.code())
+                .status(CatalogEntityStatus.ACTIVE.getCode()).build();
+        when(spuMapper.selectByCodeForUpdate(SPU_CODE)).thenReturn(spu);
+
         ProductCatalogCommandService.SaveSkuLine bound = new ProductCatalogCommandService.SaveSkuLine(
                 "SKU_KEEP", "保留SKU", FulfillmentType.ACCOUNT_BOUND_BENEFIT.code(), 100L, 0L, 0L,
                 false, null, 1L, 10L, false, null, null, false, true, "MONTH", 1L,
@@ -346,6 +357,10 @@ class ProductCatalogCommandServiceTest {
     @Test
     void omittedPhoneBindLimitFieldsPreserveExistingSkuConfiguration() {
         PlatformSkuDO omitted = givenUpdateWithOneOmittedSku();
+        PlatformSpuDO spu = PlatformSpuDO.builder().id(1L).spuCode(SPU_CODE)
+                .fulfillmentType(FulfillmentType.DIRECT_RECHARGE.code())
+                .status(CatalogEntityStatus.ACTIVE.getCode()).build();
+        when(spuMapper.selectByCodeForUpdate(SPU_CODE)).thenReturn(spu);
         PlatformSkuDO keep = PlatformSkuDO.builder().id(10L).spuId(1L).skuCode("SKU_KEEP")
                 .fulfillmentType(FulfillmentType.DIRECT_RECHARGE.code())
                 .phoneBindLimitEnabled(true).phoneBindLimitPeriod("DAY").phoneBindLimitQuantity(2L)
@@ -371,6 +386,10 @@ class ProductCatalogCommandServiceTest {
     @Test
     void disablingPhoneBindLimitClearsPeriodAndQuantity() {
         PlatformSkuDO omitted = givenUpdateWithOneOmittedSku();
+        PlatformSpuDO spu = PlatformSpuDO.builder().id(1L).spuCode(SPU_CODE)
+                .fulfillmentType(FulfillmentType.DIRECT_RECHARGE.code())
+                .status(CatalogEntityStatus.ACTIVE.getCode()).build();
+        when(spuMapper.selectByCodeForUpdate(SPU_CODE)).thenReturn(spu);
         PlatformSkuDO keep = PlatformSkuDO.builder().id(10L).spuId(1L).skuCode("SKU_KEEP")
                 .fulfillmentType(FulfillmentType.DIRECT_RECHARGE.code())
                 .phoneBindLimitEnabled(true).phoneBindLimitPeriod("DAY").phoneBindLimitQuantity(2L)
@@ -393,20 +412,71 @@ class ProductCatalogCommandServiceTest {
                 });
     }
 
-    /** 履约类型改为卡密且省略绑定手机号字段时，不得把直充上已开启的限购保留下来。 */
+    /** 履约类型在草稿态改为卡密且省略绑定手机号字段时，不得把直充上已开启的限购保留下来。 */
     @Test
     void changingToCardSecretWhilePreservingPhoneBindLimitIsRejected() {
         PlatformSkuDO omitted = givenUpdateWithOneOmittedSku();
+        PlatformSpuDO spu = PlatformSpuDO.builder().id(1L).spuCode(SPU_CODE)
+                .fulfillmentType(FulfillmentType.DIRECT_RECHARGE.code())
+                .status(CatalogEntityStatus.DRAFT.getCode()).build();
+        when(spuMapper.selectByCodeForUpdate(SPU_CODE)).thenReturn(spu);
         PlatformSkuDO keep = PlatformSkuDO.builder().id(10L).spuId(1L).skuCode("SKU_KEEP")
                 .fulfillmentType(FulfillmentType.DIRECT_RECHARGE.code())
                 .phoneBindLimitEnabled(true).phoneBindLimitPeriod("DAY").phoneBindLimitQuantity(2L)
-                .status(CatalogEntityStatus.ACTIVE.getCode()).build();
+                .status(CatalogEntityStatus.DRAFT.getCode()).build();
         when(skuMapper.selectList(any())).thenReturn(List.of(keep, omitted));
 
-        assertThatThrownBy(() -> service.updateProduct(SPU_CODE, saveCommand()))
+        ProductCatalogCommandService.SaveSkuLine keepLine = new ProductCatalogCommandService.SaveSkuLine(
+                "SKU_KEEP", "保留SKU", FulfillmentType.CARD_CODE_SECRET.code(), 100L, 0L, 0L, 1L, 10L,
+                CatalogEntityStatus.DRAFT.getCode());
+        ProductCatalogCommandService.SaveSpuCommand command = new ProductCatalogCommandService.SaveSpuCommand(
+                SPU_CODE, "商品", null, 2L, 3L, null,
+                SellableCategory.EQUITY.name(), "EQUITY_PRODUCT", ProductClassification.VIRTUAL_CARD.name(),
+                null, null, null, null, null, FulfillmentType.CARD_CODE_SECRET.code(), 1L, 10L,
+                CatalogEntityStatus.DRAFT.getCode(), List.of(keepLine), 1L);
+
+        assertThatThrownBy(() -> service.updateProduct(SPU_CODE, command))
                 .isInstanceOf(ServiceException.class)
                 .extracting(ex -> ((ServiceException) ex).getCode())
                 .isEqualTo(PRODUCT_PURCHASE_LIMIT_CONFIG_INVALID.getCode());
+    }
+
+    /** 启用态 SPU 禁止修改履约方式。 */
+    @Test
+    void changingFulfillmentTypeOnActiveSpuIsRejected() {
+        givenUpdateWithOneOmittedSku();
+        ProductCatalogCommandService.SaveSkuLine keepLine = new ProductCatalogCommandService.SaveSkuLine(
+                "SKU_KEEP", "保留SKU", FulfillmentType.DIRECT_RECHARGE.code(), 100L, 0L, 0L, 1L, 10L,
+                CatalogEntityStatus.DRAFT.getCode());
+        ProductCatalogCommandService.SaveSpuCommand command = new ProductCatalogCommandService.SaveSpuCommand(
+                SPU_CODE, "商品", null, 2L, 3L, null,
+                SellableCategory.EQUITY.name(), "EQUITY_PRODUCT", ProductClassification.VIRTUAL_CARD.name(),
+                null, null, null, null, null, FulfillmentType.DIRECT_RECHARGE.code(), 1L, 10L,
+                CatalogEntityStatus.ACTIVE.getCode(), List.of(keepLine), 1L);
+
+        assertThatThrownBy(() -> service.updateProduct(SPU_CODE, command))
+                .isInstanceOf(ServiceException.class)
+                .extracting(ex -> ((ServiceException) ex).getCode())
+                .isEqualTo(PRODUCT_FULFILLMENT_TYPE_IMMUTABLE.getCode());
+    }
+
+    /** SPU 与下属 SKU 履约方式不一致时拒绝保存。 */
+    @Test
+    void inconsistentSkuFulfillmentTypeWithSpuIsRejected() {
+        givenUpdateWithOneOmittedSku();
+        ProductCatalogCommandService.SaveSkuLine keepLine = new ProductCatalogCommandService.SaveSkuLine(
+                "SKU_KEEP", "保留SKU", FulfillmentType.DIRECT_RECHARGE.code(), 100L, 0L, 0L, 1L, 10L,
+                CatalogEntityStatus.DRAFT.getCode());
+        ProductCatalogCommandService.SaveSpuCommand command = new ProductCatalogCommandService.SaveSpuCommand(
+                SPU_CODE, "商品", null, 2L, 3L, null,
+                SellableCategory.EQUITY.name(), "EQUITY_PRODUCT", ProductClassification.VIRTUAL_CARD.name(),
+                null, null, null, null, null, FulfillmentType.CARD_CODE_SECRET.code(), 1L, 10L,
+                CatalogEntityStatus.ACTIVE.getCode(), List.of(keepLine), 1L);
+
+        assertThatThrownBy(() -> service.updateProduct(SPU_CODE, command))
+                .isInstanceOf(ServiceException.class)
+                .extracting(ex -> ((ServiceException) ex).getCode())
+                .isEqualTo(PRODUCT_SKU_FIELD_INVALID.getCode());
     }
 
     /** 构造：SPU 下挂 keep 与 omitted 两个启用 SKU，更新请求只保留 keep。 */
@@ -414,6 +484,7 @@ class ProductCatalogCommandServiceTest {
         LocalDateTime now = LocalDateTime.now();
         when(clock.now()).thenReturn(now);
         PlatformSpuDO spu = PlatformSpuDO.builder().id(1L).spuCode(SPU_CODE)
+                .fulfillmentType(FulfillmentType.CARD_CODE_SECRET.code())
                 .status(CatalogEntityStatus.ACTIVE.getCode()).build();
         when(spuMapper.selectByCodeForUpdate(SPU_CODE)).thenReturn(spu);
         when(spuMapper.updateById(any(PlatformSpuDO.class))).thenReturn(1);
@@ -425,10 +496,12 @@ class ProductCatalogCommandServiceTest {
                 .thenReturn(ProductTypeDO.builder().typeCode("EQUITY_PRODUCT").build());
 
         PlatformSkuDO keep = PlatformSkuDO.builder().id(10L).spuId(1L).skuCode("SKU_KEEP")
+                .fulfillmentType(FulfillmentType.CARD_CODE_SECRET.code())
                 .userLimitEnabled(true).userLimitPeriod("MONTH").userLimitQuantity(2L)
                 .orderLimitEnabled(true)
                 .status(CatalogEntityStatus.ACTIVE.getCode()).build();
         PlatformSkuDO omitted = PlatformSkuDO.builder().id(11L).spuId(1L).skuCode("SKU_OMITTED")
+                .fulfillmentType(FulfillmentType.CARD_CODE_SECRET.code())
                 .status(CatalogEntityStatus.ACTIVE.getCode()).build();
         when(skuMapper.selectList(any())).thenReturn(List.of(keep, omitted));
         when(skuMapper.updateById(any(PlatformSkuDO.class))).thenReturn(1);
@@ -444,9 +517,12 @@ class ProductCatalogCommandServiceTest {
 
     private ProductCatalogCommandService.SaveSpuCommand saveCommand(
             ProductCatalogCommandService.SaveSkuLine keepLine) {
+        String fulfillmentType = keepLine != null && keepLine.fulfillmentType() != null
+                ? keepLine.fulfillmentType()
+                : FulfillmentType.CARD_CODE_SECRET.code();
         return new ProductCatalogCommandService.SaveSpuCommand(SPU_CODE, "商品", null, 2L, 3L, null,
                 SellableCategory.EQUITY.name(), "EQUITY_PRODUCT", ProductClassification.VIRTUAL_CARD.name(),
-                null, null, null, null, null, 1L, 10L,
+                null, null, null, null, null, fulfillmentType, 1L, 10L,
                 CatalogEntityStatus.ACTIVE.getCode(), List.of(keepLine), 1L);
     }
 }

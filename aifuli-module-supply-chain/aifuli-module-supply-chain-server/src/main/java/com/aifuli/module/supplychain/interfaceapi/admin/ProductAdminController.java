@@ -53,7 +53,7 @@ public class ProductAdminController {
     @GetMapping("/spus")
     @PreAuthorize(PRODUCT_QUERY_EXPRESSION)
     @Operation(summary = "分页查询平台 SPU",
-            description = "普通商品类型 Tab 由商品类型表动态驱动；电影和点餐没有专属业务分支。"
+            description     = "普通商品类型 Tab 由商品类型表动态驱动；电影和点餐没有专属业务分支。"
                     + "tabCode 传入未知的动态类型编码时，返回 1050001081 商品类型不存在。")
     public CommonResult<PageResult<SpuListItem>> page(
             @Parameter(description = "业务 Tab 标识。固定复合 Tab：ALL 全部、VIRTUAL_CARD 虚拟卡密、"
@@ -200,18 +200,23 @@ public class ProductAdminController {
     }
 
     private SaveSpuCommand toCommand(SpuSaveReqVO request) {
-        List<SaveSkuLine> skus = request.skus.stream().map(line -> new SaveSkuLine(line.skuCode, line.skuName,
-                line.mainImageUrl, line.detailImageUrls, line.description,
-                line.fulfillmentType, line.faceValue, line.marketPrice, line.suggestedSalePrice,
-                line.taxIncluded, line.taxRate, line.minQuantity, line.maxQuantity,
-                line.userLimitEnabled, line.userLimitPeriod, line.userLimitQuantity,
-                line.orderLimitEnabled, line.phoneBindLimitEnabled, line.phoneBindLimitPeriod,
-                line.phoneBindLimitQuantity, line.status)).toList();
+        String spuFulfillmentType = request.fulfillmentType != null ? request.fulfillmentType.trim() : null;
+        List<SaveSkuLine> skus = request.skus.stream().map(line -> {
+            String skuFulfillment = (line.fulfillmentType != null && !line.fulfillmentType.isBlank())
+                    ? line.fulfillmentType.trim() : spuFulfillmentType;
+            return new SaveSkuLine(line.skuCode, line.skuName,
+                    line.mainImageUrl, line.detailImageUrls, line.description,
+                    skuFulfillment, line.faceValue, line.marketPrice, line.suggestedSalePrice,
+                    line.taxIncluded, line.taxRate, line.minQuantity, line.maxQuantity,
+                    line.userLimitEnabled, line.userLimitPeriod, line.userLimitQuantity,
+                    line.orderLimitEnabled, line.phoneBindLimitEnabled, line.phoneBindLimitPeriod,
+                    line.phoneBindLimitQuantity, line.status);
+        }).toList();
         return new SaveSpuCommand(request.spuCode, request.spuName, request.subtitle, request.brandId,
                 request.primaryCategoryId, request.secondaryCategoryIds, request.sellableCategory,
                 request.productType, request.productClassification, request.coverUrl, request.sliderImageUrls,
-                request.useInstruction, request.description, request.deliveryType, request.minQuantity,
-                request.maxQuantity, request.status, skus, getLoginUserId());
+                request.useInstruction, request.description, request.deliveryType, spuFulfillmentType,
+                request.minQuantity, request.maxQuantity, request.status, skus, getLoginUserId());
     }
 
     @Data
@@ -235,6 +240,10 @@ public class ProductAdminController {
         @Size(max = 2000) @Schema(description = "使用说明") private String useInstruction;
         @Schema(description = "图文详情") private String description;
         @Size(max = 32) @Schema(description = "配送模式；默认 VIRTUAL") private String deliveryType;
+        @NotBlank
+        @Size(max = 32)
+        @Schema(description = "履约类型：DIRECT_RECHARGE直充，VOUCHER_CODE券码，CARD_CODE_SECRET卡号卡密，VOUCHER_URL券链接，ACCOUNT_BOUND_BENEFIT账户绑定权益", example = "CARD_CODE_SECRET")
+        private String fulfillmentType;
         @Positive @Schema(description = "SPU默认单次最低起购量") private Long minQuantity;
         @Positive @Schema(description = "SPU默认单次最高限购量") private Long maxQuantity;
         @Schema(description = "状态：0草稿，10启用，20停用；默认10") private Short status;
@@ -250,7 +259,9 @@ public class ProductAdminController {
         @Schema(description = "SKU详情图地址列表(JSON数组)")
         private List<@NotBlank @Size(max = 512) String> detailImageUrls;
         @Size(max = 200) @Schema(description = "SKU商品描述") private String description;
-        @NotBlank @Size(max = 32) @Schema(description = "履约方式") private String fulfillmentType;
+        @Size(max = 32)
+        @Schema(description = "履约类型：DIRECT_RECHARGE直充，VOUCHER_CODE券码，CARD_CODE_SECRET卡号卡密，VOUCHER_URL券链接，ACCOUNT_BOUND_BENEFIT账户绑定权益", deprecated = true)
+        private String fulfillmentType;
         @NotNull @Min(0) @Schema(description = "面值，CNY分") private Long faceValue;
         @Min(0) @Schema(description = "市场价，CNY分；默认0") private Long marketPrice;
         @Min(0) @Schema(description = "销售建议价，CNY分；默认0") private Long suggestedSalePrice;

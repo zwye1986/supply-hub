@@ -98,7 +98,7 @@ public class M1MasterDataAdminController {
                 request.getSpuCode(), request.getBrandCode(), request.getPrimaryCategoryCode(),
                 request.getSellableCategory(), request.getProductType(), request.getProductClassification(),
                 request.getSpuName(), request.getSubtitle(), request.getCoverUrl(),
-                request.getUseInstruction(), getLoginUserId())));
+                request.getUseInstruction(), request.getFulfillmentType(), getLoginUserId())));
     }
 
     @PostMapping("/skus")
@@ -244,6 +244,9 @@ public class M1MasterDataAdminController {
         private String coverUrl;
         @Schema(description = "使用说明")
         private String useInstruction;
+        @Size(max = 32)
+        @Schema(description = "履约类型：DIRECT_RECHARGE直充，VOUCHER_CODE券码，CARD_CODE_SECRET卡号卡密，VOUCHER_URL券链接，ACCOUNT_BOUND_BENEFIT账户绑定权益", example = "DIRECT_RECHARGE")
+        private String fulfillmentType;
     }
 
     @Schema(description = "创建平台 SKU 请求")

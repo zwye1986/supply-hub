@@ -49,6 +49,8 @@ public class PlatformSpuDO {
     private String unshelveMode;
     /** 配送履约模式：VIRTUAL虚拟发货, EXPRESS物流快递, PICKUP自提核销 */
     private String deliveryType;
+    /** 履约类型：DIRECT_RECHARGE直充，VOUCHER_CODE券码，CARD_CODE_SECRET卡号卡密，VOUCHER_URL券链接，ACCOUNT_BOUND_BENEFIT账户绑定权益 */
+    private String fulfillmentType;
     /** SPU默认单次最低起购量 */
     private Long minQuantity;
     /** SPU默认单次最高限购量 */
