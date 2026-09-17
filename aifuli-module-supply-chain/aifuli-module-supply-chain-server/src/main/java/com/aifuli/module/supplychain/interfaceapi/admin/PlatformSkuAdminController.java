@@ -9,6 +9,7 @@ import com.aifuli.module.supplychain.interfaceapi.admin.pricing.GenericPricingAd
 import com.aifuli.module.supplychain.interfaceapi.admin.pricing.GenericPricingAdminVos.ServiceFeeRuleReqVO;
 import com.aifuli.module.supplychain.interfaceapi.admin.pricing.GenericPricingRequestMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericBatchPricingService;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericBatchPricingService.PlatformPricingDetail;
 import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericBatchPricingService.PricingPreview;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -26,12 +27,14 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import static com.aifuli.framework.common.pojo.CommonResult.success;
 import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.PLATFORM_SKU_QUERY_EXPRESSION;
+import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.PRODUCT_QUERY_EXPRESSION;
 import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.PRODUCT_UPDATE_EXPRESSION;
 import static com.aifuli.framework.security.core.util.SecurityFrameworkUtils.getLoginUserId;
 
@@ -82,6 +85,17 @@ public class PlatformSkuAdminController {
         return success(queryService.page(new SkuPageQuery(
                 keyword, sellableCategory, productType, productClassification,
                 supplierCode, buyerCode, projectCode, pageNo, pageSize)));
+    }
+
+    @GetMapping("/{skuCode}/pricing")
+    @PreAuthorize(PRODUCT_QUERY_EXPRESSION)
+    @Operation(summary = "查询商品SKU当前完整默认定价",
+            description = "按平台SKU永久业务编码返回当前版本、五组完整配置、计算快照、结果与发布信息；"
+                    + "未定价正常返回UNPRICED及空版本。该查询不重算、不签发报价凭证。")
+    public CommonResult<PlatformPricingDetail> getPricing(
+            @Parameter(description = "平台SKU永久业务编码", required = true, example = "SKU_01ABC")
+            @PathVariable String skuCode) {
+        return success(genericPricingService.getPlatformPricing(skuCode));
     }
 
     @PostMapping("/pricing/preview")

@@ -27,6 +27,7 @@ import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferVer
 import com.aifuli.module.supplychain.tradecore.supply.domain.SupplierStatus;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -35,6 +36,9 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.*;
+
+import static com.aifuli.framework.common.exception.util.ServiceExceptionUtil.exception;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PLATFORM_SKU_NOT_FOUND;
 
 /**
  * 商品默认、分销商与项目三层通用批量定价编排。写入前先完成整批试算，随后发布不可变版本并逐层切换当前指针。
@@ -67,6 +71,39 @@ public class GenericBatchPricingService {
     private final SupplyChainDatabaseClock clock;
     private final ObjectMapper objectMapper;
     private final GenericPricingCalculator calculator = new GenericPricingCalculator();
+
+    /**
+     * 查询平台 SKU 当前默认定价完整快照。未定价是正常业务状态，返回身份状态而不是抛错；
+     * 已发布版本严格按当前指针读取，不调用税率字典、不重新计算，保证编辑回显与当前生效版本一致。
+     * 设计见 {@code docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#6-管理端接口}。
+     */
+    @Transactional(transactionManager = TX, readOnly = true)
+    public PlatformPricingDetail getPlatformPricing(String skuCode) {
+        log.info("查询商品默认定价 skuCode={}", skuCode);
+        PlatformSkuDO sku = skuMapper.selectByCode(skuCode);
+        if (sku == null) {
+            throw exception(PLATFORM_SKU_NOT_FOUND);
+        }
+        PlatformSkuPricingDO identity = platformPricingMapper.selectById(sku.getId());
+        if (identity == null || identity.getCurrentVersionId() == null) {
+            String status = identity == null ? PricingStatus.UNPRICED.name() : identity.getPricingStatus();
+            return PlatformPricingDetail.unpriced(sku.getSkuCode(), status,
+                    identity == null ? null : identity.getUnavailableReason());
+        }
+        PlatformSkuPricingVersionDO version = platformVersionMapper.selectById(identity.getCurrentVersionId());
+        if (version == null || !sku.getId().equals(version.getPlatformSkuId())) {
+            throw new IllegalStateException("platform SKU pricing current version is missing or mismatched");
+        }
+        PricingConfig config = configFrom(version);
+        return new PlatformPricingDetail(sku.getSkuCode(), version.getId(), version.getVersionNo(),
+                identity.getPricingStatus(), identity.getUnavailableReason(),
+                config.distributionRule(), config.salesRule(), config.serviceFeeRule(),
+                config.hideRule(), config.taxMetadata(), version.getMarketPriceCents(),
+                version.getSuggestedSalePriceCents(), version.getSupplyPriceCents(),
+                version.getDistributionPriceCents(), version.getSalesPriceCents(),
+                version.getDistributionMarginPercent(), version.getEffectiveHideThresholdPercent(),
+                version.getCurrency(), version.getPublishedBy(), version.getPublishedAt());
+    }
 
     @Transactional(transactionManager = TX, readOnly = true)
     public List<PricingPreview> previewPlatform(List<String> skuCodes, PricingConfig config) {
@@ -631,6 +668,40 @@ public class GenericBatchPricingService {
                                  java.math.BigDecimal distributionMarginPercent,
                                  java.math.BigDecimal effectiveHideThresholdPercent,
                                  PricingStatus status, String unavailableReason) { }
+
+    /**
+     * 平台 SKU 当前默认定价详情。字段语义与 035 变更集的身份表和不可变版本表 COMMENT 一致。
+     * 设计见 {@code docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#6-管理端接口}。
+     */
+    public record PlatformPricingDetail(
+            @Schema(description = "平台SKU永久业务编码") String platformSkuCode,
+            @Schema(description = "当前商品默认定价版本主键，空表示未定价") Long currentVersionId,
+            @Schema(description = "定价版本号，从1递增；未定价为空") Integer versionNo,
+            @Schema(description = "定价状态：UNPRICED、READY、RECALCULATING、DEPENDENCY_MISSING、CALCULATION_FAILED、MARGIN_HIDDEN")
+            String pricingStatus,
+            @Schema(description = "用户端不可售原因编码") String unavailableReason,
+            @Schema(description = "默认分销价规则") FormulaRule distributionRule,
+            @Schema(description = "默认销售价规则") FormulaRule salesRule,
+            @Schema(description = "默认服务费规则与文案") ServiceFeeRule serviceFeeRule,
+            @Schema(description = "默认分销区和销售区利润隐藏阈值") HideRule hideRule,
+            @Schema(description = "默认税务展示属性；不参与价格计算") TaxMetadata taxMetadata,
+            @Schema(description = "计算时市场价快照，单位CNY分") Long marketPriceCents,
+            @Schema(description = "计算时销售建议价快照，单位CNY分") Long suggestedSalePriceCents,
+            @Schema(description = "计算时最低有效供货价快照，单位CNY分") Long supplyPriceCents,
+            @Schema(description = "计算后默认商品分销单价，单位CNY分") Long distributionPriceCents,
+            @Schema(description = "计算后默认商品销售单价，单位CNY分") Long salesPriceCents,
+            @Schema(description = "单品分销利润率百分数快照") java.math.BigDecimal distributionMarginPercent,
+            @Schema(description = "实际生效的利润隐藏阈值百分数") java.math.BigDecimal effectiveHideThresholdPercent,
+            @Schema(description = "币种，一期固定CNY") String currency,
+            @Schema(description = "发布人用户ID；依赖重算可为空") Long publishedBy,
+            @Schema(description = "发布时间，Asia/Shanghai") LocalDateTime publishedAt) {
+
+        private static PlatformPricingDetail unpriced(String skuCode, String status, String unavailableReason) {
+            return new PlatformPricingDetail(skuCode, null, null, status, unavailableReason,
+                    null, null, null, null, null, null, null, null, null, null,
+                    null, null, null, null, null);
+        }
+    }
 
     public record CurrentProjectPricing(ProjectSkuPricingVersionDO version, Long listingId,
                                         Long platformSkuId, String platformSkuCode) { }

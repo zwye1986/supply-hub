@@ -48,6 +48,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -119,6 +120,60 @@ class GenericBatchPricingServiceTest {
         verify(skuMapper, never()).selectByCodeForUpdate(any());
         verify(platformPricingMapper, never()).insert(any(PlatformSkuPricingDO.class));
         verify(platformVersionMapper, never()).insert(any(PlatformSkuPricingVersionDO.class));
+    }
+
+    @Test
+    void getPlatformPricingReturnsCompleteCurrentVersionWithoutRecalculation() throws Exception {
+        PlatformSkuDO sku = PlatformSkuDO.builder().id(8L).skuCode("SKU_1").build();
+        PlatformSkuPricingDO identity = PlatformSkuPricingDO.builder().platformSkuId(8L)
+                .currentVersionId(9L).pricingStatus(PricingStatus.READY.name()).build();
+        PricingConfig config = config();
+        LocalDateTime publishedAt = LocalDateTime.of(2026, 9, 16, 9, 30);
+        PlatformSkuPricingVersionDO version = PlatformSkuPricingVersionDO.builder()
+                .id(9L).platformSkuId(8L).versionNo(3)
+                .effectiveConfigJson(new ObjectMapper().writeValueAsString(config))
+                .marketPriceCents(10_000L).suggestedSalePriceCents(9_800L).supplyPriceCents(8_000L)
+                .distributionPriceCents(10_000L).salesPriceCents(10_000L)
+                .distributionMarginPercent(new BigDecimal("25.0000"))
+                .effectiveHideThresholdPercent(new BigDecimal("10.00"))
+                .pricingStatus(PricingStatus.READY.name()).currency("CNY")
+                .publishedBy(100L).publishedAt(publishedAt).build();
+        when(skuMapper.selectByCode("SKU_1")).thenReturn(sku);
+        when(platformPricingMapper.selectById(8L)).thenReturn(identity);
+        when(platformVersionMapper.selectById(9L)).thenReturn(version);
+
+        GenericBatchPricingService.PlatformPricingDetail detail = service.getPlatformPricing("SKU_1");
+
+        assertThat(detail.platformSkuCode()).isEqualTo("SKU_1");
+        assertThat(detail.currentVersionId()).isEqualTo(9L);
+        assertThat(detail.versionNo()).isEqualTo(3);
+        assertThat(detail.pricingStatus()).isEqualTo(PricingStatus.READY.name());
+        assertThat(detail.distributionRule()).isEqualTo(config.distributionRule());
+        assertThat(detail.serviceFeeRule()).isEqualTo(config.serviceFeeRule());
+        assertThat(detail.taxMetadata()).isEqualTo(config.taxMetadata());
+        assertThat(detail.supplyPriceCents()).isEqualTo(8_000L);
+        assertThat(detail.distributionMarginPercent()).isEqualByComparingTo("25.0000");
+        assertThat(detail.publishedAt()).isEqualTo(publishedAt);
+        verifyNoInteractions(taxDictionary);
+    }
+
+    @Test
+    void getPlatformPricingReturnsUnpricedForSkuWithoutCurrentVersion() {
+        PlatformSkuDO sku = PlatformSkuDO.builder().id(8L).skuCode("SKU_NEW").build();
+        PlatformSkuPricingDO identity = PlatformSkuPricingDO.builder().platformSkuId(8L)
+                .pricingStatus(PricingStatus.UNPRICED.name()).build();
+        when(skuMapper.selectByCode("SKU_NEW")).thenReturn(sku);
+        when(platformPricingMapper.selectById(8L)).thenReturn(identity);
+
+        GenericBatchPricingService.PlatformPricingDetail detail = service.getPlatformPricing("SKU_NEW");
+
+        assertThat(detail.platformSkuCode()).isEqualTo("SKU_NEW");
+        assertThat(detail.pricingStatus()).isEqualTo(PricingStatus.UNPRICED.name());
+        assertThat(detail.currentVersionId()).isNull();
+        assertThat(detail.distributionRule()).isNull();
+        assertThat(detail.marketPriceCents()).isNull();
+        verify(platformVersionMapper, never()).selectById(any());
+        verifyNoInteractions(taxDictionary);
     }
 
     private static PricingConfig config() {

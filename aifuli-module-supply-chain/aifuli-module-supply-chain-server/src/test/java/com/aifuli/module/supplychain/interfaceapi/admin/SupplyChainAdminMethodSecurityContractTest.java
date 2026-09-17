@@ -40,6 +40,7 @@ import static com.aifuli.framework.common.pojo.CommonResult.success;
 import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.ADMIN;
 import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.BUYER_QUERY;
 import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.ORDER_QUERY;
+import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.PRODUCT_QUERY;
 import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.SUPPLIER_QUERY;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -174,6 +175,21 @@ class SupplyChainAdminMethodSecurityContractTest {
         grant();
 
         assertThatThrownBy(() -> queryPlatformSkus(null, null))
+                .isInstanceOf(AccessDeniedException.class);
+    }
+
+    @Test
+    void productQueryCanReadSingleSkuPricing() {
+        grant(PRODUCT_QUERY);
+
+        assertThatCode(() -> platformSkuController.getPricing("SKU_1")).doesNotThrowAnyException();
+    }
+
+    @Test
+    void buyerQueryCannotReadSingleSkuPricing() {
+        grant(BUYER_QUERY);
+
+        assertThatThrownBy(() -> platformSkuController.getPricing("SKU_1"))
                 .isInstanceOf(AccessDeniedException.class);
     }
 

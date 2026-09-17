@@ -61,7 +61,7 @@ SKU 建议价”的限制。本文的“模板”是一次性应用到当前所�
 ## 4. 税务展示属性
 
 税务信息只用于结算展示，不参与定价、利润、服务费或路由。平台商品/SKU 保存默认税务配置，分销商 + SKU 可整体继承或
-整体覆盖，项目 + SKU 再可整体继承或整体覆盖。有效税务解析顺序为“项目覆盖 > 分销商覆盖 > 商品默认”。税率来自 system 字典 `supply_chain_tax_rate`，供应链通过显式注册的
+整体覆盖，项目 + SKU 再可整体继承或整体覆盖。有效税务解析顺序为“项目覆盖 > 分销商覆盖 > 商品默认”。税率来自 system 字典 `supply_chain_tax_rate`，由 system 服务自身的 Liquibase 变更集 `releases/1.0.0/009-supply-chain-tax-rate-dictionary.sql`（主清单 `db.changelog-1.0.0.yaml`）在服务启动时自动向主数据源执行迁移与幂等初始化。供应链通过显式注册的
 `DictDataCommonApi` 实时读取启用项校验，不跨库读取 `system_*`。RPC 不可用时保存失败并整批回滚；既有
 价格读取和下单不依赖字典 RPC。
 
@@ -100,6 +100,7 @@ SKU 建议价”的限制。本文的“模板”是一次性应用到当前所�
 
 新增商品默认定价路径，并保留分销商/项目路径：
 
+- `GET /supply-chain/products/skus/{skuCode}/pricing`
 - `POST /supply-chain/products/skus/pricing/preview`
 - `PUT /supply-chain/products/skus/pricing`
 - `POST /supply-chain/buyers/{buyerCode}/products/pricing/preview`
@@ -110,6 +111,12 @@ SKU 建议价”的限制。本文的“模板”是一次性应用到当前所�
 商品请求携带所选 `platformSkuCodes` 和五组完整默认配置；分销商请求携带 `buyerProductCodes`，项目请求携带 `listingCodes`，两个下游层每组都包含
 `inherit=true` 或完整覆盖配置。预览不落库，逐 SKU 返回三个依赖价格、计算结果、利润率和预期可售状态。
 保存由服务端重新计算，不能信任预览结果。
+
+商品默认定价单条查询按平台 SKU 永久业务编码读取，不要求 SKU 当前为启用状态，便于停用商品审计和编辑回显。
+响应返回当前版本主键与版本号、定价状态与不可售原因、分销价/销售价/服务费/利润隐藏/税务五组完整配置、
+计算时三个依赖价格快照、分销价与销售价结果、利润率、实际隐藏阈值、币种和发布信息。尚未定价的 SKU
+正常返回 `pricingStatus=UNPRICED`，当前版本、五组配置、计算快照与发布信息均为空；SKU 不存在时返回
+`PLATFORM_SKU_NOT_FOUND`。查询只读取当前指针指向的不可变版本，不调用税率字典、不触发重算，也不生成报价凭证。
 
 ## 7. 项目报价凭证与标准履约
 

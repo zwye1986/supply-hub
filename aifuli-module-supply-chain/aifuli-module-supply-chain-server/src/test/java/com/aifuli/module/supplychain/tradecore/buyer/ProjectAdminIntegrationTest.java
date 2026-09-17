@@ -252,6 +252,27 @@ class ProjectAdminIntegrationTest {
                 new HideRule(new BigDecimal("10"), new BigDecimal("5")),
                 new TaxMetadata(false, "NON_TAXABLE", null));
         pricing.savePlatform(List.of(sku.getSkuCode()), config, 1L);
+        GenericBatchPricingService.PlatformPricingDetail platformDetail =
+                pricing.getPlatformPricing(sku.getSkuCode());
+        assertThat(platformDetail.currentVersionId()).isNotNull();
+        assertThat(platformDetail.versionNo()).isEqualTo(1);
+        assertThat(platformDetail.pricingStatus()).isEqualTo(PricingStatus.READY.name());
+        assertThat(platformDetail.distributionRule()).isEqualTo(config.distributionRule());
+        assertThat(platformDetail.salesRule()).isEqualTo(config.salesRule());
+        assertThat(platformDetail.serviceFeeRule().percentage())
+                .isEqualByComparingTo(config.serviceFeeRule().percentage());
+        assertThat(platformDetail.serviceFeeRule().operator()).isEqualTo(config.serviceFeeRule().operator());
+        assertThat(platformDetail.serviceFeeRule().operand())
+                .isEqualByComparingTo(config.serviceFeeRule().operand());
+        assertThat(platformDetail.serviceFeeRule().hideCopy()).isEqualTo(config.serviceFeeRule().hideCopy());
+        assertThat(platformDetail.serviceFeeRule().copy()).isEqualTo(config.serviceFeeRule().copy());
+        assertThat(platformDetail.hideRule()).isEqualTo(config.hideRule());
+        assertThat(platformDetail.taxMetadata().taxIncluded()).isFalse();
+        assertThat(platformDetail.taxMetadata().taxRateCode()).isEqualTo("NON_TAXABLE");
+        assertThat(platformDetail.taxMetadata().taxRateLabel()).isEqualTo("不征税");
+        assertThat(platformDetail.marketPriceCents()).isEqualTo(10_000L);
+        assertThat(platformDetail.supplyPriceCents()).isEqualTo(8_000L);
+        assertThat(platformDetail.distributionPriceCents()).isEqualTo(10_000L);
         pricing.saveBuyer(buyerA, List.of(buyerProductCode),
                 GenericBatchPricingService.ProjectOverrides.allInherited(), 1L);
 
