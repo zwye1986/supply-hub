@@ -139,7 +139,7 @@ public class ProductAdminController {
             @RequestParam(required = false) String sellableCategory,
             @Parameter(description = "商品类型编码，取值来自商品类型表", example = "EQUITY_PRODUCT")
             @RequestParam(required = false) String productType,
-            @Parameter(description = "商品分类封闭枚举：ELECTRONICS、VIRTUAL_CARD、MOVIE_TICKET",
+            @Parameter(description = "商品分类供货命中码：字典枚举名或类目 categoryCode",
                     example = "VIRTUAL_CARD")
             @RequestParam(required = false) String productClassification,
             @Parameter(description = "SPU 状态：0草稿，10启用，20停用", example = "10")
@@ -329,7 +329,7 @@ public class ProductAdminController {
         @NotBlank @Size(max = 32) @Schema(description = "数据驱动商品类型编码", example = "EQUITY_PRODUCT")
         private String productType;
         @NotBlank @Size(max = 32)
-        @Schema(description = "供货匹配商品分类；system字典supply_chain_product_classification，不是商品分类树",
+        @Schema(description = "供货匹配商品分类：system字典supply_chain_product_classification枚举名，或/supply-chain/categories的categoryCode",
                 example = "VIRTUAL_CARD")
         private String productClassification;
         @Size(max = 512) @Schema(description = "封面图地址",

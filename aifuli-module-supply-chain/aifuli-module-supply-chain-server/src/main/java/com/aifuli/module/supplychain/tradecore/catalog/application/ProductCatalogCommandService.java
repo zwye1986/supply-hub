@@ -35,7 +35,6 @@ import com.aifuli.module.supplychain.tradecore.catalog.domain.UnshelveMode;
 import com.aifuli.module.supplychain.tradecore.catalog.pricing.PricingDependencyChangedEvent;
 import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericPricingCalculator.PricingStatus;
 import com.aifuli.module.supplychain.tradecore.profile.domain.ClosedEnums;
-import com.aifuli.module.supplychain.tradecore.profile.domain.ProductClassification;
 import com.aifuli.module.supplychain.tradecore.profile.domain.SellableCategory;
 import com.aifuli.framework.common.exception.ServiceException;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
@@ -125,6 +124,7 @@ public class ProductCatalogCommandService {
     private final BrandAdminService brandAdminService;
     private final CategoryCommandService categoryCommandService;
     private final ProductTypeValidationService productTypeValidationService;
+    private final ProductClassificationValidationService productClassificationValidationService;
     private final ProductSellabilityService sellabilityService;
     private final ProductDeletionValidator deletionValidator;
     private final FulfillmentTargetSchemaRegistry targetSchemaRegistry;
@@ -374,7 +374,9 @@ public class ProductCatalogCommandService {
     /**
      * SPU 校验与落库的唯一路径，由复合创建与存量兼容入口共享，确保动态商品类型准入、品牌与类目有效性、
      * 辅助类目、配送模式与限购区间在新旧接口上完全一致。
-     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#45-存量主数据接口治理m1masterdataadmincontroller}（d9）。
+     * {@code productClassification} 先认封闭枚举名，否则按类目树 {@code category_code} 解析并原样落库（d34）。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#45-存量主数据接口治理m1masterdataadmincontroller}（d9）、
+     * {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线}（d34）。
      */
     private PlatformSpuDO insertSpu(SaveSpuCommand command) {
         String spuCode = hasText(command.spuCode()) ? command.spuCode().trim()
@@ -385,11 +387,9 @@ public class ProductCatalogCommandService {
         ProductCategoryDO primary = requireCategoryById(command.primaryCategoryId(), activeRequired);
         List<Long> secondary = validateSecondaryCategories(command.secondaryCategoryIds(), activeRequired);
         String productType = productTypeValidationService.requireActiveForUpdate(command.productType()).getTypeCode();
-        // 可售品类与商品分类是供货匹配封闭枚举，不是类目树编码；未知值回显允许列表。
-        // 设计见 docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#413-spusku-复合创建postsupply-chainproductsspus
         String sellable = ClosedEnums.parseRequired(SellableCategory.class, command.sellableCategory()).name();
-        String classification = ClosedEnums.parseRequired(ProductClassification.class,
-                command.productClassification()).name();
+        String classification = productClassificationValidationService.requireWritable(
+                command.productClassification(), activeRequired, primary == null ? null : primary.getId());
         String deliveryType = DeliveryType.parseOrDefault(command.deliveryType()).code();
         String fulfillmentType = hasText(command.fulfillmentType())
                 ? FulfillmentType.fromCode(command.fulfillmentType().trim()).code()
@@ -432,8 +432,9 @@ public class ProductCatalogCommandService {
                 spuStatus == CatalogEntityStatus.ACTIVE));
         spu.setSellableCategory(ClosedEnums.parseRequired(SellableCategory.class, command.sellableCategory()).name());
         spu.setProductType(productType);
-        spu.setProductClassification(ClosedEnums.parseRequired(ProductClassification.class,
-                command.productClassification()).name());
+        spu.setProductClassification(productClassificationValidationService.requireWritable(
+                command.productClassification(), spuStatus == CatalogEntityStatus.ACTIVE,
+                primary == null ? null : primary.getId()));
         spu.setSpuName(command.spuName().trim());
         spu.setSubtitle(command.subtitle());
         spu.setCoverUrl(command.coverUrl());

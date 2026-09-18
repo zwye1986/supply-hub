@@ -33,7 +33,6 @@ import java.util.List;
 
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_CANNOT_DELETE_HAS_SUPPLIER_OFFER;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BRAND_NOT_FOUND;
-import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.ENUM_NOT_OPEN;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.CATEGORY_NOT_FOUND;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_CONCURRENT_UPDATE;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_FULFILLMENT_TYPE_IMMUTABLE;
@@ -75,6 +74,8 @@ class ProductCatalogCommandServiceTest {
     private final CategoryCommandService categoryCommandService = mock(CategoryCommandService.class);
     private final ProductTypeValidationService productTypeValidationService =
             mock(ProductTypeValidationService.class);
+    private final ProductClassificationValidationService productClassificationValidationService =
+            new ProductClassificationValidationService(categoryMapper);
     private final ProductSellabilityService sellabilityService = mock(ProductSellabilityService.class);
     private final ProductDeletionValidator deletionValidator = mock(ProductDeletionValidator.class);
     private final FulfillmentTargetSchemaRegistry targetSchemaRegistry = mock(FulfillmentTargetSchemaRegistry.class);
@@ -84,7 +85,7 @@ class ProductCatalogCommandServiceTest {
             clock, eventPublisher, brandMapper, categoryMapper, spuMapper, skuMapper, platformSkuPricingMapper,
             buyerMapper, listingMapper,
             availabilityMapper, generator, brandAdminService, categoryCommandService,
-            productTypeValidationService, sellabilityService, deletionValidator, targetSchemaRegistry,
+            productTypeValidationService, productClassificationValidationService, sellabilityService, deletionValidator, targetSchemaRegistry,
             skuSchemaRegistry);
 
     /** 请求中省略、且仍被下游引用的 SKU 保留原状态，不被停用，且整体更新继续成功。 */
@@ -639,17 +640,21 @@ class ProductCatalogCommandServiceTest {
     }
 
     /**
-     * 复现：前端把类目树编码 E2E_L1_20260903 写进 productClassification，应拒绝并回显允许值。
-     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#413-spusku-复合创建postsupply-chainproductsspus}。
+     * 复现：前端把类目树编码写进 productClassification，应解析为类目编码并落库，而不是 ENUM_NOT_OPEN。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线}（d34）。
      */
     @Test
-    void createProductWithCategoryCodeAsProductClassificationThrowsEnumNotOpen() {
+    void createProductWithCategoryCodeAsProductClassificationSuccess() {
         BrandDO brand = BrandDO.builder().id(99L).brandCode("1111").status(CatalogEntityStatus.ACTIVE.getCode()).build();
+        ProductCategoryDO category = ProductCategoryDO.builder().id(1L).categoryCode("E2E_L1_20260903")
+                .status(CatalogEntityStatus.ACTIVE.getCode()).build();
         when(brandMapper.selectByCode("1111")).thenReturn(brand);
-        when(categoryMapper.selectById(1L)).thenReturn(ProductCategoryDO.builder().id(1L)
-                .status(CatalogEntityStatus.ACTIVE.getCode()).build());
+        when(categoryMapper.selectById(1L)).thenReturn(category);
+        when(categoryMapper.selectByCode("E2E_L1_20260903")).thenReturn(category);
         when(productTypeValidationService.requireActiveForUpdate("EQUITY_PRODUCT"))
                 .thenReturn(ProductTypeDO.builder().typeCode("EQUITY_PRODUCT").build());
+        when(clock.now()).thenReturn(LocalDateTime.now());
+        when(generator.next(any())).thenReturn("SPU_CAT", "SKU_CAT");
 
         ProductCatalogCommandService.SaveSkuLine line = new ProductCatalogCommandService.SaveSkuLine(
                 "SKU_1", "SKU名称", FulfillmentType.CARD_CODE_SECRET.code(), 100L, 100L, 100L, 1L, 10L,
@@ -660,14 +665,40 @@ class ProductCatalogCommandServiceTest {
                 null, null, null, null, null, FulfillmentType.CARD_CODE_SECRET.code(), 1L, 10L,
                 CatalogEntityStatus.DRAFT.getCode(), List.of(line), 1L);
 
+        String result = service.createProduct(command);
+        assertThat(result).isEqualTo("SPU_CAT");
+        ArgumentCaptor<PlatformSpuDO> captor = ArgumentCaptor.forClass(PlatformSpuDO.class);
+        verify(spuMapper).insert(captor.capture());
+        assertThat(captor.getValue().getProductClassification()).isEqualTo("E2E_L1_20260903");
+        assertThat(captor.getValue().getPrimaryCategoryId()).isEqualTo(1L);
+    }
+
+    @Test
+    void createProductWithMismatchedClassificationCategoryThrowsCategoryNotFound() {
+        BrandDO brand = BrandDO.builder().id(99L).brandCode("1111").status(CatalogEntityStatus.ACTIVE.getCode()).build();
+        ProductCategoryDO primary = ProductCategoryDO.builder().id(1L).categoryCode("E2E_L1_20260903")
+                .status(CatalogEntityStatus.ACTIVE.getCode()).build();
+        ProductCategoryDO other = ProductCategoryDO.builder().id(2L).categoryCode("E2E_L2_20260903")
+                .status(CatalogEntityStatus.ACTIVE.getCode()).build();
+        when(brandMapper.selectByCode("1111")).thenReturn(brand);
+        when(categoryMapper.selectById(1L)).thenReturn(primary);
+        when(categoryMapper.selectByCode("E2E_L2_20260903")).thenReturn(other);
+        when(productTypeValidationService.requireActiveForUpdate("EQUITY_PRODUCT"))
+                .thenReturn(ProductTypeDO.builder().typeCode("EQUITY_PRODUCT").build());
+
+        ProductCatalogCommandService.SaveSkuLine line = new ProductCatalogCommandService.SaveSkuLine(
+                "SKU_1", "SKU名称", FulfillmentType.CARD_CODE_SECRET.code(), 100L, 100L, 100L, 1L, 10L,
+                CatalogEntityStatus.DRAFT.getCode());
+        ProductCatalogCommandService.SaveSpuCommand command = new ProductCatalogCommandService.SaveSpuCommand(
+                null, " 001", null, null, "1111", 1L, null,
+                SellableCategory.EQUITY.name(), "EQUITY_PRODUCT", "E2E_L2_20260903",
+                null, null, null, null, null, FulfillmentType.CARD_CODE_SECRET.code(), 1L, 10L,
+                CatalogEntityStatus.DRAFT.getCode(), List.of(line), 1L);
+
         assertThatThrownBy(() -> service.createProduct(command))
                 .isInstanceOf(ServiceException.class)
-                .satisfies(ex -> {
-                    ServiceException se = (ServiceException) ex;
-                    assertThat(se.getCode()).isEqualTo(ENUM_NOT_OPEN.getCode());
-                    assertThat(se.getMessage()).isEqualTo(
-                            "未知枚举值：ProductClassification 不支持 E2E_L1_20260903，允许值：ELECTRONICS、VIRTUAL_CARD、MOVIE_TICKET");
-                });
+                .extracting(ex -> ((ServiceException) ex).getCode())
+                .isEqualTo(CATEGORY_NOT_FOUND.getCode());
     }
 
     /** 构造：SPU 下挂 keep 与 omitted 两个启用 SKU，更新请求只保留 keep。 */

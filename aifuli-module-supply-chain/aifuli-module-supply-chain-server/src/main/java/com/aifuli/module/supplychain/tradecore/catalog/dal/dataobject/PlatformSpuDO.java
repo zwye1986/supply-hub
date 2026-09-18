@@ -30,7 +30,7 @@ public class PlatformSpuDO {
     private String sellableCategory;
     /** 启用商品类型编码，来源sc_product_type，供货命中用 */
     private String productType;
-    /** 商品分类封闭枚举，见ProductClassification，供货命中用 */
+    /** 商品分类供货命中码：ProductClassification枚举名或sc_product_category.category_code */
     private String productClassification;
     /** 辅助/扩展分类ID列表(JSON数组) */
     @TableField(typeHandler = JacksonTypeHandler.class)

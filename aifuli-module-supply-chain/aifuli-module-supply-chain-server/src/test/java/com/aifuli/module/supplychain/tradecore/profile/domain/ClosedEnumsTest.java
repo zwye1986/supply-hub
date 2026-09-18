@@ -36,8 +36,8 @@ class ClosedEnumsTest {
     }
 
     /**
-     * 复现管理端把类目树编码写入 productClassification 时，必须回显类型、提交值与允许值。
-     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#413-spusku-复合创建postsupply-chainproductsspus}。
+     * ClosedEnums 仍只认三枚举名；管理端写入类目编码走 ProductClassificationValidationService，不经此解析器。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线}（d34）。
      */
     @Test
     void unknownProductClassificationIncludesTypeValueAndAllowed() {

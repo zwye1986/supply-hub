@@ -167,7 +167,7 @@ class ProductCenterContractTest {
         assertThat(sku.get("suggestedSalePrice").asLong()).isEqualTo(6_100L);
     }
 
-    /** 原型商品分类必须绑定供应链分类树主键，不能与供货匹配字典混为同一字段。 */
+    /** 原型商品分类绑定分类树主键；供货命中码可同时接受字典枚举名或类目编码。 */
     @Test
     void productCategoryUsesRequiredPrimaryCategoryId() throws Exception {
         var categoryField = ProductAdminController.SpuSaveReqVO.class.getDeclaredField("primaryCategoryId");
@@ -176,7 +176,7 @@ class ProductCenterContractTest {
                 .contains("/supply-chain/categories", "不是system数据字典");
         assertThat(ProductAdminController.SpuSaveReqVO.class.getDeclaredField("productClassification")
                 .getAnnotation(Schema.class).description())
-                .contains("supply_chain_product_classification", "不是商品分类树");
+                .contains("supply_chain_product_classification", "categoryCode");
     }
 
     /** SKU 限购请求字段注释必须与 DDL COMMENT 使用同一表述。 */

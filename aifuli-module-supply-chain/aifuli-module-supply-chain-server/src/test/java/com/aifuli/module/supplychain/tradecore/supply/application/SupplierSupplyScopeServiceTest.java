@@ -2,8 +2,12 @@ package com.aifuli.module.supplychain.tradecore.supply.application;
 
 import com.aifuli.framework.common.exception.ServiceException;
 import com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock;
+import com.aifuli.module.supplychain.tradecore.catalog.application.ProductClassificationValidationService;
 import com.aifuli.module.supplychain.tradecore.catalog.application.ProductTypeValidationService;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProductCategoryDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProductTypeDO;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProductCategoryMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierSupplyScopeService.ScopeLine;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierSupplyScopeDO;
@@ -19,6 +23,7 @@ import org.mockito.InOrder;
 import java.time.LocalDateTime;
 import java.util.List;
 
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.CATEGORY_NOT_FOUND;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.ENUM_NOT_OPEN;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.SUPPLIER_SCOPE_CONFLICT;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -40,12 +45,15 @@ class SupplierSupplyScopeServiceTest {
     private final SupplierSupplyScopeMapper scopeMapper = mock(SupplierSupplyScopeMapper.class);
     private final SupplierSupplyScopeModeMapper modeMapper = mock(SupplierSupplyScopeModeMapper.class);
     private final ProductTypeValidationService productTypeValidationService = mock(ProductTypeValidationService.class);
+    private final ProductCategoryMapper categoryMapper = mock(ProductCategoryMapper.class);
+    private final ProductClassificationValidationService productClassificationValidationService =
+            new ProductClassificationValidationService(categoryMapper);
     private SupplierSupplyScopeService service;
 
     @BeforeEach
     void setUp() {
         service = new SupplierSupplyScopeService(databaseClock, supplierMapper, scopeMapper, modeMapper,
-                productTypeValidationService);
+                productTypeValidationService, productClassificationValidationService);
         when(productTypeValidationService.requireActiveForUpdate(any())).thenAnswer(invocation ->
                 ProductTypeDO.builder().typeCode(invocation.getArgument(0)).status((short) 10).build());
         when(databaseClock.now()).thenReturn(LocalDateTime.of(2026, 9, 4, 19, 0));
@@ -81,6 +89,29 @@ class SupplierSupplyScopeServiceTest {
         verify(modeMapper).insert(modeCaptor.capture());
         assertThat(modeCaptor.getValue().getSupplyScopeId()).isEqualTo(101L);
         assertThat(modeCaptor.getValue().getSupplyMode()).isEqualTo("API_DIRECT");
+    }
+
+    @Test
+    void replaceAllPersistsCategoryCodeAsProductClassification() {
+        when(categoryMapper.selectByCode("E2E_L1_20260903")).thenReturn(ProductCategoryDO.builder()
+                .id(1L).categoryCode("E2E_L1_20260903").status(CatalogEntityStatus.ACTIVE.getCode()).build());
+
+        service.replaceAll("SPL_A", List.of(new ScopeLine(
+                "EQUITY", "EQUITY_PRODUCT", "E2E_L1_20260903", List.of("API_DIRECT"), 1L, 100L)), 7L);
+
+        ArgumentCaptor<SupplierSupplyScopeDO> scopeCaptor = ArgumentCaptor.forClass(SupplierSupplyScopeDO.class);
+        verify(scopeMapper).insert(scopeCaptor.capture());
+        assertThat(scopeCaptor.getValue().getProductClassification()).isEqualTo("E2E_L1_20260903");
+    }
+
+    @Test
+    void rejectsUnknownClassificationAsCategoryNotFound() {
+        when(categoryMapper.selectByCode("NOT_A_CATEGORY")).thenReturn(null);
+        assertThatThrownBy(() -> service.replaceAll("SPL_A", List.of(new ScopeLine(
+                "EQUITY", "MOVIE", "NOT_A_CATEGORY", List.of("API_DIRECT"), 100L, 1L)), 7L))
+                .isInstanceOf(ServiceException.class)
+                .extracting(ex -> ((ServiceException) ex).getCode())
+                .isEqualTo(CATEGORY_NOT_FOUND.getCode());
     }
 
     @Test
