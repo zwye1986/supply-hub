@@ -17,11 +17,37 @@ class ClosedEnumsTest {
                 .isEqualTo(ShippingSlaCode.NEXT_DAY);
         assertThatThrownBy(() -> ClosedEnums.parse(ShippingSlaCode.class, "same-day"))
                 .isInstanceOf(ServiceException.class)
-                .extracting(ex -> ((ServiceException) ex).getCode())
-                .isEqualTo(ENUM_NOT_OPEN.getCode());
+                .satisfies(ex -> {
+                    ServiceException se = (ServiceException) ex;
+                    assertThat(se.getCode()).isEqualTo(ENUM_NOT_OPEN.getCode());
+                    assertThat(se.getMessage()).isEqualTo(
+                            "未知枚举值：ShippingSlaCode 不支持 same-day，允许值：SAME_DAY、NEXT_DAY、HOURS_48、HOURS_72、CUSTOM");
+                });
         assertThat(ClosedEnums.parseRequired(L2AdjustMode.class, "EQUAL_L1"))
                 .isEqualTo(L2AdjustMode.EQUAL_L1);
         assertThatThrownBy(() -> ClosedEnums.parseRequired(L2AdjustMode.class, null))
-                .isInstanceOf(ServiceException.class);
+                .isInstanceOf(ServiceException.class)
+                .satisfies(ex -> {
+                    ServiceException se = (ServiceException) ex;
+                    assertThat(se.getCode()).isEqualTo(ENUM_NOT_OPEN.getCode());
+                    assertThat(se.getMessage()).isEqualTo(
+                            "未知枚举值：L2AdjustMode 不能为空，允许值：FOLLOW_TEMPLATE、EQUAL_L1、CUSTOM");
+                });
+    }
+
+    /**
+     * 复现管理端把类目树编码写入 productClassification 时，必须回显类型、提交值与允许值。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#413-spusku-复合创建postsupply-chainproductsspus}。
+     */
+    @Test
+    void unknownProductClassificationIncludesTypeValueAndAllowed() {
+        assertThatThrownBy(() -> ClosedEnums.parseRequired(ProductClassification.class, "E2E_L1_20260903"))
+                .isInstanceOf(ServiceException.class)
+                .satisfies(ex -> {
+                    ServiceException se = (ServiceException) ex;
+                    assertThat(se.getCode()).isEqualTo(ENUM_NOT_OPEN.getCode());
+                    assertThat(se.getMessage()).isEqualTo(
+                            "未知枚举值：ProductClassification 不支持 E2E_L1_20260903，允许值：ELECTRONICS、VIRTUAL_CARD、MOVIE_TICKET");
+                });
     }
 }

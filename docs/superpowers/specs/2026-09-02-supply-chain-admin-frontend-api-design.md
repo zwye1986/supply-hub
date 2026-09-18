@@ -220,6 +220,9 @@
 **抬头类型** `titleType`（仅开票子资源）：`ENTERPRISE` / `PERSONAL`。详见开票设计。
 
 非法常量 → `ENUM_NOT_OPEN`（替换原「非空即拒」的时效/结算/对接语义；未知值仍拒绝）。
+`ClosedEnums` 抛出该码时，HTTP `msg` 必须带上枚举类型、实际提交值与允许值列表，例如
+「未知枚举值：ProductClassification 不支持 E2E_L1_20260903，允许值：ELECTRONICS、VIRTUAL_CARD、MOVIE_TICKET」。
+错误码目录短文案仍为「未知枚举值」，不得只把短文案返回给调用方。
 
 ### 4.3 类目树与表单字典
 
@@ -484,7 +487,7 @@ O2O / INSTORE 仍 `buyerSettlementAmount = channelPayAmount`，不读三级价�
 
 | 码 | 含义 |
 | --- | --- |
-| `ENUM_NOT_OPEN` | 未知枚举值（替代「时效非空即拒」） |
+| `ENUM_NOT_OPEN` | 未知枚举值（替代「时效非空即拒」）。目录短文案不变；运行时 `msg` 须包含枚举类型、提交值与允许值 |
 | `CATEGORY_CHAIN_INVALID` | 仅类目树主数据父子不合法；供货配置与分销商档案不用此码 |
 | `BUYER_PARENT_INVALID` | 上级/等级不合法或成环 |
 | `BUYER_PRODUCT_DUPLICATE` | 分销商品 SKU 已存在 |

@@ -519,7 +519,10 @@ PRD 8.4.1 的列表 Tab 支持从 `GET /supply-chain/product-types` 动态拉取
   * `sellableCategory` (String, 必填)
   * `productType` (String, 必填，校验在 `sc_product_type` 中启用存在)
   * `productClassification` (String, 必填)：供货配置命中的商品分类标签，取值来自 system 字典
-    `supply_chain_product_classification`，不是原型「商品分类」下拉树。
+    `supply_chain_product_classification`（`ELECTRONICS` / `VIRTUAL_CARD` / `MOVIE_TICKET`），不是原型「商品分类」下拉树。
+    类目树编码（如联调数据 `E2E_L1_20260903`）属于 `sc_product_category.category_code`，只能通过 `primaryCategoryId`
+    引用，写入本字段须返回 `ENUM_NOT_OPEN`（1050001052），`msg` 形如
+    「未知枚举值：ProductClassification 不支持 E2E_L1_20260903，允许值：ELECTRONICS、VIRTUAL_CARD、MOVIE_TICKET」。
   * `coverUrl` (String, 可选)
   * `sliderImageUrls` (List<String>, 可选)
   * `description` (String, 可选)

@@ -33,6 +33,7 @@ import java.util.List;
 
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_CANNOT_DELETE_HAS_SUPPLIER_OFFER;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BRAND_NOT_FOUND;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.ENUM_NOT_OPEN;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.CATEGORY_NOT_FOUND;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_CONCURRENT_UPDATE;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_FULFILLMENT_TYPE_IMMUTABLE;
@@ -635,6 +636,38 @@ class ProductCatalogCommandServiceTest {
                 .isInstanceOf(ServiceException.class)
                 .extracting(ex -> ((ServiceException) ex).getCode())
                 .isEqualTo(BRAND_NOT_FOUND.getCode());
+    }
+
+    /**
+     * 复现：前端把类目树编码 E2E_L1_20260903 写进 productClassification，应拒绝并回显允许值。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#413-spusku-复合创建postsupply-chainproductsspus}。
+     */
+    @Test
+    void createProductWithCategoryCodeAsProductClassificationThrowsEnumNotOpen() {
+        BrandDO brand = BrandDO.builder().id(99L).brandCode("1111").status(CatalogEntityStatus.ACTIVE.getCode()).build();
+        when(brandMapper.selectByCode("1111")).thenReturn(brand);
+        when(categoryMapper.selectById(1L)).thenReturn(ProductCategoryDO.builder().id(1L)
+                .status(CatalogEntityStatus.ACTIVE.getCode()).build());
+        when(productTypeValidationService.requireActiveForUpdate("EQUITY_PRODUCT"))
+                .thenReturn(ProductTypeDO.builder().typeCode("EQUITY_PRODUCT").build());
+
+        ProductCatalogCommandService.SaveSkuLine line = new ProductCatalogCommandService.SaveSkuLine(
+                "SKU_1", "SKU名称", FulfillmentType.CARD_CODE_SECRET.code(), 100L, 100L, 100L, 1L, 10L,
+                CatalogEntityStatus.DRAFT.getCode());
+        ProductCatalogCommandService.SaveSpuCommand command = new ProductCatalogCommandService.SaveSpuCommand(
+                null, " 001", null, null, "1111", 1L, null,
+                SellableCategory.EQUITY.name(), "EQUITY_PRODUCT", "E2E_L1_20260903",
+                null, null, null, null, null, FulfillmentType.CARD_CODE_SECRET.code(), 1L, 10L,
+                CatalogEntityStatus.DRAFT.getCode(), List.of(line), 1L);
+
+        assertThatThrownBy(() -> service.createProduct(command))
+                .isInstanceOf(ServiceException.class)
+                .satisfies(ex -> {
+                    ServiceException se = (ServiceException) ex;
+                    assertThat(se.getCode()).isEqualTo(ENUM_NOT_OPEN.getCode());
+                    assertThat(se.getMessage()).isEqualTo(
+                            "未知枚举值：ProductClassification 不支持 E2E_L1_20260903，允许值：ELECTRONICS、VIRTUAL_CARD、MOVIE_TICKET");
+                });
     }
 
     /** 构造：SPU 下挂 keep 与 omitted 两个启用 SKU，更新请求只保留 keep。 */

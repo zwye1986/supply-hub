@@ -345,8 +345,11 @@ public class ProductCatalogCommandService {
      */
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public String createProduct(SaveSpuCommand command) {
-        log.info("创建平台商品 spuCode={} spuName={} skuCount={} operatorId={}", command.spuCode(),
-                command.spuName(), command.skus() == null ? 0 : command.skus().size(), command.operatorId());
+        log.info("创建平台商品 spuCode={} spuName={} sellableCategory={} productType={} productClassification={} "
+                        + "skuCount={} operatorId={}",
+                command.spuCode(), command.spuName(), command.sellableCategory(), command.productType(),
+                command.productClassification(), command.skus() == null ? 0 : command.skus().size(),
+                command.operatorId());
         if (command.skus() == null || command.skus().isEmpty()) {
             throw exception(PRODUCT_SKU_REQUIRED);
         }
@@ -382,6 +385,8 @@ public class ProductCatalogCommandService {
         ProductCategoryDO primary = requireCategoryById(command.primaryCategoryId(), activeRequired);
         List<Long> secondary = validateSecondaryCategories(command.secondaryCategoryIds(), activeRequired);
         String productType = productTypeValidationService.requireActiveForUpdate(command.productType()).getTypeCode();
+        // 可售品类与商品分类是供货匹配封闭枚举，不是类目树编码；未知值回显允许列表。
+        // 设计见 docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#413-spusku-复合创建postsupply-chainproductsspus
         String sellable = ClosedEnums.parseRequired(SellableCategory.class, command.sellableCategory()).name();
         String classification = ClosedEnums.parseRequired(ProductClassification.class,
                 command.productClassification()).name();

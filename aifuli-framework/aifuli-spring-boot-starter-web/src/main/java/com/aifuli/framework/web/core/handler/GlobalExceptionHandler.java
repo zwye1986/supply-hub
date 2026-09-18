@@ -156,7 +156,8 @@ public class GlobalExceptionHandler {
                 errorMessage = allErrors.get(0).getDefaultMessage();
             }
         } else {
-            errorMessage = fieldError.getDefaultMessage();
+            // 拼接字段名与校验说明，便于排查（如 "fulfillmentType 不能为空"）
+            errorMessage = fieldError.getField() + " " + fieldError.getDefaultMessage();
         }
         // 转换 CommonResult
         if (StrUtil.isEmpty(errorMessage)) {
@@ -173,7 +174,7 @@ public class GlobalExceptionHandler {
         log.warn("[handleBindException]", ex);
         FieldError fieldError = ex.getFieldError();
         assert fieldError != null; // 断言，避免告警
-        return CommonResult.error(BAD_REQUEST.getCode(), String.format("请求参数不正确:%s", fieldError.getDefaultMessage()));
+        return CommonResult.error(BAD_REQUEST.getCode(), String.format("请求参数不正确:%s %s", fieldError.getField(), fieldError.getDefaultMessage()));
     }
 
     /**
@@ -303,7 +304,8 @@ public class GlobalExceptionHandler {
                 StackTraceElement[] stackTraces = ex.getStackTrace();
                 for (StackTraceElement stackTrace : stackTraces) {
                     if (ObjUtil.notEqual(stackTrace.getClassName(), ServiceExceptionUtil.class.getName())) {
-                        log.warn("[serviceExceptionHandler]\n\t{}", stackTrace);
+                        log.warn("[serviceExceptionHandler][code({}) message({})]\n\t{}",
+                                ex.getCode(), ex.getMessage(), stackTrace);
                         break;
                     }
                 }
