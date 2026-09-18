@@ -37,6 +37,7 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProductTypeDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProductTypeMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.UnshelveMode;
+import com.aifuli.module.supplychain.tradecore.catalog.domain.SuggestedSalePriceRule;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierOfferDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierOfferVersionDO;
@@ -104,6 +105,7 @@ public class ProductCatalogQueryService {
                 .map(sku -> new SkuDetail(sku.getSkuCode(), sku.getSkuName(), sku.getMainImageUrl(),
                         sku.getDetailImageUrls(), sku.getDescription(), sku.getFulfillmentType(),
                         sku.getFaceValue(), sku.getMarketPrice(), sku.getSuggestedSalePrice(),
+                        toSuggestedSalePriceRuleView(sku.getSuggestedSalePriceRuleJson()),
                         sku.getTaxIncluded(), sku.getTaxRate(), sku.getMinQuantity(),
                         sku.getMaxQuantity(), sku.getUserLimitEnabled(), sku.getUserLimitPeriod(),
                         sku.getUserLimitQuantity(), sku.getOrderLimitEnabled(),
@@ -258,6 +260,8 @@ public class ProductCatalogQueryService {
             @Schema(description = "商品标准面值，单位CNY分") Long faceValue,
             @Schema(description = "市场划线价或吊牌价，单位CNY分") Long marketPrice,
             @Schema(description = "建议零售价或销售建议价，单位CNY分") Long suggestedSalePrice,
+            @Schema(description = "SKU销售建议价生成规则", allOf = SuggestedSalePriceRuleView.class)
+            SuggestedSalePriceRuleView suggestedSalePriceRule,
             @Schema(description = "是否含税：1含税，0不含税；仅记录展示，不参与价格计算；标准商品结算以分销商/项目通用定价为准") Boolean taxIncluded,
             @Schema(description = "税率，如0.0600表示6%；仅记录展示，不参与价格计算；标准商品结算以分销商/项目通用定价为准") BigDecimal taxRate,
             @Schema(description = "SKU单次最小起购数量") Long minQuantity,
@@ -468,6 +472,7 @@ public class ProductCatalogQueryService {
                         sku.getSkuName(),
                         sku.getMarketPrice(),
                         sku.getSuggestedSalePrice(),
+                        toSuggestedSalePriceRuleView(sku.getSuggestedSalePriceRuleJson()),
                         minSupplyPrice,
                         supplyPriceExclusive,
                         taxIncluded,
@@ -585,6 +590,8 @@ public class ProductCatalogQueryService {
             @Schema(description = "SKU规格名称") String skuName,
             @Schema(description = "市场划线价或吊牌价，单位CNY分") Long marketPrice,
             @Schema(description = "建议零售价或销售建议价，单位CNY分") Long suggestedSalePrice,
+            @Schema(description = "SKU销售建议价生成规则", allOf = SuggestedSalePriceRuleView.class)
+            SuggestedSalePriceRuleView suggestedSalePriceRule,
             @Schema(description = "供货价或有效结算价，单位CNY分") Long supplyPrice,
             @Schema(description = "不含税供货价，单位CNY分") Long supplyPriceExclusive,
             @Schema(description = "是否含税：1含税，0不含税；仅记录展示，不参与价格计算；标准商品结算以分销商/项目通用定价为准") Boolean taxIncluded,
@@ -596,6 +603,30 @@ public class ProductCatalogQueryService {
             @Schema(description = "履约方式封闭枚举名") String fulfillmentType,
             @Schema(description = "履约方式中文展示名称") String fulfillmentTypeDisplay,
             @Schema(description = "SKU管理状态：0草稿，10启用，20停用") Short status) {
+    }
+
+    /** SKU销售建议价规则管理端投影；字段语义与 suggested_sale_price_rule_json DDL COMMENT 对齐。 */
+    @Schema(description = "SKU销售建议价生成规则")
+    public record SuggestedSalePriceRuleView(
+            @Schema(description = "建议价模式（字典supply_chain_suggested_sale_price_mode）：EQUAL_MARKET_PRICE、CUSTOM、FIXED") String mode,
+            @Schema(description = "CUSTOM基数：MARKET_PRICE、SUGGESTED_SALE_PRICE") String base,
+            @Schema(description = "CUSTOM百分比") BigDecimal percentage,
+            @Schema(description = "CUSTOM运算符（字典supply_chain_suggested_sale_price_operator）：ADD加、SUBTRACT减、MULTIPLY乘、DIVIDE除") String operator,
+            @Schema(description = "CUSTOM运算数；加减单位元，乘除为系数") BigDecimal operand,
+            @Schema(description = "FIXED固定建议价，单位CNY分") Long fixedPriceCents,
+            @Schema(description = "以修改前建议价为基数时的服务端快照，单位CNY分") Long basePriceSnapshotCents) {
+    }
+
+    private static SuggestedSalePriceRuleView toSuggestedSalePriceRuleView(SuggestedSalePriceRule rule) {
+        if (rule == null) {
+            return null;
+        }
+        return new SuggestedSalePriceRuleView(
+                rule.mode() == null ? null : rule.mode().name(),
+                rule.base() == null ? null : rule.base().name(),
+                rule.percentage(),
+                rule.operator() == null ? null : rule.operator().name(),
+                rule.operand(), rule.fixedPriceCents(), rule.basePriceSnapshotCents());
     }
 
     /** 管理端商品列表 SPU 聚合行。 */

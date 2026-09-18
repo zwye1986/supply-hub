@@ -10,8 +10,11 @@ import com.aifuli.module.supplychain.tradecore.catalog.application.ProductCatalo
 import com.aifuli.module.supplychain.tradecore.catalog.application.ProductCatalogQueryService.SpuListItem;
 import com.aifuli.module.supplychain.tradecore.catalog.application.ProductCatalogQueryService.SpuPageQuery;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
+import com.aifuli.module.supplychain.tradecore.catalog.domain.SuggestedSalePriceRule;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.ExampleObject;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -33,8 +36,10 @@ import java.math.BigDecimal;
 import java.util.List;
 
 import static com.aifuli.framework.common.pojo.CommonResult.success;
+import static com.aifuli.framework.common.exception.util.ServiceExceptionUtil.exception;
 import static com.aifuli.framework.security.core.util.SecurityFrameworkUtils.getLoginUserId;
 import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.*;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_SUGGESTED_PRICE_RULE_INVALID;
 
 /**
  * 平台商品 SPU+SKU 复合管理入口。
@@ -46,6 +51,68 @@ import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminP
 @Validated
 @RequiredArgsConstructor
 public class ProductAdminController {
+
+    private static final String SPU_SAVE_REQUEST_EXAMPLE = """
+            {
+              "spuCode": "SPU_DEMO_001",
+              "spuName": "爱奇艺黄金会员月卡",
+              "subtitle": "官方直充，到账快",
+              "brandId": 1,
+              "primaryCategoryId": 10,
+              "secondaryCategoryIds": [11, 12],
+              "sellableCategory": "EQUITY",
+              "productType": "EQUITY_PRODUCT",
+              "productClassification": "VIRTUAL_CARD",
+              "coverUrl": "https://cdn.example.com/products/iqiyi-month-cover.png",
+              "sliderImageUrls": [
+                "https://cdn.example.com/products/iqiyi-month-banner-1.png",
+                "https://cdn.example.com/products/iqiyi-month-banner-2.png"
+              ],
+              "useInstruction": "购买后请输入需要充值的爱奇艺账号，预计5分钟内到账",
+              "description": "<p>爱奇艺黄金会员月卡，支持电视剧、电影和综艺会员内容。</p>",
+              "deliveryType": "VIRTUAL",
+              "fulfillmentType": "DIRECT_RECHARGE",
+              "minQuantity": 1,
+              "maxQuantity": 10,
+              "status": 10,
+              "skus": [
+                {
+                  "skuCode": "SKU_DEMO_001",
+                  "skuName": "爱奇艺黄金会员月卡",
+                  "mainImageUrl": "https://cdn.example.com/products/iqiyi-month-main.png",
+                  "detailImageUrls": [
+                    "https://cdn.example.com/products/iqiyi-month-detail-1.png",
+                    "https://cdn.example.com/products/iqiyi-month-detail-2.png"
+                  ],
+                  "description": "爱奇艺黄金会员直充月卡",
+                  "fulfillmentType": "DIRECT_RECHARGE",
+                  "faceValue": 10000,
+                  "marketPrice": 12000,
+                  "suggestedSalePrice": 6100,
+                  "suggestedSalePriceRule": {
+                    "mode": "CUSTOM",
+                    "base": "MARKET_PRICE",
+                    "percentage": 50,
+                    "operator": "ADD",
+                    "operand": 1.00,
+                    "fixedPriceCents": 6100
+                  },
+                  "taxIncluded": true,
+                  "taxRate": 0.0600,
+                  "minQuantity": 1,
+                  "maxQuantity": 10,
+                  "userLimitEnabled": true,
+                  "userLimitPeriod": "MONTH",
+                  "userLimitQuantity": 2,
+                  "orderLimitEnabled": true,
+                  "phoneBindLimitEnabled": true,
+                  "phoneBindLimitPeriod": "DAY",
+                  "phoneBindLimitQuantity": 1,
+                  "status": 10
+                }
+              ]
+            }
+            """;
 
     private final ProductCatalogQueryService queryService;
     private final ProductCatalogCommandService commandService;
@@ -143,18 +210,35 @@ public class ProductAdminController {
     @PostMapping("/spus")
     @PreAuthorize(PRODUCT_CREATE_EXPRESSION)
     @Operation(summary = "复合创建 SPU 与 SKU",
-            description = "在同一事务中创建一个 SPU 和至少一个 SKU；目标与结果 Schema 由服务端按履约方式生成。")
-    public CommonResult<String> create(@Valid @RequestBody SpuSaveReqVO request) {
+            description = "在同一事务中创建一个 SPU 和至少一个 SKU；目标与结果 Schema 由服务端按履约方式生成；"
+                    + "SKU销售建议价规则由服务端校验、计算并与物化金额一并保存。")
+    public CommonResult<String> create(
+            @Valid @RequestBody
+            @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true,
+                    content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = SpuSaveReqVO.class),
+                            examples = @ExampleObject(name = "完整商品保存示例",
+                                    summary = "每个 SPU、SKU 与建议价规则字段均提供具体值",
+                                    value = SPU_SAVE_REQUEST_EXAMPLE)))
+            SpuSaveReqVO request) {
         return success(commandService.createProduct(toCommand(request)));
     }
 
     @PutMapping("/spus/{spuCode}")
     @PreAuthorize(PRODUCT_UPDATE_EXPRESSION)
     @Operation(summary = "复合更新 SPU 与 SKU",
-            description = "按 SKU 编码新增、更新；遗漏且无有效引用的 SKU 自动停用；目标与结果 Schema 由服务端按履约方式生成。")
+            description = "按 SKU 编码新增、更新；遗漏且无有效引用的 SKU 自动停用；目标与结果 Schema 由服务端按履约方式生成；"
+                    + "SKU销售建议价规则由服务端校验、计算并与物化金额一并保存。")
     public CommonResult<Boolean> update(
             @Parameter(description = "平台SPU永久业务编码", example = "SPU_01ABC") @PathVariable String spuCode,
-            @Valid @RequestBody SpuSaveReqVO request) {
+            @Valid @RequestBody
+            @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true,
+                    content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = SpuSaveReqVO.class),
+                            examples = @ExampleObject(name = "完整商品保存示例",
+                                    summary = "每个 SPU、SKU 与建议价规则字段均提供具体值",
+                                    value = SPU_SAVE_REQUEST_EXAMPLE)))
+            SpuSaveReqVO request) {
         commandService.updateProduct(spuCode, toCommand(request));
         return success(true);
     }
@@ -207,6 +291,7 @@ public class ProductAdminController {
             return new SaveSkuLine(line.skuCode, line.skuName,
                     line.mainImageUrl, line.detailImageUrls, line.description,
                     skuFulfillment, line.faceValue, line.marketPrice, line.suggestedSalePrice,
+                    toSuggestedSalePriceRule(line.suggestedSalePriceRule),
                     line.taxIncluded, line.taxRate, line.minQuantity, line.maxQuantity,
                     line.userLimitEnabled, line.userLimitPeriod, line.userLimitQuantity,
                     line.orderLimitEnabled, line.phoneBindLimitEnabled, line.phoneBindLimitPeriod,
@@ -222,66 +307,146 @@ public class ProductAdminController {
     @Data
     @Schema(description = "SPU 与 SKU 复合保存请求")
     public static class SpuSaveReqVO {
-        @Size(max = 32) @Schema(description = "SPU 编码；创建时可空") private String spuCode;
-        @NotBlank @Size(max = 256) @Schema(description = "SPU 名称") private String spuName;
-        @Size(max = 256) @Schema(description = "副标题") private String subtitle;
-        @NotNull @Schema(description = "品牌内部主键") private Long brandId;
+        @Size(max = 32) @Schema(description = "SPU 编码；创建时可空", example = "SPU_DEMO_001")
+        private String spuCode;
+        @NotBlank @Size(max = 256) @Schema(description = "SPU 名称", example = "爱奇艺黄金会员月卡")
+        private String spuName;
+        @Size(max = 256) @Schema(description = "副标题", example = "官方直充，到账快")
+        private String subtitle;
+        @NotNull @Schema(description = "品牌内部主键", example = "1") private Long brandId;
         @NotNull
-        @Schema(description = "商品分类内部主键；来源于 /supply-chain/categories 启用分类树，不是system数据字典")
+        @Schema(description = "商品分类内部主键；来源于 /supply-chain/categories 启用分类树，不是system数据字典",
+                example = "10")
         private Long primaryCategoryId;
-        @Schema(description = "辅助分类内部主键列表") private List<Long> secondaryCategoryIds;
-        @NotBlank @Size(max = 32) @Schema(description = "可售品类") private String sellableCategory;
-        @NotBlank @Size(max = 32) @Schema(description = "数据驱动商品类型编码") private String productType;
+        @Schema(description = "辅助分类内部主键列表", example = "[11,12]")
+        private List<Long> secondaryCategoryIds;
+        @NotBlank @Size(max = 32) @Schema(description = "可售品类", example = "EQUITY")
+        private String sellableCategory;
+        @NotBlank @Size(max = 32) @Schema(description = "数据驱动商品类型编码", example = "EQUITY_PRODUCT")
+        private String productType;
         @NotBlank @Size(max = 32)
-        @Schema(description = "供货匹配商品分类；system字典supply_chain_product_classification，不是商品分类树")
+        @Schema(description = "供货匹配商品分类；system字典supply_chain_product_classification，不是商品分类树",
+                example = "VIRTUAL_CARD")
         private String productClassification;
-        @Size(max = 512) @Schema(description = "封面图地址") private String coverUrl;
-        @Schema(description = "轮播图地址列表") private List<String> sliderImageUrls;
-        @Size(max = 2000) @Schema(description = "使用说明") private String useInstruction;
-        @Schema(description = "图文详情") private String description;
-        @Size(max = 32) @Schema(description = "配送模式；默认 VIRTUAL") private String deliveryType;
+        @Size(max = 512) @Schema(description = "封面图地址",
+                example = "https://cdn.example.com/products/iqiyi-month-cover.png")
+        private String coverUrl;
+        @Schema(description = "轮播图地址列表",
+                example = "[\"https://cdn.example.com/products/iqiyi-month-banner-1.png\",\"https://cdn.example.com/products/iqiyi-month-banner-2.png\"]")
+        private List<String> sliderImageUrls;
+        @Size(max = 2000) @Schema(description = "使用说明", example = "购买后请输入需要充值的爱奇艺账号，预计5分钟内到账")
+        private String useInstruction;
+        @Schema(description = "图文详情", example = "<p>爱奇艺黄金会员月卡，支持电视剧、电影和综艺会员内容。</p>")
+        private String description;
+        @Size(max = 32) @Schema(description = "配送模式；默认 VIRTUAL", example = "VIRTUAL")
+        private String deliveryType;
         @NotBlank
         @Size(max = 32)
-        @Schema(description = "履约类型：DIRECT_RECHARGE直充，VOUCHER_CODE券码，CARD_CODE_SECRET卡号卡密，VOUCHER_URL券链接，ACCOUNT_BOUND_BENEFIT账户绑定权益", example = "CARD_CODE_SECRET")
+        @Schema(description = "履约类型：DIRECT_RECHARGE直充，VOUCHER_CODE券码，CARD_CODE_SECRET卡号卡密，VOUCHER_URL券链接，ACCOUNT_BOUND_BENEFIT账户绑定权益", example = "DIRECT_RECHARGE")
         private String fulfillmentType;
-        @Positive @Schema(description = "SPU默认单次最低起购量") private Long minQuantity;
-        @Positive @Schema(description = "SPU默认单次最高限购量") private Long maxQuantity;
-        @Schema(description = "状态：0草稿，10启用，20停用；默认10") private Short status;
-        @Valid @NotEmpty @Schema(description = "至少一个 SKU") private List<SkuItemSaveReqVO> skus;
+        @Positive @Schema(description = "SPU默认单次最低起购量", example = "1") private Long minQuantity;
+        @Positive @Schema(description = "SPU默认单次最高限购量", example = "10") private Long maxQuantity;
+        @Schema(description = "状态：0草稿，10启用，20停用；默认10", example = "10") private Short status;
+        @Valid @NotEmpty
+        @Schema(description = "至少一个 SKU",
+                example = "[{\"skuCode\":\"SKU_DEMO_001\",\"skuName\":\"爱奇艺黄金会员月卡\",\"mainImageUrl\":\"https://cdn.example.com/products/iqiyi-month-main.png\",\"detailImageUrls\":[\"https://cdn.example.com/products/iqiyi-month-detail-1.png\"],\"description\":\"爱奇艺黄金会员直充月卡\",\"fulfillmentType\":\"DIRECT_RECHARGE\",\"faceValue\":10000,\"marketPrice\":12000,\"suggestedSalePrice\":6100,\"suggestedSalePriceRule\":{\"mode\":\"CUSTOM\",\"base\":\"MARKET_PRICE\",\"percentage\":50,\"operator\":\"ADD\",\"operand\":1.00,\"fixedPriceCents\":6100},\"taxIncluded\":true,\"taxRate\":0.0600,\"minQuantity\":1,\"maxQuantity\":10,\"userLimitEnabled\":true,\"userLimitPeriod\":\"MONTH\",\"userLimitQuantity\":2,\"orderLimitEnabled\":true,\"phoneBindLimitEnabled\":true,\"phoneBindLimitPeriod\":\"DAY\",\"phoneBindLimitQuantity\":1,\"status\":10}]")
+        private List<SkuItemSaveReqVO> skus;
     }
 
     @Data
     @Schema(description = "SKU 保存项")
     public static class SkuItemSaveReqVO {
-        @Size(max = 32) @Schema(description = "SKU 编码；新增时可空") private String skuCode;
-        @NotBlank @Size(max = 256) @Schema(description = "SKU 名称") private String skuName;
-        @Size(max = 512) @Schema(description = "SKU主图地址") private String mainImageUrl;
-        @Schema(description = "SKU详情图地址列表(JSON数组)")
+        @Size(max = 32) @Schema(description = "SKU 编码；新增时可空", example = "SKU_DEMO_001")
+        private String skuCode;
+        @NotBlank @Size(max = 256) @Schema(description = "SKU 名称", example = "爱奇艺黄金会员月卡")
+        private String skuName;
+        @Size(max = 512) @Schema(description = "SKU主图地址",
+                example = "https://cdn.example.com/products/iqiyi-month-main.png")
+        private String mainImageUrl;
+        @Schema(description = "SKU详情图地址列表(JSON数组)",
+                example = "[\"https://cdn.example.com/products/iqiyi-month-detail-1.png\",\"https://cdn.example.com/products/iqiyi-month-detail-2.png\"]")
         private List<@NotBlank @Size(max = 512) String> detailImageUrls;
-        @Size(max = 200) @Schema(description = "SKU商品描述") private String description;
+        @Size(max = 200) @Schema(description = "SKU商品描述", example = "爱奇艺黄金会员直充月卡")
+        private String description;
         @Size(max = 32)
-        @Schema(description = "履约类型：DIRECT_RECHARGE直充，VOUCHER_CODE券码，CARD_CODE_SECRET卡号卡密，VOUCHER_URL券链接，ACCOUNT_BOUND_BENEFIT账户绑定权益", deprecated = true)
+        @Schema(description = "履约类型：DIRECT_RECHARGE直充，VOUCHER_CODE券码，CARD_CODE_SECRET卡号卡密，VOUCHER_URL券链接，ACCOUNT_BOUND_BENEFIT账户绑定权益",
+                example = "DIRECT_RECHARGE", deprecated = true)
         private String fulfillmentType;
-        @NotNull @Min(0) @Schema(description = "面值，CNY分") private Long faceValue;
-        @Min(0) @Schema(description = "市场价，CNY分；默认0") private Long marketPrice;
-        @Min(0) @Schema(description = "销售建议价，CNY分；默认0") private Long suggestedSalePrice;
-        @Schema(description = "是否含税：1含税，0不含税；仅记录展示，不参与价格计算；标准商品结算以分销商/项目通用定价为准") private Boolean taxIncluded;
+        @NotNull @Min(0) @Schema(description = "面值，CNY分", example = "10000") private Long faceValue;
+        @Min(0) @Schema(description = "市场价，CNY分；默认0", example = "12000") private Long marketPrice;
+        @Min(0) @Schema(description = "销售建议价，CNY分；默认0", example = "6100")
+        private Long suggestedSalePrice;
+        @Valid
+        @Schema(description = "SKU销售建议价生成规则；物化结果保存在suggestedSalePrice",
+                example = "{\"mode\":\"CUSTOM\",\"base\":\"MARKET_PRICE\",\"percentage\":50,\"operator\":\"ADD\",\"operand\":1.00,\"fixedPriceCents\":6100}")
+        private SuggestedSalePriceRuleReqVO suggestedSalePriceRule;
+        @Schema(description = "是否含税：1含税，0不含税；仅记录展示，不参与价格计算；标准商品结算以分销商/项目通用定价为准",
+                example = "true")
+        private Boolean taxIncluded;
         @DecimalMin("0.0000") @DecimalMax("1.0000")
-        @Schema(description = "税率，如0.0600表示6%；仅记录展示，不参与价格计算；标准商品结算以分销商/项目通用定价为准") private BigDecimal taxRate;
-        @Positive @Schema(description = "SKU单次最小起购数量") private Long minQuantity;
-        @Positive @Schema(description = "SKU单次最大限购数量") private Long maxQuantity;
-        @Schema(description = "是否启用每人限购：1启用，0停用") private Boolean userLimitEnabled;
+        @Schema(description = "税率，如0.0600表示6%；仅记录展示，不参与价格计算；标准商品结算以分销商/项目通用定价为准",
+                example = "0.0600")
+        private BigDecimal taxRate;
+        @Positive @Schema(description = "SKU单次最小起购数量", example = "1") private Long minQuantity;
+        @Positive @Schema(description = "SKU单次最大限购数量", example = "10") private Long maxQuantity;
+        @Schema(description = "是否启用每人限购：1启用，0停用", example = "true")
+        private Boolean userLimitEnabled;
         @Size(max = 16)
-        @Schema(description = "每人限购周期：LIFETIME终身，YEAR每年，MONTH每月，WEEK每周，DAY每天")
+        @Schema(description = "每人限购周期：LIFETIME终身，YEAR每年，MONTH每月，WEEK每周，DAY每天",
+                example = "MONTH")
         private String userLimitPeriod;
-        @Positive @Schema(description = "每人每周期最多购买数量") private Long userLimitQuantity;
-        @Schema(description = "是否启用每订单限购：1启用，0停用") private Boolean orderLimitEnabled;
-        @Schema(description = "是否启用绑定手机号限购：1启用，0停用") private Boolean phoneBindLimitEnabled;
+        @Positive @Schema(description = "每人每周期最多购买数量", example = "2") private Long userLimitQuantity;
+        @Schema(description = "是否启用每订单限购：1启用，0停用", example = "true")
+        private Boolean orderLimitEnabled;
+        @Schema(description = "是否启用绑定手机号限购：1启用，0停用", example = "true")
+        private Boolean phoneBindLimitEnabled;
         @Size(max = 16)
-        @Schema(description = "绑定手机号限购周期：LIFETIME终身，YEAR每年，MONTH每月，WEEK每周，DAY每天")
+        @Schema(description = "绑定手机号限购周期：LIFETIME终身，YEAR每年，MONTH每月，WEEK每周，DAY每天",
+                example = "DAY")
         private String phoneBindLimitPeriod;
-        @Positive @Schema(description = "同一履约手机号每周期最多购买数量") private Long phoneBindLimitQuantity;
-        @Schema(description = "SKU 状态；默认继承 SPU") private Short status;
+        @Positive @Schema(description = "同一履约手机号每周期最多购买数量", example = "1")
+        private Long phoneBindLimitQuantity;
+        @Schema(description = "SKU 状态；默认继承 SPU", example = "10") private Short status;
+    }
+
+    @Data
+    @Schema(description = "SKU销售建议价生成规则")
+    public static class SuggestedSalePriceRuleReqVO {
+        @NotBlank
+        @Schema(description = "建议价模式（字典supply_chain_suggested_sale_price_mode）：EQUAL_MARKET_PRICE等于市场价、CUSTOM自定义设置、FIXED固定值",
+                example = "CUSTOM")
+        private String mode;
+        @Schema(description = "CUSTOM基数：MARKET_PRICE市场价、SUGGESTED_SALE_PRICE修改前销售建议价",
+                example = "MARKET_PRICE")
+        private String base;
+        @Schema(description = "CUSTOM百分比，大于0且最多2位小数", example = "50")
+        private BigDecimal percentage;
+        @Schema(description = "CUSTOM运算符（字典supply_chain_suggested_sale_price_operator）：ADD加、SUBTRACT减、MULTIPLY乘、DIVIDE除",
+                example = "ADD")
+        private String operator;
+        @Schema(description = "CUSTOM运算数；加减单位元且最多2位小数，乘除为系数且最多4位小数",
+                example = "1.00")
+        private BigDecimal operand;
+        @Min(0) @Schema(description = "FIXED固定销售建议价，单位CNY分", example = "6100")
+        private Long fixedPriceCents;
+    }
+
+    private static SuggestedSalePriceRule toSuggestedSalePriceRule(SuggestedSalePriceRuleReqVO request) {
+        if (request == null) {
+            return null;
+        }
+        try {
+            return new SuggestedSalePriceRule(
+                    SuggestedSalePriceRule.Mode.valueOf(request.mode.trim()),
+                    request.base == null || request.base.isBlank() ? null
+                            : SuggestedSalePriceRule.Base.valueOf(request.base.trim()),
+                    request.percentage,
+                    request.operator == null || request.operator.isBlank() ? null
+                            : SuggestedSalePriceRule.Operator.valueOf(request.operator.trim()),
+                    request.operand, request.fixedPriceCents, null);
+        } catch (RuntimeException invalidEnum) {
+            throw exception(PRODUCT_SUGGESTED_PRICE_RULE_INVALID);
+        }
     }
 
     @Data

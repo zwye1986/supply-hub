@@ -29,6 +29,8 @@ import com.aifuli.module.supplychain.tradecore.catalog.domain.DeliveryType;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.FulfillmentType;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.ListingAvailability;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.PurchaseLimitPeriod;
+import com.aifuli.module.supplychain.tradecore.catalog.domain.SuggestedSalePriceCalculator;
+import com.aifuli.module.supplychain.tradecore.catalog.domain.SuggestedSalePriceRule;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.UnshelveMode;
 import com.aifuli.module.supplychain.tradecore.catalog.pricing.PricingDependencyChangedEvent;
 import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericPricingCalculator.PricingStatus;
@@ -72,6 +74,7 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_SKU_REQUIRED;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_STATUS_INVALID;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_FULFILLMENT_TYPE_IMMUTABLE;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_SUGGESTED_PRICE_RULE_INVALID;
 
 @Slf4j
 @Service
@@ -551,12 +554,15 @@ public class ProductCatalogCommandService {
     private void insertValidatedSku(PlatformSpuDO spu, String skuCode, SaveSkuLine line,
                                     CatalogEntityStatus status, SchemaDefinition schema,
                                     Long operatorId, LocalDateTime now) {
+        long marketPrice = defaultLong(line.marketPrice(), DEFAULT_PRICE_FEN);
+        SuggestedSalePriceCalculator.Calculation suggestedPrice = resolveSuggestedSalePrice(line, marketPrice, null);
         PlatformSkuDO sku = PlatformSkuDO.builder().skuCode(skuCode).spuId(spu.getId())
                 .skuName(line.skuName().trim()).mainImageUrl(normalizeOptionalText(line.mainImageUrl()))
                 .detailImageUrls(normalizeDetailImageUrls(line.detailImageUrls()))
                 .description(normalizeOptionalText(line.description())).fulfillmentType(line.fulfillmentType())
-                .faceValue(line.faceValue()).marketPrice(defaultLong(line.marketPrice(), DEFAULT_PRICE_FEN))
-                .suggestedSalePrice(defaultLong(line.suggestedSalePrice(), DEFAULT_PRICE_FEN))
+                .faceValue(line.faceValue()).marketPrice(marketPrice)
+                .suggestedSalePrice(suggestedPrice.suggestedSalePriceCents())
+                .suggestedSalePriceRuleJson(suggestedPrice.normalizedRule())
                 .taxIncluded(Boolean.TRUE.equals(line.taxIncluded())).taxRate(line.taxRate())
                 .minQuantity(defaultLong(line.minQuantity(), DEFAULT_MIN_QUANTITY))
                 .maxQuantity(defaultLong(line.maxQuantity(), DEFAULT_MAX_QUANTITY))
@@ -579,14 +585,17 @@ public class ProductCatalogCommandService {
 
     private void applySku(PlatformSkuDO sku, SaveSkuLine line, CatalogEntityStatus status, SchemaDefinition schema,
                           Long operatorId, LocalDateTime now) {
+        long marketPrice = defaultLong(line.marketPrice(), DEFAULT_PRICE_FEN);
+        SuggestedSalePriceCalculator.Calculation suggestedPrice = resolveSuggestedSalePrice(line, marketPrice, sku);
         sku.setSkuName(line.skuName().trim());
         sku.setMainImageUrl(normalizeOptionalText(line.mainImageUrl()));
         sku.setDetailImageUrls(normalizeDetailImageUrls(line.detailImageUrls()));
         sku.setDescription(normalizeOptionalText(line.description()));
         sku.setFulfillmentType(line.fulfillmentType());
         sku.setFaceValue(line.faceValue());
-        sku.setMarketPrice(defaultLong(line.marketPrice(), DEFAULT_PRICE_FEN));
-        sku.setSuggestedSalePrice(defaultLong(line.suggestedSalePrice(), DEFAULT_PRICE_FEN));
+        sku.setMarketPrice(marketPrice);
+        sku.setSuggestedSalePrice(suggestedPrice.suggestedSalePriceCents());
+        sku.setSuggestedSalePriceRuleJson(suggestedPrice.normalizedRule());
         // 兼容尚未携带新增税务字段的旧商品编辑请求：两字段均缺省时保留原值；显式传含税标识时全量替换税务元数据。
         if (line.taxIncluded() != null) {
             sku.setTaxIncluded(line.taxIncluded());
@@ -615,7 +624,7 @@ public class ProductCatalogCommandService {
         if (line == null || !hasText(line.skuName()) || !hasText(line.fulfillmentType())
                 || line.faceValue() == null || line.faceValue() < 0
                 || defaultLong(line.marketPrice(), DEFAULT_PRICE_FEN) < 0
-                || defaultLong(line.suggestedSalePrice(), DEFAULT_PRICE_FEN) < 0) {
+                || (line.suggestedSalePrice() != null && line.suggestedSalePrice() < 0)) {
             throw exception(PRODUCT_SKU_FIELD_INVALID);
         }
         validateSkuDisplayContent(line);
@@ -794,6 +803,58 @@ public class ProductCatalogCommandService {
 
     private static long defaultLong(Long value, long defaultValue) {
         return value == null ? defaultValue : value;
+    }
+
+    /**
+     * 解析新旧两类请求并生成唯一可信的建议价结果。
+     * 新请求提交规则时服务端重新计算；旧请求只提交变化后的金额时归一成 FIXED。编辑请求两者都省略，或旧
+     * 管理端原样回传未变化市场价与建议价时保留存量规则，避免编辑其它字段把已保存规则重置或降级。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#4112-sku-销售建议价规则写入收口}。
+     */
+    private static SuggestedSalePriceCalculator.Calculation resolveSuggestedSalePrice(
+            SaveSkuLine line, long marketPrice, PlatformSkuDO existing) {
+        SuggestedSalePriceRule requestedRule = line.suggestedSalePriceRule();
+        if (requestedRule == null) {
+            if (line.suggestedSalePrice() != null) {
+                // 未升级的管理端会在编辑其它字段时原样回传金额。市场价与建议价都未变化时保留已保存规则，
+                // 避免一次无关编辑把 CUSTOM/EQUAL_MARKET_PRICE 静默降级成 FIXED。
+                if (existing != null
+                        && line.suggestedSalePrice().equals(existing.getSuggestedSalePrice())
+                        && marketPrice == defaultLong(existing.getMarketPrice(), DEFAULT_PRICE_FEN)) {
+                    return existingSuggestedSalePrice(existing);
+                }
+                requestedRule = SuggestedSalePriceRule.fixed(line.suggestedSalePrice());
+            } else if (existing != null) {
+                return existingSuggestedSalePrice(existing);
+            } else {
+                requestedRule = SuggestedSalePriceRule.fixed(DEFAULT_PRICE_FEN);
+            }
+        }
+        SuggestedSalePriceCalculator.Calculation calculation = calculateSuggestedSalePrice(
+                requestedRule, marketPrice, existing == null ? null : existing.getSuggestedSalePrice());
+        if (line.suggestedSalePrice() != null
+                && line.suggestedSalePrice() != calculation.suggestedSalePriceCents()) {
+            throw exception(PRODUCT_SUGGESTED_PRICE_RULE_INVALID);
+        }
+        return calculation;
+    }
+
+    private static SuggestedSalePriceCalculator.Calculation existingSuggestedSalePrice(PlatformSkuDO existing) {
+        long existingAmount = defaultLong(existing.getSuggestedSalePrice(), DEFAULT_PRICE_FEN);
+        SuggestedSalePriceRule existingRule = existing.getSuggestedSalePriceRuleJson() != null
+                ? existing.getSuggestedSalePriceRuleJson()
+                : SuggestedSalePriceRule.fixed(existingAmount);
+        return new SuggestedSalePriceCalculator.Calculation(existingAmount, existingRule);
+    }
+
+    private static SuggestedSalePriceCalculator.Calculation calculateSuggestedSalePrice(
+            SuggestedSalePriceRule rule, Long marketPrice, Long previousSuggestedSalePrice) {
+        try {
+            return SuggestedSalePriceCalculator.calculate(rule,
+                    defaultLong(marketPrice, DEFAULT_PRICE_FEN), previousSuggestedSalePrice);
+        } catch (RuntimeException invalidRule) {
+            throw exception(PRODUCT_SUGGESTED_PRICE_RULE_INVALID);
+        }
     }
 
     private static void validateTaxMetadata(Boolean taxIncluded, BigDecimal taxRate) {
@@ -993,7 +1054,9 @@ public class ProductCatalogCommandService {
     public record SaveSkuLine(String skuCode, String skuName, String mainImageUrl,
                               List<String> detailImageUrls, String description,
                               String fulfillmentType, Long faceValue,
-                              Long marketPrice, Long suggestedSalePrice, Boolean taxIncluded, BigDecimal taxRate,
+                              Long marketPrice, Long suggestedSalePrice,
+                              SuggestedSalePriceRule suggestedSalePriceRule,
+                              Boolean taxIncluded, BigDecimal taxRate,
                               Long minQuantity, Long maxQuantity,
                               Boolean userLimitEnabled, String userLimitPeriod, Long userLimitQuantity,
                               Boolean orderLimitEnabled,
@@ -1003,7 +1066,7 @@ public class ProductCatalogCommandService {
 
         public SaveSkuLine withFulfillmentType(String newFulfillmentType) {
             return new SaveSkuLine(skuCode, skuName, mainImageUrl, detailImageUrls, description,
-                    newFulfillmentType, faceValue, marketPrice, suggestedSalePrice,
+                    newFulfillmentType, faceValue, marketPrice, suggestedSalePrice, suggestedSalePriceRule,
                     taxIncluded, taxRate, minQuantity, maxQuantity,
                     userLimitEnabled, userLimitPeriod, userLimitQuantity, orderLimitEnabled,
                     phoneBindLimitEnabled, phoneBindLimitPeriod, phoneBindLimitQuantity,
@@ -1017,7 +1080,18 @@ public class ProductCatalogCommandService {
                            Long marketPrice, Long suggestedSalePrice, Long minQuantity, Long maxQuantity,
                            Short status) {
             this(skuCode, skuName, null, null, null, fulfillmentType, faceValue, marketPrice, suggestedSalePrice,
-                    false, null, minQuantity, maxQuantity, null, null, null, null, null, null, null,
+                    null, false, null, minQuantity, maxQuantity, null, null, null, null, null, null, null,
+                    null, null, null, null, status);
+        }
+
+        /** 商品中心复合接口携带销售建议价规则的精简构造器。 */
+        public SaveSkuLine(String skuCode, String skuName, String fulfillmentType, Long faceValue,
+                           Long marketPrice, Long suggestedSalePrice,
+                           SuggestedSalePriceRule suggestedSalePriceRule,
+                           Long minQuantity, Long maxQuantity, Short status) {
+            this(skuCode, skuName, null, null, null, fulfillmentType, faceValue, marketPrice, suggestedSalePrice,
+                    suggestedSalePriceRule, false, null, minQuantity, maxQuantity,
+                    null, null, null, null, null, null, null,
                     null, null, null, null, status);
         }
 
@@ -1026,7 +1100,7 @@ public class ProductCatalogCommandService {
                            Long marketPrice, Long suggestedSalePrice, Boolean taxIncluded, BigDecimal taxRate,
                            Long minQuantity, Long maxQuantity, Short status) {
             this(skuCode, skuName, null, null, null, fulfillmentType, faceValue, marketPrice, suggestedSalePrice,
-                    taxIncluded, taxRate, minQuantity, maxQuantity, null, null, null, null, null, null, null,
+                    null, taxIncluded, taxRate, minQuantity, maxQuantity, null, null, null, null, null, null, null,
                     null, null, null, null, status);
         }
 
@@ -1037,7 +1111,7 @@ public class ProductCatalogCommandService {
                            String userLimitPeriod, Long userLimitQuantity, Boolean orderLimitEnabled,
                            Short status) {
             this(skuCode, skuName, null, null, null, fulfillmentType, faceValue, marketPrice, suggestedSalePrice,
-                    taxIncluded, taxRate, minQuantity, maxQuantity, userLimitEnabled, userLimitPeriod,
+                    null, taxIncluded, taxRate, minQuantity, maxQuantity, userLimitEnabled, userLimitPeriod,
                     userLimitQuantity, orderLimitEnabled, null, null, null, null, null, null, null, status);
         }
 
@@ -1049,7 +1123,7 @@ public class ProductCatalogCommandService {
                            Boolean phoneBindLimitEnabled, String phoneBindLimitPeriod, Long phoneBindLimitQuantity,
                            Short status) {
             this(skuCode, skuName, null, null, null, fulfillmentType, faceValue, marketPrice, suggestedSalePrice,
-                    taxIncluded, taxRate, minQuantity, maxQuantity, userLimitEnabled, userLimitPeriod,
+                    null, taxIncluded, taxRate, minQuantity, maxQuantity, userLimitEnabled, userLimitPeriod,
                     userLimitQuantity, orderLimitEnabled, phoneBindLimitEnabled, phoneBindLimitPeriod,
                     phoneBindLimitQuantity, null, null, null, null, status);
         }
@@ -1060,7 +1134,7 @@ public class ProductCatalogCommandService {
                            String targetSchemaCode, Integer targetSchemaVersion,
                            String resultSchemaCode, Integer resultSchemaVersion, Short status) {
             this(skuCode, skuName, null, null, null, fulfillmentType, faceValue, marketPrice, suggestedSalePrice,
-                    false, null, minQuantity, maxQuantity, null, null, null, null, null, null, null,
+                    null, false, null, minQuantity, maxQuantity, null, null, null, null, null, null, null,
                     targetSchemaCode, targetSchemaVersion, resultSchemaCode, resultSchemaVersion, status);
         }
 
@@ -1070,7 +1144,7 @@ public class ProductCatalogCommandService {
                            Long minQuantity, Long maxQuantity, String targetSchemaCode, Integer targetSchemaVersion,
                            String resultSchemaCode, Integer resultSchemaVersion, Short status) {
             this(skuCode, skuName, null, null, null, fulfillmentType, faceValue, marketPrice, suggestedSalePrice,
-                    taxIncluded, taxRate, minQuantity, maxQuantity, null, null, null, null, null, null, null,
+                    null, taxIncluded, taxRate, minQuantity, maxQuantity, null, null, null, null, null, null, null,
                     targetSchemaCode, targetSchemaVersion, resultSchemaCode, resultSchemaVersion, status);
         }
 
@@ -1083,9 +1157,25 @@ public class ProductCatalogCommandService {
                            Boolean orderLimitEnabled, Boolean phoneBindLimitEnabled,
                            String phoneBindLimitPeriod, Long phoneBindLimitQuantity, Short status) {
             this(skuCode, skuName, mainImageUrl, detailImageUrls, description, fulfillmentType, faceValue,
-                    marketPrice, suggestedSalePrice, taxIncluded, taxRate, minQuantity, maxQuantity,
+                    marketPrice, suggestedSalePrice, null, taxIncluded, taxRate, minQuantity, maxQuantity,
                     userLimitEnabled, userLimitPeriod, userLimitQuantity, orderLimitEnabled,
                     phoneBindLimitEnabled, phoneBindLimitPeriod, phoneBindLimitQuantity,
+                    null, null, null, null, status);
+        }
+
+        /** 复合接口携带销售建议价规则、展示资料与完整限购配置，内部 Schema 仍由应用层注册表派生。 */
+        public SaveSkuLine(String skuCode, String skuName, String mainImageUrl,
+                           List<String> detailImageUrls, String description,
+                           String fulfillmentType, Long faceValue, Long marketPrice, Long suggestedSalePrice,
+                           SuggestedSalePriceRule suggestedSalePriceRule,
+                           Boolean taxIncluded, BigDecimal taxRate, Long minQuantity, Long maxQuantity,
+                           Boolean userLimitEnabled, String userLimitPeriod, Long userLimitQuantity,
+                           Boolean orderLimitEnabled, Boolean phoneBindLimitEnabled,
+                           String phoneBindLimitPeriod, Long phoneBindLimitQuantity, Short status) {
+            this(skuCode, skuName, mainImageUrl, detailImageUrls, description, fulfillmentType, faceValue,
+                    marketPrice, suggestedSalePrice, suggestedSalePriceRule, taxIncluded, taxRate,
+                    minQuantity, maxQuantity, userLimitEnabled, userLimitPeriod, userLimitQuantity,
+                    orderLimitEnabled, phoneBindLimitEnabled, phoneBindLimitPeriod, phoneBindLimitQuantity,
                     null, null, null, null, status);
         }
     }
@@ -1103,4 +1193,5 @@ public class ProductCatalogCommandService {
     public record SkuTaxMetadataBatchCommand(List<String> skuCodes, Boolean taxIncluded,
                                               BigDecimal taxRate, Long operatorId) {
     }
+
 }

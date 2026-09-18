@@ -9,6 +9,8 @@ import com.aifuli.module.supplychain.tradecore.catalog.application.ProductCatalo
 import com.aifuli.module.supplychain.tradecore.catalog.application.ProductCatalogQueryService.SpuListItem;
 import com.aifuli.module.supplychain.tradecore.catalog.application.ProductTypeAdminService.ProductTypeView;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.swagger.v3.core.converter.ModelConverters;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -23,10 +25,13 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.PutMapping;
 
 import java.lang.reflect.Method;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BRAND_LEGACY_API_DEPRECATED;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_STATUS_INVALID;
@@ -67,6 +72,7 @@ class ProductCenterContractTest {
                 .map(field -> field.getName()))
                 .doesNotContain("targetSchemaCode", "targetSchemaVersion", "resultSchemaCode", "resultSchemaVersion")
                 .contains("mainImageUrl", "detailImageUrls", "description",
+                        "suggestedSalePrice", "suggestedSalePriceRule",
                         "fulfillmentType", "taxIncluded", "taxRate",
                         "userLimitEnabled", "userLimitPeriod", "userLimitQuantity", "orderLimitEnabled",
                         "phoneBindLimitEnabled", "phoneBindLimitPeriod", "phoneBindLimitQuantity");
@@ -81,6 +87,84 @@ class ProductCenterContractTest {
                 .getAnnotation(Schema.class).description()).isEqualTo("SKU详情图地址列表(JSON数组)");
         assertThat(ProductAdminController.SkuItemSaveReqVO.class.getDeclaredField("description")
                 .getAnnotation(Schema.class).description()).isEqualTo("SKU商品描述");
+    }
+
+    /** 销售建议价规则只随复合保存写入，并在详情中完整回显，不得保留独立旁路接口。 */
+    @Test
+    void suggestedSalePriceRuleIsExposedByCompositeSaveAndDetailContracts() throws Exception {
+        assertThat(fieldNames(ProductAdminController.SuggestedSalePriceRuleReqVO.class))
+                .containsExactlyInAnyOrder("mode", "base", "percentage", "operator", "operand",
+                        "fixedPriceCents");
+        assertThat(fieldNames(ProductAdminController.SkuItemSaveReqVO.class))
+                .contains("suggestedSalePrice", "suggestedSalePriceRule");
+        assertThat(Arrays.stream(ProductAdminController.class.getDeclaredMethods())
+                .filter(method -> method.isAnnotationPresent(PutMapping.class))
+                .flatMap(method -> Arrays.stream(method.getAnnotation(PutMapping.class).value())))
+                .doesNotContain("/skus/suggested-sale-price");
+        assertThat(Arrays.stream(SkuDetail.class.getRecordComponents()).map(component -> component.getName()))
+                .contains("suggestedSalePrice", "suggestedSalePriceRule");
+        assertRecordComponentsDocumented(
+                com.aifuli.module.supplychain.tradecore.catalog.application.ProductCatalogQueryService
+                        .SuggestedSalePriceRuleView.class);
+        assertThat(ProductAdminController.SuggestedSalePriceRuleReqVO.class.getDeclaredField("mode")
+                .getAnnotation(Schema.class).description())
+                .contains("supply_chain_suggested_sale_price_mode");
+        assertThat(ProductAdminController.SuggestedSalePriceRuleReqVO.class.getDeclaredField("operator")
+                .getAnnotation(Schema.class).description())
+                .contains("supply_chain_suggested_sale_price_operator");
+        Map<String, io.swagger.v3.oas.models.media.Schema> ruleSchemas = ModelConverters.getInstance()
+                .readAll(com.aifuli.module.supplychain.tradecore.catalog.application.ProductCatalogQueryService
+                        .SuggestedSalePriceRuleView.class);
+        io.swagger.v3.oas.models.media.Schema<?> modeSchema =
+                (io.swagger.v3.oas.models.media.Schema<?>) ruleSchemas.get("SuggestedSalePriceRuleView")
+                        .getProperties().get("mode");
+        assertThat(modeSchema.getDescription())
+                .contains("supply_chain_suggested_sale_price_mode");
+        io.swagger.v3.oas.models.media.Schema<?> operatorSchema =
+                (io.swagger.v3.oas.models.media.Schema<?>) ruleSchemas.get("SuggestedSalePriceRuleView")
+                        .getProperties().get("operator");
+        assertThat(operatorSchema.getDescription())
+                .contains("supply_chain_suggested_sale_price_operator");
+    }
+
+    /**
+     * 复合创建、编辑接口共用的三层请求模型，每个字段都必须提供可直接联调的非空 Swagger 示例。
+     * 完整 SKU 示例还必须覆盖全部嵌套字段，避免只给出空数组或不完整对象。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#41-接口定义}。
+     */
+    @Test
+    void compositeSaveRequestFieldsDeclareConcreteSwaggerExamples() throws Exception {
+        assertEveryFieldHasConcreteExample(ProductAdminController.SpuSaveReqVO.class);
+        assertEveryFieldHasConcreteExample(ProductAdminController.SkuItemSaveReqVO.class);
+        assertEveryFieldHasConcreteExample(ProductAdminController.SuggestedSalePriceRuleReqVO.class);
+
+        String createExample = requestBodyExample(ProductAdminController.class.getDeclaredMethod(
+                "create", ProductAdminController.SpuSaveReqVO.class));
+        String updateExample = requestBodyExample(ProductAdminController.class.getDeclaredMethod(
+                "update", String.class, ProductAdminController.SpuSaveReqVO.class));
+        assertThat(updateExample).isEqualTo(createExample);
+
+        JsonNode request = new ObjectMapper().readTree(createExample);
+        assertThat(jsonFieldNames(request))
+                .containsExactlyInAnyOrder(fieldNames(ProductAdminController.SpuSaveReqVO.class));
+        JsonNode skus = request.get("skus");
+        assertThat(skus.isArray()).isTrue();
+        assertThat(skus.size()).isGreaterThan(0);
+
+        JsonNode sku = skus.get(0);
+        assertThat(jsonFieldNames(sku))
+                .containsExactlyInAnyOrder(fieldNames(ProductAdminController.SkuItemSaveReqVO.class));
+
+        JsonNode rule = sku.get("suggestedSalePriceRule");
+        assertThat(rule).isNotNull();
+        assertThat(jsonFieldNames(rule))
+                .containsExactlyInAnyOrder(fieldNames(ProductAdminController.SuggestedSalePriceRuleReqVO.class));
+
+        assertThat(sku.get("marketPrice").asLong()).isEqualTo(12_000L);
+        assertThat(rule.get("percentage").decimalValue()).isEqualByComparingTo("50");
+        assertThat(rule.get("operator").asText()).isEqualTo("ADD");
+        assertThat(rule.get("operand").decimalValue()).isEqualByComparingTo("1.00");
+        assertThat(sku.get("suggestedSalePrice").asLong()).isEqualTo(6_100L);
     }
 
     /** 原型商品分类必须绑定供应链分类树主键，不能与供货匹配字典混为同一字段。 */
@@ -360,6 +444,64 @@ class ProductCenterContractTest {
         return Arrays.stream(type.getDeclaredFields()).map(field -> field.getName()).toArray(String[]::new);
     }
 
+    private static Set<String> jsonFieldNames(JsonNode node) {
+        Set<String> names = new HashSet<>();
+        node.fieldNames().forEachRemaining(names::add);
+        return names;
+    }
+
+    private static String requestBodyExample(Method method) {
+        java.lang.reflect.Parameter requestParameter = Arrays.stream(method.getParameters())
+                .filter(parameter -> parameter.isAnnotationPresent(
+                        io.swagger.v3.oas.annotations.parameters.RequestBody.class))
+                .findFirst()
+                .orElseThrow();
+        io.swagger.v3.oas.annotations.parameters.RequestBody requestBody = requestParameter.getAnnotation(
+                io.swagger.v3.oas.annotations.parameters.RequestBody.class);
+        assertThat(requestBody.required()).isTrue();
+        assertThat(requestBody.content()).hasSize(1);
+        assertThat(requestBody.content()[0].examples()).hasSize(1);
+        String example = requestBody.content()[0].examples()[0].value();
+        assertThat(example).isNotBlank();
+        return example;
+    }
+
+    @SuppressWarnings("rawtypes")
+    private static void assertEveryFieldHasConcreteExample(Class<?> type) {
+        Arrays.stream(type.getDeclaredFields()).forEach(field -> {
+            Schema schema = field.getAnnotation(Schema.class);
+            assertThat(schema)
+                    .as("%s.%s 缺少 @Schema", type.getSimpleName(), field.getName())
+                    .isNotNull();
+            assertThat(schema.example())
+                    .as("%s.%s 缺少可直接联调的 Swagger 示例", type.getSimpleName(), field.getName())
+                    .isNotBlank()
+                    .isNotIn("null", "\"\"", "[]", "{}");
+        });
+
+        Map<String, io.swagger.v3.oas.models.media.Schema> schemas =
+                ModelConverters.getInstance().readAll(type);
+        io.swagger.v3.oas.models.media.Schema<?> model = schemas.get(type.getSimpleName());
+        assertThat(model).as("未生成 OpenAPI schema %s", type.getSimpleName()).isNotNull();
+        assertThat(model.getProperties().keySet()).containsExactlyInAnyOrder(fieldNames(type));
+        model.getProperties().forEach((fieldName, property) -> {
+            Object example = property.getExample();
+            if (example == null && property.get$ref() != null) {
+                assertThat(property.get$ref())
+                        .as("OpenAPI schema %s.%s 的引用模型不存在", type.getSimpleName(), fieldName)
+                        .startsWith("#/components/schemas/");
+                return;
+            }
+            assertThat(example)
+                    .as("生成的 OpenAPI schema %s.%s 缺少示例", type.getSimpleName(), fieldName)
+                    .isNotNull();
+            assertThat(example.toString())
+                    .as("生成的 OpenAPI schema %s.%s 示例为空", type.getSimpleName(), fieldName)
+                    .isNotBlank()
+                    .isNotIn("null", "\"\"", "[]", "{}");
+        });
+    }
+
     private static void assertEndpointParametersDocumented(Class<?> controllerType) {
         Arrays.stream(controllerType.getDeclaredMethods())
                 .filter(ProductCenterContractTest::isHttpEndpoint)
@@ -389,7 +531,14 @@ class ProductCenterContractTest {
                 .toArray(String[]::new);
         assertThat(properties.keySet()).containsExactlyInAnyOrder(componentNames);
         properties.forEach((name, property) -> {
-            assertThat(property.getDescription())
+            String description = property.getDescription();
+            if ((description == null || description.isBlank()) && property.get$ref() != null) {
+                String referencedSchemaName = property.get$ref()
+                        .substring(property.get$ref().lastIndexOf('/') + 1);
+                io.swagger.v3.oas.models.media.Schema<?> referencedSchema = schemas.get(referencedSchemaName);
+                description = referencedSchema == null ? null : referencedSchema.getDescription();
+            }
+            assertThat(description)
                     .as("OpenAPI schema %s.%s 缺少字段说明", recordType.getSimpleName(), name)
                     .isNotBlank();
         });

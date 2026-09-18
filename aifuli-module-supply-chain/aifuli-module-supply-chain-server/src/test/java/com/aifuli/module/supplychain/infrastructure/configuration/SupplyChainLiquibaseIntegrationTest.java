@@ -97,6 +97,7 @@ class SupplyChainLiquibaseIntegrationTest {
                         "sc_platform_spu.delivery_type",
                         "sc_platform_spu.min_quantity",
                         "sc_platform_sku.suggested_sale_price",
+                        "sc_platform_sku.suggested_sale_price_rule_json",
                         "sc_platform_sku.user_limit_enabled",
                         "sc_platform_sku.user_limit_period",
                         "sc_platform_sku.user_limit_quantity",
@@ -133,7 +134,7 @@ class SupplyChainLiquibaseIntegrationTest {
                 "expire_at:DATETIME:-:3:NO");
         assertThat(firstStartup.projectAuthNoncePrimaryKeyColumns())
                 .containsExactly("app_id", "nonce");
-        assertThat(firstStartup.changeSetCount()).isEqualTo(38L);
+        assertThat(firstStartup.changeSetCount()).isEqualTo(40L);
         assertThat(firstStartup.uniqueIndexes())
                 .contains("sc_instore_payment_flow.uk_sc_instore_flow_order",
                         "sc_instore_channel_user_binding.uk_sc_instore_user_binding_project",

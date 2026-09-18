@@ -1,5 +1,6 @@
 package com.aifuli.module.supplychain.tradecore.catalog;
 
+import com.aifuli.framework.common.exception.ServiceException;
 import com.aifuli.module.supplychain.infrastructure.configuration.SupplyChainDataSourceConfiguration;
 import com.aifuli.module.supplychain.infrastructure.identity.BusinessNoGenerator;
 import com.aifuli.module.supplychain.infrastructure.identity.UlidGenerator;
@@ -24,6 +25,7 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlem
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuPricingMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
+import com.aifuli.module.supplychain.tradecore.catalog.domain.SuggestedSalePriceRule;
 import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericPricingCalculator.PricingStatus;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -153,7 +155,8 @@ class ProductCenterIntegrationTest {
                             "https://example.com/sku-main.png",
                             List.of("https://example.com/sku-detail-1.png", "https://example.com/sku-detail-2.png"),
                             "SKU商品描述", "DIRECT_RECHARGE",
-                            10_000L, 12_000L, 9_900L, true, new BigDecimal("0.0600"), 1L, 10L,
+                            10_000L, 12_000L, 9_900L, SuggestedSalePriceRule.fixed(9_900L),
+                            true, new BigDecimal("0.0600"), 1L, 10L,
                             true, "MONTH", 2L, true, true, "DAY", 2L,
                             CatalogEntityStatus.ACTIVE.getCode())), 1L));
 
@@ -161,6 +164,9 @@ class ProductCenterIntegrationTest {
             assertThat(platformSku.getFaceValue()).isEqualTo(10_000L);
             assertThat(platformSku.getMarketPrice()).isEqualTo(12_000L);
             assertThat(platformSku.getSuggestedSalePrice()).isEqualTo(9_900L);
+            assertThat(platformSku.getSuggestedSalePriceRuleJson().mode())
+                    .isEqualTo(com.aifuli.module.supplychain.tradecore.catalog.domain.SuggestedSalePriceRule.Mode.FIXED);
+            assertThat(platformSku.getSuggestedSalePriceRuleJson().fixedPriceCents()).isEqualTo(9_900L);
             assertThat(platformSku.getMainImageUrl()).isEqualTo("https://example.com/sku-main.png");
             assertThat(platformSku.getDetailImageUrls()).containsExactly(
                     "https://example.com/sku-detail-1.png", "https://example.com/sku-detail-2.png");
@@ -220,6 +226,8 @@ class ProductCenterIntegrationTest {
                 assertThat(sku.detailImageUrls()).containsExactly(
                         "https://example.com/sku-detail-1.png", "https://example.com/sku-detail-2.png");
                 assertThat(sku.description()).isEqualTo("SKU商品描述");
+                assertThat(sku.suggestedSalePriceRule().mode()).isEqualTo("FIXED");
+                assertThat(sku.suggestedSalePriceRule().fixedPriceCents()).isEqualTo(9_900L);
                 assertThat(sku.effectiveSellable()).isTrue();
                 assertThat(sku.taxIncluded()).isFalse();
                 assertThat(sku.taxRate()).isEqualByComparingTo("0.1300");
@@ -230,6 +238,69 @@ class ProductCenterIntegrationTest {
                 assertThat(sku.phoneBindLimitEnabled()).isTrue();
                 assertThat(sku.phoneBindLimitPeriod()).isEqualTo("DAY");
                 assertThat(sku.phoneBindLimitQuantity()).isEqualTo(2L);
+            });
+
+            SuggestedSalePriceRule customRule = new SuggestedSalePriceRule(
+                    SuggestedSalePriceRule.Mode.CUSTOM,
+                    SuggestedSalePriceRule.Base.MARKET_PRICE,
+                    new BigDecimal("50"),
+                    SuggestedSalePriceRule.Operator.ADD,
+                    new BigDecimal("1.00"), null, null);
+            SaveSkuLine validNewSku = new SaveSkuLine(
+                    "PC_SKU_200", "商品中心直充200元", "DIRECT_RECHARGE",
+                    20_000L, 20_000L, null, SuggestedSalePriceRule.equalMarketPrice(),
+                    1L, 10L, CatalogEntityStatus.DRAFT.getCode());
+            SaveSkuLine mismatchedExistingSku = new SaveSkuLine(
+                    "PC_SKU_100", "商品中心直充100元",
+                    "https://example.com/sku-main.png",
+                    List.of("https://example.com/sku-detail-1.png", "https://example.com/sku-detail-2.png"),
+                    "SKU商品描述", "DIRECT_RECHARGE",
+                    10_000L, 12_000L, 6_099L, customRule,
+                    false, new BigDecimal("0.1300"), 1L, 10L,
+                    true, "MONTH", 2L, true, true, "DAY", 2L,
+                    CatalogEntityStatus.ACTIVE.getCode());
+
+            assertThatThrownBy(() -> commandService.updateProduct(spuCode, new SaveSpuCommand(
+                    spuCode, "商品中心虚拟直充", "本次修改必须回滚", brandId, categoryId, List.of(),
+                    "EQUITY", "EQUITY_PRODUCT", "VIRTUAL_CARD", null, List.of(), "测试说明",
+                    "测试详情", "VIRTUAL", "DIRECT_RECHARGE", 1L, 100L,
+                    CatalogEntityStatus.ACTIVE.getCode(),
+                    List.of(validNewSku, mismatchedExistingSku), 1L)))
+                    .isInstanceOf(ServiceException.class);
+            PlatformSkuDO rolledBackSku = skuMapper.selectByCode("PC_SKU_100");
+            assertThat(rolledBackSku.getSuggestedSalePrice()).isEqualTo(9_900L);
+            assertThat(rolledBackSku.getSuggestedSalePriceRuleJson().mode())
+                    .isEqualTo(SuggestedSalePriceRule.Mode.FIXED);
+            assertThat(skuMapper.selectByCode("PC_SKU_200")).isNull();
+            assertThat(queryService.detail(spuCode).subtitle()).isEqualTo("复合保存回归");
+
+            SaveSkuLine validExistingSku = new SaveSkuLine(
+                    "PC_SKU_100", "商品中心直充100元",
+                    "https://example.com/sku-main.png",
+                    List.of("https://example.com/sku-detail-1.png", "https://example.com/sku-detail-2.png"),
+                    "SKU商品描述", "DIRECT_RECHARGE",
+                    10_000L, 12_000L, null, customRule,
+                    false, new BigDecimal("0.1300"), 1L, 10L,
+                    true, "MONTH", 2L, true, true, "DAY", 2L,
+                    CatalogEntityStatus.ACTIVE.getCode());
+            commandService.updateProduct(spuCode, new SaveSpuCommand(
+                    spuCode, "商品中心虚拟直充", "复合保存回归已更新", brandId, categoryId, List.of(),
+                    "EQUITY", "EQUITY_PRODUCT", "VIRTUAL_CARD", null, List.of(), "测试说明",
+                    "测试详情", "VIRTUAL", "DIRECT_RECHARGE", 1L, 100L,
+                    CatalogEntityStatus.ACTIVE.getCode(), List.of(validExistingSku), 1L));
+            PlatformSkuDO repricedSku = skuMapper.selectByCode("PC_SKU_100");
+            assertThat(repricedSku.getSuggestedSalePrice()).isEqualTo(6_100L);
+            assertThat(repricedSku.getSuggestedSalePriceRuleJson()).satisfies(persistedRule -> {
+                assertThat(persistedRule.mode()).isEqualTo(customRule.mode());
+                assertThat(persistedRule.base()).isEqualTo(customRule.base());
+                assertThat(persistedRule.percentage()).isEqualByComparingTo(customRule.percentage());
+                assertThat(persistedRule.operator()).isEqualTo(customRule.operator());
+                assertThat(persistedRule.operand()).isEqualByComparingTo(customRule.operand());
+            });
+            assertThat(queryService.detail(spuCode).skus()).singleElement().satisfies(sku -> {
+                assertThat(sku.suggestedSalePrice()).isEqualTo(6_100L);
+                assertThat(sku.suggestedSalePriceRule().mode()).isEqualTo("CUSTOM");
+                assertThat(sku.suggestedSalePriceRule().operator()).isEqualTo("ADD");
             });
 
             commandService.changeSkuStatus("PC_SKU_100", CatalogEntityStatus.INACTIVE, 1L);

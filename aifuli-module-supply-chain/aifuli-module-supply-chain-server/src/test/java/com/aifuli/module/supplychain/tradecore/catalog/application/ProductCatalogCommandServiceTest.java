@@ -19,6 +19,8 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSpuMapp
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProductCategoryMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.FulfillmentType;
+import com.aifuli.module.supplychain.tradecore.catalog.domain.SuggestedSalePriceRule;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.PricingDependencyChangedEvent;
 import org.springframework.context.ApplicationEventPublisher;
 import com.aifuli.module.supplychain.tradecore.profile.domain.ProductClassification;
 import com.aifuli.module.supplychain.tradecore.profile.domain.SellableCategory;
@@ -45,6 +47,7 @@ import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.when;
 
 /**
@@ -92,6 +95,89 @@ class ProductCatalogCommandServiceTest {
         service.updateProduct(SPU_CODE, saveCommand());
 
         assertThat(omitted.getStatus()).isEqualTo(CatalogEntityStatus.ACTIVE.getCode());
+    }
+
+    /** 旧调用方只提交最终金额时，服务端必须补齐 FIXED 规则，保证编辑详情可以精确回显来源。 */
+    @Test
+    void legacySuggestedSalePriceIsNormalizedToFixedRule() {
+        givenUpdateWithOneOmittedSku();
+        ProductCatalogCommandService.SaveSkuLine line = new ProductCatalogCommandService.SaveSkuLine(
+                "SKU_KEEP", "保留SKU", FulfillmentType.CARD_CODE_SECRET.code(),
+                100L, 10_000L, 7_777L, 1L, 10L, CatalogEntityStatus.DRAFT.getCode());
+
+        service.updateProduct(SPU_CODE, saveCommand(line));
+
+        ArgumentCaptor<PlatformSkuDO> captor = ArgumentCaptor.forClass(PlatformSkuDO.class);
+        verify(skuMapper, atLeastOnce()).updateById(captor.capture());
+        assertThat(captor.getAllValues()).filteredOn(sku -> "SKU_KEEP".equals(sku.getSkuCode()))
+                .singleElement().satisfies(sku -> {
+                    assertThat(sku.getSuggestedSalePrice()).isEqualTo(7_777L);
+                    assertThat(sku.getSuggestedSalePriceRuleJson().mode())
+                            .isEqualTo(SuggestedSalePriceRule.Mode.FIXED);
+                    assertThat(sku.getSuggestedSalePriceRuleJson().fixedPriceCents()).isEqualTo(7_777L);
+                });
+        verify(eventPublisher).publishEvent(new PricingDependencyChangedEvent(10L));
+    }
+
+    /** 旧管理端原样回传未变化金额时保留既有规则，避免编辑其它字段造成规则静默丢失。 */
+    @Test
+    void unchangedLegacyAmountPreservesExistingSuggestedSalePriceRule() {
+        givenUpdateWithOneOmittedSku();
+        SuggestedSalePriceRule customRule = new SuggestedSalePriceRule(
+                SuggestedSalePriceRule.Mode.CUSTOM, SuggestedSalePriceRule.Base.MARKET_PRICE,
+                new BigDecimal("50"), SuggestedSalePriceRule.Operator.ADD,
+                new BigDecimal("1.00"), null, null);
+        PlatformSkuDO keep = PlatformSkuDO.builder().id(10L).spuId(1L).skuCode("SKU_KEEP")
+                .fulfillmentType(FulfillmentType.CARD_CODE_SECRET.code())
+                .marketPrice(10_000L).suggestedSalePrice(5_100L).suggestedSalePriceRuleJson(customRule)
+                .status(CatalogEntityStatus.ACTIVE.getCode()).build();
+        when(skuMapper.selectList(any())).thenReturn(List.of(keep));
+        ProductCatalogCommandService.SaveSkuLine unchanged = new ProductCatalogCommandService.SaveSkuLine(
+                "SKU_KEEP", "保留SKU", FulfillmentType.CARD_CODE_SECRET.code(),
+                100L, 10_000L, 5_100L, 1L, 10L, CatalogEntityStatus.DRAFT.getCode());
+
+        service.updateProduct(SPU_CODE, saveCommand(unchanged));
+
+        ArgumentCaptor<PlatformSkuDO> captor = ArgumentCaptor.forClass(PlatformSkuDO.class);
+        verify(skuMapper, atLeastOnce()).updateById(captor.capture());
+        assertThat(captor.getAllValues()).filteredOn(sku -> "SKU_KEEP".equals(sku.getSkuCode()))
+                .singleElement().satisfies(sku -> {
+                    assertThat(sku.getSuggestedSalePrice()).isEqualTo(5_100L);
+                    assertThat(sku.getSuggestedSalePriceRuleJson()).isEqualTo(customRule);
+                });
+        verify(eventPublisher, never()).publishEvent(new PricingDependencyChangedEvent(10L));
+    }
+
+    /** 复合编辑的自定义规则由服务端计算，客户端不得用不一致的 suggestedSalePrice 覆盖结果。 */
+    @Test
+    void customRuleIsCalculatedByServerAndMismatchedClientResultIsRejected() {
+        givenUpdateWithOneOmittedSku();
+        SuggestedSalePriceRule rule = new SuggestedSalePriceRule(
+                SuggestedSalePriceRule.Mode.CUSTOM, SuggestedSalePriceRule.Base.MARKET_PRICE,
+                new BigDecimal("50"), SuggestedSalePriceRule.Operator.ADD,
+                new BigDecimal("1.00"), null, null);
+        ProductCatalogCommandService.SaveSkuLine valid = new ProductCatalogCommandService.SaveSkuLine(
+                "SKU_KEEP", "保留SKU", FulfillmentType.CARD_CODE_SECRET.code(),
+                100L, 10_000L, null, rule, 1L, 10L, CatalogEntityStatus.DRAFT.getCode());
+
+        service.updateProduct(SPU_CODE, saveCommand(valid));
+
+        ArgumentCaptor<PlatformSkuDO> captor = ArgumentCaptor.forClass(PlatformSkuDO.class);
+        verify(skuMapper, atLeastOnce()).updateById(captor.capture());
+        assertThat(captor.getAllValues()).filteredOn(sku -> "SKU_KEEP".equals(sku.getSkuCode()))
+                .singleElement().satisfies(sku -> {
+                    assertThat(sku.getSuggestedSalePrice()).isEqualTo(5_100L);
+                    assertThat(sku.getSuggestedSalePriceRuleJson()).isEqualTo(rule);
+                });
+
+        ProductCatalogCommandService.SaveSkuLine mismatch = new ProductCatalogCommandService.SaveSkuLine(
+                "SKU_KEEP", "保留SKU", FulfillmentType.CARD_CODE_SECRET.code(),
+                100L, 10_000L, 5_099L, rule, 1L, 10L, CatalogEntityStatus.DRAFT.getCode());
+        assertThatThrownBy(() -> service.updateProduct(SPU_CODE, saveCommand(mismatch)))
+                .isInstanceOf(ServiceException.class)
+                .extracting(ex -> ((ServiceException) ex).getCode())
+                .isEqualTo(com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants
+                        .PRODUCT_SUGGESTED_PRICE_RULE_INVALID.getCode());
     }
 
     /** 省略且无引用的 SKU 被安全停用。 */

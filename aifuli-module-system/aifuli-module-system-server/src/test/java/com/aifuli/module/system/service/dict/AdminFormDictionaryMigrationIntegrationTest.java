@@ -76,7 +76,7 @@ class AdminFormDictionaryMigrationIntegrationTest {
     }
 
     @Test
-    void migrationWritesFourteenDictionariesOnlyOnce() throws Exception {
+    void migrationWritesDictionariesOnlyOnce() throws Exception {
         updateLiquibase();
         assertEquals(14, queryCount("""
                 SELECT COUNT(*) FROM system_dict_type
@@ -180,6 +180,61 @@ class AdminFormDictionaryMigrationIntegrationTest {
                 SELECT COUNT(*) FROM DATABASECHANGELOG
                 WHERE ID = '006-product-list-filter-dictionaries' AND AUTHOR = 'supply-chain'
                 """));
+        assertEquals(3, queryCount("""
+                SELECT COUNT(*) FROM system_dict_data
+                WHERE dict_type = 'supply_chain_suggested_sale_price_mode' AND deleted = b'0'
+                """));
+        assertEquals("等于市场价", queryText("""
+                SELECT label FROM system_dict_data
+                WHERE dict_type = 'supply_chain_suggested_sale_price_mode'
+                  AND value = 'EQUAL_MARKET_PRICE' AND deleted = b'0'
+                """));
+        assertEquals("自定义设置", queryText("""
+                SELECT label FROM system_dict_data
+                WHERE dict_type = 'supply_chain_suggested_sale_price_mode'
+                  AND value = 'CUSTOM' AND deleted = b'0'
+                """));
+        assertEquals("固定值", queryText("""
+                SELECT label FROM system_dict_data
+                WHERE dict_type = 'supply_chain_suggested_sale_price_mode'
+                  AND value = 'FIXED' AND deleted = b'0'
+                """));
+        assertEquals(1, queryCount("""
+                SELECT COUNT(*) FROM DATABASECHANGELOG
+                WHERE ID = '010-suggested-sale-price-mode-dictionary' AND AUTHOR = 'supply-chain'
+                """));
+        assertEquals(1, queryCount("""
+                SELECT COUNT(*) FROM system_dict_type
+                WHERE type = 'supply_chain_suggested_sale_price_operator' AND deleted = b'0'
+                """));
+        assertEquals(4, queryCount("""
+                SELECT COUNT(*) FROM system_dict_data
+                WHERE dict_type = 'supply_chain_suggested_sale_price_operator' AND deleted = b'0'
+                """));
+        assertEquals("加", queryText("""
+                SELECT label FROM system_dict_data
+                WHERE dict_type = 'supply_chain_suggested_sale_price_operator'
+                  AND value = 'ADD' AND deleted = b'0'
+                """));
+        assertEquals("减", queryText("""
+                SELECT label FROM system_dict_data
+                WHERE dict_type = 'supply_chain_suggested_sale_price_operator'
+                  AND value = 'SUBTRACT' AND deleted = b'0'
+                """));
+        assertEquals("乘", queryText("""
+                SELECT label FROM system_dict_data
+                WHERE dict_type = 'supply_chain_suggested_sale_price_operator'
+                  AND value = 'MULTIPLY' AND deleted = b'0'
+                """));
+        assertEquals("除", queryText("""
+                SELECT label FROM system_dict_data
+                WHERE dict_type = 'supply_chain_suggested_sale_price_operator'
+                  AND value = 'DIVIDE' AND deleted = b'0'
+                """));
+        assertEquals(1, queryCount("""
+                SELECT COUNT(*) FROM DATABASECHANGELOG
+                WHERE ID = '011-suggested-sale-price-operator-dictionary' AND AUTHOR = 'supply-chain'
+                """));
 
         updateLiquibase();
         assertEquals(14, queryCount("""
@@ -225,6 +280,26 @@ class AdminFormDictionaryMigrationIntegrationTest {
         assertEquals(1, queryCount("""
                 SELECT COUNT(*) FROM DATABASECHANGELOG
                 WHERE ID = '006-product-list-filter-dictionaries' AND AUTHOR = 'supply-chain'
+                """));
+        assertEquals(3, queryCount("""
+                SELECT COUNT(*) FROM system_dict_data
+                WHERE dict_type = 'supply_chain_suggested_sale_price_mode' AND deleted = b'0'
+                """));
+        assertEquals(1, queryCount("""
+                SELECT COUNT(*) FROM DATABASECHANGELOG
+                WHERE ID = '010-suggested-sale-price-mode-dictionary' AND AUTHOR = 'supply-chain'
+                """));
+        assertEquals(1, queryCount("""
+                SELECT COUNT(*) FROM system_dict_type
+                WHERE type = 'supply_chain_suggested_sale_price_operator' AND deleted = b'0'
+                """));
+        assertEquals(4, queryCount("""
+                SELECT COUNT(*) FROM system_dict_data
+                WHERE dict_type = 'supply_chain_suggested_sale_price_operator' AND deleted = b'0'
+                """));
+        assertEquals(1, queryCount("""
+                SELECT COUNT(*) FROM DATABASECHANGELOG
+                WHERE ID = '011-suggested-sale-price-operator-dictionary' AND AUTHOR = 'supply-chain'
                 """));
     }
 

@@ -36,6 +36,10 @@
 | **d26** | **分类商品类型与描述闭环** | `036-category-product-type-description.sql` 为 `sc_product_category` 增加可空 `product_type` 与 `description`。新版分类创建/编辑请求必须提交动态商品类型编码并通过 `ProductTypeValidationService` 校验其处于启用状态；分类描述最多 200 字，空字符串按 `NULL` 保存。历史分类不根据父级或 SPU 标签猜测回填，两个字段保持 `NULL`，由运营编辑后补齐。详情返回 `productType` 与 `description` 供页面完整回显。 | 修复分类编辑详情缺少商品类型和分类描述，避免只补 DTO 造成数据仍丢失 |
 | **d27** | **SKU 限购周期数据字典化** | 管理端商品编辑/限购表单中“每人限购周期”与“绑定手机号限购周期”下拉选项统一由 system 模块数据字典 `supply_chain_purchase_limit_period` 统一下发，前端不再硬编码选项；字典值与现有 `PurchaseLimitPeriod`（LIFETIME/YEAR/MONTH/WEEK/DAY）严格保持一致。后端交易与履约校验及数据库 CHECK 约束保持不变。 | 对齐系统标准字典模式，避免前端硬编码选项 |
 | **d28** | **SPU 履约方式上移与 SKU 只读继承** | 平台 SPU+SKU 复合创建/编辑接口将 `fulfillmentType`（履约方式/兑换方式）提升至 SPU 根属性，由 SPU 决定商品履约方式；SKU 保存项不再强制要求录入 `fulfillmentType`。数据库层在 `sc_platform_spu` 表新增 `fulfillment_type` 列与索引，并从关联 SKU 洗数回填；`sc_platform_sku.fulfillment_type` 继续保留并由所属 SPU 自动继承双写，保证下游订单、履约边界、路由引擎与数据库行级 CHECK 约束零破坏。SPU 分页与 Tab 过滤由 SPU 表直接等值匹配，消除关联 SKU 子查询。SPU 激活或存在有效外部引用后禁止变更 `fulfillmentType`，草稿态变更时级联更新所有草稿 SKU 及其 Schema。 | 业务模型对齐原型交互，杜绝同 SPU 下履约方式冲突，提升查询性能并保持下游零破坏 |
+| **d29** | **SKU 销售建议价规则服务端持久化与计算** | `sc_platform_sku.suggested_sale_price` 继续保存销售建议价物化结果，并新增 `suggested_sale_price_rule_json` 保存该结果的生成规则。规则支持 `EQUAL_MARKET_PRICE`（等于市场价）、`CUSTOM`（`基准价格×百分比` 后执行加减乘除）和 `FIXED`（固定分值）；服务端使用十进制定点计算并最终 `HALF_UP` 到 CNY 分，前端试算结果不作为可信来源。规则写入只收口在 `POST /supply-chain/products/spus` 与 `PUT /supply-chain/products/spus/{spuCode}` 两条 SPU+SKU 复合保存链路，同一事务保存规则与结果，不再提供独立的 `/products/skus/suggested-sale-price` 批量写入口。未传规则但传入已变化的旧字段 `suggestedSalePrice` 时兼容归一为 `FIXED`，市场价与金额均原样回传时保留存量规则，避免旧管理端编辑其它字段造成配置丢失。存量数据迁移统一固定化，禁止根据金额相等猜测历史规则。该规则只生成 SKU 主数据建议价，不替代 09-15 通用定价的 `salesRule`；物化结果变化继续通过 `PricingDependencyChangedEvent` 重算下游不可变价格版本。 | 补齐新增/编辑商品中销售建议价模式、公式和固定值的保存回显，并隔离建议价与最终销售价语义 |
+| **d30** | **SKU 销售建议价模式数据字典化** | system 数据字典新增 `supply_chain_suggested_sale_price_mode`，固定下发 `EQUAL_MARKET_PRICE`（等于市场价）、`CUSTOM`（自定义设置）、`FIXED`（固定值）三项，字典值与 `SuggestedSalePriceRule.Mode` 严格一致。system-server 通过 Liquibase `010` 自动迁移，`script/deploy` 同步提供存量环境热更脚本；两处均采用幂等新增与已知项同步，不删除管理员额外数据。供应链运行时仍以领域枚举为准，不查询 `system_*` 表，避免跨库依赖。 | 统一三种建议价规则的管理端展示来源，同时保持供应链独立进程和数据所有权边界 |
+| **d31** | **SKU 销售建议价运算符数据字典化** | system 数据字典新增 `supply_chain_suggested_sale_price_operator`，固定下发 `ADD`（加）、`SUBTRACT`（减）、`MULTIPLY`（乘）、`DIVIDE`（除）四项，字典值与 `SuggestedSalePriceRule.Operator` 严格一致。pro143 已执行 `010`，因此必须追加 Liquibase `011`，禁止回改已发布的 `010` 产生 checksum 冲突；`script/deploy` 同步提供独立幂等热更脚本。供应链运行时继续以领域枚举校验，不跨库读取 system 字典。 | 统一 CUSTOM 公式运算符的管理端展示来源，并保证已部署环境可增量升级 |
+| **d32** | **SPU 复合保存 Swagger 示例完整性** | `POST /supply-chain/products/spus` 与 `PUT /supply-chain/products/spus/{spuCode}` 共用的 `SpuSaveReqVO`、`SkuItemSaveReqVO`、`SuggestedSalePriceRuleReqVO` 中，每个请求字段必须声明具体且非空的 OpenAPI `example`。列表使用至少一个元素，对象使用可解析的非空 JSON；金额统一使用 CNY 分，CUSTOM 示例的市场价、百分比、运算符、运算数和物化建议价必须可以相互校验。两个端点还必须显式声明同一份完整 `ExampleObject` 请求体，规避 swagger-core 将嵌套对象转换为 `$ref` 后丢失字段级对象示例。即使字段可选或仅适用于特定模式，也必须提供独立字段示例，禁止 Swagger UI 回落为空字符串、空数组或无意义默认值。 | 让联调方可直接从 Swagger 获取完整可用的请求参数示例，避免可选字段因示例缺失被误解 |
 
 ---
 
@@ -69,6 +73,34 @@ ALTER TABLE sc_platform_sku
     ADD CONSTRAINT ck_sc_sku_suggested_price CHECK (suggested_sale_price >= 0),
     ADD CONSTRAINT ck_sc_sku_quantity CHECK (min_quantity > 0 AND max_quantity >= min_quantity);
 ```
+
+#### 2.2.1 销售建议价规则（039 Changeset）
+
+`039-sku-suggested-sale-price-rule.sql` 为 `sc_platform_sku` 增加
+`suggested_sale_price_rule_json JSON NOT NULL`，COMMENT 为“SKU销售建议价生成规则JSON；物化结果保存在suggested_sale_price”。
+该 JSON 是不可拆分的联合配置，不参与检索；应用层必须整体校验、整体写入。存量行统一回填为：
+
+```json
+{"mode":"FIXED","fixedPriceCents":9900}
+```
+
+不得把 `suggested_sale_price = market_price` 的存量行推断成 `EQUAL_MARKET_PRICE`，因为金额相同不能证明历史配置来源。
+
+规则字段如下：
+
+| 字段 | 语义 |
+| --- | --- |
+| `mode` | `EQUAL_MARKET_PRICE`、`CUSTOM`、`FIXED` |
+| `base` | `CUSTOM` 必填：`MARKET_PRICE` 或 `SUGGESTED_SALE_PRICE`；后者使用本次修改前建议价快照，创建时禁止使用 |
+| `percentage` | 大于 0、最多 2 位小数 |
+| `operator` | `ADD`、`SUBTRACT`、`MULTIPLY`、`DIVIDE` |
+| `operand` | 加减时单位元且最多 2 位小数；乘除时为无量纲系数且最多 4 位小数；除数不得为 0 |
+| `fixedPriceCents` | `FIXED` 必填的非负 CNY 分值 |
+| `basePriceSnapshotCents` | 服务端字段；仅 `base=SUGGESTED_SALE_PRICE` 时记录计算使用的修改前建议价快照 |
+
+结果小于 0、参数不完整、精度超限或除零均拒绝整次事务。市场价和固定价允许为 0。复合编辑未传规则且未传
+`suggestedSalePrice` 时保留存量规则与结果；旧调用方同时原样回传未变化的市场价与建议价时也保留存量规则，
+只有金额或市场价发生变化且未提交规则时才按显式金额落为 `FIXED`。创建时两者都未传则落为固定 0，保持既有默认值行为。
 
 ### 2.3 平台商品分类扩展 (`sc_product_category`)
 ```sql
@@ -471,6 +503,10 @@ PRD 8.4.1 的列表 Tab 支持从 `GET /supply-chain/product-types` 动态拉取
 #### 4.1.3 SPU+SKU 复合创建：`POST /supply-chain/products/spus`
 * **权限**：使用 `SupplyChainAdminPermissions.PRODUCT_CREATE_EXPRESSION`。
 * **请求体**：`SpuSaveReqVO`
+  * **Swagger 示例约束**：以下 SPU 字段、`skus[]` 全部字段以及 `suggestedSalePriceRule` 全部字段均必须配置
+    具体、非空的 `@Schema(example=...)`；列表示例不得为空。CUSTOM 主示例使用市场价 12000 分、50%、ADD 1 元，
+    对应物化建议价 6100 分。创建和编辑端点同时使用相同的完整 `ExampleObject` 请求体，确保 Swagger UI 在
+    嵌套对象生成 `$ref` 时仍能展示每个字段，复制后可以直接联调。
   * `spuCode` (String, 可选，未传时由系统生成 `SPU_`+ULID)
   * `spuName` (String, 必填, 长度 ≤256)
   * `fulfillmentType` (String, 必填)：兑换/履约方式（`CARD_CODE_SECRET` 卡号卡密、`DIRECT_RECHARGE` 直充、`VOUCHER_CODE` 券码、`VOUCHER_URL` 券链接、`ACCOUNT_BOUND_BENEFIT` 账户绑定权益；字典 `supply_chain_fulfillment_type`）
@@ -499,6 +535,10 @@ PRD 8.4.1 的列表 Tab 支持从 `GET /supply-chain/product-types` 动态拉取
     * `faceValue` (Long, 必填，单位分)
     * `marketPrice` (Long, 默认 0，分)
     * `suggestedSalePrice` (Long, 默认 0，分)
+    * `suggestedSalePriceRule` (Object, 可选)：销售建议价生成规则；其中 `mode` 使用 system 数据字典
+      `supply_chain_suggested_sale_price_mode`，提交时由服务端计算 `suggestedSalePrice`。
+      同时提交规则与结果时二者必须一致。旧调用方仅提交 `suggestedSalePrice` 时按 `FIXED` 兼容保存；编辑时市场价
+      与建议价均未变化则保留已有规则，避免未升级调用方覆盖规则配置。
     * `taxIncluded` (Boolean, 可选): 是否含税；仅记录展示，不参与价格计算。
     * `taxRate` (BigDecimal, 可选): 税率，取值 `[0, 1]`；仅记录展示，不参与价格计算。
     * `minQuantity` (Long, 默认 1)
@@ -527,6 +567,15 @@ PRD 8.4.1 的列表 Tab 支持从 `GET /supply-chain/product-types` 动态拉取
 #### 4.1.8 单 SKU 逻辑删除：`DELETE /supply-chain/products/skus/{skuCode}`
 * **权限**：使用 `SupplyChainAdminPermissions.PRODUCT_DELETE_EXPRESSION`。
 * **执行**：执行 3.2 节 4 表强校验。
+
+#### 4.1.12 SKU 销售建议价规则写入收口
+
+* **唯一入口**：随 SKU 行提交 `suggestedSalePriceRule`，新增使用 `POST /supply-chain/products/spus`，编辑使用
+  `PUT /supply-chain/products/spus/{spuCode}`；不提供独立 SKU 建议价批量更新接口。
+* **执行**：复合创建/编辑在所属 SPU 的事务和锁边界内，使用每个 SKU 自身的市场价及修改前建议价计算并保存规则
+  与物化结果。任一 SKU 规则非法或提交结果与服务端计算不一致时整单回滚。
+* **下游影响**：仅物化结果实际变化的既有 SKU 发布 `PricingDependencyChangedEvent`；只改变规则但结果不变时不生成
+  无意义的下游价格版本。新 SKU 保持 `UNPRICED`，仍须通过商品默认通用定价流程生成可售价格版本。
 
 #### 4.1.9 管理端商品列表聚合查询：`GET /supply-chain/products/management-page`
 * **设计目的**：支撑商品管理后台原型中「SPU 包含多 SKU 行内平铺展开」、「复杂多维度组合检索」与「供货价、税率、税额、供应商换行展示及总库存聚合展示」，避免前端逐条查询详情造成数百次网络请求。
@@ -761,6 +810,28 @@ system-server 通过追加变更集 `008-sku-purchase-limit-period-dictionary` �
   - 管理端商品编辑/限购表单中“每人限购周期”（`userLimitPeriod`）与“绑定手机号限购周期”（`phoneBindLimitPeriod`）下拉选项统一绑定 `supply_chain_purchase_limit_period` 数据字典，前端不再写死枚举。
   - 字典值严格对应后端 `PurchaseLimitPeriod` 英文大写枚举值，数据库 `sc_platform_sku` 的 CHECK 约束与履约校验逻辑维持不变。
 
+system-server 通过追加变更集 `010-suggested-sale-price-mode-dictionary` 写入 SKU 销售建议价模式数据字典：
+
+| 字典类型 | 字典名称 | 值 | 标签 | 颜色类型 (color_type) | 说明 |
+| --- | --- | --- | --- | --- | --- |
+| `supply_chain_suggested_sale_price_mode` | SKU销售建议价模式 | `EQUAL_MARKET_PRICE` | 等于市场价 | `default` | 对应 SuggestedSalePriceRule.Mode.EQUAL_MARKET_PRICE |
+| `supply_chain_suggested_sale_price_mode` | SKU销售建议价模式 | `CUSTOM` | 自定义设置 | `default` | 对应 SuggestedSalePriceRule.Mode.CUSTOM |
+| `supply_chain_suggested_sale_price_mode` | SKU销售建议价模式 | `FIXED` | 固定值 | `default` | 对应 SuggestedSalePriceRule.Mode.FIXED |
+
+system-server 通过追加变更集 `011-suggested-sale-price-operator-dictionary` 写入 CUSTOM 运算符数据字典：
+
+| 字典类型 | 字典名称 | 值 | 标签 | 颜色类型 (color_type) | 说明 |
+| --- | --- | --- | --- | --- | --- |
+| `supply_chain_suggested_sale_price_operator` | SKU销售建议价运算符 | `ADD` | 加 | `default` | 对应 SuggestedSalePriceRule.Operator.ADD |
+| `supply_chain_suggested_sale_price_operator` | SKU销售建议价运算符 | `SUBTRACT` | 减 | `default` | 对应 SuggestedSalePriceRule.Operator.SUBTRACT |
+| `supply_chain_suggested_sale_price_operator` | SKU销售建议价运算符 | `MULTIPLY` | 乘 | `default` | 对应 SuggestedSalePriceRule.Operator.MULTIPLY |
+| `supply_chain_suggested_sale_price_operator` | SKU销售建议价运算符 | `DIVIDE` | 除 | `default` | 对应 SuggestedSalePriceRule.Operator.DIVIDE |
+
+* **进程与数据所有权边界**：
+  - 字典只负责管理端展示与选项下发，由 system-server 写入 system 库；供应链进程不得读取 `system_dict_type` 或 `system_dict_data`，请求校验继续使用 `SuggestedSalePriceRule.Mode` 封闭枚举。
+  - `SuggestedSalePriceRuleReqVO` 与 `SuggestedSalePriceRuleView` 的 `mode`、`operator` OpenAPI 描述必须分别声明模式、运算符字典标识；自动化测试同时锁定 Liquibase、热更 SQL、字典值与 Java 枚举一致。
+  - 本次不修改前端；前端后续接入时可使用既有 system 字典查询能力读取该字典，并通过既有 SPU+SKU 复合创建/编辑接口提交规则。
+
 ## 6. 测试策略
 
 1. `ProductCenterIntegrationTest` 必须在真实 MySQL 8.4 与 Liquibase 完整表结构上覆盖 SPU/SKU 复合创建、状态独立性、分类详情投影及标品池价格读取，不得用 H2 或 Mock Mapper 代替。
@@ -774,3 +845,14 @@ system-server 通过追加变更集 `008-sku-purchase-limit-period-dictionary` �
    手机号共享绑定手机号额度；同一买家号不同履约手机号独立计数；每人限购超限拒绝；绑定手机号限购超限拒绝；
    失败/取消/全额退款释放额度且部分退款不释放；SKU 行锁下并发不超卖；公开契约保持 `quantity=1`。
    `ORDER_PURCHASE_LIMIT_EXCEEDED` 由 `SkuPurchaseLimitServiceTest` 覆盖，不通过放开公开数量契约验证。
+8. `SuggestedSalePriceCalculatorTest` 必须覆盖三种模式、四种运算、HALF_UP 到分、0 价格、负结果、百分比和
+   operand 精度、除零以及“以修改前建议价为基数”的快照语义。
+9. `ProductCatalogCommandServiceTest`、`ProductCenterContractTest` 与 `ProductCenterIntegrationTest` 必须分别覆盖：
+   旧金额请求归一为 `FIXED`；复合创建/编辑规则保存、详情回显与多 SKU 原子回滚；物化结果变化触发下游重算；
+   规则变化但结果不变不触发重算；MySQL 空库执行 `039` 后存量规则非空且金额不变。
+10. `SuggestedSalePriceOperatorDictionaryLiquibaseTest` 必须锁定 `011` 注册、四项字典值与
+    `SuggestedSalePriceRule.Operator` 完全一致、迁移与热更脚本幂等且不删除管理员额外数据；真实 MySQL 二次执行
+    Liquibase 后字典类型和四项数据不得重复。
+11. `ProductCenterContractTest` 必须反射检查 `SpuSaveReqVO`、`SkuItemSaveReqVO`、
+    `SuggestedSalePriceRuleReqVO` 的每个声明字段均具有非空 `@Schema.example`；列表和对象示例必须是非空 JSON，
+    CUSTOM 组合示例的 `suggestedSalePrice` 必须与服务端计算结果一致。
