@@ -32,6 +32,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_CANNOT_DELETE_HAS_SUPPLIER_OFFER;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BRAND_NOT_FOUND;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.CATEGORY_NOT_FOUND;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_CONCURRENT_UPDATE;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_FULFILLMENT_TYPE_IMMUTABLE;
@@ -563,6 +564,77 @@ class ProductCatalogCommandServiceTest {
                 .isInstanceOf(ServiceException.class)
                 .extracting(ex -> ((ServiceException) ex).getCode())
                 .isEqualTo(PRODUCT_SKU_FIELD_INVALID.getCode());
+    }
+
+    @Test
+    void createProductWithBrandCodeSuccess() {
+        BrandDO brand = BrandDO.builder().id(99L).brandCode("BRD_TEST").status(CatalogEntityStatus.ACTIVE.getCode()).build();
+        when(brandMapper.selectByCode("BRD_TEST")).thenReturn(brand);
+        when(categoryMapper.selectById(3L)).thenReturn(ProductCategoryDO.builder().id(3L).status(CatalogEntityStatus.ACTIVE.getCode()).build());
+        when(productTypeValidationService.requireActiveForUpdate("EQUITY_PRODUCT"))
+                .thenReturn(ProductTypeDO.builder().typeCode("EQUITY_PRODUCT").build());
+        when(clock.now()).thenReturn(LocalDateTime.now());
+        when(generator.next(any())).thenReturn("SPU_AUTO");
+
+        ProductCatalogCommandService.SaveSkuLine line = new ProductCatalogCommandService.SaveSkuLine(
+                "SKU_1", "SKU名称", FulfillmentType.CARD_CODE_SECRET.code(), 100L, 100L, 100L, 1L, 10L,
+                CatalogEntityStatus.ACTIVE.getCode());
+        ProductCatalogCommandService.SaveSpuCommand command = new ProductCatalogCommandService.SaveSpuCommand(
+                null, "测试SPU", null, null, "BRD_TEST", 3L, null,
+                SellableCategory.EQUITY.name(), "EQUITY_PRODUCT", ProductClassification.VIRTUAL_CARD.name(),
+                null, null, null, null, null, FulfillmentType.CARD_CODE_SECRET.code(), 1L, 10L,
+                CatalogEntityStatus.ACTIVE.getCode(), List.of(line), 1L);
+
+        String result = service.createProduct(command);
+        assertThat(result).isEqualTo("SPU_AUTO");
+        verify(brandMapper).selectByCode("BRD_TEST");
+    }
+
+    @Test
+    void createProductWithNumericBrandCodeInBrandIdFallbackSuccess() {
+        // 前端将纯数字 brandCode 如 "1111" 传到了 brandId 字段，selectById(1111L) 返回 null，兜底按 selectByCode("1111") 解析成功
+        BrandDO brand = BrandDO.builder().id(88L).brandCode("1111").status(CatalogEntityStatus.ACTIVE.getCode()).build();
+        when(brandMapper.selectById(1111L)).thenReturn(null);
+        when(brandMapper.selectByCode("1111")).thenReturn(brand);
+        when(categoryMapper.selectById(3L)).thenReturn(ProductCategoryDO.builder().id(3L).status(CatalogEntityStatus.ACTIVE.getCode()).build());
+        when(productTypeValidationService.requireActiveForUpdate("EQUITY_PRODUCT"))
+                .thenReturn(ProductTypeDO.builder().typeCode("EQUITY_PRODUCT").build());
+        when(clock.now()).thenReturn(LocalDateTime.now());
+        when(generator.next(any())).thenReturn("SPU_AUTO_2");
+
+        ProductCatalogCommandService.SaveSkuLine line = new ProductCatalogCommandService.SaveSkuLine(
+                "SKU_2", "SKU名称2", FulfillmentType.CARD_CODE_SECRET.code(), 100L, 100L, 100L, 1L, 10L,
+                CatalogEntityStatus.ACTIVE.getCode());
+        ProductCatalogCommandService.SaveSpuCommand command = new ProductCatalogCommandService.SaveSpuCommand(
+                null, "测试SPU2", null, 1111L, null, 3L, null,
+                SellableCategory.EQUITY.name(), "EQUITY_PRODUCT", ProductClassification.VIRTUAL_CARD.name(),
+                null, null, null, null, null, FulfillmentType.CARD_CODE_SECRET.code(), 1L, 10L,
+                CatalogEntityStatus.ACTIVE.getCode(), List.of(line), 1L);
+
+        String result = service.createProduct(command);
+        assertThat(result).isEqualTo("SPU_AUTO_2");
+        verify(brandMapper).selectById(1111L);
+        verify(brandMapper).selectByCode("1111");
+    }
+
+    @Test
+    void createProductWithUnknownBrandThrowsBrandNotFound() {
+        when(brandMapper.selectById(9999L)).thenReturn(null);
+        when(brandMapper.selectByCode("9999")).thenReturn(null);
+
+        ProductCatalogCommandService.SaveSkuLine line = new ProductCatalogCommandService.SaveSkuLine(
+                "SKU_3", "SKU名称3", FulfillmentType.CARD_CODE_SECRET.code(), 100L, 100L, 100L, 1L, 10L,
+                CatalogEntityStatus.ACTIVE.getCode());
+        ProductCatalogCommandService.SaveSpuCommand command = new ProductCatalogCommandService.SaveSpuCommand(
+                null, "测试SPU3", null, 9999L, null, 3L, null,
+                SellableCategory.EQUITY.name(), "EQUITY_PRODUCT", ProductClassification.VIRTUAL_CARD.name(),
+                null, null, null, null, null, FulfillmentType.CARD_CODE_SECRET.code(), 1L, 10L,
+                CatalogEntityStatus.ACTIVE.getCode(), List.of(line), 1L);
+
+        assertThatThrownBy(() -> service.createProduct(command))
+                .isInstanceOf(ServiceException.class)
+                .extracting(ex -> ((ServiceException) ex).getCode())
+                .isEqualTo(BRAND_NOT_FOUND.getCode());
     }
 
     /** 构造：SPU 下挂 keep 与 omitted 两个启用 SKU，更新请求只保留 keep。 */

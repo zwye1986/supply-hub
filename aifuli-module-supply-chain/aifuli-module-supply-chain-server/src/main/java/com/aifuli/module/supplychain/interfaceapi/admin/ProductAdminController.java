@@ -58,6 +58,7 @@ public class ProductAdminController {
               "spuName": "爱奇艺黄金会员月卡",
               "subtitle": "官方直充，到账快",
               "brandId": 1,
+              "brandCode": "BRD_DEMO_001",
               "primaryCategoryId": 10,
               "secondaryCategoryIds": [11, 12],
               "sellableCategory": "EQUITY",
@@ -298,6 +299,7 @@ public class ProductAdminController {
                     line.phoneBindLimitQuantity, line.status);
         }).toList();
         return new SaveSpuCommand(request.spuCode, request.spuName, request.subtitle, request.brandId,
+                request.brandCode,
                 request.primaryCategoryId, request.secondaryCategoryIds, request.sellableCategory,
                 request.productType, request.productClassification, request.coverUrl, request.sliderImageUrls,
                 request.useInstruction, request.description, request.deliveryType, spuFulfillmentType,
@@ -313,7 +315,9 @@ public class ProductAdminController {
         private String spuName;
         @Size(max = 256) @Schema(description = "副标题", example = "官方直充，到账快")
         private String subtitle;
-        @NotNull @Schema(description = "品牌内部主键", example = "1") private Long brandId;
+        @Schema(description = "品牌内部主键；与 brandCode 二选一", example = "1") private Long brandId;
+        @Size(max = 32) @Schema(description = "平台品牌永久编码；与 brandId 二选一", example = "BRD_DEMO_001")
+        private String brandCode;
         @NotNull
         @Schema(description = "商品分类内部主键；来源于 /supply-chain/categories 启用分类树，不是system数据字典",
                 example = "10")

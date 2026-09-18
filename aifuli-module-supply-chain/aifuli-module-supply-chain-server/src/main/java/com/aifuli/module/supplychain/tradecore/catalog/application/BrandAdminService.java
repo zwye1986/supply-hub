@@ -196,7 +196,7 @@ public class BrandAdminService {
     }
 
     private BrandView toView(BrandDO brand, long productCount) {
-        return new BrandView(brand.getBrandCode(), brand.getBrandName(), brand.getShortName(),
+        return new BrandView(brand.getId(), brand.getBrandCode(), brand.getBrandName(), brand.getShortName(),
                 brand.getEnglishName(), brand.getLogoUrl(), brand.getDescription(),
                 brand.getSort(), brand.getStatus(), productCount, productCount,
                 brand.getCreatedAt(), brand.getUpdatedAt());
@@ -229,8 +229,9 @@ public class BrandAdminService {
                                 String description, Integer sort, Long operatorId) {
     }
 
-    /** 商品品牌管理端投影；字段语义与 {@code sc_brand} DDL COMMENT 一致。 */
+    /** 商品品牌管理端投影；字段语义与 {@code sc_brand} DDL COMMENT 一致。设计见 docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#43-商品品牌管理brandadmincontroller（d33）。 */
     public record BrandView(
+            @Schema(description = "品牌内部主键") Long id,
             @Schema(description = "平台品牌永久业务编码") String brandCode,
             @Schema(description = "品牌中文或标准名称") String brandName,
             @Schema(description = "品牌简称") String shortName,

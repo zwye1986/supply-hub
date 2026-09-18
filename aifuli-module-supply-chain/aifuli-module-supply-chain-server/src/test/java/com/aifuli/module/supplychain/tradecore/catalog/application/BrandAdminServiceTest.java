@@ -99,6 +99,7 @@ class BrandAdminServiceTest {
                         .brandId(10L).build()));
 
         BrandAdminService.BrandView view = service.detail("BRD_TEST");
+        assertThat(view.id()).isEqualTo(10L);
         assertThat(view.brandCode()).isEqualTo("BRD_TEST");
         assertThat(view.brandName()).isEqualTo("腾讯视频");
         assertThat(view.shortName()).isEqualTo("腾讯");
