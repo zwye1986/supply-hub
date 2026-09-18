@@ -344,9 +344,8 @@ public class ProductAdminController {
         private String description;
         @Size(max = 32) @Schema(description = "配送模式；默认 VIRTUAL", example = "VIRTUAL")
         private String deliveryType;
-        @NotBlank
         @Size(max = 32)
-        @Schema(description = "履约类型：DIRECT_RECHARGE直充，VOUCHER_CODE券码，CARD_CODE_SECRET卡号卡密，VOUCHER_URL券链接，ACCOUNT_BOUND_BENEFIT账户绑定权益", example = "DIRECT_RECHARGE")
+        @Schema(description = "履约类型：DIRECT_RECHARGE直充，VOUCHER_CODE券码，CARD_CODE_SECRET卡号卡密，VOUCHER_URL券链接，ACCOUNT_BOUND_BENEFIT账户绑定权益；仅虚拟卡券类型必传，未传时由首个 SKU 推断", example = "DIRECT_RECHARGE")
         private String fulfillmentType;
         @Positive @Schema(description = "SPU默认单次最低起购量", example = "1") private Long minQuantity;
         @Positive @Schema(description = "SPU默认单次最高限购量", example = "10") private Long maxQuantity;
