@@ -40,6 +40,8 @@
 | **d30** | **SKU 销售建议价模式数据字典化** | system 数据字典新增 `supply_chain_suggested_sale_price_mode`，固定下发 `EQUAL_MARKET_PRICE`（等于市场价）、`CUSTOM`（自定义设置）、`FIXED`（固定值）三项，字典值与 `SuggestedSalePriceRule.Mode` 严格一致。system-server 通过 Liquibase `010` 自动迁移，`script/deploy` 同步提供存量环境热更脚本；两处均采用幂等新增与已知项同步，不删除管理员额外数据。供应链运行时仍以领域枚举为准，不查询 `system_*` 表，避免跨库依赖。 | 统一三种建议价规则的管理端展示来源，同时保持供应链独立进程和数据所有权边界 |
 | **d31** | **SKU 销售建议价运算符数据字典化** | system 数据字典新增 `supply_chain_suggested_sale_price_operator`，固定下发 `ADD`（加）、`SUBTRACT`（减）、`MULTIPLY`（乘）、`DIVIDE`（除）四项，字典值与 `SuggestedSalePriceRule.Operator` 严格一致。pro143 已执行 `010`，因此必须追加 Liquibase `011`，禁止回改已发布的 `010` 产生 checksum 冲突；`script/deploy` 同步提供独立幂等热更脚本。供应链运行时继续以领域枚举校验，不跨库读取 system 字典。 | 统一 CUSTOM 公式运算符的管理端展示来源，并保证已部署环境可增量升级 |
 | **d32** | **SPU 复合保存 Swagger 示例完整性** | `POST /supply-chain/products/spus` 与 `PUT /supply-chain/products/spus/{spuCode}` 共用的 `SpuSaveReqVO`、`SkuItemSaveReqVO`、`SuggestedSalePriceRuleReqVO` 中，每个请求字段必须声明具体且非空的 OpenAPI `example`。列表使用至少一个元素，对象使用可解析的非空 JSON；金额统一使用 CNY 分，CUSTOM 示例的市场价、百分比、运算符、运算数和物化建议价必须可以相互校验。两个端点还必须显式声明同一份完整 `ExampleObject` 请求体，规避 swagger-core 将嵌套对象转换为 `$ref` 后丢失字段级对象示例。即使字段可选或仅适用于特定模式，也必须提供独立字段示例，禁止 Swagger UI 回落为空字符串、空数组或无意义默认值。 | 让联调方可直接从 Swagger 获取完整可用的请求参数示例，避免可选字段因示例缺失被误解 |
+| **d33** | **品牌管理端投影补齐主键与 SPU 复合保存支持品牌编码/ID 双轨解析容错** | 1. 品牌管理端响应模型 `BrandView` 补充内部主键 `id`（`Long`），与 `CategoryNode` 保持一致，支撑前端下拉选择组件获取并绑定真实主键。<br>2. SPU 复合保存模型 `SpuSaveReqVO` 支持 `brandId`（Long）与 `brandCode`（String）双轨入参，二选一即可。服务端按优先级解析品牌：传入 `brandCode` 时按业务编码匹配；传入 `brandId` 时先按主键匹配，查不到时自动将纯数字 ID 尝试按 `brand_code` 容错匹配（解决前端将纯数字编码绑定至 ID 导致的误报）；均匹配不到时抛出 `BRAND_NOT_FOUND`（1050001077）。<br>3. SPU 详情 `SpuDetail` 补齐 `brandCode` 字段回显，彻底打通品牌展示、选择与保存回显闭环。 | 解决前端品牌选择后提交报“商品品牌不存在”的契约缺陷与容错缺失 |
+| **d34** | **SPU/供货范围 productClassification 接受类目树编码** | 管理端把 `sc_product_category.category_code`（如 `E2E_L1_20260903`）写入 `productClassification` 是合法契约，不得再抛 `ENUM_NOT_OPEN`。写入解析：先认 `ProductClassification` 三枚举名（存量兼容）；否则按类目编码查启用/未归档分类，命中则把该类目编码原样写入 `sc_platform_spu.product_classification` 与 `sc_supplier_supply_scope.product_classification`。若同时传 `primaryCategoryId`，必须与该类目为同一行，否则 `CATEGORY_NOT_FOUND`。未知码同样 `CATEGORY_NOT_FOUND`。供货命中仍是三码字符串全等，不回读类目树。`040` 变更集删除 `ck_sc_spu_product_classification` 与 `ck_sc_supplier_scope_product_classification`，禁止回改 `024`。 | 消除前端类目下拉与供货三码字段混用时被三枚举误拒 |
 
 ---
 
@@ -497,7 +499,7 @@ PRD 8.4.1 的列表 Tab 支持从 `GET /supply-chain/product-types` 动态拉取
 #### 4.1.2 SPU 详情查询：`GET /supply-chain/products/spus/{spuCode}`
 * **权限**：使用 `SupplyChainAdminPermissions.PRODUCT_QUERY_EXPRESSION`。
 * **响应**：`CommonResult<SpuDetailVO>`
-  * SPU 完整信息：编码、名称、副标题、品牌、主分类、辅助分类列表、三码、封面图、轮播图列表、图文详情、配送模式、履约方式（`fulfillmentType` 与 `fulfillmentTypeDisplay`）、起购/限购、状态。
+  * SPU 完整信息：编码、名称、副标题、品牌内部主键（`brandId`）、品牌业务编码（`brandCode`）、品牌名称（`brandName`）、主分类、辅助分类列表、三码、封面图、轮播图列表、图文详情、配送模式、履约方式（`fulfillmentType` 与 `fulfillmentTypeDisplay`）、起购/限购、状态。
   * `skus: List<SkuDetailVO>`：挂载的每个 SKU 详情（编码、名称、履约模式、面值、市场价、销售建议价、起购/限购、有效可售状态、schema 配置等）。
 
 #### 4.1.3 SPU+SKU 复合创建：`POST /supply-chain/products/spus`
@@ -510,14 +512,18 @@ PRD 8.4.1 的列表 Tab 支持从 `GET /supply-chain/product-types` 动态拉取
   * `spuCode` (String, 可选，未传时由系统生成 `SPU_`+ULID)
   * `spuName` (String, 必填, 长度 ≤256)
   * `fulfillmentType` (String, 必填)：兑换/履约方式（`CARD_CODE_SECRET` 卡号卡密、`DIRECT_RECHARGE` 直充、`VOUCHER_CODE` 券码、`VOUCHER_URL` 券链接、`ACCOUNT_BOUND_BENEFIT` 账户绑定权益；字典 `supply_chain_fulfillment_type`）
-  * `brandId` (Long, 必填)
+  * `brandId` (Long, 可选；与 `brandCode` 二选一，优先 `brandCode` 其次 `brandId` 兜底)
+  * `brandCode` (String, 可选，长度 ≤32；与 `brandId` 二选一)
   * `primaryCategoryId` (Long, 必填)：原型「商品分类」字段；取值来自 `GET /supply-chain/categories` 返回的
     `sc_product_category` 启用树，不是 system 数据字典。
   * `secondaryCategoryIds` (List<Long>, 可选)
   * `sellableCategory` (String, 必填)
   * `productType` (String, 必填，校验在 `sc_product_type` 中启用存在)
-  * `productClassification` (String, 必填)：供货配置命中的商品分类标签，取值来自 system 字典
-    `supply_chain_product_classification`，不是原型「商品分类」下拉树。
+  * `productClassification` (String, 必填)：供货命中码。允许 system 字典
+    `supply_chain_product_classification` 的枚举名（`ELECTRONICS` / `VIRTUAL_CARD` / `MOVIE_TICKET`，存量兼容），
+    也允许 `GET /supply-chain/categories` 返回的 `categoryCode`（如 `E2E_L1_20260903`）。类目编码按
+    `sc_product_category.category_code` 解析并原样落库；与 `primaryCategoryId` 同时传入时必须指向同一分类，
+    未知码返回 `CATEGORY_NOT_FOUND`（1050001078），不得返回 `ENUM_NOT_OPEN`。
   * `coverUrl` (String, 可选)
   * `sliderImageUrls` (List<String>, 可选)
   * `description` (String, 可选)
@@ -694,7 +700,8 @@ system-server 通过追加变更集 `006-product-list-filter-dictionaries` 写�
 * `SkuItemSaveReqVO` 与详情 `SkuDetail` 同步增加 `mainImageUrl`、`detailImageUrls`、`description`；创建和编辑
   复用 `SaveSkuLine`、`PlatformSkuDO` 与 `034` 变更集，不另建旁路接口。
 * `SpuSaveReqVO.primaryCategoryId` 为必填，服务端必须校验类目存在且满足当前 SPU 状态要求；选项从
-  `GET /supply-chain/categories` 获取。`productClassification` 仍是供货匹配标签，不替代主类目。
+  `GET /supply-chain/categories` 获取。`productClassification` 是供货匹配标签，不替代主类目；d34 起允许
+  字典枚举名或同一棵分类树的 `categoryCode`。
 * 标准履约受理在生成请求指纹与订单摘要前规范化 `buyerUserId`；目标为 `MOBILE` 时同样规范化
   `accountValue`。因此 `13800138000`、`+8613800138000`、`008613800138000` 在同一项目与 SKU 下共享限购
   额度。非法手机号不得降级为不同字符串继续计数。
@@ -719,8 +726,8 @@ system-server 通过追加变更集 `006-product-list-filter-dictionaries` 写�
 ### 4.3 商品品牌管理：`BrandAdminController`
 基路径：`/supply-chain/brands`
 
-* `GET /supply-chain/brands`：品牌分页查询（支持名称/编码检索、状态筛选、排序）。响应 `BrandView` 返回品牌编码、名称、简称（`shortName`）、英文名、Logo、介绍（`description`）、排序、状态、引用未归档 SPU 数量（`productCount`/`spuCount`）、创建/更新时间，完全支撑原型卡片视图。
-* `GET /supply-chain/brands/{brandCode}`：品牌详情。
+* `GET /supply-chain/brands`：品牌分页查询（支持名称/编码检索、状态筛选、排序）。响应 `BrandView` 返回品牌内部主键（`id`）、品牌编码、名称、简称（`shortName`）、英文名、Logo、介绍（`description`）、排序、状态、引用未归档 SPU 数量（`productCount`/`spuCount`）、创建/更新时间，既支撑前端下拉选择器获取并绑定主键，也完全支撑原型卡片视图。
+* `GET /supply-chain/brands/{brandCode}`：品牌详情（响应 `BrandView`，包含内部主键 `id` 与业务字段）。
 * `POST /supply-chain/brands`：创建品牌（支持自动生成 `BRD_`+ULID、品牌名称全局唯一校验、Logo 必填校验、简称、介绍、英文名、排序、创建状态）。
 * `PUT /supply-chain/brands/{brandCode}`：更新品牌（名称、简称、Logo 必填、介绍、英文名、排序，名称变更时防重校验）。
 * `PUT /supply-chain/brands/{brandCode}/status`：启用/停用品牌状态。

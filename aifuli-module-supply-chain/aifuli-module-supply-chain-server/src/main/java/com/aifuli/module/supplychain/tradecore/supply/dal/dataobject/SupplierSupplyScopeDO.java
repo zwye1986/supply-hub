@@ -30,7 +30,7 @@ public class SupplierSupplyScopeDO {
     private String sellableCategory;
     /** 商品类型编码，由 sc_product_type 动态维护。 */
     private String productType;
-    /** 商品分类封闭枚举，见ProductClassification */
+    /** 商品分类供货命中码：ProductClassification枚举名或sc_product_category.category_code */
     private String productClassification;
     private Long maxQuantity;
     /** 允许最低起订量，预留字段；当前仅存储和回显。 */

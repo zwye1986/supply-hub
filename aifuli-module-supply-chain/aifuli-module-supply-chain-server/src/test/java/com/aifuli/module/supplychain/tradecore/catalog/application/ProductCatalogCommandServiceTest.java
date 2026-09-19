@@ -32,6 +32,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_CANNOT_DELETE_HAS_SUPPLIER_OFFER;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BRAND_NOT_FOUND;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.CATEGORY_NOT_FOUND;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_CONCURRENT_UPDATE;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_FULFILLMENT_TYPE_IMMUTABLE;
@@ -73,6 +74,8 @@ class ProductCatalogCommandServiceTest {
     private final CategoryCommandService categoryCommandService = mock(CategoryCommandService.class);
     private final ProductTypeValidationService productTypeValidationService =
             mock(ProductTypeValidationService.class);
+    private final ProductClassificationValidationService productClassificationValidationService =
+            new ProductClassificationValidationService(categoryMapper);
     private final ProductSellabilityService sellabilityService = mock(ProductSellabilityService.class);
     private final ProductDeletionValidator deletionValidator = mock(ProductDeletionValidator.class);
     private final FulfillmentTargetSchemaRegistry targetSchemaRegistry = mock(FulfillmentTargetSchemaRegistry.class);
@@ -82,7 +85,7 @@ class ProductCatalogCommandServiceTest {
             clock, eventPublisher, brandMapper, categoryMapper, spuMapper, skuMapper, platformSkuPricingMapper,
             buyerMapper, listingMapper,
             availabilityMapper, generator, brandAdminService, categoryCommandService,
-            productTypeValidationService, sellabilityService, deletionValidator, targetSchemaRegistry,
+            productTypeValidationService, productClassificationValidationService, sellabilityService, deletionValidator, targetSchemaRegistry,
             skuSchemaRegistry);
 
     /** 请求中省略、且仍被下游引用的 SKU 保留原状态，不被停用，且整体更新继续成功。 */
@@ -563,6 +566,139 @@ class ProductCatalogCommandServiceTest {
                 .isInstanceOf(ServiceException.class)
                 .extracting(ex -> ((ServiceException) ex).getCode())
                 .isEqualTo(PRODUCT_SKU_FIELD_INVALID.getCode());
+    }
+
+    @Test
+    void createProductWithBrandCodeSuccess() {
+        BrandDO brand = BrandDO.builder().id(99L).brandCode("BRD_TEST").status(CatalogEntityStatus.ACTIVE.getCode()).build();
+        when(brandMapper.selectByCode("BRD_TEST")).thenReturn(brand);
+        when(categoryMapper.selectById(3L)).thenReturn(ProductCategoryDO.builder().id(3L).status(CatalogEntityStatus.ACTIVE.getCode()).build());
+        when(productTypeValidationService.requireActiveForUpdate("EQUITY_PRODUCT"))
+                .thenReturn(ProductTypeDO.builder().typeCode("EQUITY_PRODUCT").build());
+        when(clock.now()).thenReturn(LocalDateTime.now());
+        when(generator.next(any())).thenReturn("SPU_AUTO");
+
+        ProductCatalogCommandService.SaveSkuLine line = new ProductCatalogCommandService.SaveSkuLine(
+                "SKU_1", "SKU名称", FulfillmentType.CARD_CODE_SECRET.code(), 100L, 100L, 100L, 1L, 10L,
+                CatalogEntityStatus.ACTIVE.getCode());
+        ProductCatalogCommandService.SaveSpuCommand command = new ProductCatalogCommandService.SaveSpuCommand(
+                null, "测试SPU", null, null, "BRD_TEST", 3L, null,
+                SellableCategory.EQUITY.name(), "EQUITY_PRODUCT", ProductClassification.VIRTUAL_CARD.name(),
+                null, null, null, null, null, FulfillmentType.CARD_CODE_SECRET.code(), 1L, 10L,
+                CatalogEntityStatus.ACTIVE.getCode(), List.of(line), 1L);
+
+        String result = service.createProduct(command);
+        assertThat(result).isEqualTo("SPU_AUTO");
+        verify(brandMapper).selectByCode("BRD_TEST");
+    }
+
+    @Test
+    void createProductWithNumericBrandCodeInBrandIdFallbackSuccess() {
+        // 前端将纯数字 brandCode 如 "1111" 传到了 brandId 字段，selectById(1111L) 返回 null，兜底按 selectByCode("1111") 解析成功
+        BrandDO brand = BrandDO.builder().id(88L).brandCode("1111").status(CatalogEntityStatus.ACTIVE.getCode()).build();
+        when(brandMapper.selectById(1111L)).thenReturn(null);
+        when(brandMapper.selectByCode("1111")).thenReturn(brand);
+        when(categoryMapper.selectById(3L)).thenReturn(ProductCategoryDO.builder().id(3L).status(CatalogEntityStatus.ACTIVE.getCode()).build());
+        when(productTypeValidationService.requireActiveForUpdate("EQUITY_PRODUCT"))
+                .thenReturn(ProductTypeDO.builder().typeCode("EQUITY_PRODUCT").build());
+        when(clock.now()).thenReturn(LocalDateTime.now());
+        when(generator.next(any())).thenReturn("SPU_AUTO_2");
+
+        ProductCatalogCommandService.SaveSkuLine line = new ProductCatalogCommandService.SaveSkuLine(
+                "SKU_2", "SKU名称2", FulfillmentType.CARD_CODE_SECRET.code(), 100L, 100L, 100L, 1L, 10L,
+                CatalogEntityStatus.ACTIVE.getCode());
+        ProductCatalogCommandService.SaveSpuCommand command = new ProductCatalogCommandService.SaveSpuCommand(
+                null, "测试SPU2", null, 1111L, null, 3L, null,
+                SellableCategory.EQUITY.name(), "EQUITY_PRODUCT", ProductClassification.VIRTUAL_CARD.name(),
+                null, null, null, null, null, FulfillmentType.CARD_CODE_SECRET.code(), 1L, 10L,
+                CatalogEntityStatus.ACTIVE.getCode(), List.of(line), 1L);
+
+        String result = service.createProduct(command);
+        assertThat(result).isEqualTo("SPU_AUTO_2");
+        verify(brandMapper).selectById(1111L);
+        verify(brandMapper).selectByCode("1111");
+    }
+
+    @Test
+    void createProductWithUnknownBrandThrowsBrandNotFound() {
+        when(brandMapper.selectById(9999L)).thenReturn(null);
+        when(brandMapper.selectByCode("9999")).thenReturn(null);
+
+        ProductCatalogCommandService.SaveSkuLine line = new ProductCatalogCommandService.SaveSkuLine(
+                "SKU_3", "SKU名称3", FulfillmentType.CARD_CODE_SECRET.code(), 100L, 100L, 100L, 1L, 10L,
+                CatalogEntityStatus.ACTIVE.getCode());
+        ProductCatalogCommandService.SaveSpuCommand command = new ProductCatalogCommandService.SaveSpuCommand(
+                null, "测试SPU3", null, 9999L, null, 3L, null,
+                SellableCategory.EQUITY.name(), "EQUITY_PRODUCT", ProductClassification.VIRTUAL_CARD.name(),
+                null, null, null, null, null, FulfillmentType.CARD_CODE_SECRET.code(), 1L, 10L,
+                CatalogEntityStatus.ACTIVE.getCode(), List.of(line), 1L);
+
+        assertThatThrownBy(() -> service.createProduct(command))
+                .isInstanceOf(ServiceException.class)
+                .extracting(ex -> ((ServiceException) ex).getCode())
+                .isEqualTo(BRAND_NOT_FOUND.getCode());
+    }
+
+    /**
+     * 复现：前端把类目树编码写进 productClassification，应解析为类目编码并落库，而不是 ENUM_NOT_OPEN。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线}（d34）。
+     */
+    @Test
+    void createProductWithCategoryCodeAsProductClassificationSuccess() {
+        BrandDO brand = BrandDO.builder().id(99L).brandCode("1111").status(CatalogEntityStatus.ACTIVE.getCode()).build();
+        ProductCategoryDO category = ProductCategoryDO.builder().id(1L).categoryCode("E2E_L1_20260903")
+                .status(CatalogEntityStatus.ACTIVE.getCode()).build();
+        when(brandMapper.selectByCode("1111")).thenReturn(brand);
+        when(categoryMapper.selectById(1L)).thenReturn(category);
+        when(categoryMapper.selectByCode("E2E_L1_20260903")).thenReturn(category);
+        when(productTypeValidationService.requireActiveForUpdate("EQUITY_PRODUCT"))
+                .thenReturn(ProductTypeDO.builder().typeCode("EQUITY_PRODUCT").build());
+        when(clock.now()).thenReturn(LocalDateTime.now());
+        when(generator.next(any())).thenReturn("SPU_CAT", "SKU_CAT");
+
+        ProductCatalogCommandService.SaveSkuLine line = new ProductCatalogCommandService.SaveSkuLine(
+                "SKU_1", "SKU名称", FulfillmentType.CARD_CODE_SECRET.code(), 100L, 100L, 100L, 1L, 10L,
+                CatalogEntityStatus.DRAFT.getCode());
+        ProductCatalogCommandService.SaveSpuCommand command = new ProductCatalogCommandService.SaveSpuCommand(
+                null, " 001", null, null, "1111", 1L, null,
+                SellableCategory.EQUITY.name(), "EQUITY_PRODUCT", "E2E_L1_20260903",
+                null, null, null, null, null, FulfillmentType.CARD_CODE_SECRET.code(), 1L, 10L,
+                CatalogEntityStatus.DRAFT.getCode(), List.of(line), 1L);
+
+        String result = service.createProduct(command);
+        assertThat(result).isEqualTo("SPU_CAT");
+        ArgumentCaptor<PlatformSpuDO> captor = ArgumentCaptor.forClass(PlatformSpuDO.class);
+        verify(spuMapper).insert(captor.capture());
+        assertThat(captor.getValue().getProductClassification()).isEqualTo("E2E_L1_20260903");
+        assertThat(captor.getValue().getPrimaryCategoryId()).isEqualTo(1L);
+    }
+
+    @Test
+    void createProductWithMismatchedClassificationCategoryThrowsCategoryNotFound() {
+        BrandDO brand = BrandDO.builder().id(99L).brandCode("1111").status(CatalogEntityStatus.ACTIVE.getCode()).build();
+        ProductCategoryDO primary = ProductCategoryDO.builder().id(1L).categoryCode("E2E_L1_20260903")
+                .status(CatalogEntityStatus.ACTIVE.getCode()).build();
+        ProductCategoryDO other = ProductCategoryDO.builder().id(2L).categoryCode("E2E_L2_20260903")
+                .status(CatalogEntityStatus.ACTIVE.getCode()).build();
+        when(brandMapper.selectByCode("1111")).thenReturn(brand);
+        when(categoryMapper.selectById(1L)).thenReturn(primary);
+        when(categoryMapper.selectByCode("E2E_L2_20260903")).thenReturn(other);
+        when(productTypeValidationService.requireActiveForUpdate("EQUITY_PRODUCT"))
+                .thenReturn(ProductTypeDO.builder().typeCode("EQUITY_PRODUCT").build());
+
+        ProductCatalogCommandService.SaveSkuLine line = new ProductCatalogCommandService.SaveSkuLine(
+                "SKU_1", "SKU名称", FulfillmentType.CARD_CODE_SECRET.code(), 100L, 100L, 100L, 1L, 10L,
+                CatalogEntityStatus.DRAFT.getCode());
+        ProductCatalogCommandService.SaveSpuCommand command = new ProductCatalogCommandService.SaveSpuCommand(
+                null, " 001", null, null, "1111", 1L, null,
+                SellableCategory.EQUITY.name(), "EQUITY_PRODUCT", "E2E_L2_20260903",
+                null, null, null, null, null, FulfillmentType.CARD_CODE_SECRET.code(), 1L, 10L,
+                CatalogEntityStatus.DRAFT.getCode(), List.of(line), 1L);
+
+        assertThatThrownBy(() -> service.createProduct(command))
+                .isInstanceOf(ServiceException.class)
+                .extracting(ex -> ((ServiceException) ex).getCode())
+                .isEqualTo(CATEGORY_NOT_FOUND.getCode());
     }
 
     /** 构造：SPU 下挂 keep 与 omitted 两个启用 SKU，更新请求只保留 keep。 */

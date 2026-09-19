@@ -35,7 +35,6 @@ import com.aifuli.module.supplychain.tradecore.catalog.domain.UnshelveMode;
 import com.aifuli.module.supplychain.tradecore.catalog.pricing.PricingDependencyChangedEvent;
 import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericPricingCalculator.PricingStatus;
 import com.aifuli.module.supplychain.tradecore.profile.domain.ClosedEnums;
-import com.aifuli.module.supplychain.tradecore.profile.domain.ProductClassification;
 import com.aifuli.module.supplychain.tradecore.profile.domain.SellableCategory;
 import com.aifuli.framework.common.exception.ServiceException;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
@@ -125,6 +124,7 @@ public class ProductCatalogCommandService {
     private final BrandAdminService brandAdminService;
     private final CategoryCommandService categoryCommandService;
     private final ProductTypeValidationService productTypeValidationService;
+    private final ProductClassificationValidationService productClassificationValidationService;
     private final ProductSellabilityService sellabilityService;
     private final ProductDeletionValidator deletionValidator;
     private final FulfillmentTargetSchemaRegistry targetSchemaRegistry;
@@ -345,8 +345,11 @@ public class ProductCatalogCommandService {
      */
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public String createProduct(SaveSpuCommand command) {
-        log.info("创建平台商品 spuCode={} spuName={} skuCount={} operatorId={}", command.spuCode(),
-                command.spuName(), command.skus() == null ? 0 : command.skus().size(), command.operatorId());
+        log.info("创建平台商品 spuCode={} spuName={} sellableCategory={} productType={} productClassification={} "
+                        + "skuCount={} operatorId={}",
+                command.spuCode(), command.spuName(), command.sellableCategory(), command.productType(),
+                command.productClassification(), command.skus() == null ? 0 : command.skus().size(),
+                command.operatorId());
         if (command.skus() == null || command.skus().isEmpty()) {
             throw exception(PRODUCT_SKU_REQUIRED);
         }
@@ -371,20 +374,22 @@ public class ProductCatalogCommandService {
     /**
      * SPU 校验与落库的唯一路径，由复合创建与存量兼容入口共享，确保动态商品类型准入、品牌与类目有效性、
      * 辅助类目、配送模式与限购区间在新旧接口上完全一致。
-     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#45-存量主数据接口治理m1masterdataadmincontroller}（d9）。
+     * {@code productClassification} 先认封闭枚举名，否则按类目树 {@code category_code} 解析并原样落库（d34）。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#45-存量主数据接口治理m1masterdataadmincontroller}（d9）、
+     * {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线}（d34）。
      */
     private PlatformSpuDO insertSpu(SaveSpuCommand command) {
         String spuCode = hasText(command.spuCode()) ? command.spuCode().trim()
                 : businessNoGenerator.next(BusinessNoPrefixes.SPU);
         CatalogEntityStatus spuStatus = writableStatus(command.status(), CatalogEntityStatus.ACTIVE);
         boolean activeRequired = spuStatus == CatalogEntityStatus.ACTIVE;
-        BrandDO brand = requireBrandById(command.brandId(), activeRequired);
+        BrandDO brand = resolveBrand(command.brandId(), command.brandCode(), activeRequired);
         ProductCategoryDO primary = requireCategoryById(command.primaryCategoryId(), activeRequired);
         List<Long> secondary = validateSecondaryCategories(command.secondaryCategoryIds(), activeRequired);
         String productType = productTypeValidationService.requireActiveForUpdate(command.productType()).getTypeCode();
         String sellable = ClosedEnums.parseRequired(SellableCategory.class, command.sellableCategory()).name();
-        String classification = ClosedEnums.parseRequired(ProductClassification.class,
-                command.productClassification()).name();
+        String classification = productClassificationValidationService.requireWritable(
+                command.productClassification(), activeRequired, primary == null ? null : primary.getId());
         String deliveryType = DeliveryType.parseOrDefault(command.deliveryType()).code();
         String fulfillmentType = hasText(command.fulfillmentType())
                 ? FulfillmentType.fromCode(command.fulfillmentType().trim()).code()
@@ -417,7 +422,7 @@ public class ProductCatalogCommandService {
         }
         PlatformSpuDO spu = requireSpuForUpdate(spuCode);
         CatalogEntityStatus spuStatus = writableStatus(command.status(), CatalogEntityStatus.fromCode(spu.getStatus()));
-        BrandDO brand = requireBrandById(command.brandId(), spuStatus == CatalogEntityStatus.ACTIVE);
+        BrandDO brand = resolveBrand(command.brandId(), command.brandCode(), spuStatus == CatalogEntityStatus.ACTIVE);
         ProductCategoryDO primary = requireCategoryById(command.primaryCategoryId(), spuStatus == CatalogEntityStatus.ACTIVE);
         String productType = productTypeValidationService.requireActiveForUpdate(command.productType()).getTypeCode();
         validateQuantity(command.minQuantity(), command.maxQuantity());
@@ -427,8 +432,9 @@ public class ProductCatalogCommandService {
                 spuStatus == CatalogEntityStatus.ACTIVE));
         spu.setSellableCategory(ClosedEnums.parseRequired(SellableCategory.class, command.sellableCategory()).name());
         spu.setProductType(productType);
-        spu.setProductClassification(ClosedEnums.parseRequired(ProductClassification.class,
-                command.productClassification()).name());
+        spu.setProductClassification(productClassificationValidationService.requireWritable(
+                command.productClassification(), spuStatus == CatalogEntityStatus.ACTIVE,
+                primary == null ? null : primary.getId()));
         spu.setSpuName(command.spuName().trim());
         spu.setSubtitle(command.subtitle());
         spu.setCoverUrl(command.coverUrl());
@@ -764,13 +770,38 @@ public class ProductCatalogCommandService {
         }
     }
 
-    private BrandDO requireBrandById(Long brandId, boolean activeRequired) {
-        BrandDO brand = brandId == null ? null : brandMapper.selectById(brandId);
+    /**
+     * 品牌标识双轨解析与容错。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#413-spusku-复合创建post-supply-chainproductsspus}（d33）。
+     *
+     * <p>解析规则：
+     * 1. 优先使用 {@code brandCode} 查询；
+     * 2. 其次使用 {@code brandId} 主键查询；
+     * 3. 若按 {@code brandId} 未查到，尝试将 {@code brandId} 作为业务编码容错查询（兼容前端将纯数字编码绑定至 ID）；
+     * 4. 查不到或状态无效（已归档/非启用）则抛出 {@link com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants#BRAND_NOT_FOUND}。
+     * </p>
+     */
+    private BrandDO resolveBrand(Long brandId, String brandCode, boolean activeRequired) {
+        BrandDO brand = null;
+        if (hasText(brandCode)) {
+            brand = brandMapper.selectByCode(brandCode.trim());
+        }
+        if (brand == null && brandId != null) {
+            brand = brandMapper.selectById(brandId);
+            if (brand == null) {
+                // 容错兜底：前端可能将全数字 brandCode（如 "1111"）填入 brandId
+                brand = brandMapper.selectByCode(String.valueOf(brandId));
+            }
+        }
         if (brand == null || brand.getStatus() == CatalogEntityStatus.ARCHIVED.getCode()
                 || (activeRequired && brand.getStatus() != CatalogEntityStatus.ACTIVE.getCode())) {
             throw exception(BRAND_NOT_FOUND);
         }
         return brand;
+    }
+
+    private BrandDO requireBrandById(Long brandId, boolean activeRequired) {
+        return resolveBrand(brandId, null, activeRequired);
     }
 
     private ProductCategoryDO requireCategoryById(Long categoryId, boolean activeRequired) {
@@ -1030,7 +1061,7 @@ public class ProductCatalogCommandService {
                                             String buyerSkuCode, Long operatorId) {
     }
 
-    public record SaveSpuCommand(String spuCode, String spuName, String subtitle, Long brandId,
+    public record SaveSpuCommand(String spuCode, String spuName, String subtitle, Long brandId, String brandCode,
                                  Long primaryCategoryId, List<Long> secondaryCategoryIds,
                                  String sellableCategory, String productType, String productClassification,
                                  String coverUrl, List<String> sliderImageUrls, String useInstruction,
@@ -1043,10 +1074,23 @@ public class ProductCatalogCommandService {
                              String coverUrl, List<String> sliderImageUrls, String useInstruction,
                              String description, String deliveryType, Long minQuantity, Long maxQuantity,
                              Short status, List<SaveSkuLine> skus, Long operatorId) {
-            this(spuCode, spuName, subtitle, brandId, primaryCategoryId, secondaryCategoryIds,
+            this(spuCode, spuName, subtitle, brandId, null, primaryCategoryId, secondaryCategoryIds,
                     sellableCategory, productType, productClassification, coverUrl, sliderImageUrls,
                     useInstruction, description, deliveryType,
                     (skus != null && !skus.isEmpty() && skus.get(0) != null ? skus.get(0).fulfillmentType() : null),
+                    minQuantity, maxQuantity, status, skus, operatorId);
+        }
+
+        public SaveSpuCommand(String spuCode, String spuName, String subtitle, Long brandId,
+                             Long primaryCategoryId, List<Long> secondaryCategoryIds,
+                             String sellableCategory, String productType, String productClassification,
+                             String coverUrl, List<String> sliderImageUrls, String useInstruction,
+                             String description, String deliveryType, String fulfillmentType,
+                             Long minQuantity, Long maxQuantity,
+                             Short status, List<SaveSkuLine> skus, Long operatorId) {
+            this(spuCode, spuName, subtitle, brandId, null, primaryCategoryId, secondaryCategoryIds,
+                    sellableCategory, productType, productClassification, coverUrl, sliderImageUrls,
+                    useInstruction, description, deliveryType, fulfillmentType,
                     minQuantity, maxQuantity, status, skus, operatorId);
         }
     }

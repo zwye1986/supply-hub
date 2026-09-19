@@ -58,6 +58,7 @@ public class ProductAdminController {
               "spuName": "爱奇艺黄金会员月卡",
               "subtitle": "官方直充，到账快",
               "brandId": 1,
+              "brandCode": "BRD_DEMO_001",
               "primaryCategoryId": 10,
               "secondaryCategoryIds": [11, 12],
               "sellableCategory": "EQUITY",
@@ -138,7 +139,7 @@ public class ProductAdminController {
             @RequestParam(required = false) String sellableCategory,
             @Parameter(description = "商品类型编码，取值来自商品类型表", example = "EQUITY_PRODUCT")
             @RequestParam(required = false) String productType,
-            @Parameter(description = "商品分类封闭枚举：ELECTRONICS、VIRTUAL_CARD、MOVIE_TICKET",
+            @Parameter(description = "商品分类供货命中码：字典枚举名或类目 categoryCode",
                     example = "VIRTUAL_CARD")
             @RequestParam(required = false) String productClassification,
             @Parameter(description = "SPU 状态：0草稿，10启用，20停用", example = "10")
@@ -298,6 +299,7 @@ public class ProductAdminController {
                     line.phoneBindLimitQuantity, line.status);
         }).toList();
         return new SaveSpuCommand(request.spuCode, request.spuName, request.subtitle, request.brandId,
+                request.brandCode,
                 request.primaryCategoryId, request.secondaryCategoryIds, request.sellableCategory,
                 request.productType, request.productClassification, request.coverUrl, request.sliderImageUrls,
                 request.useInstruction, request.description, request.deliveryType, spuFulfillmentType,
@@ -313,7 +315,9 @@ public class ProductAdminController {
         private String spuName;
         @Size(max = 256) @Schema(description = "副标题", example = "官方直充，到账快")
         private String subtitle;
-        @NotNull @Schema(description = "品牌内部主键", example = "1") private Long brandId;
+        @Schema(description = "品牌内部主键；与 brandCode 二选一", example = "1") private Long brandId;
+        @Size(max = 32) @Schema(description = "平台品牌永久编码；与 brandId 二选一", example = "BRD_DEMO_001")
+        private String brandCode;
         @NotNull
         @Schema(description = "商品分类内部主键；来源于 /supply-chain/categories 启用分类树，不是system数据字典",
                 example = "10")
@@ -325,7 +329,7 @@ public class ProductAdminController {
         @NotBlank @Size(max = 32) @Schema(description = "数据驱动商品类型编码", example = "EQUITY_PRODUCT")
         private String productType;
         @NotBlank @Size(max = 32)
-        @Schema(description = "供货匹配商品分类；system字典supply_chain_product_classification，不是商品分类树",
+        @Schema(description = "供货匹配商品分类：system字典supply_chain_product_classification枚举名，或/supply-chain/categories的categoryCode",
                 example = "VIRTUAL_CARD")
         private String productClassification;
         @Size(max = 512) @Schema(description = "封面图地址",
@@ -340,9 +344,8 @@ public class ProductAdminController {
         private String description;
         @Size(max = 32) @Schema(description = "配送模式；默认 VIRTUAL", example = "VIRTUAL")
         private String deliveryType;
-        @NotBlank
         @Size(max = 32)
-        @Schema(description = "履约类型：DIRECT_RECHARGE直充，VOUCHER_CODE券码，CARD_CODE_SECRET卡号卡密，VOUCHER_URL券链接，ACCOUNT_BOUND_BENEFIT账户绑定权益", example = "DIRECT_RECHARGE")
+        @Schema(description = "履约类型：DIRECT_RECHARGE直充，VOUCHER_CODE券码，CARD_CODE_SECRET卡号卡密，VOUCHER_URL券链接，ACCOUNT_BOUND_BENEFIT账户绑定权益；仅虚拟卡券类型必传，未传时由首个 SKU 推断", example = "DIRECT_RECHARGE")
         private String fulfillmentType;
         @Positive @Schema(description = "SPU默认单次最低起购量", example = "1") private Long minQuantity;
         @Positive @Schema(description = "SPU默认单次最高限购量", example = "10") private Long maxQuantity;
