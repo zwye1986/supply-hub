@@ -54,6 +54,8 @@ class ProductBatchStatusTest {
     private final BrandAdminService brandAdminService = mock(BrandAdminService.class);
     private final CategoryCommandService categoryCommandService = mock(CategoryCommandService.class);
     private final ProductTypeValidationService productTypeValidationService = mock(ProductTypeValidationService.class);
+    private final ProductClassificationValidationService productClassificationValidationService =
+            new ProductClassificationValidationService(categoryMapper);
     private final ProductSellabilityService sellabilityService = mock(ProductSellabilityService.class);
     private final ProductDeletionValidator deletionValidator = mock(ProductDeletionValidator.class);
     private final FulfillmentTargetSchemaRegistry targetSchemaRegistry = mock(FulfillmentTargetSchemaRegistry.class);
@@ -63,7 +65,7 @@ class ProductBatchStatusTest {
             clock, eventPublisher, brandMapper, categoryMapper, spuMapper, skuMapper, platformSkuPricingMapper,
             buyerMapper, buyerListingMapper,
             availabilityMapper, generator, brandAdminService, categoryCommandService,
-            productTypeValidationService, sellabilityService, deletionValidator, targetSchemaRegistry,
+            productTypeValidationService, productClassificationValidationService, sellabilityService, deletionValidator, targetSchemaRegistry,
             skuSchemaRegistry);
 
     @BeforeEach

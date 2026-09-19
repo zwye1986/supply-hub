@@ -43,8 +43,10 @@ class SupplyChainModuleArchitectureTest {
 
     /**
      * 供货命中、标品SKU池供应商过滤、分销商品列表展示禁止依赖 ProductCategoryMapper：
-     * 三码是彼此独立的封闭枚举，不应回退去走类目树祖先链。
-     * 设计见 {@code docs/superpowers/specs/2026-09-07-供应链管理端表单字典与标品标签设计.md#7-测试门禁}。
+     * 三码写入期由 {@code ProductClassificationValidationService} 解析类目编码；命中路径仍按字符串全等，
+     * 不得回退去走类目树祖先链。
+     * 设计见 {@code docs/superpowers/specs/2026-09-07-供应链管理端表单字典与标品标签设计.md#7-测试门禁}、
+     * {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线}（d34）。
      */
     static final ArchRule supply_matching_does_not_read_category_tree = noClasses()
             .that().haveSimpleName("SupplierCooperativeProductService")
