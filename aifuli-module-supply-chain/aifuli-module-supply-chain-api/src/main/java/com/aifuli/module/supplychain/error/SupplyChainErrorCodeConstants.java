@@ -142,6 +142,8 @@ public interface SupplyChainErrorCodeConstants {
             error(1_050_001_113, "商品履约方式已锁定，禁止修改");
     ErrorCode PRODUCT_SUGGESTED_PRICE_RULE_INVALID =
             error(1_050_001_114, "SKU销售建议价规则不合法");
+    ErrorCode FULFILLMENT_ASSET_SCOPE_DENIED =
+            error(1_050_001_115, "缺少独立授予的 FULFILLMENT_ASSET_READ 权限");
 
     /** 订单详情不可用只作为成功响应中的详情标记，不作为 CommonResult 失败码。 */
     String DETAIL_UNAVAILABLE = "DETAIL_UNAVAILABLE";
@@ -260,7 +262,8 @@ public interface SupplyChainErrorCodeConstants {
             entry(BRAND_LEGACY_API_DEPRECATED, RetryDirective.DO_NOT_RETRY),
             entry(CATEGORY_PRODUCT_TYPE_REQUIRED, RetryDirective.DO_NOT_RETRY),
             entry(PRODUCT_FULFILLMENT_TYPE_IMMUTABLE, RetryDirective.DO_NOT_RETRY),
-            entry(PRODUCT_SUGGESTED_PRICE_RULE_INVALID, RetryDirective.DO_NOT_RETRY));
+            entry(PRODUCT_SUGGESTED_PRICE_RULE_INVALID, RetryDirective.DO_NOT_RETRY),
+            entry(FULFILLMENT_ASSET_SCOPE_DENIED, RetryDirective.DO_NOT_RETRY));
 
     static RetryDirective retryDirective(int errorCode) {
         return RETRY_DIRECTIVES.getOrDefault(errorCode, RetryDirective.DO_NOT_RETRY);

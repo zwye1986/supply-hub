@@ -93,7 +93,7 @@ class InstoreProjectCashierRouteMigrationIntegrationTest {
         // updateRemaining 已应用到最新 038 个 changeSet，重跑不再新增。
         long changeSetCount = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM DATABASECHANGELOG", Long.class);
-        assertThat(changeSetCount).isEqualTo(38L);
+        assertThat(changeSetCount).isEqualTo(41L);
         updateRemaining(dataSource);
         assertThat(jdbc.queryForObject(
                 "SELECT COUNT(*) FROM DATABASECHANGELOG", Long.class)).isEqualTo(changeSetCount);

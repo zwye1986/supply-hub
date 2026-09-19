@@ -2,6 +2,7 @@ package com.aifuli.module.supplychain.api.fulfillment;
 
 import com.aifuli.module.supplychain.api.fulfillment.dto.AcceptFulfillmentReqDTO;
 import com.aifuli.module.supplychain.api.fulfillment.dto.FulfillmentAcceptanceReceiptRespDTO;
+import com.aifuli.module.supplychain.api.fulfillment.dto.FulfillmentAssetQueryReqDTO;
 import com.aifuli.module.supplychain.api.fulfillment.dto.FulfillmentTargetDTO;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -88,6 +89,23 @@ class BuyerFulfillmentContractTest {
 
         Set<ConstraintViolation<AcceptFulfillmentReqDTO>> violations = validator.validate(request);
         assertThat(violations).anyMatch(v -> v.getPropertyPath().toString().equals("target.values"));
+    }
+
+    @Test
+    void assetQueryRequiresScopeCode() {
+        FulfillmentAssetQueryReqDTO request = new FulfillmentAssetQueryReqDTO();
+        request.setSourceSystem("AIFULI_MALL");
+        request.setExternalTenantId("tenant-wusheng");
+        request.setFulfillmentRequestNo("FR_01K1XXXXXXXXXXXX");
+        request.setBuyerUserId("member-1024");
+
+        Set<String> properties = validator.validate(request).stream()
+                .map(v -> v.getPropertyPath().toString())
+                .collect(Collectors.toSet());
+        assertThat(properties).contains("scopeCode");
+
+        request.setScopeCode("FULFILLMENT_ASSET_READ");
+        assertThat(validator.validate(request)).isEmpty();
     }
 
     @Test

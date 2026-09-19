@@ -19,6 +19,7 @@ import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.CredentialSlotMa
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierConnectorMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierConnectorVersionMapper;
 import com.aifuli.module.supplychain.tradecore.supply.domain.ConnectorVersionStatus;
+import com.aifuli.module.supplychain.tradecore.supply.domain.CredentialSlotStatus;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -75,7 +76,7 @@ public class ConnectorValidationService {
         validateLimits(version);
 
         CredentialSlotDO slot = credentialSlotMapper.selectById(version.getCredentialSlotId());
-        if (slot == null || slot.getStatus() != 10 || credentialProviders.stream()
+        if (slot == null || slot.getStatus() != CredentialSlotStatus.ACTIVE.getCode() || credentialProviders.stream()
                 .filter(provider -> provider.supports(slot.getProviderType()))
                 .noneMatch(provider -> provider.isResolvable(slot))) {
             throw new IllegalStateException("Credential reference cannot be resolved");

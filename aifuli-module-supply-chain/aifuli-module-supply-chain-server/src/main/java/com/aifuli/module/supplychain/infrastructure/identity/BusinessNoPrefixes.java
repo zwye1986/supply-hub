@@ -83,11 +83,17 @@ public final class BusinessNoPrefixes {
     public static final String CAT = "CAT_";
     /** 平台商品类型永久业务编码。 */
     public static final String PT = "PT_";
+    /** 敏感数据访问审计稳定业务编号。 */
+    public static final String AUD = "AUD_";
+    /** 供应商调用审计稳定业务编号。 */
+    public static final String CL = "CL_";
+    /** 供应商原始状态观察稳定业务编号。 */
+    public static final String OBS = "OBS_";
 
     public static final Set<String> ALL = Set.of(
             LST, EVT, SC, FR, BO, FUN, RF, TMR,
             RCP, OP, FA, CASE, CRD, CON, CPR, INV, OFR,
             ACC, LED, REQ, RR, BILL, OUB, O2D, ORC, O2OP,
             IUB, IEC, ISC, IPF, IRC, IOP, ISO, SPL, SSA, SSL,
-            BYR, BPD, PRJ, PLT, SPU, SKU, BRD, CAT, PT);
+            BYR, BPD, PRJ, PLT, SPU, SKU, BRD, CAT, PT, AUD, CL, OBS);
 }
