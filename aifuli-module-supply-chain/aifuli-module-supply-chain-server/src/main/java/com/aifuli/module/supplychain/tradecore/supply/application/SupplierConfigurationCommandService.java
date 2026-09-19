@@ -20,6 +20,7 @@ import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierConnecto
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierConnectorVersionMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierMapper;
 import com.aifuli.module.supplychain.tradecore.supply.domain.ConnectorVersionStatus;
+import com.aifuli.module.supplychain.tradecore.supply.domain.CredentialSlotStatus;
 import com.aifuli.module.supplychain.tradecore.supply.domain.SupplierStatus;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -186,7 +187,7 @@ public class SupplierConfigurationCommandService {
 
     private CredentialSlotDO requireActiveSlot(String slotNo) {
         CredentialSlotDO slot = credentialSlotMapper.selectByNo(slotNo);
-        if (slot == null || slot.getStatus() != 10) {
+        if (slot == null || slot.getStatus() != CredentialSlotStatus.ACTIVE.getCode()) {
             throw new IllegalArgumentException("Active credential slot does not exist: " + slotNo);
         }
         return slot;

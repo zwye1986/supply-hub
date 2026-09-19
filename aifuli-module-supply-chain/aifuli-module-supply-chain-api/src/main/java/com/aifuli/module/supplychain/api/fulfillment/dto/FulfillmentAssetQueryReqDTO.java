@@ -33,4 +33,10 @@ public class FulfillmentAssetQueryReqDTO implements Serializable {
     @NotBlank(message = "采购商用户标识不能为空")
     @Size(max = 128)
     private String buyerUserId;
+
+    @Schema(description = "调用方声明的权限 Scope，必须为 FULFILLMENT_ASSET_READ",
+            requiredMode = Schema.RequiredMode.REQUIRED, example = "FULFILLMENT_ASSET_READ")
+    @NotBlank(message = "资产查询 Scope 不能为空")
+    @Size(max = 64)
+    private String scopeCode;
 }

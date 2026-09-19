@@ -53,12 +53,14 @@ public class PublishedConnectorConfigurationResolver {
         }
         return new PublishedConnectorConfiguration(connector.getConnectorNo(), version.getId(),
                 version.getVersionNo(), connector.getAdapterType(), version.getBaseUrl(),
-                version.getMerchantAccount(), version.getCredentialSlotId(), capabilities);
+                version.getMerchantAccount(), version.getCredentialSlotId(), version.getCallbackPath(),
+                capabilities);
     }
 
     public record PublishedConnectorConfiguration(String connectorNo, Long connectorVersionId,
                                                    int versionNo, String adapterType, String baseUrl,
                                                    String merchantAccount, Long credentialSlotId,
+                                                   String callbackPath,
                                                    Set<Capability> capabilities) {
         public PublishedConnectorConfiguration {
             capabilities = Set.copyOf(capabilities);

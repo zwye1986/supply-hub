@@ -39,6 +39,33 @@ class OrderSummaryPolicyTest {
     }
 
     @Test
+    void cardFulfillmentStatusMapping() {
+        OrderSummaryFact succeededFact = new OrderSummaryFact(
+                SupplyChainOrderTypes.ORDER_TYPE_CARD,
+                SupplyChainOrderTypes.DETAIL_TYPE_FULFILLMENT,
+                (short) 40, 1L, 1L, null);
+        OrderSummaryDecision succeeded = cardPolicy.decide(succeededFact);
+        assertThat(succeeded.orderStatus()).isEqualTo((short) 30);
+        assertThat(succeeded.businessStage()).isEqualTo(SupplyChainOrderTypes.STAGE_CARD_FULFILLED);
+
+        OrderSummaryFact failedFact = new OrderSummaryFact(
+                SupplyChainOrderTypes.ORDER_TYPE_CARD,
+                SupplyChainOrderTypes.DETAIL_TYPE_FULFILLMENT,
+                (short) 50, 1L, 0L, null);
+        OrderSummaryDecision failed = cardPolicy.decide(failedFact);
+        assertThat(failed.orderStatus()).isEqualTo((short) 40);
+        assertThat(failed.businessStage()).isEqualTo(SupplyChainOrderTypes.STAGE_CARD_FAILED);
+
+        OrderSummaryFact manualFact = new OrderSummaryFact(
+                SupplyChainOrderTypes.ORDER_TYPE_CARD,
+                SupplyChainOrderTypes.DETAIL_TYPE_FULFILLMENT,
+                (short) 90, 1L, 0L, null);
+        OrderSummaryDecision manual = cardPolicy.decide(manualFact);
+        assertThat(manual.orderStatus()).isEqualTo((short) 90);
+        assertThat(manual.businessStage()).isEqualTo(SupplyChainOrderTypes.STAGE_CARD_MANUAL);
+    }
+
+    @Test
     void cardPolicyRejectsNullOrWrongOrderType() {
         assertThatThrownBy(() -> cardPolicy.decide(null))
                 .isInstanceOf(IllegalArgumentException.class)

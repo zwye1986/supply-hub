@@ -78,7 +78,7 @@ class SupplyChainDatabaseLocalTimeMigrationIntegrationTest {
 
         // 022 不增表；023 新增开票 2 表；028 新增商品类型 1 表；035 新增通用定价 7 表。合计相对 021 多 10 张业务表。
         assertThat(businessTableCount(jdbc)).isEqualTo(businessTableCountBefore + 10);
-        assertThat(changeSetCount(jdbc)).isEqualTo(38L);
+        assertThat(changeSetCount(jdbc)).isEqualTo(41L);
         assertThat(jdbc.queryForObject("""
                 SELECT COUNT(*) FROM DATABASECHANGELOG WHERE ID = '022-database-local-time'
                 """, Long.class)).isEqualTo(1L);
@@ -96,7 +96,7 @@ class SupplyChainDatabaseLocalTimeMigrationIntegrationTest {
 
         updateRemaining(dataSource);
 
-        assertThat(changeSetCount(jdbc)).isEqualTo(38L);
+        assertThat(changeSetCount(jdbc)).isEqualTo(41L);
         assertThat(brandCreatedAt(jdbc)).isEqualTo(SHANGHAI_WALL_TIME);
     }
 

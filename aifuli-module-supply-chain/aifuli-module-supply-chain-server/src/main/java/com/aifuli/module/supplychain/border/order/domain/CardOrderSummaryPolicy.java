@@ -1,5 +1,6 @@
 package com.aifuli.module.supplychain.border.order.domain;
 
+import com.aifuli.module.supplychain.border.fulfillment.domain.FulfillmentRequestStatus;
 import org.springframework.stereotype.Component;
 
 /**
@@ -13,6 +14,9 @@ import org.springframework.stereotype.Component;
 public class CardOrderSummaryPolicy implements OrderSummaryPolicy {
 
     private static final short ORDER_STATUS_PROCESSING = 10;
+    private static final short ORDER_STATUS_SUCCEEDED = 30;
+    private static final short ORDER_STATUS_FAILED = 40;
+    private static final short ORDER_STATUS_MANUAL = 90;
     private static final short AFTERSALE_STATUS_NONE = 0;
 
     @Override
@@ -24,6 +28,17 @@ public class CardOrderSummaryPolicy implements OrderSummaryPolicy {
     public OrderSummaryDecision decide(OrderSummaryFact fact) {
         if (fact == null || !SupplyChainOrderTypes.ORDER_TYPE_CARD.equals(fact.orderType())) {
             throw new IllegalArgumentException("CardOrderSummaryPolicy requires CARD fact");
+        }
+        short fulfillmentStatus = fact.fulfillmentStatus();
+        if (fulfillmentStatus == FulfillmentRequestStatus.SUCCEEDED.getCode()) {
+            return new OrderSummaryDecision(ORDER_STATUS_SUCCEEDED, AFTERSALE_STATUS_NONE,
+                    SupplyChainOrderTypes.STAGE_CARD_FULFILLED);
+        } else if (fulfillmentStatus == FulfillmentRequestStatus.FAILED.getCode()) {
+            return new OrderSummaryDecision(ORDER_STATUS_FAILED, AFTERSALE_STATUS_NONE,
+                    SupplyChainOrderTypes.STAGE_CARD_FAILED);
+        } else if (fulfillmentStatus == FulfillmentRequestStatus.MANUAL.getCode()) {
+            return new OrderSummaryDecision(ORDER_STATUS_MANUAL, AFTERSALE_STATUS_NONE,
+                    SupplyChainOrderTypes.STAGE_CARD_MANUAL);
         }
         return new OrderSummaryDecision(ORDER_STATUS_PROCESSING, AFTERSALE_STATUS_NONE,
                 SupplyChainOrderTypes.STAGE_CARD_AWAITING_RESULT);

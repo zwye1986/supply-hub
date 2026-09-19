@@ -86,6 +86,23 @@ public class FundReservationService {
                                       String traceId, String causationId) {
         requireTrace(traceId);
         FundReservationDO reservation = requireReservationForUpdate(reservationNo);
+        return commitInternal(reservation, orderNo, traceId, causationId);
+    }
+
+    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
+    public ReservationSnapshot commitByReference(Long buyerId, String referenceType, String referenceNo,
+                                                 String orderNo, String traceId, String causationId) {
+        requireTrace(traceId);
+        FundReservationDO reservation = reservationMapper.selectByReferenceForUpdate(buyerId, referenceType, referenceNo);
+        if (reservation == null) {
+            throw new IllegalArgumentException("Fund reservation does not exist for reference: " + referenceType + ":" + referenceNo);
+        }
+        return commitInternal(reservation, orderNo, traceId, causationId);
+    }
+
+    private ReservationSnapshot commitInternal(FundReservationDO reservation, String orderNo,
+                                               String traceId, String causationId) {
+        String reservationNo = reservation.getReservationNo();
         if (reservation.getStatus() == COMMITTED) {
             return snapshot(reservation);
         }
@@ -117,6 +134,23 @@ public class FundReservationService {
                                        String traceId, String causationId) {
         requireTrace(traceId);
         FundReservationDO reservation = requireReservationForUpdate(reservationNo);
+        return releaseInternal(reservation, orderNo, traceId, causationId);
+    }
+
+    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
+    public ReservationSnapshot releaseByReference(Long buyerId, String referenceType, String referenceNo,
+                                                  String orderNo, String traceId, String causationId) {
+        requireTrace(traceId);
+        FundReservationDO reservation = reservationMapper.selectByReferenceForUpdate(buyerId, referenceType, referenceNo);
+        if (reservation == null) {
+            throw new IllegalArgumentException("Fund reservation does not exist for reference: " + referenceType + ":" + referenceNo);
+        }
+        return releaseInternal(reservation, orderNo, traceId, causationId);
+    }
+
+    private ReservationSnapshot releaseInternal(FundReservationDO reservation, String orderNo,
+                                                String traceId, String causationId) {
+        String reservationNo = reservation.getReservationNo();
         if (reservation.getStatus() == RELEASED) {
             return snapshot(reservation);
         }
@@ -162,6 +196,9 @@ public class FundReservationService {
 
     private FundReservationDO requireReservationForUpdate(String reservationNo) {
         FundReservationDO reservation = reservationMapper.selectByNoForUpdate(reservationNo);
+        if (reservation == null) {
+            reservation = reservationMapper.selectOneForUpdate(FundReservationDO::getReferenceNo, reservationNo);
+        }
         if (reservation == null) {
             throw new IllegalArgumentException("Fund reservation does not exist: " + reservationNo);
         }

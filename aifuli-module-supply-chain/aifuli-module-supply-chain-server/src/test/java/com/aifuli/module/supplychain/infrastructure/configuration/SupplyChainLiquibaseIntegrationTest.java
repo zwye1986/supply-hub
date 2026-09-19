@@ -1,5 +1,6 @@
 package com.aifuli.module.supplychain.infrastructure.configuration;
 
+import com.aifuli.module.supplychain.border.fulfillment.domain.FulfillmentAssetStatus;
 import com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -20,6 +21,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class SupplyChainLiquibaseIntegrationTest {
 
@@ -219,6 +221,65 @@ class SupplyChainLiquibaseIntegrationTest {
                           AND DATA_TYPE = 'datetime'
                           AND COLUMN_COMMENT NOT LIKE '%Asia/Shanghai%'
                         """)).isZero();
+            }
+        }
+    }
+
+    /**
+     * 040 将 {@code sc_fulfillment_asset.lifecycle_status} 与 {@link FulfillmentAssetStatus} 对齐，允许 50 已过期。
+     */
+    @Test
+    void fulfillmentAssetLifecycleStatusAllowsExpiredAndRejectsUnknown() throws Exception {
+        try (ConfigurableApplicationContext context = applicationContext()) {
+            DataSource dataSource = context.getBean("supplyChainDataSource", DataSource.class);
+            try (Connection connection = dataSource.getConnection()) {
+                List<String> comments = queryStrings(connection, """
+                        SELECT COLUMN_COMMENT
+                        FROM information_schema.COLUMNS
+                        WHERE TABLE_SCHEMA = DATABASE()
+                          AND TABLE_NAME = 'sc_fulfillment_asset'
+                          AND COLUMN_NAME = 'lifecycle_status'
+                        """);
+                assertThat(comments).hasSize(1);
+                assertThat(comments.get(0)).contains("50已过期");
+
+                List<String> checkClauses = queryStrings(connection, """
+                        SELECT CHECK_CLAUSE
+                        FROM information_schema.CHECK_CONSTRAINTS
+                        WHERE CONSTRAINT_SCHEMA = DATABASE()
+                          AND CONSTRAINT_NAME = 'ck_sc_fulfillment_asset_status'
+                        """);
+                assertThat(checkClauses).hasSize(1);
+                assertThat(checkClauses.get(0)).contains("50");
+
+                try (PreparedStatement insertExpired = connection.prepareStatement("""
+                        INSERT INTO sc_fulfillment_asset (
+                            asset_no, fulfillment_request_id, b_order_id, operation_id, supplier_id, buyer_id,
+                            buyer_user_id, sequence_no, unit_quantity, asset_type, encrypted_payload, masked_value,
+                            fingerprint, key_version, lifecycle_status, version, created_at, updated_at)
+                        VALUES ('FA_IT_EXPIRED_50', 1, 1, 1, 1, 1, 'it-user', 1, 1, 'VOUCHER_CODE', ?, '****',
+                            ?, '1', ?, 0, CURRENT_TIMESTAMP(3), CURRENT_TIMESTAMP(3))
+                        """)) {
+                    insertExpired.setBytes(1, new byte[]{1});
+                    insertExpired.setBytes(2, new byte[32]);
+                    insertExpired.setShort(3, FulfillmentAssetStatus.EXPIRED.getCode());
+                    assertThat(insertExpired.executeUpdate()).isEqualTo(1);
+                }
+
+                try (PreparedStatement insertInvalid = connection.prepareStatement("""
+                        INSERT INTO sc_fulfillment_asset (
+                            asset_no, fulfillment_request_id, b_order_id, operation_id, supplier_id, buyer_id,
+                            buyer_user_id, sequence_no, unit_quantity, asset_type, encrypted_payload, masked_value,
+                            fingerprint, key_version, lifecycle_status, version, created_at, updated_at)
+                        VALUES ('FA_IT_INVALID_60', 1, 1, 1, 1, 1, 'it-user', 2, 1, 'VOUCHER_CODE', ?, '****',
+                            ?, '1', 60, 0, CURRENT_TIMESTAMP(3), CURRENT_TIMESTAMP(3))
+                        """)) {
+                    insertInvalid.setBytes(1, new byte[]{2});
+                    byte[] fingerprint = new byte[32];
+                    fingerprint[0] = 2;
+                    insertInvalid.setBytes(2, fingerprint);
+                    assertThatThrownBy(insertInvalid::executeUpdate).isInstanceOf(SQLException.class);
+                }
             }
         }
     }
