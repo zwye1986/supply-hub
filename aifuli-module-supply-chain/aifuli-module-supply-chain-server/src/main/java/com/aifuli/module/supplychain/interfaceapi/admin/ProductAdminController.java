@@ -11,6 +11,8 @@ import com.aifuli.module.supplychain.tradecore.catalog.application.ProductCatalo
 import com.aifuli.module.supplychain.tradecore.catalog.application.ProductCatalogQueryService.SpuPageQuery;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.SuggestedSalePriceRule;
+import com.fasterxml.jackson.annotation.JsonAlias;
+import com.fasterxml.jackson.annotation.JsonFormat;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Content;
@@ -75,7 +77,14 @@ public class ProductAdminController {
               "fulfillmentType": "DIRECT_RECHARGE",
               "minQuantity": 1,
               "maxQuantity": 10,
-              "status": 10,
+              "status": "10",
+              "userLimitEnabled": true,
+              "userLimitPeriod": "MONTH",
+              "userLimitQuantity": 2,
+              "orderLimitEnabled": true,
+              "phoneBindLimitEnabled": true,
+              "phoneBindLimitPeriod": "DAY",
+              "phoneBindLimitQuantity": 1,
               "skus": [
                 {
                   "skuCode": "SKU_DEMO_001",
@@ -109,7 +118,7 @@ public class ProductAdminController {
                   "phoneBindLimitEnabled": true,
                   "phoneBindLimitPeriod": "DAY",
                   "phoneBindLimitQuantity": 1,
-                  "status": 10
+                  "status": "10"
                 }
               ]
             }
@@ -222,7 +231,7 @@ public class ProductAdminController {
                                     summary = "每个 SPU、SKU 与建议价规则字段均提供具体值",
                                     value = SPU_SAVE_REQUEST_EXAMPLE)))
             SpuSaveReqVO request) {
-        return success(commandService.createProduct(toCommand(request)));
+        return success(commandService.createProduct(toSaveCommand(request, getLoginUserId())));
     }
 
     @PutMapping("/spus/{spuCode}")
@@ -240,7 +249,7 @@ public class ProductAdminController {
                                     summary = "每个 SPU、SKU 与建议价规则字段均提供具体值",
                                     value = SPU_SAVE_REQUEST_EXAMPLE)))
             SpuSaveReqVO request) {
-        commandService.updateProduct(spuCode, toCommand(request));
+        commandService.updateProduct(spuCode, toSaveCommand(request, getLoginUserId()));
         return success(true);
     }
 
@@ -284,26 +293,59 @@ public class ProductAdminController {
         return success(true);
     }
 
-    private SaveSpuCommand toCommand(SpuSaveReqVO request) {
-        String spuFulfillmentType = request.fulfillmentType != null ? request.fulfillmentType.trim() : null;
-        List<SaveSkuLine> skus = request.skus.stream().map(line -> {
-            String skuFulfillment = (line.fulfillmentType != null && !line.fulfillmentType.isBlank())
-                    ? line.fulfillmentType.trim() : spuFulfillmentType;
-            return new SaveSkuLine(line.skuCode, line.skuName,
-                    line.mainImageUrl, line.detailImageUrls, line.description,
-                    skuFulfillment, line.faceValue, line.marketPrice, line.suggestedSalePrice,
-                    toSuggestedSalePriceRule(line.suggestedSalePriceRule),
-                    line.taxIncluded, line.taxRate, line.minQuantity, line.maxQuantity,
-                    line.userLimitEnabled, line.userLimitPeriod, line.userLimitQuantity,
-                    line.orderLimitEnabled, line.phoneBindLimitEnabled, line.phoneBindLimitPeriod,
-                    line.phoneBindLimitQuantity, line.status);
-        }).toList();
+    /**
+     * 把管理端复合保存请求转成领域命令：收下 SKU 图片别名，并把 SPU 根级限购下沉到未显式提交的 SKU。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线}（d35）。
+     */
+    static SaveSpuCommand toSaveCommand(SpuSaveReqVO request, Long operatorId) {
+        String spuFulfillmentType = trimToNull(request.fulfillmentType);
+        List<SaveSkuLine> skus = request.skus.stream()
+                .map(line -> toSkuLine(line, request, spuFulfillmentType))
+                .toList();
         return new SaveSpuCommand(request.spuCode, request.spuName, request.subtitle, request.brandId,
                 request.brandCode,
                 request.primaryCategoryId, request.secondaryCategoryIds, request.sellableCategory,
                 request.productType, request.productClassification, request.coverUrl, request.sliderImageUrls,
                 request.useInstruction, request.description, request.deliveryType, spuFulfillmentType,
-                request.minQuantity, request.maxQuantity, request.status, skus, getLoginUserId());
+                request.minQuantity, request.maxQuantity, request.status, skus, operatorId);
+    }
+
+    private static SaveSkuLine toSkuLine(SkuItemSaveReqVO line, SpuSaveReqVO request, String spuFulfillmentType) {
+        String skuFulfillment = hasText(line.fulfillmentType) ? line.fulfillmentType.trim() : spuFulfillmentType;
+        Boolean userLimitEnabled = firstNonNull(line.userLimitEnabled, request.userLimitEnabled);
+        String userLimitPeriod = firstText(line.userLimitPeriod, request.userLimitPeriod);
+        Long userLimitQuantity = firstNonNull(line.userLimitQuantity, request.userLimitQuantity);
+        Boolean orderLimitEnabled = firstNonNull(line.orderLimitEnabled, request.orderLimitEnabled);
+        Boolean phoneBindLimitEnabled = firstNonNull(line.phoneBindLimitEnabled, request.phoneBindLimitEnabled);
+        Long phoneBindLimitQuantity = firstNonNull(line.phoneBindLimitQuantity, request.phoneBindLimitQuantity);
+        String phoneBindLimitPeriod = firstText(line.phoneBindLimitPeriod, request.phoneBindLimitPeriod);
+        if (Boolean.TRUE.equals(phoneBindLimitEnabled) && !hasText(phoneBindLimitPeriod)) {
+            phoneBindLimitPeriod = userLimitPeriod;
+        }
+        return new SaveSkuLine(line.skuCode, line.skuName,
+                line.mainImageUrl, line.detailImageUrls, line.description,
+                skuFulfillment, line.faceValue, line.marketPrice, line.suggestedSalePrice,
+                toSuggestedSalePriceRule(line.suggestedSalePriceRule),
+                line.taxIncluded, line.taxRate, line.minQuantity, line.maxQuantity,
+                userLimitEnabled, userLimitPeriod, userLimitQuantity,
+                orderLimitEnabled, phoneBindLimitEnabled, phoneBindLimitPeriod,
+                phoneBindLimitQuantity, line.status);
+    }
+
+    private static boolean hasText(String value) {
+        return value != null && !value.isBlank();
+    }
+
+    private static String trimToNull(String value) {
+        return hasText(value) ? value.trim() : null;
+    }
+
+    private static String firstText(String preferred, String fallback) {
+        return hasText(preferred) ? preferred.trim() : trimToNull(fallback);
+    }
+
+    private static <T> T firstNonNull(T preferred, T fallback) {
+        return preferred != null ? preferred : fallback;
     }
 
     @Data
@@ -349,10 +391,30 @@ public class ProductAdminController {
         private String fulfillmentType;
         @Positive @Schema(description = "SPU默认单次最低起购量", example = "1") private Long minQuantity;
         @Positive @Schema(description = "SPU默认单次最高限购量", example = "10") private Long maxQuantity;
-        @Schema(description = "状态：0草稿，10启用，20停用；默认10", example = "10") private Short status;
+        @JsonFormat(shape = JsonFormat.Shape.STRING)
+        @Schema(description = "状态：0草稿，10启用，20停用；默认10；字典值以字符串返回", type = "string", example = "10")
+        private Short status;
+        @Schema(description = "是否启用每人限购：1启用，0停用", example = "true")
+        private Boolean userLimitEnabled;
+        @Size(max = 16)
+        @Schema(description = "每人限购周期：LIFETIME终身，YEAR每年，MONTH每月，WEEK每周，DAY每天",
+                example = "MONTH")
+        private String userLimitPeriod;
+        @Positive @Schema(description = "每人每周期最多购买数量", example = "2")
+        private Long userLimitQuantity;
+        @Schema(description = "是否启用每订单限购：1启用，0停用", example = "true")
+        private Boolean orderLimitEnabled;
+        @Schema(description = "是否启用绑定手机号限购：1启用，0停用", example = "true")
+        private Boolean phoneBindLimitEnabled;
+        @Size(max = 16)
+        @Schema(description = "绑定手机号限购周期：LIFETIME终身，YEAR每年，MONTH每月，WEEK每周，DAY每天",
+                example = "DAY")
+        private String phoneBindLimitPeriod;
+        @Positive @Schema(description = "同一履约手机号每周期最多购买数量", example = "1")
+        private Long phoneBindLimitQuantity;
         @Valid @NotEmpty
         @Schema(description = "至少一个 SKU",
-                example = "[{\"skuCode\":\"SKU_DEMO_001\",\"skuName\":\"爱奇艺黄金会员月卡\",\"mainImageUrl\":\"https://cdn.example.com/products/iqiyi-month-main.png\",\"detailImageUrls\":[\"https://cdn.example.com/products/iqiyi-month-detail-1.png\"],\"description\":\"爱奇艺黄金会员直充月卡\",\"fulfillmentType\":\"DIRECT_RECHARGE\",\"faceValue\":10000,\"marketPrice\":12000,\"suggestedSalePrice\":6100,\"suggestedSalePriceRule\":{\"mode\":\"CUSTOM\",\"base\":\"MARKET_PRICE\",\"percentage\":50,\"operator\":\"ADD\",\"operand\":1.00,\"fixedPriceCents\":6100},\"taxIncluded\":true,\"taxRate\":0.0600,\"minQuantity\":1,\"maxQuantity\":10,\"userLimitEnabled\":true,\"userLimitPeriod\":\"MONTH\",\"userLimitQuantity\":2,\"orderLimitEnabled\":true,\"phoneBindLimitEnabled\":true,\"phoneBindLimitPeriod\":\"DAY\",\"phoneBindLimitQuantity\":1,\"status\":10}]")
+                example = "[{\"skuCode\":\"SKU_DEMO_001\",\"skuName\":\"爱奇艺黄金会员月卡\",\"mainImageUrl\":\"https://cdn.example.com/products/iqiyi-month-main.png\",\"detailImageUrls\":[\"https://cdn.example.com/products/iqiyi-month-detail-1.png\"],\"description\":\"爱奇艺黄金会员直充月卡\",\"fulfillmentType\":\"DIRECT_RECHARGE\",\"faceValue\":10000,\"marketPrice\":12000,\"suggestedSalePrice\":6100,\"suggestedSalePriceRule\":{\"mode\":\"CUSTOM\",\"base\":\"MARKET_PRICE\",\"percentage\":50,\"operator\":\"ADD\",\"operand\":1.00,\"fixedPriceCents\":6100},\"taxIncluded\":true,\"taxRate\":0.0600,\"minQuantity\":1,\"maxQuantity\":10,\"userLimitEnabled\":true,\"userLimitPeriod\":\"MONTH\",\"userLimitQuantity\":2,\"orderLimitEnabled\":true,\"phoneBindLimitEnabled\":true,\"phoneBindLimitPeriod\":\"DAY\",\"phoneBindLimitQuantity\":1,\"status\":\"10\"}]")
         private List<SkuItemSaveReqVO> skus;
     }
 
@@ -365,9 +427,11 @@ public class ProductAdminController {
         private String skuName;
         @Size(max = 512) @Schema(description = "SKU主图地址",
                 example = "https://cdn.example.com/products/iqiyi-month-main.png")
+        @JsonAlias("picUrl")
         private String mainImageUrl;
         @Schema(description = "SKU详情图地址列表(JSON数组)",
                 example = "[\"https://cdn.example.com/products/iqiyi-month-detail-1.png\",\"https://cdn.example.com/products/iqiyi-month-detail-2.png\"]")
+        @JsonAlias("detailPics")
         private List<@NotBlank @Size(max = 512) String> detailImageUrls;
         @Size(max = 200) @Schema(description = "SKU商品描述", example = "爱奇艺黄金会员直充月卡")
         private String description;
@@ -409,7 +473,9 @@ public class ProductAdminController {
         private String phoneBindLimitPeriod;
         @Positive @Schema(description = "同一履约手机号每周期最多购买数量", example = "1")
         private Long phoneBindLimitQuantity;
-        @Schema(description = "SKU 状态；默认继承 SPU", example = "10") private Short status;
+        @JsonFormat(shape = JsonFormat.Shape.STRING)
+        @Schema(description = "SKU 状态；默认继承 SPU；字典值以字符串返回", type = "string", example = "10")
+        private Short status;
     }
 
     @Data
@@ -460,7 +526,9 @@ public class ProductAdminController {
         @Schema(description = "选中的平台 SKU 编码列表")
         private List<String> skuCodes;
         @NotNull(message = "目标状态不能为空")
-        @Schema(description = "目标状态：10上架，20下架", requiredMode = Schema.RequiredMode.REQUIRED, example = "10")
+        @JsonFormat(shape = JsonFormat.Shape.STRING)
+        @Schema(description = "目标状态：10上架，20下架；字典值以字符串传递", type = "string",
+                requiredMode = Schema.RequiredMode.REQUIRED, example = "10")
         private Short targetStatus;
         @Schema(description = "下架方式：MANUAL_UNSHELVE手动下架，SYSTEM_UNSHELVE系统下架；下架时可选，缺省为 MANUAL_UNSHELVE", example = "MANUAL_UNSHELVE")
         private String unshelveMode;

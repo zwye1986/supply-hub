@@ -42,6 +42,8 @@
 | **d32** | **SPU 复合保存 Swagger 示例完整性** | `POST /supply-chain/products/spus` 与 `PUT /supply-chain/products/spus/{spuCode}` 共用的 `SpuSaveReqVO`、`SkuItemSaveReqVO`、`SuggestedSalePriceRuleReqVO` 中，每个请求字段必须声明具体且非空的 OpenAPI `example`。列表使用至少一个元素，对象使用可解析的非空 JSON；金额统一使用 CNY 分，CUSTOM 示例的市场价、百分比、运算符、运算数和物化建议价必须可以相互校验。两个端点还必须显式声明同一份完整 `ExampleObject` 请求体，规避 swagger-core 将嵌套对象转换为 `$ref` 后丢失字段级对象示例。即使字段可选或仅适用于特定模式，也必须提供独立字段示例，禁止 Swagger UI 回落为空字符串、空数组或无意义默认值。 | 让联调方可直接从 Swagger 获取完整可用的请求参数示例，避免可选字段因示例缺失被误解 |
 | **d33** | **品牌管理端投影补齐主键与 SPU 复合保存支持品牌编码/ID 双轨解析容错** | 1. 品牌管理端响应模型 `BrandView` 补充内部主键 `id`（`Long`），与 `CategoryNode` 保持一致，支撑前端下拉选择组件获取并绑定真实主键。<br>2. SPU 复合保存模型 `SpuSaveReqVO` 支持 `brandId`（Long）与 `brandCode`（String）双轨入参，二选一即可。服务端按优先级解析品牌：传入 `brandCode` 时按业务编码匹配；传入 `brandId` 时先按主键匹配，查不到时自动将纯数字 ID 尝试按 `brand_code` 容错匹配（解决前端将纯数字编码绑定至 ID 导致的误报）；均匹配不到时抛出 `BRAND_NOT_FOUND`（1050001077）。<br>3. SPU 详情 `SpuDetail` 补齐 `brandCode` 字段回显，彻底打通品牌展示、选择与保存回显闭环。 | 解决前端品牌选择后提交报“商品品牌不存在”的契约缺陷与容错缺失 |
 | **d34** | **SPU/供货范围 productClassification 接受类目树编码** | 管理端把 `sc_product_category.category_code`（如 `E2E_L1_20260903`）写入 `productClassification` 是合法契约，不得再抛 `ENUM_NOT_OPEN`。写入解析：先认 `ProductClassification` 三枚举名（存量兼容）；否则按类目编码查启用/未归档分类，命中则把该类目编码原样写入 `sc_platform_spu.product_classification` 与 `sc_supplier_supply_scope.product_classification`。若同时传 `primaryCategoryId`，必须与该类目为同一行，否则 `CATEGORY_NOT_FOUND`。未知码同样 `CATEGORY_NOT_FOUND`。供货命中仍是三码字符串全等，不回读类目树。`040` 变更集删除 `ck_sc_spu_product_classification` 与 `ck_sc_supplier_scope_product_classification`，禁止回改 `024`。 | 消除前端类目下拉与供货三码字段混用时被三枚举误拒 |
+| **d35** | **复合保存兼容 SKU 图片别名与 SPU 根级限购下沉** | 管理端商品表单会把 SKU 主图、详情图写成 `picUrl`、`detailPics`，并把每人/绑定手机号限购放在 SPU 根级。`SkuItemSaveReqVO` 必须用 `@JsonAlias` 收下这两个别名并写入 `sc_platform_sku.main_image_url` / `detail_image_urls`。`SpuSaveReqVO` 根级限购字段在 SKU 未显式提交时继承到每个 SKU；SKU 已提交的字段优先。绑定手机号限购开启且未传周期时继承每人限购周期，以满足 `ck_sc_sku_phone_bind_limit`。限购仍只落在 SKU 表，不新增 SPU 限购列。详情 `SpuDetail` 按 SKU 完整回显入库字段，并额外投影首个 SKU 的限购到 SPU 根级；`SkuDetail` 在保留 `mainImageUrl`/`detailImageUrls` 的同时必须再序列化同值别名 `picUrl`/`detailPics`，保证编辑表单可按提交结构回填。只回主字段会导致表单图片为空，下一次全量保存把已入库图片写成 NULL。 | 避免前端别名字段与根级限购被 Jackson 静默丢弃，造成创建成功但详情缺图、缺限购 |
+| **d36** | **商品管理数据字典 JSON 一律字符串** | 商品管理请求与响应中，所有对应 system 数据字典的字段值必须以 JSON 字符串返回和接收，与字典 `value`（如 `supply_chain_sku_status` 的 `"0"`/`"10"`/`"20"`）对齐。当前主要缺口是 `status` / `targetStatus` 被序列化成数字。Java 存储与数据库列保持 `SMALLINT`/`Short`，仅在管理端 VO/投影上使用 `@JsonFormat(shape = STRING)` 并将 OpenAPI `type` 声明为 `string`。已是字符串的字典码（履约方式、配送模式、限购周期、建议价模式/运算符、可售品类等）保持不变。 | 前端字典组件按字符串匹配选项，数字 `0` 无法命中字典值 `"0"` |
 
 ---
 
@@ -499,8 +501,9 @@ PRD 8.4.1 的列表 Tab 支持从 `GET /supply-chain/product-types` 动态拉取
 #### 4.1.2 SPU 详情查询：`GET /supply-chain/products/spus/{spuCode}`
 * **权限**：使用 `SupplyChainAdminPermissions.PRODUCT_QUERY_EXPRESSION`。
 * **响应**：`CommonResult<SpuDetailVO>`
-  * SPU 完整信息：编码、名称、副标题、品牌内部主键（`brandId`）、品牌业务编码（`brandCode`）、品牌名称（`brandName`）、主分类、辅助分类列表、三码、封面图、轮播图列表、图文详情、配送模式、履约方式（`fulfillmentType` 与 `fulfillmentTypeDisplay`）、起购/限购、状态。
-  * `skus: List<SkuDetailVO>`：挂载的每个 SKU 详情（编码、名称、履约模式、面值、市场价、销售建议价、起购/限购、有效可售状态、schema 配置等）。
+  * SPU 完整信息：编码、名称、副标题、品牌内部主键（`brandId`）、品牌业务编码（`brandCode`）、品牌名称（`brandName`）、主分类、辅助分类列表、三码、封面图、轮播图列表、图文详情、配送模式、履约方式（`fulfillmentType` 与 `fulfillmentTypeDisplay`）、起购/限购、状态、以及从首个 SKU 投影的每人/每订单/绑定手机号限购（d35）。
+  * `status` 等数据字典码 JSON 必须是字符串（d36），例如草稿 `"0"`、启用 `"10"`、停用 `"20"`。
+  * `skus: List<SkuDetailVO>`：挂载的每个 SKU 详情（编码、名称、主图、详情图、描述、履约模式、面值、市场价、销售建议价与规则、税务展示、起购/限购、每人/每订单/绑定手机号限购、有效可售状态、只读 schema 配置等）。SKU `status` 同样返回字符串。主图/详情图除 `mainImageUrl`/`detailImageUrls` 外，必须再输出同值别名 `picUrl`/`detailPics`（d35），供管理端编辑表单按提交字段回填。
 
 #### 4.1.3 SPU+SKU 复合创建：`POST /supply-chain/products/spus`
 * **权限**：使用 `SupplyChainAdminPermissions.PRODUCT_CREATE_EXPRESSION`。
@@ -530,12 +533,13 @@ PRD 8.4.1 的列表 Tab 支持从 `GET /supply-chain/product-types` 动态拉取
   * `deliveryType` (String, 默认 `VIRTUAL`)
   * `minQuantity` (Long, 默认 1)
   * `maxQuantity` (Long, 默认 9999999)
-  * `status` (Short, 默认 10)
+  * `status` (JSON 字符串，默认 `"10"`)：`"0"` 草稿、`"10"` 启用、`"20"` 停用；库内仍为 Short
+  * `userLimitEnabled` / `userLimitPeriod` / `userLimitQuantity` / `orderLimitEnabled` / `phoneBindLimitEnabled` / `phoneBindLimitPeriod` / `phoneBindLimitQuantity`（可选）：SPU 根级限购。SKU 未显式提交对应字段时继承到每个 SKU；绑定手机号限购开启且未传周期时继承 `userLimitPeriod`（d35）
   * `skus` (List<SkuItemSaveReqVO>, 必填且非空):
     * `skuCode` (String, 可选，系统自动生成 `SKU_`+ULID)
     * `skuName` (String, 必填)
-    * `mainImageUrl` (String, 可选，长度 ≤512)：SKU 主图地址
-    * `detailImageUrls` (List<String>, 可选)：SKU 详情图地址列表，单项长度 ≤512
+    * `mainImageUrl` (String, 可选，长度 ≤512)：SKU 主图地址；兼容别名 `picUrl`
+    * `detailImageUrls` (List<String>, 可选)：SKU 详情图地址列表，单项长度 ≤512；兼容别名 `detailPics`
     * `description` (String, 可选，长度 ≤200)：SKU 商品描述
     * `fulfillmentType` (String, 可选/废弃，统一由 SPU 决定并继承；若传值则强校验必须与 SPU 一致)
     * `faceValue` (Long, 必填，单位分)
@@ -549,7 +553,7 @@ PRD 8.4.1 的列表 Tab 支持从 `GET /supply-chain/product-types` 动态拉取
     * `taxRate` (BigDecimal, 可选): 税率，取值 `[0, 1]`；仅记录展示，不参与价格计算。
     * `minQuantity` (Long, 默认 1)
     * `maxQuantity` (Long, 默认 9999999)
-    * `status` (Short, 默认与 SPU 保持一致)
+    * `status` (JSON 字符串，默认继承 SPU)：`"0"`/`"10"`/`"20"`
   * 目标与结果 Schema 不属于前端请求契约。应用层按 SPU 级 `fulfillmentType` 从 `PlatformSkuSchemaRegistry` 获取并写入 SKU；当前映射版本均为 1。查询详情可返回这些字段，但前端只能只读展示，不得回传决定其取值。
 * **响应**：`CommonResult<String>`（返回生成的 `spuCode`）
 
@@ -609,7 +613,7 @@ PRD 8.4.1 的列表 Tab 支持从 `GET /supply-chain/product-types` 动态拉取
     * `productTypeName` (String): 商品类型中文名称
     * `primaryCategoryName` (String): 商品分类中文名称
     * `brandName` (String): 品牌中文名称
-    * `status` (Short): SPU 状态（0草稿，10已上架，20已下架）
+    * `status` (String): SPU 状态字典值（`"0"`草稿，`"10"`已上架，`"20"`已下架）
     * `unshelveMode` (String): 下架方式（已下架时回显）
     * `updatedAt` (LocalDateTime): SPU 最后更新时间
     * `skus` (List<ProductManagementSkuItem>): 挂载的未归档多 SKU 聚合明细
@@ -626,7 +630,7 @@ PRD 8.4.1 的列表 Tab 支持从 `GET /supply-chain/product-types` 动态拉取
     * `suppliers` (List<SupplierSimpleItem>): 供应商列表（编码与名称，支撑多供应商换行展示）
     * `totalInventory` (Long): 总库存（来源库存事实快照，无库存管理默认0）
     * `fulfillmentType` (String): 兑换方式编码与名称
-    * `status` (Short): SKU 状态（0草稿，10已上架，20已下架）
+    * `status` (String): SKU 状态字典值（`"0"`草稿，`"10"`已上架，`"20"`已下架；字典 `supply_chain_sku_status`）
 
 SKU 级条件 `status`、`fulfillmentType`、`marketPriceMin`、`marketPriceMax` 必须同时用于候选 SPU
 预过滤和返回 SKU 明细过滤。一个 SPU 只要存在至少一个符合全部 SKU 级条件的未归档 SKU 即可进入分页；响应中
@@ -802,6 +806,7 @@ system-server 通过追加变更集 `007-product-type-and-category-status-dictio
   - 商品类型状态仅支持 `10`（启用）与 `20`（禁用），归档状态 `90` 仅作为内部逻辑删除标识，严禁作为业务选项字典暴露；彻底纠偏历史注释中误写「0草稿」的笔误。
   - 商品分类状态支持 `0`（草稿）、`10`（启用）与 `20`（禁用）。
   - OpenAPI/Swagger 参数描述与模型 DTO 字段必须统一补充对应字典标识 `supply_chain_product_type_status` 与 `supply_chain_category_status`。
+  - 商品管理接口返回给前端的字典码必须是 JSON 字符串，不得把 `0`/`10`/`20` 序列化成数字；请求体同样接受字符串。库内列类型不变（d36）。
 
 system-server 通过追加变更集 `008-sku-purchase-limit-period-dictionary` 写入限购周期数据字典：
 
@@ -863,3 +868,6 @@ system-server 通过追加变更集 `011-suggested-sale-price-operator-dictionar
 11. `ProductCenterContractTest` 必须反射检查 `SpuSaveReqVO`、`SkuItemSaveReqVO`、
     `SuggestedSalePriceRuleReqVO` 的每个声明字段均具有非空 `@Schema.example`；列表和对象示例必须是非空 JSON，
     CUSTOM 组合示例的 `suggestedSalePrice` 必须与服务端计算结果一致。
+12. `ProductCenterContractTest` 必须覆盖：前端 `picUrl`/`detailPics` 与 SPU 根级限购能映射进 `SaveSkuLine`；
+    详情 `SkuDetail` JSON 同时包含 `mainImageUrl`/`detailImageUrls` 与同值别名 `picUrl`/`detailPics`；
+    商品管理 `status` JSON 为字符串且 OpenAPI type 为 `string`。

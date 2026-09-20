@@ -220,6 +220,18 @@ class ProductCenterIntegrationTest {
             assertThat(priceVersionMapper.selectById(priceVersion.getId()).getUnitPriceCents()).isEqualTo(8_800L);
 
             ProductCatalogQueryService.SpuDetail created = queryService.detail(spuCode);
+            assertThat(created.userLimitEnabled()).isTrue();
+            assertThat(created.userLimitPeriod()).isEqualTo("MONTH");
+            assertThat(created.userLimitQuantity()).isEqualTo(2L);
+            assertThat(created.orderLimitEnabled()).isTrue();
+            assertThat(created.phoneBindLimitEnabled()).isTrue();
+            assertThat(created.phoneBindLimitPeriod()).isEqualTo("DAY");
+            assertThat(created.phoneBindLimitQuantity()).isEqualTo(2L);
+            JsonNode createdJson = objectMapper.valueToTree(created);
+            assertThat(createdJson.get("status").isTextual()).isTrue();
+            assertThat(createdJson.get("status").asText())
+                    .isEqualTo(String.valueOf(CatalogEntityStatus.ACTIVE.getCode()));
+            assertThat(createdJson.get("skus").get(0).get("status").isTextual()).isTrue();
             assertThat(created.skus()).singleElement().satisfies(sku -> {
                 assertThat(sku.skuCode()).isEqualTo("PC_SKU_100");
                 assertThat(sku.mainImageUrl()).isEqualTo("https://example.com/sku-main.png");

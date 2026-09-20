@@ -1,6 +1,7 @@
 package com.aifuli.module.supplychain.interfaceapi.admin;
 
 import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
+import com.fasterxml.jackson.annotation.JsonFormat;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.NotNull;
@@ -23,7 +24,9 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
 public class CatalogStatusSwitchReqVO {
 
     @NotNull
-    @Schema(description = "目标状态：10启用，20停用", requiredMode = Schema.RequiredMode.REQUIRED,
+    @JsonFormat(shape = JsonFormat.Shape.STRING)
+    @Schema(description = "目标状态：10启用，20停用；字典值以字符串传递", type = "string",
+            requiredMode = Schema.RequiredMode.REQUIRED,
             allowableValues = {"10", "20"}, example = "10")
     private Short targetStatus;
 
