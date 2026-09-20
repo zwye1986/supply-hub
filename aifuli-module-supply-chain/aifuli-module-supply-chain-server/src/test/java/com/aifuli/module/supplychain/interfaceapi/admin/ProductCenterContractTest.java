@@ -4,6 +4,7 @@ import com.aifuli.framework.common.exception.ServiceException;
 import com.aifuli.module.supplychain.interfaceapi.admin.pricing.GenericPricingAdminVos;
 import com.aifuli.module.supplychain.tradecore.catalog.application.BrandAdminService.BrandView;
 import com.aifuli.module.supplychain.tradecore.catalog.application.ProductCatalogCommandService;
+import com.aifuli.module.supplychain.tradecore.catalog.application.ProductCatalogQueryService;
 import com.aifuli.module.supplychain.tradecore.catalog.application.ProductCatalogQueryService.SkuDetail;
 import com.aifuli.module.supplychain.tradecore.catalog.application.ProductCatalogQueryService.SpuDetail;
 import com.aifuli.module.supplychain.tradecore.catalog.application.ProductCatalogQueryService.SpuListItem;
@@ -30,6 +31,7 @@ import org.springframework.web.bind.annotation.PutMapping;
 import java.lang.reflect.Method;
 import java.util.Arrays;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -177,6 +179,143 @@ class ProductCenterContractTest {
         assertThat(ProductAdminController.SpuSaveReqVO.class.getDeclaredField("productClassification")
                 .getAnnotation(Schema.class).description())
                 .contains("supply_chain_product_classification", "categoryCode");
+    }
+
+    /**
+     * 管理端商品表单会把 SKU 主图/详情图写成 picUrl、detailPics；复合保存必须收下这些别名，
+     * 才能把请求里的展示资料完整落入 main_image_url / detail_image_urls。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线}（d35）。
+     */
+    @Test
+    void createRequestAcceptsSkuImageAliasesAndSpuLevelLimits() throws Exception {
+        ProductAdminController.SpuSaveReqVO request = new ObjectMapper().readValue("""
+                {
+                  "spuName":"测试777",
+                  "productType":"MOVIE",
+                  "primaryCategoryId":3,
+                  "productClassification":"E2E_L3_20260903",
+                  "sellableCategory":"EQUITY",
+                  "deliveryType":"VIRTUAL",
+                  "status":"0",
+                  "fulfillmentType":"DIRECT_RECHARGE",
+                  "userLimitEnabled":true,
+                  "userLimitPeriod":"DAY",
+                  "userLimitQuantity":1,
+                  "phoneBindLimitEnabled":true,
+                  "phoneBindLimitQuantity":1,
+                  "skus":[{
+                    "skuCode":"",
+                    "skuName":"测试名称",
+                    "picUrl":"https://cdn.example.com/main.png",
+                    "detailPics":["https://cdn.example.com/detail.png"],
+                    "description":"SKU商品描述",
+                    "marketPrice":9700,
+                    "faceValue":10000,
+                    "suggestedSalePriceRule":{
+                      "mode":"CUSTOM",
+                      "base":"MARKET_PRICE",
+                      "percentage":100,
+                      "operator":"ADD",
+                      "operand":8
+                    }
+                  }],
+                  "brandCode":"1111"
+                }
+                """, ProductAdminController.SpuSaveReqVO.class);
+
+        assertThat(request.getStatus()).isEqualTo((short) 0);
+        assertThat(request.getUserLimitEnabled()).isTrue();
+        assertThat(request.getUserLimitPeriod()).isEqualTo("DAY");
+        assertThat(request.getUserLimitQuantity()).isEqualTo(1L);
+        assertThat(request.getPhoneBindLimitEnabled()).isTrue();
+        assertThat(request.getPhoneBindLimitQuantity()).isEqualTo(1L);
+        assertThat(request.getSkus()).singleElement().satisfies(sku -> {
+            assertThat(sku.getMainImageUrl()).isEqualTo("https://cdn.example.com/main.png");
+            assertThat(sku.getDetailImageUrls()).containsExactly("https://cdn.example.com/detail.png");
+            assertThat(sku.getDescription()).isEqualTo("SKU商品描述");
+        });
+
+        ProductCatalogCommandService.SaveSpuCommand command =
+                ProductAdminController.toSaveCommand(request, 1L);
+        assertThat(command.status()).isEqualTo((short) 0);
+        assertThat(command.skus()).singleElement().satisfies(sku -> {
+            assertThat(sku.mainImageUrl()).isEqualTo("https://cdn.example.com/main.png");
+            assertThat(sku.detailImageUrls()).containsExactly("https://cdn.example.com/detail.png");
+            assertThat(sku.description()).isEqualTo("SKU商品描述");
+            assertThat(sku.userLimitEnabled()).isTrue();
+            assertThat(sku.userLimitPeriod()).isEqualTo("DAY");
+            assertThat(sku.userLimitQuantity()).isEqualTo(1L);
+            assertThat(sku.phoneBindLimitEnabled()).isTrue();
+            assertThat(sku.phoneBindLimitPeriod()).isEqualTo("DAY");
+            assertThat(sku.phoneBindLimitQuantity()).isEqualTo(1L);
+            assertThat(sku.suggestedSalePriceRule()).isNotNull();
+            assertThat(sku.suggestedSalePriceRule().mode().name()).isEqualTo("CUSTOM");
+        });
+    }
+
+    /**
+     * 管理端编辑表单按 picUrl、detailPics 回填图片。详情若只回 mainImageUrl、detailImageUrls，
+     * 表单会当成没图，下一次全量保存把已入库图片写成 NULL。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线}（d35）。
+     */
+    @Test
+    void skuDetailSerializesFrontendImageAliasesForFormRefill() throws Exception {
+        SkuDetail sku = new SkuDetail("SKU_1", "规格",
+                "https://cdn.example.com/main.png", List.of("https://cdn.example.com/detail.png"),
+                "描述", "DIRECT_RECHARGE",
+                10_000L, 9_700L, 10_500L, null, false, null, 1L, 10L,
+                true, "DAY", 1L, false, true, "DAY", 1L,
+                "DIRECT_RECHARGE_TARGET", 1, "DIRECT_RECHARGE_RESULT", 1, (short) 0, false);
+
+        JsonNode json = new ObjectMapper().valueToTree(sku);
+
+        assertThat(json.get("mainImageUrl").asText()).isEqualTo("https://cdn.example.com/main.png");
+        assertThat(json.get("picUrl").asText()).isEqualTo("https://cdn.example.com/main.png");
+        assertThat(json.get("detailImageUrls").get(0).asText()).isEqualTo("https://cdn.example.com/detail.png");
+        assertThat(json.get("detailPics").get(0).asText()).isEqualTo("https://cdn.example.com/detail.png");
+    }
+
+    /**
+     * 商品管理返回给前端的数据字典码必须是字符串，与 system 字典 value（如 "0"/"10"/"20"）对齐。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线}（d36）。
+     */
+    @Test
+    void productManagementDictFieldsSerializeAsStrings() throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        SkuDetail sku = new SkuDetail("SKU_1", "规格", null, null, "描述", "DIRECT_RECHARGE",
+                10_000L, 9_700L, 10_500L, null, false, null, 1L, 10L,
+                true, "DAY", 1L, false, true, "DAY", 1L,
+                "DIRECT_RECHARGE_TARGET", 1, "DIRECT_RECHARGE_RESULT", 1, (short) 0, false);
+        JsonNode skuJson = mapper.valueToTree(sku);
+        assertThat(skuJson.get("status").isTextual()).isTrue();
+        assertThat(skuJson.get("status").asText()).isEqualTo("0");
+
+        SpuListItem listItem = new SpuListItem("SPU_1", "商品", "品牌", "分类", "EQUITY", "MOVIE",
+                "VIRTUAL_CARD", null, (short) 10, 1, null, null, null);
+        JsonNode listJson = mapper.valueToTree(listItem);
+        assertThat(listJson.get("status").isTextual()).isTrue();
+        assertThat(listJson.get("status").asText()).isEqualTo("10");
+
+        var managementSku = new ProductCatalogQueryService.ProductManagementSkuItem(
+                "SKU_1", "规格", 9_700L, 10_500L, null, null, null, false, null, null, null,
+                List.of(), 0L, "DIRECT_RECHARGE", "虚拟直充", (short) 20);
+        JsonNode managementSkuJson = mapper.valueToTree(managementSku);
+        assertThat(managementSkuJson.get("status").isTextual()).isTrue();
+        assertThat(managementSkuJson.get("status").asText()).isEqualTo("20");
+
+        var managementSpu = new ProductCatalogQueryService.ProductManagementSpuItem(
+                "SPU_1", "商品", null, "MOVIE", "电影", "分类", "品牌", (short) 0,
+                null, null, null, List.of());
+        JsonNode managementSpuJson = mapper.valueToTree(managementSpu);
+        assertThat(managementSpuJson.get("status").isTextual()).isTrue();
+        assertThat(managementSpuJson.get("status").asText()).isEqualTo("0");
+
+        Map<String, io.swagger.v3.oas.models.media.Schema> detailSchemas =
+                ModelConverters.getInstance().readAll(SpuDetail.class);
+        io.swagger.v3.oas.models.media.Schema<?> statusSchema =
+                (io.swagger.v3.oas.models.media.Schema<?>) detailSchemas.get("SpuDetail")
+                        .getProperties().get("status");
+        assertThat(statusSchema.getType()).isEqualTo("string");
     }
 
     /** SKU 限购请求字段注释必须与 DDL COMMENT 使用同一表述。 */
@@ -529,7 +668,8 @@ class ProductCenterContractTest {
         String[] componentNames = Arrays.stream(recordType.getRecordComponents())
                 .map(component -> component.getName())
                 .toArray(String[]::new);
-        assertThat(properties.keySet()).containsExactlyInAnyOrder(componentNames);
+        // 允许额外序列化前端别名（如 SkuDetail.picUrl），但 record 组件本身必须全部出现在 OpenAPI 中。
+        assertThat(properties.keySet()).contains(componentNames);
         properties.forEach((name, property) -> {
             String description = property.getDescription();
             if ((description == null || description.isBlank()) && property.get$ref() != null) {

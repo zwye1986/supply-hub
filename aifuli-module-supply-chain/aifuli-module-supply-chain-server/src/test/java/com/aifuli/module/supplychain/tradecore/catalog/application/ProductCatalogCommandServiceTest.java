@@ -319,19 +319,25 @@ class ProductCatalogCommandServiceTest {
                 .isEqualTo(PRODUCT_PURCHASE_LIMIT_CONFIG_INVALID.getCode());
     }
 
-    /** 关闭每人限购时不得残留周期或数量。 */
+    /** 关闭每人限购时，表单残留的周期和数量必须忽略并规范化为空，不得整单拒绝。 */
     @Test
-    void closingPersonalPurchaseLimitRejectsLeftoverPeriodOrQuantity() {
+    void closingPersonalPurchaseLimitIgnoresLeftoverPeriodOrQuantity() {
         givenUpdateWithOneOmittedSku();
-        ProductCatalogCommandService.SaveSkuLine invalid = new ProductCatalogCommandService.SaveSkuLine(
+        ProductCatalogCommandService.SaveSkuLine disabled = new ProductCatalogCommandService.SaveSkuLine(
                 "SKU_KEEP", "保留SKU", FulfillmentType.CARD_CODE_SECRET.code(), 100L, 0L, 0L,
-                false, null, 1L, 10L, false, "MONTH", null, false,
+                false, null, 1L, 10L, false, "DAY", 1L, false,
                 CatalogEntityStatus.DRAFT.getCode());
 
-        assertThatThrownBy(() -> service.updateProduct(SPU_CODE, saveCommand(invalid)))
-                .isInstanceOf(ServiceException.class)
-                .extracting(ex -> ((ServiceException) ex).getCode())
-                .isEqualTo(PRODUCT_PURCHASE_LIMIT_CONFIG_INVALID.getCode());
+        service.updateProduct(SPU_CODE, saveCommand(disabled));
+
+        ArgumentCaptor<PlatformSkuDO> captor = ArgumentCaptor.forClass(PlatformSkuDO.class);
+        verify(skuMapper, atLeastOnce()).updateById(captor.capture());
+        assertThat(captor.getAllValues()).filteredOn(sku -> "SKU_KEEP".equals(sku.getSkuCode()))
+                .singleElement().satisfies(sku -> {
+                    assertThat(sku.getUserLimitEnabled()).isFalse();
+                    assertThat(sku.getUserLimitPeriod()).isNull();
+                    assertThat(sku.getUserLimitQuantity()).isNull();
+                });
     }
 
     /** 兼容编辑请求未携带四个新增字段时，必须保留原 SKU 限购配置。 */
@@ -487,6 +493,36 @@ class ProductCatalogCommandServiceTest {
         ProductCatalogCommandService.SaveSkuLine disabled = new ProductCatalogCommandService.SaveSkuLine(
                 "SKU_KEEP", "保留SKU", FulfillmentType.DIRECT_RECHARGE.code(), 100L, 0L, 0L,
                 false, null, 1L, 10L, false, null, null, false, false, null, null,
+                CatalogEntityStatus.DRAFT.getCode());
+
+        service.updateProduct(SPU_CODE, saveCommand(disabled));
+
+        ArgumentCaptor<PlatformSkuDO> captor = ArgumentCaptor.forClass(PlatformSkuDO.class);
+        verify(skuMapper, atLeastOnce()).updateById(captor.capture());
+        assertThat(captor.getAllValues()).filteredOn(sku -> "SKU_KEEP".equals(sku.getSkuCode()))
+                .singleElement().satisfies(sku -> {
+                    assertThat(sku.getPhoneBindLimitEnabled()).isFalse();
+                    assertThat(sku.getPhoneBindLimitPeriod()).isNull();
+                    assertThat(sku.getPhoneBindLimitQuantity()).isNull();
+                });
+    }
+
+    /** 关闭绑定手机号限购时，表单残留的周期和数量必须忽略并规范化为空，不得整单拒绝。 */
+    @Test
+    void closingPhoneBindLimitIgnoresLeftoverPeriodOrQuantity() {
+        PlatformSkuDO omitted = givenUpdateWithOneOmittedSku();
+        PlatformSpuDO spu = PlatformSpuDO.builder().id(1L).spuCode(SPU_CODE)
+                .fulfillmentType(FulfillmentType.DIRECT_RECHARGE.code())
+                .status(CatalogEntityStatus.ACTIVE.getCode()).build();
+        when(spuMapper.selectByCodeForUpdate(SPU_CODE)).thenReturn(spu);
+        PlatformSkuDO keep = PlatformSkuDO.builder().id(10L).spuId(1L).skuCode("SKU_KEEP")
+                .fulfillmentType(FulfillmentType.DIRECT_RECHARGE.code())
+                .phoneBindLimitEnabled(true).phoneBindLimitPeriod("DAY").phoneBindLimitQuantity(2L)
+                .status(CatalogEntityStatus.ACTIVE.getCode()).build();
+        when(skuMapper.selectList(any())).thenReturn(List.of(keep, omitted));
+        ProductCatalogCommandService.SaveSkuLine disabled = new ProductCatalogCommandService.SaveSkuLine(
+                "SKU_KEEP", "保留SKU", FulfillmentType.DIRECT_RECHARGE.code(), 100L, 0L, 0L,
+                false, null, 1L, 10L, false, null, null, false, false, "DAY", 1L,
                 CatalogEntityStatus.DRAFT.getCode());
 
         service.updateProduct(SPU_CODE, saveCommand(disabled));

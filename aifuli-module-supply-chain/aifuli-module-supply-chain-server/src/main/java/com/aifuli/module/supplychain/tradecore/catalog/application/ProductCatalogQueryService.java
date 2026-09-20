@@ -13,6 +13,8 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProductCategory
 import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.ProductCenterTab;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.fasterxml.jackson.annotation.JsonFormat;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -115,6 +117,7 @@ public class ProductCatalogQueryService {
                         sku.getResultSchemaCode(), sku.getResultSchemaVersion(), sku.getStatus(),
                         sellabilityService.isSellable(sku, spu)))
                 .toList();
+        SkuDetail firstSku = skus.isEmpty() ? null : skus.getFirst();
         return new SpuDetail(spu.getSpuCode(), spu.getSpuName(), spu.getSubtitle(), spu.getBrandId(),
                 brand == null ? null : brand.getBrandCode(),
                 brand == null ? null : brand.getBrandName(), spu.getPrimaryCategoryId(),
@@ -122,8 +125,15 @@ public class ProductCatalogQueryService {
                 spu.getSellableCategory(), spu.getProductType(), spu.getProductClassification(), spu.getCoverUrl(),
                 spu.getSliderImageUrls(), spu.getUseInstruction(), spu.getDescription(), spu.getDeliveryType(),
                 spu.getFulfillmentType(), resolveFulfillmentTypeDisplay(spu.getFulfillmentType()),
-                spu.getMinQuantity(), spu.getMaxQuantity(), spu.getStatus(), skus,
-                spu.getCreatedAt(), spu.getUpdatedAt());
+                spu.getMinQuantity(), spu.getMaxQuantity(), spu.getStatus(),
+                firstSku == null ? null : firstSku.userLimitEnabled(),
+                firstSku == null ? null : firstSku.userLimitPeriod(),
+                firstSku == null ? null : firstSku.userLimitQuantity(),
+                firstSku == null ? null : firstSku.orderLimitEnabled(),
+                firstSku == null ? null : firstSku.phoneBindLimitEnabled(),
+                firstSku == null ? null : firstSku.phoneBindLimitPeriod(),
+                firstSku == null ? null : firstSku.phoneBindLimitQuantity(),
+                skus, spu.getCreatedAt(), spu.getUpdatedAt());
     }
 
     /**
@@ -215,7 +225,8 @@ public class ProductCatalogQueryService {
             @Schema(description = "动态商品类型编码") String productType,
             @Schema(description = "商品分类封闭枚举名") String productClassification,
             @Schema(description = "商品封面图地址") String coverUrl,
-            @Schema(description = "SPU管理状态：0草稿，10启用，20停用") Short status,
+            @JsonFormat(shape = JsonFormat.Shape.STRING)
+            @Schema(description = "SPU管理状态：0草稿，10启用，20停用；字典值以字符串返回", type = "string") Short status,
             @Schema(description = "该SPU下未归档SKU数量") int skuCount,
             @Schema(description = "有效可售SKU中的最低销售建议价，单位CNY分") Long minSuggestedPrice,
             @Schema(description = "有效可售SKU中的最高销售建议价，单位CNY分") Long maxSuggestedPrice,
@@ -245,7 +256,15 @@ public class ProductCatalogQueryService {
             @Schema(description = "履约方式中文展示名称") String fulfillmentTypeDisplay,
             @Schema(description = "SPU默认单次最低起购量") Long minQuantity,
             @Schema(description = "SPU默认单次最高限购量") Long maxQuantity,
-            @Schema(description = "SPU管理状态：0草稿，10启用，20停用") Short status,
+            @JsonFormat(shape = JsonFormat.Shape.STRING)
+            @Schema(description = "SPU管理状态：0草稿，10启用，20停用；字典值以字符串返回", type = "string") Short status,
+            @Schema(description = "是否启用每人限购：1启用，0停用") Boolean userLimitEnabled,
+            @Schema(description = "每人限购周期：LIFETIME终身，YEAR每年，MONTH每月，WEEK每周，DAY每天") String userLimitPeriod,
+            @Schema(description = "每人每周期最多购买数量") Long userLimitQuantity,
+            @Schema(description = "是否启用每订单限购：1启用，0停用") Boolean orderLimitEnabled,
+            @Schema(description = "是否启用绑定手机号限购：1启用，0停用") Boolean phoneBindLimitEnabled,
+            @Schema(description = "绑定手机号限购周期：LIFETIME终身，YEAR每年，MONTH每月，WEEK每周，DAY每天") String phoneBindLimitPeriod,
+            @Schema(description = "同一履约手机号每周期最多购买数量") Long phoneBindLimitQuantity,
             @Schema(description = "该SPU下未归档SKU详情") List<SkuDetail> skus,
             @Schema(description = "SPU创建时间，Asia/Shanghai") LocalDateTime createdAt,
             @Schema(description = "SPU最后更新时间，Asia/Shanghai") LocalDateTime updatedAt) {
@@ -279,8 +298,28 @@ public class ProductCatalogQueryService {
             @Schema(description = "履约目标Schema版本") Integer targetSchemaVersion,
             @Schema(description = "履约结果封闭Schema编码") String resultSchemaCode,
             @Schema(description = "履约结果Schema版本") Integer resultSchemaVersion,
-            @Schema(description = "SKU管理状态：0草稿，10启用，20停用") Short status,
+            @JsonFormat(shape = JsonFormat.Shape.STRING)
+            @Schema(description = "SKU管理状态：0草稿，10启用，20停用；字典值以字符串返回", type = "string") Short status,
             @Schema(description = "SPU与SKU均启用时为true") boolean effectiveSellable) {
+        /**
+         * 管理端表单用 picUrl 绑定 SKU 主图；必须与 mainImageUrl 同值回写，否则编辑保存会清空已入库图片。
+         * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线}（d35）。
+         */
+        @JsonProperty("picUrl")
+        @Schema(description = "SKU主图地址")
+        public String picUrl() {
+            return mainImageUrl;
+        }
+
+        /**
+         * 管理端表单用 detailPics 绑定 SKU 详情图；必须与 detailImageUrls 同值回写。
+         * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线}（d35）。
+         */
+        @JsonProperty("detailPics")
+        @Schema(description = "SKU详情图地址列表(JSON数组)")
+        public List<String> detailPics() {
+            return detailImageUrls;
+        }
     }
 
     /**
@@ -604,7 +643,8 @@ public class ProductCatalogQueryService {
             @Schema(description = "总库存") Long totalInventory,
             @Schema(description = "履约方式封闭枚举名") String fulfillmentType,
             @Schema(description = "履约方式中文展示名称") String fulfillmentTypeDisplay,
-            @Schema(description = "SKU管理状态：0草稿，10启用，20停用") Short status) {
+            @JsonFormat(shape = JsonFormat.Shape.STRING)
+            @Schema(description = "SKU管理状态：0草稿，10启用，20停用；字典值以字符串返回", type = "string") Short status) {
     }
 
     /** SKU销售建议价规则管理端投影；字段语义与 suggested_sale_price_rule_json DDL COMMENT 对齐。 */
@@ -640,7 +680,8 @@ public class ProductCatalogQueryService {
             @Schema(description = "商品类型中文名称") String productTypeName,
             @Schema(description = "主分类中文名称") String primaryCategoryName,
             @Schema(description = "品牌中文名称") String brandName,
-            @Schema(description = "SPU管理状态：0草稿，10启用，20停用") Short status,
+            @JsonFormat(shape = JsonFormat.Shape.STRING)
+            @Schema(description = "SPU管理状态：0草稿，10启用，20停用；字典值以字符串返回", type = "string") Short status,
             @Schema(description = "下架方式：MANUAL_UNSHELVE手动下架，SYSTEM_UNSHELVE系统下架") String unshelveMode,
             @Schema(description = "下架方式中文名称") String unshelveModeDisplay,
             @Schema(description = "SPU最后更新时间，Asia/Shanghai") LocalDateTime updatedAt,
