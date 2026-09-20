@@ -107,6 +107,7 @@ class ProductManagementPageQueryTest {
                 .taxRate(new BigDecimal("0.0600"))
                 .taxIncluded(true)
                 .fulfillmentType("CARD_CODE_SECRET")
+                .skuInventory(1000L)
                 .status(CatalogEntityStatus.INACTIVE.getCode())
                 .build();
 
@@ -193,6 +194,8 @@ class ProductManagementPageQueryTest {
         assertThat(sku1.suppliers()).hasSize(2);
         assertThat(sku1.suppliers().get(0).supplierName()).isEqualTo("腾讯会员供应商");
         assertThat(sku1.fulfillmentTypeDisplay()).isEqualTo("卡号卡密");
+        assertThat(sku1.totalInventory()).isEqualTo(1000L);
+        assertThat(sku1.skuInventory()).isEqualTo(1000L);
 
         // 季卡（不含税）
         var sku2 = spuItem.skus().get(1);
@@ -201,6 +204,8 @@ class ProductManagementPageQueryTest {
         assertThat(sku2.supplyPriceExclusive()).isEqualTo(5000L);
         assertThat(sku2.taxRateDisplay()).isEqualTo("不含税");
         assertThat(sku2.taxAmount()).isEqualTo(0L);
+        assertThat(sku2.totalInventory()).isEqualTo(0L);
+        assertThat(sku2.skuInventory()).isEqualTo(0L);
     }
 
     @Test

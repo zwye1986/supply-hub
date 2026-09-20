@@ -157,7 +157,7 @@ class ProductCenterIntegrationTest {
                             "SKU商品描述", "DIRECT_RECHARGE",
                             10_000L, 12_000L, 9_900L, SuggestedSalePriceRule.fixed(9_900L),
                             true, new BigDecimal("0.0600"), 1L, 10L,
-                            true, "MONTH", 2L, true, true, "DAY", 2L,
+                            true, "MONTH", 2L, true, true, "DAY", 2L, 1000L,
                             CatalogEntityStatus.ACTIVE.getCode())), 1L));
 
             PlatformSkuDO platformSku = skuMapper.selectByCode("PC_SKU_100");
@@ -180,6 +180,7 @@ class ProductCenterIntegrationTest {
             assertThat(platformSku.getPhoneBindLimitEnabled()).isTrue();
             assertThat(platformSku.getPhoneBindLimitPeriod()).isEqualTo("DAY");
             assertThat(platformSku.getPhoneBindLimitQuantity()).isEqualTo(2L);
+            assertThat(platformSku.getSkuInventory()).isEqualTo(1000L);
             assertThat(platformSku.getTargetSchemaCode()).isEqualTo("DIRECT_RECHARGE_TARGET");
             assertThat(platformSku.getTargetSchemaVersion()).isEqualTo(1);
             assertThat(platformSku.getResultSchemaCode()).isEqualTo("DIRECT_RECHARGE_RESULT");
@@ -250,6 +251,7 @@ class ProductCenterIntegrationTest {
                 assertThat(sku.phoneBindLimitEnabled()).isTrue();
                 assertThat(sku.phoneBindLimitPeriod()).isEqualTo("DAY");
                 assertThat(sku.phoneBindLimitQuantity()).isEqualTo(2L);
+                assertThat(sku.skuInventory()).isEqualTo(1000L);
             });
 
             SuggestedSalePriceRule customRule = new SuggestedSalePriceRule(

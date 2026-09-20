@@ -575,6 +575,9 @@ public class ProductCatalogCommandService {
                 .userLimitEnabled(false).userLimitPeriod(null).userLimitQuantity(null)
                 .orderLimitEnabled(Boolean.TRUE.equals(line.orderLimitEnabled()))
                 .phoneBindLimitEnabled(false).phoneBindLimitPeriod(null).phoneBindLimitQuantity(null)
+                // SKU 资料库存：未传时落库 0。不是 InventorySource，本期履约不预占、不扣减。
+                // 设计见 docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线（d38）。
+                .skuInventory(defaultLong(line.skuInventory(), 0L))
                 .currency(CURRENCY_CNY).targetSchemaCode(schema.targetSchemaCode())
                 .targetSchemaVersion(schema.targetSchemaVersion()).resultSchemaCode(schema.resultSchemaCode())
                 .resultSchemaVersion(schema.resultSchemaVersion()).status(status.getCode()).version(0L)
@@ -609,6 +612,11 @@ public class ProductCatalogCommandService {
         } else if (line.taxRate() != null) {
             sku.setTaxRate(line.taxRate());
         }
+        // 旧调用方未传 skuInventory 时保留原值；显式 0 会覆盖。
+        // 设计见 docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线（d38）。
+        if (line.skuInventory() != null) {
+            sku.setSkuInventory(line.skuInventory());
+        }
         sku.setMinQuantity(defaultLong(line.minQuantity(), DEFAULT_MIN_QUANTITY));
         sku.setMaxQuantity(defaultLong(line.maxQuantity(), DEFAULT_MAX_QUANTITY));
         applyUserLimit(sku, line, true);
@@ -630,7 +638,8 @@ public class ProductCatalogCommandService {
         if (line == null || !hasText(line.skuName()) || !hasText(line.fulfillmentType())
                 || line.faceValue() == null || line.faceValue() < 0
                 || defaultLong(line.marketPrice(), DEFAULT_PRICE_FEN) < 0
-                || (line.suggestedSalePrice() != null && line.suggestedSalePrice() < 0)) {
+                || (line.suggestedSalePrice() != null && line.suggestedSalePrice() < 0)
+                || (line.skuInventory() != null && line.skuInventory() < 0)) {
             throw exception(PRODUCT_SKU_FIELD_INVALID);
         }
         validateSkuDisplayContent(line);
@@ -1103,6 +1112,7 @@ public class ProductCatalogCommandService {
                               Boolean userLimitEnabled, String userLimitPeriod, Long userLimitQuantity,
                               Boolean orderLimitEnabled,
                               Boolean phoneBindLimitEnabled, String phoneBindLimitPeriod, Long phoneBindLimitQuantity,
+                              Long skuInventory,
                               String targetSchemaCode, Integer targetSchemaVersion,
                               String resultSchemaCode, Integer resultSchemaVersion, Short status) {
 
@@ -1112,6 +1122,7 @@ public class ProductCatalogCommandService {
                     taxIncluded, taxRate, minQuantity, maxQuantity,
                     userLimitEnabled, userLimitPeriod, userLimitQuantity, orderLimitEnabled,
                     phoneBindLimitEnabled, phoneBindLimitPeriod, phoneBindLimitQuantity,
+                    skuInventory,
                     targetSchemaCode, targetSchemaVersion, resultSchemaCode, resultSchemaVersion, status);
         }
         /**
@@ -1123,7 +1134,7 @@ public class ProductCatalogCommandService {
                            Short status) {
             this(skuCode, skuName, null, null, null, fulfillmentType, faceValue, marketPrice, suggestedSalePrice,
                     null, false, null, minQuantity, maxQuantity, null, null, null, null, null, null, null,
-                    null, null, null, null, status);
+                    null, null, null, null, null, status);
         }
 
         /** 商品中心复合接口携带销售建议价规则的精简构造器。 */
@@ -1134,7 +1145,7 @@ public class ProductCatalogCommandService {
             this(skuCode, skuName, null, null, null, fulfillmentType, faceValue, marketPrice, suggestedSalePrice,
                     suggestedSalePriceRule, false, null, minQuantity, maxQuantity,
                     null, null, null, null, null, null, null,
-                    null, null, null, null, status);
+                    null, null, null, null, null, status);
         }
 
         /** 商品中心复合接口携带税务展示元数据的构造器，Schema 仍由应用层注册表派生。 */
@@ -1143,7 +1154,7 @@ public class ProductCatalogCommandService {
                            Long minQuantity, Long maxQuantity, Short status) {
             this(skuCode, skuName, null, null, null, fulfillmentType, faceValue, marketPrice, suggestedSalePrice,
                     null, taxIncluded, taxRate, minQuantity, maxQuantity, null, null, null, null, null, null, null,
-                    null, null, null, null, status);
+                    null, null, null, null, null, status);
         }
 
         /** 商品中心复合接口携带 SKU 限购配置，内部 Schema 仍由应用层注册表派生。 */
@@ -1154,7 +1165,7 @@ public class ProductCatalogCommandService {
                            Short status) {
             this(skuCode, skuName, null, null, null, fulfillmentType, faceValue, marketPrice, suggestedSalePrice,
                     null, taxIncluded, taxRate, minQuantity, maxQuantity, userLimitEnabled, userLimitPeriod,
-                    userLimitQuantity, orderLimitEnabled, null, null, null, null, null, null, null, status);
+                    userLimitQuantity, orderLimitEnabled, null, null, null, null, null, null, null, null, status);
         }
 
         /** 商品中心复合接口携带每人、每订单与绑定手机号限购配置，内部 Schema 仍由应用层注册表派生。 */
@@ -1167,7 +1178,7 @@ public class ProductCatalogCommandService {
             this(skuCode, skuName, null, null, null, fulfillmentType, faceValue, marketPrice, suggestedSalePrice,
                     null, taxIncluded, taxRate, minQuantity, maxQuantity, userLimitEnabled, userLimitPeriod,
                     userLimitQuantity, orderLimitEnabled, phoneBindLimitEnabled, phoneBindLimitPeriod,
-                    phoneBindLimitQuantity, null, null, null, null, status);
+                    phoneBindLimitQuantity, null, null, null, null, null, status);
         }
 
         /** 保留已有显式 Schema 调用方的构造契约，税务元数据缺省为不含税且税率未配置。 */
@@ -1177,7 +1188,7 @@ public class ProductCatalogCommandService {
                            String resultSchemaCode, Integer resultSchemaVersion, Short status) {
             this(skuCode, skuName, null, null, null, fulfillmentType, faceValue, marketPrice, suggestedSalePrice,
                     null, false, null, minQuantity, maxQuantity, null, null, null, null, null, null, null,
-                    targetSchemaCode, targetSchemaVersion, resultSchemaCode, resultSchemaVersion, status);
+                    null, targetSchemaCode, targetSchemaVersion, resultSchemaCode, resultSchemaVersion, status);
         }
 
         /** 保留税务字段引入前显式 Schema 的完整构造契约。 */
@@ -1187,7 +1198,7 @@ public class ProductCatalogCommandService {
                            String resultSchemaCode, Integer resultSchemaVersion, Short status) {
             this(skuCode, skuName, null, null, null, fulfillmentType, faceValue, marketPrice, suggestedSalePrice,
                     null, taxIncluded, taxRate, minQuantity, maxQuantity, null, null, null, null, null, null, null,
-                    targetSchemaCode, targetSchemaVersion, resultSchemaCode, resultSchemaVersion, status);
+                    null, targetSchemaCode, targetSchemaVersion, resultSchemaCode, resultSchemaVersion, status);
         }
 
         /** 商品中心复合接口携带 SKU 展示资料与完整限购配置，内部 Schema 仍由应用层注册表派生。 */
@@ -1202,7 +1213,7 @@ public class ProductCatalogCommandService {
                     marketPrice, suggestedSalePrice, null, taxIncluded, taxRate, minQuantity, maxQuantity,
                     userLimitEnabled, userLimitPeriod, userLimitQuantity, orderLimitEnabled,
                     phoneBindLimitEnabled, phoneBindLimitPeriod, phoneBindLimitQuantity,
-                    null, null, null, null, status);
+                    null, null, null, null, null, status);
         }
 
         /** 复合接口携带销售建议价规则、展示资料与完整限购配置，内部 Schema 仍由应用层注册表派生。 */
@@ -1218,7 +1229,27 @@ public class ProductCatalogCommandService {
                     marketPrice, suggestedSalePrice, suggestedSalePriceRule, taxIncluded, taxRate,
                     minQuantity, maxQuantity, userLimitEnabled, userLimitPeriod, userLimitQuantity,
                     orderLimitEnabled, phoneBindLimitEnabled, phoneBindLimitPeriod, phoneBindLimitQuantity,
-                    null, null, null, null, status);
+                    null, null, null, null, null, status);
+        }
+
+        /**
+         * 复合接口携带销售建议价规则、展示资料、完整限购配置与 SKU 库存，内部 Schema 仍由应用层注册表派生。
+         * 由 {@link ProductAdminController#toSkuLine} 调用。
+         */
+        public SaveSkuLine(String skuCode, String skuName, String mainImageUrl,
+                           List<String> detailImageUrls, String description,
+                           String fulfillmentType, Long faceValue, Long marketPrice, Long suggestedSalePrice,
+                           SuggestedSalePriceRule suggestedSalePriceRule,
+                           Boolean taxIncluded, BigDecimal taxRate, Long minQuantity, Long maxQuantity,
+                           Boolean userLimitEnabled, String userLimitPeriod, Long userLimitQuantity,
+                           Boolean orderLimitEnabled, Boolean phoneBindLimitEnabled,
+                           String phoneBindLimitPeriod, Long phoneBindLimitQuantity,
+                           Long skuInventory, Short status) {
+            this(skuCode, skuName, mainImageUrl, detailImageUrls, description, fulfillmentType, faceValue,
+                    marketPrice, suggestedSalePrice, suggestedSalePriceRule, taxIncluded, taxRate,
+                    minQuantity, maxQuantity, userLimitEnabled, userLimitPeriod, userLimitQuantity,
+                    orderLimitEnabled, phoneBindLimitEnabled, phoneBindLimitPeriod, phoneBindLimitQuantity,
+                    skuInventory, null, null, null, null, status);
         }
     }
 

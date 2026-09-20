@@ -113,6 +113,7 @@ public class ProductCatalogQueryService {
                         sku.getUserLimitQuantity(), sku.getOrderLimitEnabled(),
                         sku.getPhoneBindLimitEnabled(), sku.getPhoneBindLimitPeriod(),
                         sku.getPhoneBindLimitQuantity(),
+                        sku.getSkuInventory(),
                         sku.getTargetSchemaCode(), sku.getTargetSchemaVersion(),
                         sku.getResultSchemaCode(), sku.getResultSchemaVersion(), sku.getStatus(),
                         sellabilityService.isSellable(sku, spu)))
@@ -294,6 +295,7 @@ public class ProductCatalogQueryService {
             @Schema(description = "是否启用绑定手机号限购：1启用，0停用") Boolean phoneBindLimitEnabled,
             @Schema(description = "绑定手机号限购周期：LIFETIME终身，YEAR每年，MONTH每月，WEEK每周，DAY每天") String phoneBindLimitPeriod,
             @Schema(description = "同一履约手机号每周期最多购买数量") Long phoneBindLimitQuantity,
+            @Schema(description = "SKU库存数量，管理端创建或编辑商品时设置") Long skuInventory,
             @Schema(description = "履约目标封闭Schema编码") String targetSchemaCode,
             @Schema(description = "履约目标Schema版本") Integer targetSchemaVersion,
             @Schema(description = "履约结果封闭Schema编码") String resultSchemaCode,
@@ -521,7 +523,7 @@ public class ProductCatalogQueryService {
                         taxRateDisplay,
                         taxAmount,
                         suppliers,
-                        0L,
+                        sku.getSkuInventory() == null ? 0L : sku.getSkuInventory(),
                         sku.getFulfillmentType(),
                         fulfillmentDisplay,
                         sku.getStatus()
@@ -640,11 +642,20 @@ public class ProductCatalogQueryService {
             @Schema(description = "税率展示文本，如6%、不含税、含税（税率未配置）") String taxRateDisplay,
             @Schema(description = "税额，单位CNY分") Long taxAmount,
             @Schema(description = "供应商列表") List<SupplierSimpleInfo> suppliers,
-            @Schema(description = "总库存") Long totalInventory,
+            @Schema(description = "总库存；本期取值SKU库存数量，管理端创建或编辑商品时设置") Long totalInventory,
             @Schema(description = "履约方式封闭枚举名") String fulfillmentType,
             @Schema(description = "履约方式中文展示名称") String fulfillmentTypeDisplay,
             @JsonFormat(shape = JsonFormat.Shape.STRING)
             @Schema(description = "SKU管理状态：0草稿，10启用，20停用；字典值以字符串返回", type = "string") Short status) {
+        /**
+         * 管理端编辑表单与详情使用 skuInventory；列表既有列仍读 totalInventory。
+         * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线}（d38）。
+         */
+        @JsonProperty("skuInventory")
+        @Schema(description = "SKU库存数量，管理端创建或编辑商品时设置")
+        public Long skuInventory() {
+            return totalInventory;
+        }
     }
 
     /** SKU销售建议价规则管理端投影；字段语义与 suggested_sale_price_rule_json DDL COMMENT 对齐。 */

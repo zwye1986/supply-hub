@@ -30,7 +30,7 @@
 | **d20** | **分销商/项目通用批量定价** | 2026-09-15 起由 `docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md` 取代：分销价、销售价、服务费、利润隐藏和税务默认归属分销商 + SKU，项目可分组覆盖；持久化公式与结果并在依赖变化时发布新版本。`031` 的平台 SKU 税务列仅保留为商品资料历史字段，不再作为分销结算税务来源。 | 扩展截图中的完整通用定价能力 |
 | **d21** | **SKU 限购配置与项目级交易校验** | 限购配置归属平台 SKU。每人限购支持 `LIFETIME`（终身）、`YEAR`（每年）、`MONTH`（每月）、`WEEK`（每周）、`DAY`（每天）五种自然周期，计数维度固定为 `采购项目 + 用户标识（规范化手机号） + 平台 SKU`；每订单限购限制本次请求购买数量。标准履约请求新增必填 `projectCode`，由服务端校验项目属于已解析采购商，禁止把采购商 ID 或外部租户标识替代项目 ID。并发受理在 SKU 行锁内统计有效订单并校验额度；订单失败、取消或全额退款后通过订单状态投影自然退出计数，释放额度。现有一期 `quantity=1` 与单履约目标契约保持不变。 | 对齐商品编辑原型限购区并形成可并发校验闭环 |
 | **d22** | **权益商品绑定手机号限购** | 原型「限购绑定手机号数量（权益商品专用）」对齐原卡管 `limit_number`：限制的是履约目标手机号，不是买家 `buyerUserId`，也不是一单绑几个号。配置仍归属平台 SKU，周期复用每人限购五值。计数维度为 `采购项目 + 履约目标手机号（target.accountValue 且 accountType=MOBILE） + 平台 SKU`。仅 `DIRECT_RECHARGE` 与 `ACCOUNT_BOUND_BENEFIT` 允许开启；卡号卡密/兑换码/券链不得开启，也不扩展其无手机号目标 Schema。直充与账户绑定权益订单把规范化手机号写入 `sc_supply_chain_order.fulfillment_account_value` 供行锁内聚合；卡密类该列为空。失败、取消、全额退款释放，部分退款不释放。一期 `quantity=1` 与单履约目标不变。 | 纠正原型「每订单」误读，并对齐卡管直充账号当日限量语义 |
-| **d23** | **SKU 展示资料与商品分类映射** | 商品编辑原型中的 SKU 主图、SKU 详情图和商品描述归属平台 SKU，分别持久化为 `main_image_url`、`detail_image_urls` 与 `description`，通过 SPU+SKU 复合创建、编辑和详情接口统一保存与回显。原型「商品分类」唯一映射 `primaryCategoryId`，取值来自供应链独立库 `sc_product_category`，由 `GET /supply-chain/categories` 返回启用树，不是 system 数据字典；`productClassification` 继续作为供货范围命中的 `supply_chain_product_classification` 字典标签，两者不得混用。库存字段本轮保持既有只读占位，不扩展库存写能力。 | 补齐 SKU 展示字段并消除两个“商品分类”的契约歧义 |
+| **d23** | **SKU 展示资料与商品分类映射** | 商品编辑原型中的 SKU 主图、SKU 详情图和商品描述归属平台 SKU，分别持久化为 `main_image_url`、`detail_image_urls` 与 `description`，通过 SPU+SKU 复合创建、编辑和详情接口统一保存与回显。原型「商品分类」唯一映射 `primaryCategoryId`，取值来自供应链独立库 `sc_product_category`，由 `GET /supply-chain/categories` 返回启用树，不是 system 数据字典；`productClassification` 继续作为供货范围命中的 `supply_chain_product_classification` 字典标签，两者不得混用。库存写能力由 d38 补齐，不再保持只读占位。 | 补齐 SKU 展示字段并消除两个“商品分类”的契约歧义 |
 | **d24** | **标准履约手机号服务端规范化** | 标准履约 `buyerUserId` 和 `accountType=MOBILE` 的目标账号统一由服务端规范化为中国大陆 11 位手机号：接受裸号码、`+86`、`0086` 前缀及首尾空白，持久化、幂等指纹与限购统计一律使用去前缀后的 11 位号码；非法号码拒绝受理。调用方无需预先规范化，但完整手机号仍禁止写日志。公开履约数量继续固定为 `quantity=1`。 | 防止同一手机号因格式差异绕过项目级限购 |
 | **d25** | **商品列表筛选字典与 SKU 状态口径** | system 数据字典新增 `supply_chain_fulfillment_type`（兑换方式）和 `supply_chain_sku_status`（商品状态）。`GET /supply-chain/products/management-page` 的 `status` 明确定义为 SKU 状态；SKU 级筛选命中任一未归档 SKU 后保留所属 SPU，并只返回符合 SKU 状态、兑换方式及市场价条件的 SKU 行。 | 对齐商品列表原型，消除 SPU/SKU 状态歧义 |
 | **d26** | **分类商品类型与描述闭环** | `036-category-product-type-description.sql` 为 `sc_product_category` 增加可空 `product_type` 与 `description`。新版分类创建/编辑请求必须提交动态商品类型编码并通过 `ProductTypeValidationService` 校验其处于启用状态；分类描述最多 200 字，空字符串按 `NULL` 保存。历史分类不根据父级或 SPU 标签猜测回填，两个字段保持 `NULL`，由运营编辑后补齐。详情返回 `productType` 与 `description` 供页面完整回显。 | 修复分类编辑详情缺少商品类型和分类描述，避免只补 DTO 造成数据仍丢失 |
@@ -45,6 +45,7 @@
 | **d35** | **复合保存兼容 SKU 图片别名与 SPU 根级限购下沉** | 管理端商品表单会把 SKU 主图、详情图写成 `picUrl`、`detailPics`，并把每人/绑定手机号限购放在 SPU 根级。`SkuItemSaveReqVO` 必须用 `@JsonAlias` 收下这两个别名并写入 `sc_platform_sku.main_image_url` / `detail_image_urls`。`SpuSaveReqVO` 根级限购字段在 SKU 未显式提交时继承到每个 SKU；SKU 已提交的字段优先。绑定手机号限购开启且未传周期时继承每人限购周期，以满足 `ck_sc_sku_phone_bind_limit`。限购仍只落在 SKU 表，不新增 SPU 限购列。详情 `SpuDetail` 按 SKU 完整回显入库字段，并额外投影首个 SKU 的限购到 SPU 根级；`SkuDetail` 在保留 `mainImageUrl`/`detailImageUrls` 的同时必须再序列化同值别名 `picUrl`/`detailPics`，保证编辑表单可按提交结构回填。只回主字段会导致表单图片为空，下一次全量保存把已入库图片写成 NULL。 | 避免前端别名字段与根级限购被 Jackson 静默丢弃，造成创建成功但详情缺图、缺限购 |
 | **d36** | **商品管理数据字典 JSON 一律字符串** | 商品管理请求与响应中，所有对应 system 数据字典的字段值必须以 JSON 字符串返回和接收，与字典 `value`（如 `supply_chain_sku_status` 的 `"0"`/`"10"`/`"20"`）对齐。当前主要缺口是 `status` / `targetStatus` 被序列化成数字。Java 存储与数据库列保持 `SMALLINT`/`Short`，仅在管理端 VO/投影上使用 `@JsonFormat(shape = STRING)` 并将 OpenAPI `type` 声明为 `string`。已是字符串的字典码（履约方式、配送模式、限购周期、建议价模式/运算符、可售品类等）保持不变。 | 前端字典组件按字符串匹配选项，数字 `0` 无法命中字典值 `"0"` |
 | **d37** | **关闭限购开关时忽略表单残留周期/数量** | 管理端关掉每人限购或绑定手机号限购后仍会提交对应周期、数量。`userLimitEnabled=false` 时忽略 `userLimitPeriod`/`userLimitQuantity`；`phoneBindLimitEnabled=false` 时忽略 `phoneBindLimitPeriod`/`phoneBindLimitQuantity`。落库规范化为 `NULL`，不得返回 `PRODUCT_PURCHASE_LIMIT_CONFIG_INVALID`（1050001107）。开启时周期和正整数数量仍必填。每订单限购仅有开关 `orderLimitEnabled`，数量复用 `maxQuantity`，关闭开关不因 `maxQuantity` 拒绝。 | 避免编辑表单开关关闭后因下拉残留值整单保存失败 |
+| **d38** | **SKU 资料库存可写可回显** | 管理端复合创建/编辑在 SKU 上读写 `skuInventory`（Java 字段名固定为此），持久化为 `sc_platform_sku.sku_inventory`。未传时创建落库 0，编辑省略保留原值，负数拒绝。详情 `SkuDetail` 原样回显；管理列表既有 `totalInventory` 改为投影该列，同时输出同值 JSON 别名 `skuInventory`。本列是商品资料数量，不接入 `InventorySource`，本期履约不预占、不扣减，公开契约仍为 `quantity=1`。变更由 `041` 执行。 | 对齐商品编辑表单库存字段，结束列表总库存写死 0 |
 
 ---
 
@@ -290,7 +291,7 @@ ALTER TABLE sc_platform_sku
 
 三个字段均为 SKU 可选展示资料；主图与每个详情图地址最长 512 个字符，描述最长 200 个字符。复合编辑按
 完整 SKU 行语义处理：字段传空即清空原值。`detail_image_urls` 使用 MyBatis JSON TypeHandler 显式映射为
-有序字符串列表。该变更不新增库存列、不改变管理列表中 `totalInventory` 的既有投影。
+有序字符串列表。库存写能力见 d38 / `041`。
 
 | **d26** | **分类商品类型与描述** | `sc_product_category` 补充 `product_type` 与 `description`。 | 补齐分类编辑回显 |
 | **d27** | **分类多商品类型与原型字段对齐** | 严格对齐管理端原型与前端分类表单：<br>1. `sc_product_category` 增加 `type_codes JSON`，存储商品类型编码列表；原 `product_type` 保留作为首选/主商品类型，并通过 `idx_sc_category_product_type` 保持高效检索。<br>2. 保存请求 `CategorySaveReqVO` 接收原型字段 `typeCodes: string[]`（商品类型多选）与 `remark: string`（描述别名），同时完全兼容存量单值 `productType` 与 `description`；在保存时至少提供一项商品类型，并通过 `ProductTypeValidationService` 统一校验所有类型均为启用状态。<br>3. 详情 DTO `CategoryDetail` 与管理树节点 `ManagementCategoryNode` 双向回显 `typeCodes` 与 `productType`、`remark` 与 `description`，彻底消除前后端参数名与单多选分歧。变更由 `037` 变更集执行。 | 支撑分类管理原型多选商品类型与描述回显 |
@@ -354,6 +355,23 @@ UPDATE sc_platform_spu spu
 2. **SKU 自动继承双写（零破坏保障）**：`sc_platform_sku.fulfillment_type` 继续保留。在应用层创建或更新 SKU 时，一律强制继承所属 SPU 的 `fulfillment_type`，确保下游订单（`sc_supply_chain_order`）、履约受理（`FulfillmentAcceptanceLifecycle`）、路由规则（`StandardProductRoutingRuleDO`）以及数据库行级 CHECK 约束（`ck_sc_sku_phone_bind_limit`）完全保持无侵入、零破坏。
 3. **SPU 列表与 Tab 查询性能跃升**：SPU 分页查询 `page(SpuPageQuery)` 在按业务 Tab（如虚拟卡密、虚拟直充）或履约类型筛选时，直接在 SPU 表上做单表等值匹配，彻底消除先全表扫描 SKU 聚合 `spu_id` 的慢查询隐患。
 4. **不可变规则约束**：SPU 处于已激活（`ACTIVE`）状态或存在下游有效业务引用时，禁止修改 `fulfillment_type`（抛出 `1_050_001_113 PRODUCT_FULFILLMENT_TYPE_IMMUTABLE`）；仅草稿态允许变更，并在变更时级联更新所有草稿 SKU 的履约类型及派生的 Target/Result Schemas。
+
+### 2.16 SKU 库存资料（041 Changeset）
+
+```sql
+-- changeset: 041-sku-inventory
+ALTER TABLE sc_platform_sku
+    ADD COLUMN sku_inventory BIGINT NOT NULL DEFAULT 0 COMMENT 'SKU库存数量，管理端创建或编辑商品时设置'
+    AFTER phone_bind_limit_quantity;
+
+ALTER TABLE sc_platform_sku
+    ADD CONSTRAINT ck_sc_sku_inventory CHECK (sku_inventory >= 0);
+```
+
+`sku_inventory` 是商品资料数量，由复合创建/编辑写入、详情与商品管理列表回显。它不是 `InventorySource`，
+不参与路由预占与履约扣减。DTO / OpenAPI 描述必须与上述 DDL COMMENT 完全一致。Java 写模型与详情字段名
+固定为 `skuInventory`；管理列表继续保留 `totalInventory`，本期改为投影本列，并额外序列化同值别名
+`skuInventory`，避免编辑表单与列表列名分叉。
 
 ---
 
@@ -504,7 +522,7 @@ PRD 8.4.1 的列表 Tab 支持从 `GET /supply-chain/product-types` 动态拉取
 * **响应**：`CommonResult<SpuDetailVO>`
   * SPU 完整信息：编码、名称、副标题、品牌内部主键（`brandId`）、品牌业务编码（`brandCode`）、品牌名称（`brandName`）、主分类、辅助分类列表、三码、封面图、轮播图列表、图文详情、配送模式、履约方式（`fulfillmentType` 与 `fulfillmentTypeDisplay`）、起购/限购、状态、以及从首个 SKU 投影的每人/每订单/绑定手机号限购（d35）。
   * `status` 等数据字典码 JSON 必须是字符串（d36），例如草稿 `"0"`、启用 `"10"`、停用 `"20"`。
-  * `skus: List<SkuDetailVO>`：挂载的每个 SKU 详情（编码、名称、主图、详情图、描述、履约模式、面值、市场价、销售建议价与规则、税务展示、起购/限购、每人/每订单/绑定手机号限购、有效可售状态、只读 schema 配置等）。SKU `status` 同样返回字符串。主图/详情图除 `mainImageUrl`/`detailImageUrls` 外，必须再输出同值别名 `picUrl`/`detailPics`（d35），供管理端编辑表单按提交字段回填。
+  * `skus: List<SkuDetailVO>`：挂载的每个 SKU 详情（编码、名称、主图、详情图、描述、履约模式、面值、市场价、销售建议价与规则、税务展示、起购/限购、每人/每订单/绑定手机号限购、SKU库存数量、有效可售状态、只读 schema 配置等）。SKU `status` 同样返回字符串。主图/详情图除 `mainImageUrl`/`detailImageUrls` 外，必须再输出同值别名 `picUrl`/`detailPics`（d35），供管理端编辑表单按提交字段回填。`skuInventory` 回显 `sc_platform_sku.sku_inventory`（d38）。
 
 #### 4.1.3 SPU+SKU 复合创建：`POST /supply-chain/products/spus`
 * **权限**：使用 `SupplyChainAdminPermissions.PRODUCT_CREATE_EXPRESSION`。
@@ -554,6 +572,8 @@ PRD 8.4.1 的列表 Tab 支持从 `GET /supply-chain/product-types` 动态拉取
     * `taxRate` (BigDecimal, 可选): 税率，取值 `[0, 1]`；仅记录展示，不参与价格计算。
     * `minQuantity` (Long, 默认 1)
     * `maxQuantity` (Long, 默认 9999999)
+    * `userLimitEnabled` / `userLimitPeriod` / `userLimitQuantity` / `orderLimitEnabled` / `phoneBindLimitEnabled` / `phoneBindLimitPeriod` / `phoneBindLimitQuantity`（可选）
+    * `skuInventory` (Long, 可选, ≥0)：SKU库存数量，管理端创建或编辑商品时设置；缺省创建为 0，编辑省略保留原值。本字段是商品资料数量，不接入 InventorySource，本期履约不预占、不扣减。
     * `status` (JSON 字符串，默认继承 SPU)：`"0"`/`"10"`/`"20"`
   * 目标与结果 Schema 不属于前端请求契约。应用层按 SPU 级 `fulfillmentType` 从 `PlatformSkuSchemaRegistry` 获取并写入 SKU；当前映射版本均为 1。查询详情可返回这些字段，但前端只能只读展示，不得回传决定其取值。
 * **响应**：`CommonResult<String>`（返回生成的 `spuCode`）
@@ -629,7 +649,7 @@ PRD 8.4.1 的列表 Tab 支持从 `GET /supply-chain/product-types` 动态拉取
     * `taxRate` (BigDecimal): 税率（例如 0.0600 代表 6%）
     * `taxAmount` (Long): 税额（分）
     * `suppliers` (List<SupplierSimpleItem>): 供应商列表（编码与名称，支撑多供应商换行展示）
-    * `totalInventory` (Long): 总库存（来源库存事实快照，无库存管理默认0）
+    * `totalInventory` (Long): 总库存；本期投影 `sc_platform_sku.sku_inventory`，缺省 0。JSON 同时输出同值别名 `skuInventory`
     * `fulfillmentType` (String): 兑换方式编码与名称
     * `status` (String): SKU 状态字典值（`"0"`草稿，`"10"`已上架，`"20"`已下架；字典 `supply_chain_sku_status`）
 
@@ -704,13 +724,15 @@ system-server 通过追加变更集 `006-product-list-filter-dictionaries` 写�
 
 * `SkuItemSaveReqVO` 与详情 `SkuDetail` 同步增加 `mainImageUrl`、`detailImageUrls`、`description`；创建和编辑
   复用 `SaveSkuLine`、`PlatformSkuDO` 与 `034` 变更集，不另建旁路接口。
+* `SkuItemSaveReqVO` 与详情 `SkuDetail` 同步增加 `skuInventory`，对应 `041` 的 `sku_inventory`。创建缺省 0，
+  编辑省略保留原值，负数拒绝。管理列表 `totalInventory` 改为投影该列，并输出同值别名 `skuInventory`。
+  本列不接入 InventorySource，也不改变公开履约 `quantity=1` 与单目标约束。
 * `SpuSaveReqVO.primaryCategoryId` 为必填，服务端必须校验类目存在且满足当前 SPU 状态要求；选项从
   `GET /supply-chain/categories` 获取。`productClassification` 是供货匹配标签，不替代主类目；d34 起允许
   字典枚举名或同一棵分类树的 `categoryCode`。
 * 标准履约受理在生成请求指纹与订单摘要前规范化 `buyerUserId`；目标为 `MOBILE` 时同样规范化
   `accountValue`。因此 `13800138000`、`+8613800138000`、`008613800138000` 在同一项目与 SKU 下共享限购
   额度。非法手机号不得降级为不同字符串继续计数。
-* 本轮不修改库存模型，也不扩展公开履约 `quantity=1` 与单目标约束。
 
 ---
 
@@ -875,3 +897,6 @@ system-server 通过追加变更集 `011-suggested-sale-price-operator-dictionar
 13. `ProductCatalogCommandServiceTest` 必须覆盖：`userLimitEnabled=false` 且仍携带 `userLimitPeriod`/
     `userLimitQuantity`，以及 `phoneBindLimitEnabled=false` 且仍携带 `phoneBindLimitPeriod`/
     `phoneBindLimitQuantity` 时保存成功，落库周期和数量为 `NULL`，不得抛 `PRODUCT_PURCHASE_LIMIT_CONFIG_INVALID`。
+14. `ProductCatalogCommandServiceTest`、`ProductCenterContractTest`、`ProductManagementPageQueryTest` 与
+    `ProductCenterIntegrationTest` 必须覆盖：复合创建未传 `skuInventory` 落库 0、显式提交按原值写入；
+    编辑省略保留原值、负数拒绝；详情与管理列表回显该值；DTO 注释与 `041` DDL COMMENT 一致。

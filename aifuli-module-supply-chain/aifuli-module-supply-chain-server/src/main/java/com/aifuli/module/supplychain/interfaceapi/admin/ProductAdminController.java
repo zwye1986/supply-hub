@@ -118,6 +118,7 @@ public class ProductAdminController {
                   "phoneBindLimitEnabled": true,
                   "phoneBindLimitPeriod": "DAY",
                   "phoneBindLimitQuantity": 1,
+                  "skuInventory": 1000,
                   "status": "10"
                 }
               ]
@@ -329,7 +330,7 @@ public class ProductAdminController {
                 line.taxIncluded, line.taxRate, line.minQuantity, line.maxQuantity,
                 userLimitEnabled, userLimitPeriod, userLimitQuantity,
                 orderLimitEnabled, phoneBindLimitEnabled, phoneBindLimitPeriod,
-                phoneBindLimitQuantity, line.status);
+                phoneBindLimitQuantity, line.skuInventory, line.status);
     }
 
     private static boolean hasText(String value) {
@@ -414,7 +415,7 @@ public class ProductAdminController {
         private Long phoneBindLimitQuantity;
         @Valid @NotEmpty
         @Schema(description = "至少一个 SKU",
-                example = "[{\"skuCode\":\"SKU_DEMO_001\",\"skuName\":\"爱奇艺黄金会员月卡\",\"mainImageUrl\":\"https://cdn.example.com/products/iqiyi-month-main.png\",\"detailImageUrls\":[\"https://cdn.example.com/products/iqiyi-month-detail-1.png\"],\"description\":\"爱奇艺黄金会员直充月卡\",\"fulfillmentType\":\"DIRECT_RECHARGE\",\"faceValue\":10000,\"marketPrice\":12000,\"suggestedSalePrice\":6100,\"suggestedSalePriceRule\":{\"mode\":\"CUSTOM\",\"base\":\"MARKET_PRICE\",\"percentage\":50,\"operator\":\"ADD\",\"operand\":1.00,\"fixedPriceCents\":6100},\"taxIncluded\":true,\"taxRate\":0.0600,\"minQuantity\":1,\"maxQuantity\":10,\"userLimitEnabled\":true,\"userLimitPeriod\":\"MONTH\",\"userLimitQuantity\":2,\"orderLimitEnabled\":true,\"phoneBindLimitEnabled\":true,\"phoneBindLimitPeriod\":\"DAY\",\"phoneBindLimitQuantity\":1,\"status\":\"10\"}]")
+                example = "[{\"skuCode\":\"SKU_DEMO_001\",\"skuName\":\"爱奇艺黄金会员月卡\",\"mainImageUrl\":\"https://cdn.example.com/products/iqiyi-month-main.png\",\"detailImageUrls\":[\"https://cdn.example.com/products/iqiyi-month-detail-1.png\"],\"description\":\"爱奇艺黄金会员直充月卡\",\"fulfillmentType\":\"DIRECT_RECHARGE\",\"faceValue\":10000,\"marketPrice\":12000,\"suggestedSalePrice\":6100,\"suggestedSalePriceRule\":{\"mode\":\"CUSTOM\",\"base\":\"MARKET_PRICE\",\"percentage\":50,\"operator\":\"ADD\",\"operand\":1.00,\"fixedPriceCents\":6100},\"taxIncluded\":true,\"taxRate\":0.0600,\"minQuantity\":1,\"maxQuantity\":10,\"userLimitEnabled\":true,\"userLimitPeriod\":\"MONTH\",\"userLimitQuantity\":2,\"orderLimitEnabled\":true,\"phoneBindLimitEnabled\":true,\"phoneBindLimitPeriod\":\"DAY\",\"phoneBindLimitQuantity\":1,\"skuInventory\":1000,\"status\":\"10\"}]")
         private List<SkuItemSaveReqVO> skus;
     }
 
@@ -473,6 +474,8 @@ public class ProductAdminController {
         private String phoneBindLimitPeriod;
         @Positive @Schema(description = "同一履约手机号每周期最多购买数量", example = "1")
         private Long phoneBindLimitQuantity;
+        @Min(0) @Schema(description = "SKU库存数量，管理端创建或编辑商品时设置", example = "1000")
+        private Long skuInventory;
         @JsonFormat(shape = JsonFormat.Shape.STRING)
         @Schema(description = "SKU 状态；默认继承 SPU；字典值以字符串返回", type = "string", example = "10")
         private Short status;
