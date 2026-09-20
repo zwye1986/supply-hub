@@ -713,9 +713,8 @@ public class ProductCatalogCommandService {
             return;
         }
         if (!enabled) {
-            if (hasPeriod || hasQuantity) {
-                throw exception(PRODUCT_PURCHASE_LIMIT_CONFIG_INVALID);
-            }
+            // 开关关闭时忽略表单残留的周期/数量，由 applyUserLimit 规范化为 NULL。
+            // 设计见 docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线（d37）。
             return;
         }
         if (!hasPeriod || line.userLimitQuantity() == null || line.userLimitQuantity() <= 0) {
@@ -736,9 +735,8 @@ public class ProductCatalogCommandService {
             return;
         }
         if (!enabled) {
-            if (hasPeriod || hasQuantity) {
-                throw exception(PRODUCT_PURCHASE_LIMIT_CONFIG_INVALID);
-            }
+            // 开关关闭时忽略表单残留的周期/数量，由 applyPhoneBindLimit 规范化为 NULL。
+            // 设计见 docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线（d37）。
             return;
         }
         if (!hasPeriod || line.phoneBindLimitQuantity() == null || line.phoneBindLimitQuantity() <= 0

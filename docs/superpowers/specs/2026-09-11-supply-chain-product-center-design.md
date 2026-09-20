@@ -44,6 +44,7 @@
 | **d34** | **SPU/供货范围 productClassification 接受类目树编码** | 管理端把 `sc_product_category.category_code`（如 `E2E_L1_20260903`）写入 `productClassification` 是合法契约，不得再抛 `ENUM_NOT_OPEN`。写入解析：先认 `ProductClassification` 三枚举名（存量兼容）；否则按类目编码查启用/未归档分类，命中则把该类目编码原样写入 `sc_platform_spu.product_classification` 与 `sc_supplier_supply_scope.product_classification`。若同时传 `primaryCategoryId`，必须与该类目为同一行，否则 `CATEGORY_NOT_FOUND`。未知码同样 `CATEGORY_NOT_FOUND`。供货命中仍是三码字符串全等，不回读类目树。`040` 变更集删除 `ck_sc_spu_product_classification` 与 `ck_sc_supplier_scope_product_classification`，禁止回改 `024`。 | 消除前端类目下拉与供货三码字段混用时被三枚举误拒 |
 | **d35** | **复合保存兼容 SKU 图片别名与 SPU 根级限购下沉** | 管理端商品表单会把 SKU 主图、详情图写成 `picUrl`、`detailPics`，并把每人/绑定手机号限购放在 SPU 根级。`SkuItemSaveReqVO` 必须用 `@JsonAlias` 收下这两个别名并写入 `sc_platform_sku.main_image_url` / `detail_image_urls`。`SpuSaveReqVO` 根级限购字段在 SKU 未显式提交时继承到每个 SKU；SKU 已提交的字段优先。绑定手机号限购开启且未传周期时继承每人限购周期，以满足 `ck_sc_sku_phone_bind_limit`。限购仍只落在 SKU 表，不新增 SPU 限购列。详情 `SpuDetail` 按 SKU 完整回显入库字段，并额外投影首个 SKU 的限购到 SPU 根级；`SkuDetail` 在保留 `mainImageUrl`/`detailImageUrls` 的同时必须再序列化同值别名 `picUrl`/`detailPics`，保证编辑表单可按提交结构回填。只回主字段会导致表单图片为空，下一次全量保存把已入库图片写成 NULL。 | 避免前端别名字段与根级限购被 Jackson 静默丢弃，造成创建成功但详情缺图、缺限购 |
 | **d36** | **商品管理数据字典 JSON 一律字符串** | 商品管理请求与响应中，所有对应 system 数据字典的字段值必须以 JSON 字符串返回和接收，与字典 `value`（如 `supply_chain_sku_status` 的 `"0"`/`"10"`/`"20"`）对齐。当前主要缺口是 `status` / `targetStatus` 被序列化成数字。Java 存储与数据库列保持 `SMALLINT`/`Short`，仅在管理端 VO/投影上使用 `@JsonFormat(shape = STRING)` 并将 OpenAPI `type` 声明为 `string`。已是字符串的字典码（履约方式、配送模式、限购周期、建议价模式/运算符、可售品类等）保持不变。 | 前端字典组件按字符串匹配选项，数字 `0` 无法命中字典值 `"0"` |
+| **d37** | **关闭限购开关时忽略表单残留周期/数量** | 管理端关掉每人限购或绑定手机号限购后仍会提交对应周期、数量。`userLimitEnabled=false` 时忽略 `userLimitPeriod`/`userLimitQuantity`；`phoneBindLimitEnabled=false` 时忽略 `phoneBindLimitPeriod`/`phoneBindLimitQuantity`。落库规范化为 `NULL`，不得返回 `PRODUCT_PURCHASE_LIMIT_CONFIG_INVALID`（1050001107）。开启时周期和正整数数量仍必填。每订单限购仅有开关 `orderLimitEnabled`，数量复用 `maxQuantity`，关闭开关不因 `maxQuantity` 拒绝。 | 避免编辑表单开关关闭后因下拉残留值整单保存失败 |
 
 ---
 
@@ -253,7 +254,7 @@ ALTER TABLE sc_supply_chain_order
 `032` 保留标准履约回执与总订单既有的 `(buyer_id, buyer_order_no)` 幂等唯一键，避免未写项目主键的
 O2O 等既有订单失去唯一约束；`projectCode` 进入请求指纹，因此同一采购商业务单号切换项目仍按幂等冲突
 处理。历史记录的 `project_id` 保持为空，避免从采购商或外部租户错误推导项目；所有新标准履约订单必须
-写入请求中 `projectCode` 解析得到的项目主键。SKU 限购配置约束如下：关闭每人限购时周期和数量均为空；开启时
+写入请求中 `projectCode` 解析得到的项目主键。SKU 限购配置约束如下：关闭每人限购时落库周期和数量均为空（请求里若仍带周期/数量视为表单残留并忽略，d37）；开启时
 周期必须属于上述五值且数量大于零。每订单限购复用 SKU 的 `max_quantity` 作为数量上限，开关关闭时
 该值仅保留兼容展示语义。
 
@@ -273,7 +274,7 @@ ALTER TABLE sc_supply_chain_order
         COMMENT '履约目标手机号；仅直充与账户绑定权益写入，卡密类为空';
 ```
 
-关闭绑定手机号限购时周期和数量必须为空；开启时周期必须属于五值、数量大于零，且
+关闭绑定手机号限购时落库周期和数量必须为空（请求里若仍带周期/数量视为表单残留并忽略，d37）；开启时周期必须属于五值、数量大于零，且
 `fulfillment_type IN ('DIRECT_RECHARGE', 'ACCOUNT_BOUND_BENEFIT')`。历史订单该列可为空，不回填。
 新受理在目标为 `accountType=MOBILE` 时写入 `accountValue` 的规范化值，长度不超过 128；日志不得输出该列。
 新增索引 `idx_sc_order_phone_bind_limit (project_id, platform_sku_id, fulfillment_account_value, created_at)`。
@@ -687,7 +688,7 @@ system-server 通过追加变更集 `006-product-list-filter-dictionaries` 写�
   `phoneBindLimitEnabled`、`phoneBindLimitPeriod`、`phoneBindLimitQuantity`；
   `maxQuantity` 在 `orderLimitEnabled=true` 时作为每订单购买数量上限。详情接口回显相同字段。
 * `userLimitPeriod` 与 `phoneBindLimitPeriod` 仅允许 `LIFETIME`、`YEAR`、`MONTH`、`WEEK`、`DAY`。
-  每人限购或绑定手机号限购开启时，各自的周期和正整数上限必填；关闭时服务端规范化为空。绑定手机号限购
+  每人限购或绑定手机号限购开启时，各自的周期和正整数上限必填；关闭时忽略请求中残留的周期/数量并规范化为空（d37）。绑定手机号限购
   仅允许 `DIRECT_RECHARGE` 与 `ACCOUNT_BOUND_BENEFIT`。存量未携带新字段的编辑请求保留原配置，避免兼容
   调用静默关闭限购。
 * `POST /rpc-api/supply-chain/buyer/fulfillment/accept` 请求新增必填 `projectCode`。服务端按
@@ -871,3 +872,6 @@ system-server 通过追加变更集 `011-suggested-sale-price-operator-dictionar
 12. `ProductCenterContractTest` 必须覆盖：前端 `picUrl`/`detailPics` 与 SPU 根级限购能映射进 `SaveSkuLine`；
     详情 `SkuDetail` JSON 同时包含 `mainImageUrl`/`detailImageUrls` 与同值别名 `picUrl`/`detailPics`；
     商品管理 `status` JSON 为字符串且 OpenAPI type 为 `string`。
+13. `ProductCatalogCommandServiceTest` 必须覆盖：`userLimitEnabled=false` 且仍携带 `userLimitPeriod`/
+    `userLimitQuantity`，以及 `phoneBindLimitEnabled=false` 且仍携带 `phoneBindLimitPeriod`/
+    `phoneBindLimitQuantity` 时保存成功，落库周期和数量为 `NULL`，不得抛 `PRODUCT_PURCHASE_LIMIT_CONFIG_INVALID`。
