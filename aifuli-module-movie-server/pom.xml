@@ -16,6 +16,16 @@
     <description>独立电影专业子系统，管理电影供给并执行中台指定的供应商操作</description>
 
     <dependencies>
+        <!-- 电影同步任务复用仓库 XXL-JOB 执行器，独立注册到调度中心。 -->
+        <dependency>
+            <groupId>com.aifuli</groupId>
+            <artifactId>aifuli-spring-boot-starter-job</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <optional>true</optional>
+        </dependency>
         <dependency>
             <groupId>com.aifuli</groupId>
             <artifactId>aifuli-module-movie-api</artifactId>
