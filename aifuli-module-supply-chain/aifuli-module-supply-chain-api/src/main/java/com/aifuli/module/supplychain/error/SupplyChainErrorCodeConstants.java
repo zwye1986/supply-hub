@@ -150,6 +150,12 @@ public interface SupplyChainErrorCodeConstants {
             error(1_050_001_117, "该供应商当前未合作供应此 SKU");
     ErrorCode FULFILLMENT_SCORE_ITEMS_REQUIRED =
             error(1_050_001_118, "履约能力评分至少提交一行");
+    ErrorCode SUPPLY_CHAIN_B_ORDER_NOT_FOUND =
+            error(1_050_001_119, "供应商履约尝试不存在");
+    ErrorCode ROUTING_RULE_WRITE_NOT_OPEN =
+            error(1_050_001_120, "本期路由规则只读，禁止新增、修改、删除或启停");
+    ErrorCode ROUTING_RULE_NOT_FOUND =
+            error(1_050_001_121, "路由规则不存在");
 
     /** 订单详情不可用只作为成功响应中的详情标记，不作为 CommonResult 失败码。 */
     String DETAIL_UNAVAILABLE = "DETAIL_UNAVAILABLE";
@@ -272,7 +278,10 @@ public interface SupplyChainErrorCodeConstants {
             entry(FULFILLMENT_ASSET_SCOPE_DENIED, RetryDirective.DO_NOT_RETRY),
             entry(FULFILLMENT_SCORE_INVALID, RetryDirective.DO_NOT_RETRY),
             entry(FULFILLMENT_SCORE_SUPPLIER_NOT_COOPERATING, RetryDirective.DO_NOT_RETRY),
-            entry(FULFILLMENT_SCORE_ITEMS_REQUIRED, RetryDirective.DO_NOT_RETRY));
+            entry(FULFILLMENT_SCORE_ITEMS_REQUIRED, RetryDirective.DO_NOT_RETRY),
+            entry(SUPPLY_CHAIN_B_ORDER_NOT_FOUND, RetryDirective.DO_NOT_RETRY),
+            entry(ROUTING_RULE_WRITE_NOT_OPEN, RetryDirective.DO_NOT_RETRY),
+            entry(ROUTING_RULE_NOT_FOUND, RetryDirective.DO_NOT_RETRY));
 
     static RetryDirective retryDirective(int errorCode) {
         return RETRY_DIRECTIVES.getOrDefault(errorCode, RetryDirective.DO_NOT_RETRY);

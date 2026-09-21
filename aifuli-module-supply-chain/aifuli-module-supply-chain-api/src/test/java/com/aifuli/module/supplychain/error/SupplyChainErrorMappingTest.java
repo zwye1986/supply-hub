@@ -102,7 +102,10 @@ class SupplyChainErrorMappingTest {
             "1050001111,DO_NOT_RETRY",
             "1050001116,DO_NOT_RETRY",
             "1050001117,DO_NOT_RETRY",
-            "1050001118,DO_NOT_RETRY"
+            "1050001118,DO_NOT_RETRY",
+            "1050001119,DO_NOT_RETRY",
+            "1050001120,DO_NOT_RETRY",
+            "1050001121,DO_NOT_RETRY"
     })
     void mapsStableErrorCodesToRetryDirectives(int code, RetryDirective expected) {
         assertThat(SupplyChainErrorCodeConstants.retryDirective(code)).isEqualTo(expected);

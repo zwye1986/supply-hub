@@ -85,14 +85,14 @@ O2O 详情状态复用现有封闭枚举：`O2OPaymentStatus`、`O2OFundStatus`�
 - `OrderAdminQueryServiceTest`：列表条件、稳定排序、状态映射；CARD/O2O/INSTORE 三分支；详情缺失降级；敏感字段不进入 DTO；路由记录 CARD 回放、非 CARD 空数组。
 - `SupplyChainAdminPermissionContractTest` 与 `SupplyChainAdminMethodSecurityContractTest`：列表、详情、路由记录三个 HTTP 映射均有 `order:query` 与 `admin` 超集权限，并验证错误资源权限被拒绝；既有 `ClosedEnumsTest` 覆盖入口复用的未知枚举拒绝契约，`OrderAdminQueryServiceTest` 覆盖时间逆序拒绝。
 - `SupplyChainModuleArchitectureTest`：管理端映射必须有 `@PreAuthorize` 的既有门禁继续覆盖新 Controller；订单查询服务不得依赖账户/账本 DAL。
-- `OrderAdminIntegrationTest`：真实 MySQL/Liquibase 下分别构造三类总订单和详情，验证列表不加载详情、详情 tagged union、支付流水顺序与缺详情降级；CARD 路由记录按候选序号回放，O2O 空 rounds。
+- `OrderAdminIntegrationTest`：真实 MySQL/Liquibase 下分别构造三类总订单和详情，验证列表不加载详情、详情 tagged union、支付流水顺序与缺详情降级；CARD 路由记录按候选序号回放，O2O 空 rounds。供应商履约尝试只读断言见 `docs/superpowers/specs/2026-09-21-supplier-order-admin-readonly-design.md#7-测试门禁`。
 - 联调步骤和实际测试结果同步写入 `docs/集成测试.md`。
 
 平台订单「路由记录」弹窗的只读 GET 见 `docs/superpowers/specs/2026-09-21-order-routing-records-admin-design.md`，不再属于本文「明确不做」。
 
 ## 8. 明确不做
 
-- `/supplier-orders`、供应商原始观察、异常 Case 工作台。
+- 供应商原始观察、异常 Case 工作台。供应商订单只读工作台见 `docs/superpowers/specs/2026-09-21-supplier-order-admin-readonly-design.md`。
 - 主动查单、重试、取消、发货、退款、售后审核等命令。
 - 卡密/券码/充值目标等敏感资产读取。
 - 实物收货地址、包裹与物流字段。

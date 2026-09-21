@@ -27,8 +27,12 @@ import com.aifuli.module.supplychain.border.o2o.domain.O2OFundStatus;
 import com.aifuli.module.supplychain.border.o2o.domain.O2OPaymentStatus;
 import com.aifuli.module.supplychain.border.order.application.OrderAdminQueryService;
 import com.aifuli.module.supplychain.border.order.application.OrderAdminQueryService.OrderPageQuery;
+import com.aifuli.module.supplychain.border.order.application.SupplierOrderAdminQueryService;
+import com.aifuli.module.supplychain.border.order.application.SupplierOrderAdminQueryService.SupplierOrderPageQuery;
 import com.aifuli.module.supplychain.border.order.dal.dataobject.SupplyChainOrderDO;
 import com.aifuli.module.supplychain.border.order.dal.mysql.SupplyChainOrderMapper;
+import com.aifuli.module.supplychain.border.order.domain.BOrderFulfillmentStatus;
+import com.aifuli.module.supplychain.border.order.domain.BOrderSettlementStatus;
 import com.aifuli.module.supplychain.border.order.domain.SupplyChainOrderType;
 import com.aifuli.module.supplychain.border.order.domain.SupplyChainOrderTypes;
 import com.aifuli.module.supplychain.infrastructure.configuration.SupplyChainDataSourceConfiguration;
@@ -50,9 +54,11 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * 真实 MySQL/Liquibase 验证平台订单列表、CARD/O2O/INSTORE 类型化详情，以及 CARD 路由记录回放。
- * 设计见 {@code docs/superpowers/specs/2026-09-12-supply-chain-order-admin-readonly-design.md#7-测试与联调门禁}
- * 与 {@code docs/superpowers/specs/2026-09-21-order-routing-records-admin-design.md}。
+ * 真实 MySQL/Liquibase 验证平台订单列表、CARD/O2O/INSTORE 类型化详情、CARD 路由记录回放，
+ * 以及供应商履约尝试只读列表/详情。
+ * 设计见 {@code docs/superpowers/specs/2026-09-12-supply-chain-order-admin-readonly-design.md#7-测试与联调门禁}、
+ * {@code docs/superpowers/specs/2026-09-21-order-routing-records-admin-design.md}
+ * 与 {@code docs/superpowers/specs/2026-09-21-supplier-order-admin-readonly-design.md#7-测试门禁}。
  */
 class OrderAdminIntegrationTest {
 
@@ -182,6 +188,23 @@ class OrderAdminIntegrationTest {
             assertThat(routing.rounds().getFirst().candidates().get(1).selected()).isFalse();
             assertThat(service.getRoutingRecords(o2o.getOrderNo()).rounds()).isEmpty();
             assertThat(service.getRoutingRecords(instore.getOrderNo()).rounds()).isEmpty();
+
+            SupplierOrderAdminQueryService supplierOrders = context.getBean(SupplierOrderAdminQueryService.class);
+            var supplierPage = supplierOrders.page(new SupplierOrderPageQuery(null, card.getOrderNo(),
+                    null, null, null, null, null, 1, 20));
+            assertThat(supplierPage.getList()).hasSize(1);
+            assertThat(supplierPage.getList().getFirst().bOrderNo()).isEqualTo("BO_" + suffix);
+            assertThat(supplierPage.getList().getFirst().attemptNo()).isEqualTo(1);
+            assertThat(supplierPage.getList().getFirst().fulfillmentStatus())
+                    .isEqualTo(BOrderFulfillmentStatus.WAITING);
+            assertThat(supplierPage.getList().getFirst().settlementStatus())
+                    .isEqualTo(BOrderSettlementStatus.PENDING);
+            assertThat(supplierPage.getList().getFirst().supplierSettlementUnitPrice()).isEqualTo(9_800L);
+            var supplierDetail = supplierOrders.get("BO_" + suffix);
+            assertThat(supplierDetail.orderNo()).isEqualTo(card.getOrderNo());
+            assertThat(supplierDetail.billno()).isEqualTo("BILL_" + suffix);
+            assertThat(supplierOrders.page(new SupplierOrderPageQuery(null, o2o.getOrderNo(),
+                    null, null, null, null, null, 1, 20)).getList()).isEmpty();
         }
     }
 
@@ -300,7 +323,8 @@ class OrderAdminIntegrationTest {
     }
 
     @Configuration(proxyBeanMethods = false)
-    @Import({SupplyChainDataSourceConfiguration.class, OrderAdminQueryService.class})
+    @Import({SupplyChainDataSourceConfiguration.class, OrderAdminQueryService.class,
+            SupplierOrderAdminQueryService.class})
     static class TestConfiguration {
     }
 }

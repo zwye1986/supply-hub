@@ -164,6 +164,9 @@ class SupplyChainAdminPermissionContractTest {
                 "page", ORDER_QUERY_EXPRESSION,
                 "get", ORDER_QUERY_EXPRESSION,
                 "getRoutingRecords", ORDER_QUERY_EXPRESSION));
+        assertMethodPermissions(SupplierOrderAdminController.class, Map.of(
+                "page", ORDER_QUERY_EXPRESSION,
+                "get", ORDER_QUERY_EXPRESSION));
         assertThat(ORDER_QUERY_EXPRESSION).contains("supply-chain:admin", "supply-chain:order:query");
     }
 
@@ -176,6 +179,8 @@ class SupplyChainAdminPermissionContractTest {
         assertThat(SupplierConfigurationAdminController.class.getAnnotation(PreAuthorize.class).value())
                 .isEqualTo(ADMIN_EXPRESSION);
         assertThat(M1MasterDataAdminController.class.getAnnotation(PreAuthorize.class).value())
+                .isEqualTo(ADMIN_EXPRESSION);
+        assertThat(RoutingRuleAdminController.class.getAnnotation(PreAuthorize.class).value())
                 .isEqualTo(ADMIN_EXPRESSION);
     }
 

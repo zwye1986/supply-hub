@@ -17,7 +17,7 @@
 
 - 改 `SupplierRoutingEngine`、综合排序、四级配置组、履约分选供
 - 供应商原始请求/响应报文、CallLog 全文、卡密、充值目标
-- `/supplier-orders` 工作台、一键补发、退款、售后
+- 一键补发、退款、售后；供应商订单工作台见 `docs/superpowers/specs/2026-09-21-supplier-order-admin-readonly-design.md`；路由规则页只读投影见 `docs/superpowers/specs/2026-09-21-routing-rule-admin-readonly-design.md`
 - 新 Liquibase；不把 O2O/INSTORE 渠道绑定改写成路由轮次
 
 ## 2. 领域不变量

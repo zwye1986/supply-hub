@@ -5,6 +5,8 @@ import com.aifuli.framework.security.core.LoginUser;
 import com.aifuli.framework.security.core.service.SecurityFrameworkService;
 import com.aifuli.framework.security.core.service.SecurityFrameworkServiceImpl;
 import com.aifuli.module.supplychain.border.order.application.OrderAdminQueryService;
+import com.aifuli.module.supplychain.border.order.application.SupplierOrderAdminQueryService;
+import com.aifuli.module.supplychain.routing.application.RoutingRuleAdminQueryService;
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerAdminCommandService;
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerAdminQueryService;
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerInvoiceService;
@@ -80,6 +82,10 @@ class SupplyChainAdminMethodSecurityContractTest {
     private PlatformSkuAdminController platformSkuController;
     @Resource
     private OrderAdminController orderController;
+    @Resource
+    private SupplierOrderAdminController supplierOrderController;
+    @Resource
+    private RoutingRuleAdminController routingRuleController;
 
     @BeforeEach
     void setUp() {
@@ -103,6 +109,8 @@ class SupplyChainAdminMethodSecurityContractTest {
         assertThat(AopUtils.isAopProxy(buyerController)).isTrue();
         assertThat(AopUtils.isAopProxy(platformSkuController)).isTrue();
         assertThat(AopUtils.isAopProxy(orderController)).isTrue();
+        assertThat(AopUtils.isAopProxy(supplierOrderController)).isTrue();
+        assertThat(AopUtils.isAopProxy(routingRuleController)).isTrue();
     }
 
     @Test
@@ -254,6 +262,21 @@ class SupplyChainAdminMethodSecurityContractTest {
         assertThatThrownBy(this::queryOrders).isInstanceOf(AccessDeniedException.class);
     }
 
+    @Test
+    void adminCanReadRoutingRules() {
+        grant(ADMIN);
+        assertThatCode(() -> routingRuleController.page(null, null, null, null, null, null,
+                null, null, null, 1, 20)).doesNotThrowAnyException();
+        assertThatCode(() -> routingRuleController.get("RR_1")).doesNotThrowAnyException();
+    }
+
+    @Test
+    void wrongPermissionCannotReadRoutingRules() {
+        grant(BUYER_QUERY);
+        assertThatThrownBy(() -> routingRuleController.page(null, null, null, null, null, null,
+                null, null, null, 1, 20)).isInstanceOf(AccessDeniedException.class);
+    }
+
     private void querySuppliers() {
         supplierController.page(null, null, null, null, null,
                 null, null, null, null, null);
@@ -279,6 +302,8 @@ class SupplyChainAdminMethodSecurityContractTest {
                 null, null, 1, 20);
         orderController.get("SC_1");
         orderController.getRoutingRecords("SC_1");
+        supplierOrderController.page(null, null, null, null, null, null, null, 1, 20);
+        supplierOrderController.get("BO_1");
     }
 
     private void saveSupplierFulfillmentScores() {
@@ -383,6 +408,16 @@ class SupplyChainAdminMethodSecurityContractTest {
         @Bean
         OrderAdminController orderAdminController() {
             return new OrderAdminController(mock(OrderAdminQueryService.class));
+        }
+
+        @Bean
+        SupplierOrderAdminController supplierOrderAdminController() {
+            return new SupplierOrderAdminController(mock(SupplierOrderAdminQueryService.class));
+        }
+
+        @Bean
+        RoutingRuleAdminController routingRuleAdminController() {
+            return new RoutingRuleAdminController(mock(RoutingRuleAdminQueryService.class));
         }
     }
 }
