@@ -49,7 +49,9 @@ import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferMap
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferVersionMapper;
 
 import java.math.BigDecimal;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 
 @Slf4j
@@ -260,6 +262,42 @@ public class ProductCatalogQueryService {
         return List.copyOf(ids);
     }
 
+    /**
+     * 将选中主分类展开为自身 ∪ 未归档子孙，供管理端类目树勾选父节点时命中叶子商品。
+     * 一次加载未归档类目后内存 BFS，访问集合防环；未选分类时不查库。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线}（d42）。
+     */
+    private List<Long> expandCategoryIdsWithDescendants(List<Long> selectedIds) {
+        if (selectedIds.isEmpty()) {
+            return selectedIds;
+        }
+        List<ProductCategoryDO> liveCategories = categoryMapper.selectList(new LambdaQueryWrapper<ProductCategoryDO>()
+                .select(ProductCategoryDO::getId, ProductCategoryDO::getParentId)
+                .ne(ProductCategoryDO::getStatus, CatalogEntityStatus.ARCHIVED.getCode()));
+        Map<Long, List<Long>> childrenByParent = new HashMap<>();
+        for (ProductCategoryDO row : liveCategories) {
+            if (row.getId() == null || row.getParentId() == null) {
+                continue;
+            }
+            childrenByParent.computeIfAbsent(row.getParentId(), ignored -> new ArrayList<>()).add(row.getId());
+        }
+        LinkedHashSet<Long> expanded = new LinkedHashSet<>(selectedIds);
+        ArrayDeque<Long> pending = new ArrayDeque<>(selectedIds);
+        while (!pending.isEmpty()) {
+            Long current = pending.removeFirst();
+            List<Long> children = childrenByParent.get(current);
+            if (children == null) {
+                continue;
+            }
+            for (Long childId : children) {
+                if (expanded.add(childId)) {
+                    pending.addLast(childId);
+                }
+            }
+        }
+        return List.copyOf(expanded);
+    }
+
     private record TabFilter(String productType, String fulfillmentType) {
     }
 
@@ -378,7 +416,7 @@ public class ProductCatalogQueryService {
 
     /**
      * 管理端商品列表聚合查询。
-     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#419-管理端商品列表聚合查询get-supply-chainproductsmanagement-page}（d39、d40）。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#419-管理端商品列表聚合查询get-supply-chainproductsmanagement-page}（d39、d40、d42）。
      */
     public PageResult<ProductManagementSpuItem> managementPage(ProductManagementPageQuery query) {
         TabFilter tab = resolveTab(query.tabCode());
@@ -386,7 +424,8 @@ public class ProductCatalogQueryService {
         if (productTypes.isEmpty() && hasText(tab.productType())) {
             productTypes = List.of(tab.productType());
         }
-        List<Long> filterCategoryIds = normalizeCategoryIds(query.categoryId());
+        List<Long> selectedCategoryIds = normalizeCategoryIds(query.categoryId());
+        List<Long> filterCategoryIds = expandCategoryIdsWithDescendants(selectedCategoryIds);
         String fulfillmentType = hasText(query.fulfillmentType()) ? query.fulfillmentType().trim() : tab.fulfillmentType();
 
         Set<Long> candidateSpuIds = null;
@@ -614,8 +653,8 @@ public class ProductCatalogQueryService {
             ));
         }
 
-        log.info("查询管理端平台商品聚合分页 tabCode={} productTypes={} categoryIds={} pageNo={} pageSize={} resultCount={}",
-                query.tabCode(), productTypes, filterCategoryIds, param.getPageNo(), param.getPageSize(), items.size());
+        log.info("查询管理端平台商品聚合分页 tabCode={} productTypes={} categoryIds={} expandedCategoryIds={} pageNo={} pageSize={} resultCount={}",
+                query.tabCode(), productTypes, selectedCategoryIds, filterCategoryIds, param.getPageNo(), param.getPageSize(), items.size());
         return new PageResult<>(items, page.getTotal());
     }
 

@@ -513,8 +513,8 @@ class ProductCenterContractTest {
     }
 
     /**
-     * 管理端聚合列表主分类筛选必须声明为可多选 List，并兼容单个 categoryId。
-     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线}（d40）。
+     * 管理端聚合列表主分类筛选必须声明为可多选 List，兼容单个 categoryId，并声明含子类目。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线}（d40、d42）。
      */
     @Test
     void managementPageCategoryIdAcceptsMultipleValues() {
@@ -530,7 +530,8 @@ class ProductCenterContractTest {
         assertThat(List.class.isAssignableFrom(categoryId.getType())).isTrue();
         assertThat(categoryId.getAnnotation(Parameter.class).description())
                 .contains("可多选")
-                .contains("兼容");
+                .contains("兼容")
+                .contains("子孙");
     }
 
     /**

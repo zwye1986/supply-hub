@@ -172,7 +172,8 @@ public class ProductAdminController {
                     example = "EQUITY_PRODUCT")
             @RequestParam(required = false) List<String> productType,
             @Parameter(description = "主类目内部主键，可多选；兼容单个 categoryId。"
-                    + "重复键 categoryId=10&categoryId=20，或逗号拼接 categoryId=10,20",
+                    + "重复键 categoryId=10&categoryId=20，或逗号拼接 categoryId=10,20。"
+                    + "选中节点含未归档子孙类目",
                     example = "10")
             @RequestParam(required = false) List<String> categoryId,
             @Parameter(description = "品牌内部主键", example = "1") @RequestParam(required = false) Long brandId,
