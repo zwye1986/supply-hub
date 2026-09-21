@@ -81,6 +81,8 @@ class SupplierCooperativeProductServiceTest {
         assertThat(inserted.getStatus()).isEqualTo(OfferStatus.PUBLISHED.getCode());
         assertThat(inserted.getDraftMaxQuantity()).isEqualTo(100L);
         assertThat(inserted.getDraftMinQuantity()).isEqualTo(1L);
+        assertThat(inserted.getStabilityScore()).isNull();
+        assertThat(inserted.getTimelinessScore()).isNull();
     }
 
     @Test
@@ -106,6 +108,24 @@ class SupplierCooperativeProductServiceTest {
                 new DraftLine("MOVIE_100", "FIXED", 8_800L, null, null, "API_DIRECT", 80L, 1L), 1L);
 
         verify(offerMapper).updateById(any(SupplierOfferDO.class));
+        verify(offerVersionMapper, never()).insert(any(com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierOfferVersionDO.class));
+    }
+
+    @Test
+    void updateCommercialDoesNotClearFulfillmentScores() {
+        stubCreatePath();
+        when(offerMapper.selectByNoForUpdate("OFR_1")).thenReturn(SupplierOfferDO.builder()
+                .id(77L).offerNo("OFR_1").supplierId(9L).platformSkuId(11L)
+                .supplyScopeId(101L).status(OfferStatus.PUBLISHED.getCode()).version(0L)
+                .stabilityScore(80).timelinessScore(70).build());
+
+        service.updateCommercial("SPL_A", "OFR_1",
+                new DraftLine("MOVIE_100", "FIXED", 8_800L, null, null, "API_DIRECT", 80L, 1L), 1L);
+
+        ArgumentCaptor<SupplierOfferDO> captor = ArgumentCaptor.forClass(SupplierOfferDO.class);
+        verify(offerMapper).updateById(captor.capture());
+        assertThat(captor.getValue().getStabilityScore()).isEqualTo(80);
+        assertThat(captor.getValue().getTimelinessScore()).isEqualTo(70);
         verify(offerVersionMapper, never()).insert(any(com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierOfferVersionDO.class));
     }
 

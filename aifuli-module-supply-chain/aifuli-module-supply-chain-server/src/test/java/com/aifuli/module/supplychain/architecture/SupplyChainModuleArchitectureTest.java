@@ -32,6 +32,28 @@ class SupplyChainModuleArchitectureTest {
             .should().dependOnClassesThat()
             .resideInAnyPackage("..persistence..", "org.springframework..", "org.apache.ibatis..");
 
+    /**
+     * Offer 身份上的人工评分是路由预备输入，引擎本期不读分、不依赖评分服务。
+     * 设计见 {@code docs/superpowers/specs/2026-09-21-offer-fulfillment-score-design.md#7-与路由的边界}。
+     */
+    static final ArchRule routing_domain_does_not_depend_on_fulfillment_score_service = noClasses()
+            .that().resideInAPackage("..routing.domain..")
+            .should().dependOnClassesThat()
+            .haveSimpleName("OfferFulfillmentScoreService");
+
+    static final ArchRule routing_domain_has_no_fulfillment_score_fields = noFields()
+            .that().areDeclaredInClassesThat().resideInAPackage("..routing.domain..")
+            .should().haveNameMatching("(?i).*(stability|timeliness).*score.*");
+
+    /**
+     * catalog 应用层不得直接写 Offer 评分；商品侧 Controller 只调用 tradecore.supply 单一写入服务。
+     * 设计见 {@code docs/superpowers/specs/2026-09-21-offer-fulfillment-score-design.md#2-领域不变量}。
+     */
+    static final ArchRule catalog_application_does_not_write_offer_scores = noClasses()
+            .that().resideInAPackage("..tradecore.catalog.application..")
+            .should().dependOnClassesThat()
+            .haveSimpleName("OfferFulfillmentScoreService");
+
     static final ArchRule adapter_does_not_write_orders = noClasses()
             .that().resideInAPackage("..supplieradapter..")
             .should().dependOnClassesThat().resideInAPackage("..border..dal..");
@@ -222,6 +244,21 @@ class SupplyChainModuleArchitectureTest {
     @Test
     void routingIsPure() {
         routing_is_pure.check(importedClasses);
+    }
+
+    @Test
+    void routingDomainDoesNotDependOnFulfillmentScoreService() {
+        routing_domain_does_not_depend_on_fulfillment_score_service.check(importedClasses);
+    }
+
+    @Test
+    void routingDomainHasNoFulfillmentScoreFields() {
+        routing_domain_has_no_fulfillment_score_fields.check(importedClasses);
+    }
+
+    @Test
+    void catalogApplicationDoesNotWriteOfferScores() {
+        catalog_application_does_not_write_offer_scores.check(importedClasses);
     }
 
     @Test

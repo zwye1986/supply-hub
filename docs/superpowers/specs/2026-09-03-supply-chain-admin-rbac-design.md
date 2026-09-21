@@ -92,11 +92,13 @@
 | --- | --- |
 | `GET /`、`GET /{supplierCode}`、`GET /{supplierCode}/supply-scopes`、`GET /{supplierCode}/offers` | `supplier:query` |
 | `POST /` | `supplier:create` |
-| `PUT /{supplierCode}`、`PUT /{supplierCode}/supply-scopes`、`POST /{supplierCode}/offers`、`PUT /{supplierCode}/offers/{offerNo}`、`PATCH /{supplierCode}/offers/{offerNo}`、`POST /{supplierCode}/offers/batch-draft` | `supplier:update` |
+| `PUT /{supplierCode}`、`PUT /{supplierCode}/supply-scopes`、`POST /{supplierCode}/offers`、`PUT /{supplierCode}/offers/{offerNo}`、`PUT /{supplierCode}/fulfillment-scores`、`PATCH /{supplierCode}/offers/{offerNo}`、`POST /{supplierCode}/offers/batch-draft` | `supplier:update` |
 | `DELETE /{supplierCode}/offers/{offerNo}`、`PUT /{supplierCode}/offers/{offerNo}/retire` | `supplier:delete` |
 | `PATCH /{supplierCode}`、`PATCH /`、`PUT /{supplierCode}/status`、`PUT /status/batch` | `supplier:update-status` |
 
 `PATCH /{supplierCode}/offers/{offerNo}` 是合作商品 `PUBLISHED↔SUSPENDED`，走 `update` 不是 `update-status`。
+
+`PUT /{supplierCode}/fulfillment-scores` 是合作商品履约能力评分批量写入，走 `update`。商品列表弹窗 `GET/PUT /supply-chain/products/skus/{skuCode}/fulfillment-scores` 分别走 `product:query` / `product:update`（含 `supply-chain:admin` 超集）。字段与不变量见 `docs/superpowers/specs/2026-09-21-offer-fulfillment-score-design.md`。
 
 ### 5.2 `BuyerAdminController` `/supply-chain/buyers`
 

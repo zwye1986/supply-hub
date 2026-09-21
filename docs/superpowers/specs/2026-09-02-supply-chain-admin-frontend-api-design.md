@@ -175,7 +175,13 @@
 
 **对接方式** `integrationModes`：`API` / `H5` / `MANUAL`，多选数组。可空。
 
-**供应价模式**：`FIXED` / `REALTIME` / `DISCOUNT`（已有）。
+**供应价模式** `priceMode`：`FIXED` / `REALTIME` / `DISCOUNT`。管理端「新增供应商品」批量配置与合作商品行下拉统一读取 system 数据字典 `supply_chain_offer_price_mode`；本次只配置字典，不修改前端工程。字典只负责标签、排序与展示颜色，提交值必须是下表三个枚举名；供应链后端继续用 `OfferPriceMode` 做封闭校验，不在请求线程远程调用 system 服务。
+
+| 字典值 | 页面文案 | 说明 |
+| --- | --- | --- |
+| `FIXED` | 固定值 | 直接填入固定供应价 |
+| `REALTIME` | 实时更新 | 按供应商 API 实时返回价格（点餐/电影票） |
+| `DISCOUNT` | 按供货折扣 | 按销售建议价 × 折扣率计算供应价 |
 
 **合作商品状态**：`PUBLISHED` 上架、`SUSPENDED` 下架、`RETIRED` 已移除（列表不返回）。新增默认 `PUBLISHED`。编辑已上架单价/模式必须发新 OfferVersion。
 
@@ -329,19 +335,24 @@ SPU / 供货范围写入的 `productClassification` 不走 `ClosedEnums`：类�
 - `GET /supply-chain/suppliers/{supplierCode}/supply-scopes`
 - `PUT /supply-chain/suppliers/{supplierCode}/supply-scopes` 全量替换
 
-行：`sellableCategory`、`productType`、`productClassification`、`supplyModes[]`、`maxQuantity`、`minQuantity`。三码与模式、数量缺一拦截；`maxQuantity`、`minQuantity` 分别只校验正整数，不建立大小关系。`minQuantity` 是允许最低起订量预留字段，仅存储、回显，不参与当前业务判断。改配置不改已发布 Offer；收窄只阻止新关联。命中规则见字典专文。
+行：`sellableCategory`、`productType`、`productClassification`、`categoryId`、`supplyModes[]`、`maxQuantity`、`minQuantity`。三码与模式、数量缺一拦截；`maxQuantity`、`minQuantity` 分别只校验正整数，不建立大小关系。`minQuantity` 是允许最低起订量预留字段，仅存储、回显，不参与当前业务判断。改配置不改已发布 Offer；收窄只阻止新关联。命中规则见字典专文。
+
+`categoryId` 是查询接口的回显增强字段（2026-09-21 新增，只读）：`productClassification` 为未归档类目编码（`sc_product_category.category_code`）时回填其内部主键，供前端类目树级联组件回显；为封闭枚举名（`ELECTRONICS`/`VIRTUAL_CARD`/`MOVIE_TICKET`）、类目编码已删除或类目已归档时为 `null`（归档即视为不可回显，前端兜底展示编码原样）。批量解析一次查库，不引入 N+1。`PUT` 保存接口不接收该字段，写入口径仍按 `productClassification` 编码提交。
 
 ### 5.5 合作商品
 
 - `GET /supply-chain/suppliers/{supplierCode}/offers` 分页，筛选 `sellableCategory`/`productType`/`productClassification`
 - `POST /supply-chain/suppliers/{supplierCode}/offers` body `{ items: [...] }` 批量新增，默认 `PUBLISHED`
 - `PUT /supply-chain/suppliers/{supplierCode}/offers/{offerNo}` 编辑（上架中改价发新版本）
+- `PUT /supply-chain/suppliers/{supplierCode}/fulfillment-scores` 人工录入稳定性/时效评分（可按 SKU 子集）
 - `PATCH /supply-chain/suppliers/{supplierCode}/offers/{offerNo}` `{ "status": "PUBLISHED"|"SUSPENDED" }` 上架/下架
 - `DELETE /supply-chain/suppliers/{supplierCode}/offers/{offerNo}` 逻辑移除（`RETIRED`，列表不再返回）
 
-行字段：平台 SPU/SKU 编码与名称、SPU 三码（`sellableCategory`/`productType`/`productClassification`）、`suggestPriceCents`、`priceMode`、`unitPriceCents`、`discountBp`（10000=100%）、`offerSupplyMode`、`maxQuantity`、`minQuantity`、`status`。`FIXED` 单价>0；`DISCOUNT` 折扣 ∈[1,10000] 且建议价>0；`REALTIME` 禁止填固定价。必须按三码整体唯一命中一条供货配置。
+行字段：平台 SPU/SKU 编码与名称、SPU 三码（`sellableCategory`/`productType`/`productClassification`）、`suggestPriceCents`、`priceMode`（字典 `supply_chain_offer_price_mode`）、`unitPriceCents`、`discountBp`（10000=100%）、`offerSupplyMode`、`maxQuantity`、`minQuantity`、`status`。`FIXED` 单价>0；`DISCOUNT` 折扣 ∈[1,10000] 且建议价>0；`REALTIME` 禁止填固定价。必须按三码整体唯一命中一条供货配置。
 
 SKU 未填供货上限时继承供货配置 `maxQuantity`；未填最低起购量时固定取 1。供货配置 `minQuantity` 是预留字段，不得被合作商品继承。
+
+履约能力评分挂点、批量评分与商品列表弹窗契约见 `docs/superpowers/specs/2026-09-21-offer-fulfillment-score-design.md`。`PUT /supply-chain/suppliers/{supplierCode}/fulfillment-scores` 覆盖未退役 Offer 的两列分数；改价 `PUT .../offers/{offerNo}` 不碰评分。
 
 ### 5.6 开票信息
 

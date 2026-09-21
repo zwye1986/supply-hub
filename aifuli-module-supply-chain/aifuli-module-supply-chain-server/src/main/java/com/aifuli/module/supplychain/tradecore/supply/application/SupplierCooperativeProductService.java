@@ -340,7 +340,9 @@ public class SupplierCooperativeProductService {
                 offer.getOfferSupplyMode(),
                 offer.getDraftMaxQuantity(),
                 offer.getDraftMinQuantity(),
-                OfferStatus.fromCode(offer.getStatus()).name());
+                OfferStatus.fromCode(offer.getStatus()).name(),
+                offer.getStabilityScore(),
+                offer.getTimelinessScore());
     }
 
     private Long resolveSuggestPriceCents(Long skuId) {
@@ -431,12 +433,14 @@ public class SupplierCooperativeProductService {
             @Schema(description = "动态商品类型编码") String productType,
             @Schema(description = "商品分类封闭枚举名") String productClassification,
             @Schema(description = "L1 B端结算单价，CNY分，允许0") Long suggestPriceCents,
-            @Schema(description = "供应价模式：FIXED固定值，REALTIME实时，DISCOUNT折扣") String priceMode,
+            @Schema(description = "供应价模式（字典supply_chain_offer_price_mode）：FIXED固定值，REALTIME实时更新，DISCOUNT按供货折扣") String priceMode,
             @Schema(description = "草稿供应价，CNY分；REALTIME为空") Long unitPriceCents,
             @Schema(description = "折扣基点，10000=100%") Integer discountBp,
             @Schema(description = "该Offer供货模式") String offerSupplyMode,
             @Schema(description = "草稿供货上限") Long maxQuantity,
             @Schema(description = "草稿最低起购量") Long minQuantity,
-            @Schema(description = "生命周期：PUBLISHED已发布，SUSPENDED暂停") String status) {
+            @Schema(description = "生命周期：PUBLISHED已发布，SUSPENDED暂停") String status,
+            @Schema(description = "稳定性评分，人工录入，0-100") Integer stabilityScore,
+            @Schema(description = "时效性评分，人工录入，0-100") Integer timelinessScore) {
     }
 }

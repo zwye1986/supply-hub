@@ -45,4 +45,34 @@ public interface SupplierOfferMapper extends BaseMapperX<SupplierOfferDO> {
                 .isNotNull(SupplierOfferDO::getCurrentVersionId)
                 .orderByAsc(SupplierOfferDO::getId));
     }
+
+    /**
+     * 未退役 Offer：{@code PUBLISHED} + {@code SUSPENDED}。履约评分展示与写入范围。
+     * 设计见 {@code docs/superpowers/specs/2026-09-21-offer-fulfillment-score-design.md#2-领域不变量}。
+     */
+    default List<SupplierOfferDO> selectLiveBySupplierId(Long supplierId) {
+        return selectList(new LambdaQueryWrapper<SupplierOfferDO>()
+                .eq(SupplierOfferDO::getSupplierId, supplierId)
+                .in(SupplierOfferDO::getStatus, liveStatusCodes())
+                .orderByAsc(SupplierOfferDO::getId));
+    }
+
+    /** 同一供应商对同一平台 SKU 当前至多一条未退役 Offer。 */
+    default SupplierOfferDO selectLiveBySupplierAndSku(Long supplierId, Long platformSkuId) {
+        return selectOne(new LambdaQueryWrapper<SupplierOfferDO>()
+                .eq(SupplierOfferDO::getSupplierId, supplierId)
+                .eq(SupplierOfferDO::getPlatformSkuId, platformSkuId)
+                .in(SupplierOfferDO::getStatus, liveStatusCodes()));
+    }
+
+    default List<SupplierOfferDO> selectLiveBySkuId(Long platformSkuId) {
+        return selectList(new LambdaQueryWrapper<SupplierOfferDO>()
+                .eq(SupplierOfferDO::getPlatformSkuId, platformSkuId)
+                .in(SupplierOfferDO::getStatus, liveStatusCodes())
+                .orderByAsc(SupplierOfferDO::getId));
+    }
+
+    private static List<Short> liveStatusCodes() {
+        return List.of(OfferStatus.PUBLISHED.getCode(), OfferStatus.SUSPENDED.getCode());
+    }
 }

@@ -47,7 +47,10 @@
 | **d37** | **关闭限购开关时忽略表单残留周期/数量** | 管理端关掉每人限购或绑定手机号限购后仍会提交对应周期、数量。`userLimitEnabled=false` 时忽略 `userLimitPeriod`/`userLimitQuantity`；`phoneBindLimitEnabled=false` 时忽略 `phoneBindLimitPeriod`/`phoneBindLimitQuantity`。落库规范化为 `NULL`，不得返回 `PRODUCT_PURCHASE_LIMIT_CONFIG_INVALID`（1050001107）。开启时周期和正整数数量仍必填。每订单限购仅有开关 `orderLimitEnabled`，数量复用 `maxQuantity`，关闭开关不因 `maxQuantity` 拒绝。 | 避免编辑表单开关关闭后因下拉残留值整单保存失败 |
 | **d38** | **SKU 资料库存可写可回显** | 管理端复合创建/编辑在 SKU 上读写 `skuInventory`（Java 字段名固定为此），持久化为 `sc_platform_sku.sku_inventory`。未传时创建落库 0，编辑省略保留原值，负数拒绝。详情 `SkuDetail` 原样回显；管理列表既有 `totalInventory` 改为投影该列，同时输出同值 JSON 别名 `skuInventory`。本列是商品资料数量，不接入 `InventorySource`，本期履约不预占、不扣减，公开契约仍为 `quantity=1`。变更由 `041` 执行。 | 对齐商品编辑表单库存字段，结束列表总库存写死 0 |
 | **d39** | **管理端商品列表 productType 可多选且兼容单值** | `GET /supply-chain/products/management-page` 的 Query 参数 `productType` 改为 `List<String>`，HTTP 参数名不变。单个 `productType=PT_CARD` 仍按该类型过滤；重复键 `productType=A&productType=B` 与逗号拼接 `productType=A,B` 均规范化为去空白、去重后的编码列表，以 `product_type IN (...)` OR 命中。显式传入时覆盖 `tabCode` 解出的单个类型；未传、空列表或全空白视为未筛选类型。筛选参数不校验类型是否存在，非法编码得到空页。响应仍按 SPU 返回单个 `productType`/`productTypeName`。`GET /supply-chain/products/spus` 保持单值，不在本决策范围。 | 商品列表支持按多个商品类型筛选，同时兼容存量单值调用 |
-| **d40** | **管理端商品列表 categoryId 可多选且兼容单值** | `GET /supply-chain/products/management-page` 的 Query 参数 `categoryId` 改为可多选，HTTP 参数名不变。单个 `categoryId=10` 仍按该主分类过滤；重复键 `categoryId=10&categoryId=20` 与逗号拼接 `categoryId=10,20` 均规范化为去空白、去重后的 Long 主键列表，以 `primary_category_id IN (...)` OR 命中。未传、空列表、全空白或无法解析为 Long 的片段视为未提供该片段；规范化后为空则不按分类过滤。只匹配 SPU 主分类，不扩展辅助分类。`GET /supply-chain/products/spus` 保持单值，不在本决策范围。 | 商品列表支持按多个主分类筛选，同时兼容存量单值调用 |
+| **d40** | **管理端商品列表 categoryId 可多选且兼容单值** | `GET /supply-chain/products/management-page` 的 Query 参数 `categoryId` 改为可多选，HTTP 参数名不变。单个 `categoryId=10` 仍按该主分类过滤；重复键 `categoryId=10&categoryId=20` 与逗号拼接 `categoryId=10,20` 均规范化为去空白、去重后的 Long 主键列表，以 `primary_category_id IN (...)` OR 命中。未传、空列表、全空白或无法解析为 Long 的片段视为未提供该片段；规范化后为空则不按分类过滤。只匹配 SPU 主分类，不扩展辅助分类。子孙展开见 d42。`GET /supply-chain/products/spus` 保持单值，不在本决策范围。 | 商品列表支持按多个主分类筛选，同时兼容存量单值调用 |
+| **d41** | **供货配置查询回显 categoryId（归档即视为不可回显）** | `GET /supply-chain/suppliers/{supplierCode}/supply-scopes` 与供应商详情 `scopes[]` 的 `SupplyScopeView` 新增只读字段 `categoryId`：`productClassification` 为未归档类目编码（`sc_product_category.category_code`）时经 `CategoryQueryService.resolveCategoryIdsByCodes` 批量解析回填内部主键；为封闭枚举名、编码已删除或类目已归档时为 `null`（归档即视为不可回显，前端兜底展示编码）。批量解析一次查库。`PUT` 保存不接收该字段，写入口径不变。 | 前端类目树级联组件需内部主键回显，当前只回编码无法定位节点 |
+| **d42** | **管理端商品列表 categoryId 含子类目** | 管理端商品列表从类目树勾选父节点时，语义为「该节点及其未归档子孙」下的商品。`GET /supply-chain/products/management-page` 在 d40 规范化出选中主键后，一次加载未归档类目（`status != 90`），按 `parent_id` 在内存 BFS 展开子孙，再与选中主键去重合并，以 `primary_category_id IN (选中 ∪ 未归档子孙)` 过滤。仍只匹配 SPU 主分类，不扩展辅助分类；归档子孙不进入展开集；选中主键即使自身已归档仍保留，以便历史主键精确命中。未传或规范化后为空则不查类目树、不加分类条件。无限级（d5）下用访问集合防环，禁止递归 SQL。 | 勾选父级（如 id=1）时须命中挂在叶子（如 id=3）上的商品，避免精确匹配空页 |
+| **d43** | **SKU×供应商履约能力评分人工挂点** | 稳定性/时效评分写在 `sc_supplier_offer` 身份列（Liquibase `042`），供应商合作商品与 `GET/PUT /supply-chain/products/skus/{skuCode}/fulfillment-scores` 读写同一事实。`management-page` 的 `suppliers[]` 不加分数。路由引擎本期不读分。权威契约见 `docs/superpowers/specs/2026-09-21-offer-fulfillment-score-design.md`。 | 对齐新 PRD 8.4.1.1 / 8.1.3.4，纠正独立路由能力配置挂点 |
 
 ---
 
@@ -616,7 +619,7 @@ PRD 8.4.1 的列表 Tab 支持从 `GET /supply-chain/product-types` 动态拉取
 * **Query 参数**：
   * `keyword` (String, 可选): SPU 编码、名称模糊检索
   * `productType` (`List<String>`, 可选): 商品类型编码，可多选。兼容单个 `productType=PT_CARD`；多个使用重复键 `productType=A&productType=B` 或逗号拼接 `productType=A,B`。规范化时 trim、丢空白、去重并保持传入顺序；多个类型为 OR（`product_type IN (...)`）。显式传入时覆盖 `tabCode` 解出的类型；未传、空列表或全空白不按类型过滤。筛选参数不校验类型是否存在。
-  * `categoryId` (`List<String>` → Long 主键, 可选): 商品主分类内部主键，可多选。兼容单个 `categoryId=10`；多个使用重复键 `categoryId=10&categoryId=20` 或逗号拼接 `categoryId=10,20`。规范化时 trim、丢空白、去重、解析为 Long 并保持传入顺序；无法解析的片段忽略；多个分类为 OR（`primary_category_id IN (...)`）。未传、空列表、全空白或规范化后为空不按分类过滤。只匹配主分类。
+  * `categoryId` (`List<String>` → Long 主键, 可选): 商品主分类内部主键，可多选。兼容单个 `categoryId=10`；多个使用重复键 `categoryId=10&categoryId=20` 或逗号拼接 `categoryId=10,20`。规范化时 trim、丢空白、去重、解析为 Long 并保持传入顺序；无法解析的片段忽略。规范化后将选中节点展开为自身 ∪ 未归档子孙（d42），多个分类为 OR（`primary_category_id IN (选中 ∪ 未归档子孙)`）。未传、空列表、全空白或规范化后为空不按分类过滤、不加载类目树。只匹配主分类，不扩展辅助分类。
   * `brandId` (Long, 可选): 品牌 ID
   * `status` (Short, 可选): SKU 状态（0-草稿，10-已上架，20-已下架；字典 `supply_chain_sku_status`）
   * `fulfillmentType` (String, 可选): 兑换方式（`CARD_CODE_SECRET` 卡号卡密、`DIRECT_RECHARGE` 直充；字典 `supply_chain_fulfillment_type`）
@@ -735,6 +738,14 @@ system-server 通过追加变更集 `006-product-list-filter-dictionaries` 写�
 * 标准履约受理在生成请求指纹与订单摘要前规范化 `buyerUserId`；目标为 `MOBILE` 时同样规范化
   `accountValue`。因此 `13800138000`、`+8613800138000`、`008613800138000` 在同一项目与 SKU 下共享限购
   额度。非法手机号不得降级为不同字符串继续计数。
+
+#### 4.1.15 SKU 履约能力评分：`GET/PUT /supply-chain/products/skus/{skuCode}/fulfillment-scores`
+
+对齐 PRD 8.4.1.1。数据与供应商合作商品共用 `sc_supplier_offer.stability_score` / `timeliness_score`，不在商品中心另存一份。权威契约、错误码与不变量见 `docs/superpowers/specs/2026-09-21-offer-fulfillment-score-design.md`。
+
+* **GET 权限**：`PRODUCT_QUERY_EXPRESSION`。SKU 不存在返回 `PLATFORM_SKU_NOT_FOUND`；无当前合作供应商返回空 `items`。
+* **PUT 权限**：`PRODUCT_UPDATE_EXPRESSION`。只更新提交的供应商行；未退役 Offer 以外的 `supplierCode` 整单拒绝。
+* **管理列表**：`GET /products/management-page` 的 `suppliers[]` 仍只含编码与名称，不加分数。
 
 ---
 
@@ -908,3 +919,11 @@ system-server 通过追加变更集 `011-suggested-sale-price-operator-dictionar
 16. `ProductManagementPageQueryTest` 与 `ProductCenterContractTest` 必须覆盖 d40：管理端聚合列表
     `categoryId` 参数类型为 `List`；单个主键、重复多个主键、逗号拼接均按 `primary_category_id IN` 过滤；
     空列表不加分类条件。
+17. `SupplierProfileQueryServiceTest` 与 `SupplierAdminRestContractTest` 必须覆盖 d41：类目编码行回填
+    `categoryId`、封闭枚举名行为 `null`、类目已删除或已归档行为 `null` 且不抛异常；批量解析只查一次库；
+    契约断言 `SupplyScopeView` 存在 `categoryId` 记录组件且 `@Schema` 描述含回填与归档口径。
+18. `ProductManagementPageQueryTest` 与 `ProductCenterContractTest` 必须覆盖 d42：勾选父类目时
+    `primary_category_id IN` 含选中节点及未归档子孙；归档子孙不进入展开集；未传 `categoryId` 时不加载类目树。
+19. `OfferFulfillmentScoreServiceTest`、`ProductCenterContractTest`、`SupplierAdminRestContractTest` 与
+    `SupplyChainAdminMethodSecurityContractTest` 必须覆盖 d43：商品履约评分 GET/PUT 权限与字段 Schema；
+    供应商列表回显分数；改价不清分；两侧读写同一 Offer 身份列。集成测试见履约评分专文。

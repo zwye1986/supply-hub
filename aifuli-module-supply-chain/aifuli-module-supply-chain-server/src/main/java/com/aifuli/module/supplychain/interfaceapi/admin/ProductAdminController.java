@@ -11,6 +11,10 @@ import com.aifuli.module.supplychain.tradecore.catalog.application.ProductCatalo
 import com.aifuli.module.supplychain.tradecore.catalog.application.ProductCatalogQueryService.SpuPageQuery;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.SuggestedSalePriceRule;
+import com.aifuli.module.supplychain.tradecore.supply.application.OfferFulfillmentScoreService;
+import com.aifuli.module.supplychain.tradecore.supply.application.OfferFulfillmentScoreService.ScoreUpdateResult;
+import com.aifuli.module.supplychain.tradecore.supply.application.OfferFulfillmentScoreService.SkuFulfillmentScoreView;
+import com.aifuli.module.supplychain.tradecore.supply.application.OfferFulfillmentScoreService.SkuSupplierScoreLine;
 import com.fasterxml.jackson.annotation.JsonAlias;
 import com.fasterxml.jackson.annotation.JsonFormat;
 import io.swagger.v3.oas.annotations.Operation;
@@ -127,6 +131,7 @@ public class ProductAdminController {
 
     private final ProductCatalogQueryService queryService;
     private final ProductCatalogCommandService commandService;
+    private final OfferFulfillmentScoreService offerFulfillmentScoreService;
 
     @GetMapping("/spus")
     @PreAuthorize(PRODUCT_QUERY_EXPRESSION)
@@ -172,7 +177,8 @@ public class ProductAdminController {
                     example = "EQUITY_PRODUCT")
             @RequestParam(required = false) List<String> productType,
             @Parameter(description = "主类目内部主键，可多选；兼容单个 categoryId。"
-                    + "重复键 categoryId=10&categoryId=20，或逗号拼接 categoryId=10,20",
+                    + "重复键 categoryId=10&categoryId=20，或逗号拼接 categoryId=10,20。"
+                    + "选中节点含未归档子孙类目",
                     example = "10")
             @RequestParam(required = false) List<String> categoryId,
             @Parameter(description = "品牌内部主键", example = "1") @RequestParam(required = false) Long brandId,
@@ -298,6 +304,33 @@ public class ProductAdminController {
             @Parameter(description = "平台SKU永久业务编码", example = "SKU_01ABC") @PathVariable String skuCode) {
         commandService.deleteSku(skuCode, getLoginUserId());
         return success(true);
+    }
+
+    @GetMapping("/skus/{skuCode}/fulfillment-scores")
+    @PreAuthorize(PRODUCT_QUERY_EXPRESSION)
+    @Operation(summary = "查询SKU当前合作供应商履约能力评分",
+            description = "弹窗读取未退役 Offer 上的稳定性/时效性评分。无合作供应商时 items 为空，不 404。"
+                    + "management-page 的 suppliers[] 不加分数。")
+    public CommonResult<SkuFulfillmentScoreView> getSkuFulfillmentScores(
+            @Parameter(description = "平台SKU永久业务编码") @PathVariable String skuCode) {
+        return success(offerFulfillmentScoreService.getSkuScores(skuCode));
+    }
+
+    @PutMapping("/skus/{skuCode}/fulfillment-scores")
+    @PreAuthorize(PRODUCT_UPDATE_EXPRESSION)
+    @Operation(summary = "保存SKU当前合作供应商履约能力评分",
+            description = "只更新提交行；未出现的当前合作供应商保持原值。"
+                    + "supplierCode 对该 SKU 无未退役 Offer 则整单拒绝。")
+    public CommonResult<ScoreUpdateResult> saveSkuFulfillmentScores(
+            @Parameter(description = "平台SKU永久业务编码") @PathVariable String skuCode,
+            @Valid @RequestBody SkuFulfillmentScoreSaveReqVO request) {
+        List<SkuSupplierScoreLine> lines = request.getItems() == null ? List.of()
+                : request.getItems().stream()
+                .map(item -> new SkuSupplierScoreLine(
+                        item.getSupplierCode(), item.getStabilityScore(), item.getTimelinessScore()))
+                .toList();
+        int updated = offerFulfillmentScoreService.saveSkuScores(skuCode, lines, getLoginUserId());
+        return success(new ScoreUpdateResult(updated));
     }
 
     /**
@@ -558,5 +591,23 @@ public class ProductAdminController {
         @DecimalMax("1.0000")
         @Schema(description = "税率，如0.0600表示6%；仅记录展示，不参与价格计算；标准商品结算以分销商/项目通用定价为准", example = "0.0600")
         private BigDecimal taxRate;
+    }
+
+    @Data
+    @Schema(description = "SKU履约能力评分保存")
+    public static class SkuFulfillmentScoreSaveReqVO {
+        @Schema(description = "当前合作供应商评分行", example = "[{\"supplierCode\":\"SPL_A\",\"stabilityScore\":80,\"timelinessScore\":70}]")
+        private List<SkuFulfillmentScoreItemReqVO> items;
+    }
+
+    @Data
+    @Schema(description = "SKU履约能力评分行")
+    public static class SkuFulfillmentScoreItemReqVO {
+        @Schema(description = "供应商永久业务编码", example = "SPL_A")
+        private String supplierCode;
+        @Schema(description = "稳定性评分，人工录入，0-100", example = "80")
+        private Integer stabilityScore;
+        @Schema(description = "时效性评分，人工录入，0-100", example = "70")
+        private Integer timelinessScore;
     }
 }

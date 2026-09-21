@@ -15,6 +15,7 @@ import org.springframework.stereotype.Service;
 import cn.hutool.core.util.StrUtil;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -162,6 +163,32 @@ public class CategoryQueryService {
                 typeCodes, category.getDescription(), category.getDescription(), category.getParentId(),
                 category.getCategoryLevel(), category.getSort(), category.getVisible(), category.getStatus(),
                 category.getCreatedAt(), category.getUpdatedAt());
+    }
+
+    /**
+     * 按类目编码批量解析内部主键，供管理端回显装配使用（如供货配置 categoryId）。
+     *
+     * <p>不变量：归档类目视为不可回显，与 {@link #detail(String)} 口径一致，不出现在结果中；
+     * 未知或已删除编码同样不出现，由调用方按 {@code null} 回显兜底。只投影编码与主键两列，
+     * 不触发 CATEGORY_NOT_FOUND——本方法用于查询侧宽容装配，不做写入校验（写入校验见
+     * {@code ProductClassificationValidationService#requireWritable}）。跨包调用走本应用服务，
+     * 不得直接注入 {@code ProductCategoryMapper}（核心设计：内部包只能通过 Interface 协作）。</p>
+     *
+     * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#54-供货配置}。
+     */
+    public Map<String, Long> resolveCategoryIdsByCodes(Collection<String> categoryCodes) {
+        if (categoryCodes == null || categoryCodes.isEmpty()) {
+            return Map.of();
+        }
+        List<ProductCategoryDO> rows = categoryMapper.selectList(new LambdaQueryWrapper<ProductCategoryDO>()
+                .in(ProductCategoryDO::getCategoryCode, categoryCodes)
+                .ne(ProductCategoryDO::getStatus, CatalogEntityStatus.ARCHIVED.getCode()));
+        Map<String, Long> idsByCode = new LinkedHashMap<>();
+        for (ProductCategoryDO row : rows) {
+            idsByCode.putIfAbsent(row.getCategoryCode(), row.getId());
+        }
+        log.info("批量解析类目主键 requestedCodes={} resolved={}", categoryCodes.size(), idsByCode.size());
+        return idsByCode;
     }
 
     private static List<String> resolveTypeCodes(ProductCategoryDO category) {

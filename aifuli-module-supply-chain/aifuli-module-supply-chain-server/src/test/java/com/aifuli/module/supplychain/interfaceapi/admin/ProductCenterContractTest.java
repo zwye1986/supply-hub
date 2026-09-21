@@ -22,6 +22,7 @@ import jakarta.validation.constraints.NotNull;
 import org.junit.jupiter.api.Test;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -471,6 +472,8 @@ class ProductCenterContractTest {
         assertRecordComponentsDocumented(com.aifuli.module.supplychain.tradecore.catalog.application.ProductCatalogQueryService.ProductManagementSpuItem.class);
         assertRecordComponentsDocumented(com.aifuli.module.supplychain.tradecore.catalog.application.ProductCatalogQueryService.ProductManagementSkuItem.class);
         assertRecordComponentsDocumented(com.aifuli.module.supplychain.tradecore.catalog.application.ProductCatalogQueryService.SupplierSimpleInfo.class);
+        assertRecordComponentsDocumented(com.aifuli.module.supplychain.tradecore.supply.application.OfferFulfillmentScoreService.SkuFulfillmentScoreView.class);
+        assertRecordComponentsDocumented(com.aifuli.module.supplychain.tradecore.supply.application.OfferFulfillmentScoreService.SkuScoreItem.class);
     }
 
     /** 商品列表两个字典筛选参数必须明确 SKU 状态口径及对应字典类型。 */
@@ -489,6 +492,30 @@ class ProductCenterContractTest {
                 .contains("SKU商品状态", "supply_chain_sku_status");
         assertThat(descriptions.get("fulfillmentType"))
                 .contains("CARD_CODE_SECRET", "DIRECT_RECHARGE", "supply_chain_fulfillment_type");
+    }
+
+    /**
+     * 履约能力评分挂在 SKU×供应商 Offer，列表 SupplierSimpleInfo 不加分数。
+     * 设计见 {@code docs/superpowers/specs/2026-09-21-offer-fulfillment-score-design.md#43-商品履约能力弹窗prd-8411}。
+     */
+    @Test
+    void skuFulfillmentScoresAreSeparateFromManagementPageSuppliers() throws Exception {
+        assertThat(fieldNames(ProductCatalogQueryService.SupplierSimpleInfo.class))
+                .containsExactly("supplierCode", "supplierName");
+        assertThat(Arrays.stream(ProductAdminController.class.getDeclaredMethods())
+                .filter(method -> method.isAnnotationPresent(GetMapping.class))
+                .flatMap(method -> Arrays.stream(method.getAnnotation(GetMapping.class).value())))
+                .contains("/skus/{skuCode}/fulfillment-scores");
+        assertThat(Arrays.stream(ProductAdminController.class.getDeclaredMethods())
+                .filter(method -> method.isAnnotationPresent(PutMapping.class))
+                .flatMap(method -> Arrays.stream(method.getAnnotation(PutMapping.class).value())))
+                .contains("/skus/{skuCode}/fulfillment-scores");
+        assertThat(ProductAdminController.SkuFulfillmentScoreItemReqVO.class
+                .getDeclaredField("stabilityScore").getAnnotation(Schema.class).description())
+                .isEqualTo("稳定性评分，人工录入，0-100");
+        assertThat(ProductAdminController.SkuFulfillmentScoreItemReqVO.class
+                .getDeclaredField("timelinessScore").getAnnotation(Schema.class).description())
+                .isEqualTo("时效性评分，人工录入，0-100");
     }
 
     /**
@@ -513,8 +540,8 @@ class ProductCenterContractTest {
     }
 
     /**
-     * 管理端聚合列表主分类筛选必须声明为可多选 List，并兼容单个 categoryId。
-     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线}（d40）。
+     * 管理端聚合列表主分类筛选必须声明为可多选 List，兼容单个 categoryId，并声明含子类目。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线}（d40、d42）。
      */
     @Test
     void managementPageCategoryIdAcceptsMultipleValues() {
@@ -530,7 +557,8 @@ class ProductCenterContractTest {
         assertThat(List.class.isAssignableFrom(categoryId.getType())).isTrue();
         assertThat(categoryId.getAnnotation(Parameter.class).description())
                 .contains("可多选")
-                .contains("兼容");
+                .contains("兼容")
+                .contains("子孙");
     }
 
     /**

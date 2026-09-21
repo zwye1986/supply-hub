@@ -37,6 +37,7 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -68,6 +69,7 @@ class ProductManagementPageQueryTest {
         TableInfoHelper.initTableInfo(new MapperBuilderAssistant(new MybatisConfiguration(), ""), PlatformSpuDO.class);
         TableInfoHelper.initTableInfo(new MapperBuilderAssistant(new MybatisConfiguration(), ""), PlatformSkuDO.class);
         TableInfoHelper.initTableInfo(new MapperBuilderAssistant(new MybatisConfiguration(), ""), SupplierOfferDO.class);
+        TableInfoHelper.initTableInfo(new MapperBuilderAssistant(new MybatisConfiguration(), ""), ProductCategoryDO.class);
     }
 
     @Test
@@ -463,6 +465,69 @@ class ProductManagementPageQueryTest {
                 ArgumentCaptor.forClass((Class) LambdaQueryWrapper.class);
         verify(spuMapper).selectPage(any(PageParam.class), captor.capture());
         assertThat(captor.getValue().getSqlSegment()).doesNotContain("primary_category_id");
+        verify(categoryMapper, never()).selectList(any());
+    }
+
+    /**
+     * 勾选父级与二级节点时，必须把未归档子孙一并纳入主分类 IN 条件。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线}（d42）。
+     */
+    @Test
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    void managementPageExpandsSelectedCategoryIdsToUnarchivedDescendants() {
+        when(spuMapper.selectPage(any(PageParam.class), any())).thenReturn(new PageResult<>(List.of(), 0L));
+        when(categoryMapper.selectList(any())).thenReturn(List.of(
+                category(1L, null),
+                category(2L, 1L),
+                category(3L, 2L),
+                category(4L, 1L),
+                category(8L, 4L)));
+
+        service.managementPage(managementQuery(null, List.of("1,4")));
+
+        ArgumentCaptor<LambdaQueryWrapper<PlatformSpuDO>> captor =
+                ArgumentCaptor.forClass((Class) LambdaQueryWrapper.class);
+        verify(spuMapper).selectPage(any(PageParam.class), captor.capture());
+        assertThat(captor.getValue().getSqlSegment()).contains("IN");
+        assertThat(captor.getValue().getParamNameValuePairs().values())
+                .contains(1L, 2L, 3L, 4L, 8L);
+    }
+
+    /**
+     * 归档子孙不得进入展开集；类目查询必须排除 ARCHIVED。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线}（d42）。
+     */
+    @Test
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    void managementPageDoesNotExpandArchivedDescendantCategoryIds() {
+        when(spuMapper.selectPage(any(PageParam.class), any())).thenReturn(new PageResult<>(List.of(), 0L));
+        when(categoryMapper.selectList(any())).thenReturn(List.of(
+                category(1L, null),
+                category(4L, 1L)));
+
+        service.managementPage(managementQuery(null, List.of("1")));
+
+        ArgumentCaptor<LambdaQueryWrapper<ProductCategoryDO>> categoryCaptor =
+                ArgumentCaptor.forClass((Class) LambdaQueryWrapper.class);
+        verify(categoryMapper).selectList(categoryCaptor.capture());
+        assertThat(categoryCaptor.getValue().getSqlSegment()).contains("status");
+        assertThat(categoryCaptor.getValue().getParamNameValuePairs().values())
+                .contains(CatalogEntityStatus.ARCHIVED.getCode());
+
+        ArgumentCaptor<LambdaQueryWrapper<PlatformSpuDO>> spuCaptor =
+                ArgumentCaptor.forClass((Class) LambdaQueryWrapper.class);
+        verify(spuMapper).selectPage(any(PageParam.class), spuCaptor.capture());
+        assertThat(spuCaptor.getValue().getSqlSegment()).contains("IN");
+        assertThat(spuCaptor.getValue().getParamNameValuePairs().values()).contains(1L, 4L);
+        assertThat(spuCaptor.getValue().getParamNameValuePairs().values()).doesNotContain(5L);
+    }
+
+    private static ProductCategoryDO category(Long id, Long parentId) {
+        return ProductCategoryDO.builder()
+                .id(id)
+                .parentId(parentId)
+                .status(CatalogEntityStatus.ACTIVE.getCode())
+                .build();
     }
 
     private static ProductManagementPageQuery managementQuery(List<String> productTypes) {
