@@ -23,6 +23,7 @@ import com.aifuli.module.supplychain.tradecore.supply.application.SupplierProfil
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierProfileQueryService.SupplyScopeView;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierSupplyScopeService;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierSupplyScopeService.ScopeLine;
+import com.aifuli.module.supplychain.tradecore.supply.domain.OfferFulfillmentScore;
 import com.aifuli.module.supplychain.tradecore.supply.domain.OfferStatus;
 import com.aifuli.module.supplychain.tradecore.supply.domain.SupplierStatus;
 import com.fasterxml.jackson.annotation.JsonAlias;
@@ -721,9 +722,9 @@ public class SupplierAdminController {
     @Data
     @Schema(description = "供应商合作商品履约能力评分保存")
     public static class FulfillmentScoreSaveReqVO {
-        @Schema(description = "稳定性评分，人工录入，0-100", example = "80")
+        @Schema(description = OfferFulfillmentScore.STABILITY_COMMENT, example = "80")
         private Integer stabilityScore;
-        @Schema(description = "时效性评分，人工录入，0-100", example = "70")
+        @Schema(description = OfferFulfillmentScore.TIMELINESS_COMMENT, example = "70")
         private Integer timelinessScore;
         @Schema(description = "平台SKU永久业务编码列表；省略则覆盖该供应商全部未退役 Offer",
                 example = "[\"MOVIE_100\"]")

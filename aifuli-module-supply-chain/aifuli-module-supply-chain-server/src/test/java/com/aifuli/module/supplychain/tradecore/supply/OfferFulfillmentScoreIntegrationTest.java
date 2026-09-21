@@ -90,8 +90,8 @@ class OfferFulfillmentScoreIntegrationTest {
             assertThat(offerNos).hasSize(2);
 
             SupplierOfferDO created = offerMapper.selectByNo(offerNos.getFirst());
-            assertThat(created.getStabilityScore()).isNull();
-            assertThat(created.getTimelinessScore()).isNull();
+            assertThat(created.getStabilityScore()).isEqualTo(80);
+            assertThat(created.getTimelinessScore()).isEqualTo(80);
 
             int batchUpdated = scores.saveSupplierScores(supplierCode, 80, 70, null, 1L);
             assertThat(batchUpdated).isEqualTo(2);

@@ -512,10 +512,10 @@ class ProductCenterContractTest {
                 .contains("/skus/{skuCode}/fulfillment-scores");
         assertThat(ProductAdminController.SkuFulfillmentScoreItemReqVO.class
                 .getDeclaredField("stabilityScore").getAnnotation(Schema.class).description())
-                .isEqualTo("稳定性评分，人工录入，0-100");
+                .isEqualTo("稳定性评分，人工录入，0-100，默认80");
         assertThat(ProductAdminController.SkuFulfillmentScoreItemReqVO.class
                 .getDeclaredField("timelinessScore").getAnnotation(Schema.class).description())
-                .isEqualTo("时效性评分，人工录入，0-100");
+                .isEqualTo("时效性评分，人工录入，0-100，默认80");
     }
 
     /**

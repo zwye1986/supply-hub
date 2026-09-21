@@ -90,10 +90,10 @@ class InstoreProjectCashierRouteMigrationIntegrationTest {
         assertThatThrownBy(() -> insertBinding(jdbc, "IUB_P1_DUP", 101L))
                 .isInstanceOf(DuplicateKeyException.class);
 
-        // updateRemaining 已应用到最新 044 个 changeSet，重跑不再新增。
+        // updateRemaining 已应用到最新 045 个 changeSet，重跑不再新增。
         long changeSetCount = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM DATABASECHANGELOG", Long.class);
-        assertThat(changeSetCount).isEqualTo(44L);
+        assertThat(changeSetCount).isEqualTo(45L);
         updateRemaining(dataSource);
         assertThat(jdbc.queryForObject(
                 "SELECT COUNT(*) FROM DATABASECHANGELOG", Long.class)).isEqualTo(changeSetCount);

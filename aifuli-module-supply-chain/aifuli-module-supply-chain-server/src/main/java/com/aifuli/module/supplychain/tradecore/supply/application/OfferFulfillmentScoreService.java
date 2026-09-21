@@ -9,6 +9,7 @@ import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierOfferDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferMapper;
+import com.aifuli.module.supplychain.tradecore.supply.domain.OfferFulfillmentScore;
 import com.aifuli.module.supplychain.tradecore.supply.domain.OfferStatus;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.RequiredArgsConstructor;
@@ -40,8 +41,6 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
 public class OfferFulfillmentScoreService {
 
     private static final String TRANSACTION_MANAGER = "supplyChainTransactionManager";
-    private static final int SCORE_MIN = 0;
-    private static final int SCORE_MAX = 100;
 
     private final SupplyChainDatabaseClock databaseClock;
     private final SupplierMapper supplierMapper;
@@ -197,7 +196,7 @@ public class OfferFulfillmentScoreService {
     }
 
     private static boolean isScore(Integer value) {
-        return value != null && value >= SCORE_MIN && value <= SCORE_MAX;
+        return OfferFulfillmentScore.isValid(value);
     }
 
     private static boolean isLive(SupplierOfferDO offer) {
@@ -227,7 +226,7 @@ public class OfferFulfillmentScoreService {
             @Schema(description = "供应商永久业务编码") String supplierCode,
             @Schema(description = "供应商标准名称") String supplierName,
             @Schema(description = "供应商报价稳定业务编号") String offerNo,
-            @Schema(description = "稳定性评分，人工录入，0-100") Integer stabilityScore,
-            @Schema(description = "时效性评分，人工录入，0-100") Integer timelinessScore) {
+            @Schema(description = OfferFulfillmentScore.STABILITY_COMMENT) Integer stabilityScore,
+            @Schema(description = OfferFulfillmentScore.TIMELINESS_COMMENT) Integer timelinessScore) {
     }
 }

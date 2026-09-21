@@ -19,6 +19,7 @@ import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferVersionMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierSupplyScopeMapper;
+import com.aifuli.module.supplychain.tradecore.supply.domain.OfferFulfillmentScore;
 import com.aifuli.module.supplychain.tradecore.supply.domain.OfferStatus;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -81,8 +82,8 @@ class SupplierCooperativeProductServiceTest {
         assertThat(inserted.getStatus()).isEqualTo(OfferStatus.PUBLISHED.getCode());
         assertThat(inserted.getDraftMaxQuantity()).isEqualTo(100L);
         assertThat(inserted.getDraftMinQuantity()).isEqualTo(1L);
-        assertThat(inserted.getStabilityScore()).isNull();
-        assertThat(inserted.getTimelinessScore()).isNull();
+        assertThat(inserted.getStabilityScore()).isEqualTo(OfferFulfillmentScore.DEFAULT);
+        assertThat(inserted.getTimelinessScore()).isEqualTo(OfferFulfillmentScore.DEFAULT);
     }
 
     @Test

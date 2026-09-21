@@ -30,6 +30,7 @@ import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferMap
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferVersionMapper;
 import com.aifuli.module.supplychain.tradecore.supply.domain.ConnectorVersionStatus;
 import com.aifuli.module.supplychain.tradecore.supply.domain.InventorySourceStatus;
+import com.aifuli.module.supplychain.tradecore.supply.domain.OfferFulfillmentScore;
 import com.aifuli.module.supplychain.tradecore.supply.domain.OfferStatus;
 import com.aifuli.module.supplychain.tradecore.supply.domain.SupplierStatus;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
@@ -116,6 +117,8 @@ public class SupplierOfferPublicationService {
         SupplierOfferDO offer = SupplierOfferDO.builder()
                 .offerNo(businessNoGenerator.next("OFR_")).offerCode(command.offerCode())
                 .supplierId(supplier.getId()).platformSkuId(sku.getId())
+                .stabilityScore(OfferFulfillmentScore.DEFAULT)
+                .timelinessScore(OfferFulfillmentScore.DEFAULT)
                 .status(OfferStatus.DRAFT.getCode()).version(0L)
                 .createdBy(command.operatorId()).createdAt(now)
                 .updatedBy(command.operatorId()).updatedAt(now).build();

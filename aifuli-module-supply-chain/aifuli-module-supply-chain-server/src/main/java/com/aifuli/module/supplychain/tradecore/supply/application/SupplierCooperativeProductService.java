@@ -23,6 +23,7 @@ import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferVersionMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierSupplyScopeMapper;
+import com.aifuli.module.supplychain.tradecore.supply.domain.OfferFulfillmentScore;
 import com.aifuli.module.supplychain.tradecore.supply.domain.OfferPriceMode;
 import com.aifuli.module.supplychain.tradecore.supply.domain.OfferStatus;
 import com.aifuli.module.supplychain.tradecore.supply.domain.SupplyMode;
@@ -253,6 +254,8 @@ public class SupplierCooperativeProductService {
                 .offerSupplyMode(resolved.supplyMode().name())
                 .draftMaxQuantity(resolved.maxQuantity())
                 .draftMinQuantity(resolved.minQuantity())
+                .stabilityScore(OfferFulfillmentScore.DEFAULT)
+                .timelinessScore(OfferFulfillmentScore.DEFAULT)
                 .status(OfferStatus.PUBLISHED.getCode())
                 .version(0L)
                 .createdBy(operatorId)
@@ -440,7 +443,7 @@ public class SupplierCooperativeProductService {
             @Schema(description = "草稿供货上限") Long maxQuantity,
             @Schema(description = "草稿最低起购量") Long minQuantity,
             @Schema(description = "生命周期：PUBLISHED已发布，SUSPENDED暂停") String status,
-            @Schema(description = "稳定性评分，人工录入，0-100") Integer stabilityScore,
-            @Schema(description = "时效性评分，人工录入，0-100") Integer timelinessScore) {
+            @Schema(description = OfferFulfillmentScore.STABILITY_COMMENT) Integer stabilityScore,
+            @Schema(description = OfferFulfillmentScore.TIMELINESS_COMMENT) Integer timelinessScore) {
     }
 }

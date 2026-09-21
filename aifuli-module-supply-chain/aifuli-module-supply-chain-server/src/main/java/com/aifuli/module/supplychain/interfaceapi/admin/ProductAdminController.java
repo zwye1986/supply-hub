@@ -15,6 +15,7 @@ import com.aifuli.module.supplychain.tradecore.supply.application.OfferFulfillme
 import com.aifuli.module.supplychain.tradecore.supply.application.OfferFulfillmentScoreService.ScoreUpdateResult;
 import com.aifuli.module.supplychain.tradecore.supply.application.OfferFulfillmentScoreService.SkuFulfillmentScoreView;
 import com.aifuli.module.supplychain.tradecore.supply.application.OfferFulfillmentScoreService.SkuSupplierScoreLine;
+import com.aifuli.module.supplychain.tradecore.supply.domain.OfferFulfillmentScore;
 import com.fasterxml.jackson.annotation.JsonAlias;
 import com.fasterxml.jackson.annotation.JsonFormat;
 import io.swagger.v3.oas.annotations.Operation;
@@ -605,9 +606,9 @@ public class ProductAdminController {
     public static class SkuFulfillmentScoreItemReqVO {
         @Schema(description = "供应商永久业务编码", example = "SPL_A")
         private String supplierCode;
-        @Schema(description = "稳定性评分，人工录入，0-100", example = "80")
+        @Schema(description = OfferFulfillmentScore.STABILITY_COMMENT, example = "80")
         private Integer stabilityScore;
-        @Schema(description = "时效性评分，人工录入，0-100", example = "70")
+        @Schema(description = OfferFulfillmentScore.TIMELINESS_COMMENT, example = "70")
         private Integer timelinessScore;
     }
 }

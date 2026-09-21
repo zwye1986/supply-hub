@@ -446,3 +446,13 @@ databaseChangeLog:
             encoding: UTF-8
             splitStatements: true
             stripComments: false
+  - changeSet:
+      id: 043-offer-fulfillment-score-default
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 043-offer-fulfillment-score-default.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false

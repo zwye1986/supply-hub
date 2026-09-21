@@ -188,9 +188,9 @@ class SupplierAdminRestContractTest {
                 .findFirst()
                 .orElseThrow();
         assertThat(stability.getAccessor().getAnnotation(io.swagger.v3.oas.annotations.media.Schema.class)
-                .description()).isEqualTo("稳定性评分，人工录入，0-100");
+                .description()).isEqualTo("稳定性评分，人工录入，0-100，默认80");
         assertThat(timeliness.getAccessor().getAnnotation(io.swagger.v3.oas.annotations.media.Schema.class)
-                .description()).isEqualTo("时效性评分，人工录入，0-100");
+                .description()).isEqualTo("时效性评分，人工录入，0-100，默认80");
     }
 
     private static boolean hasHttpMapping(Method method) {
