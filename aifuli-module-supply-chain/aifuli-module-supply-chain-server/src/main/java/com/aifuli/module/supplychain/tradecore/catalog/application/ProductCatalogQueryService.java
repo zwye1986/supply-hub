@@ -23,6 +23,7 @@ import org.springframework.stereotype.Service;
 import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -208,6 +209,29 @@ public class ProductCatalogQueryService {
         return value != null && !value.isBlank();
     }
 
+    /**
+     * 规范化管理端商品类型筛选：兼容单个编码、重复键多值与逗号拼接，trim、丢空白并去重。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线}（d39）。
+     */
+    private static List<String> normalizeProductTypes(List<String> raw) {
+        if (raw == null || raw.isEmpty()) {
+            return List.of();
+        }
+        LinkedHashSet<String> codes = new LinkedHashSet<>();
+        for (String item : raw) {
+            if (item == null || item.isBlank()) {
+                continue;
+            }
+            for (String part : item.split(",")) {
+                String code = part.trim();
+                if (!code.isEmpty()) {
+                    codes.add(code);
+                }
+            }
+        }
+        return List.copyOf(codes);
+    }
+
     private record TabFilter(String productType, String fulfillmentType) {
     }
 
@@ -326,11 +350,14 @@ public class ProductCatalogQueryService {
 
     /**
      * 管理端商品列表聚合查询。
-     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#419-管理端商品列表聚合查询get-supply-chainproductsmanagement-page}。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#419-管理端商品列表聚合查询get-supply-chainproductsmanagement-page}（d39）。
      */
     public PageResult<ProductManagementSpuItem> managementPage(ProductManagementPageQuery query) {
         TabFilter tab = resolveTab(query.tabCode());
-        String productType = hasText(query.productType()) ? query.productType().trim() : tab.productType();
+        List<String> productTypes = normalizeProductTypes(query.productType());
+        if (productTypes.isEmpty() && hasText(tab.productType())) {
+            productTypes = List.of(tab.productType());
+        }
         String fulfillmentType = hasText(query.fulfillmentType()) ? query.fulfillmentType().trim() : tab.fulfillmentType();
 
         Set<Long> candidateSpuIds = null;
@@ -402,7 +429,7 @@ public class ProductCatalogQueryService {
                 .ne(PlatformSpuDO::getStatus, CatalogEntityStatus.ARCHIVED.getCode())
                 .eq(query.brandId() != null, PlatformSpuDO::getBrandId, query.brandId())
                 .eq(query.categoryId() != null, PlatformSpuDO::getPrimaryCategoryId, query.categoryId())
-                .eq(hasText(productType), PlatformSpuDO::getProductType, productType)
+                .in(!productTypes.isEmpty(), PlatformSpuDO::getProductType, productTypes)
                 .eq(hasText(query.unshelveMode()), PlatformSpuDO::getUnshelveMode, query.unshelveMode())
                 .ge(query.updateTimeStart() != null, PlatformSpuDO::getUpdatedAt, query.updateTimeStart())
                 .le(query.updateTimeEnd() != null, PlatformSpuDO::getUpdatedAt, query.updateTimeEnd())
@@ -558,8 +585,8 @@ public class ProductCatalogQueryService {
             ));
         }
 
-        log.info("查询管理端平台商品聚合分页 tabCode={} pageNo={} pageSize={} resultCount={}",
-                query.tabCode(), param.getPageNo(), param.getPageSize(), items.size());
+        log.info("查询管理端平台商品聚合分页 tabCode={} productTypes={} pageNo={} pageSize={} resultCount={}",
+                query.tabCode(), productTypes, param.getPageNo(), param.getPageSize(), items.size());
         return new PageResult<>(items, page.getTotal());
     }
 
@@ -604,7 +631,7 @@ public class ProductCatalogQueryService {
     public record ProductManagementPageQuery(
             String tabCode,
             String keyword,
-            String productType,
+            List<String> productType,
             Long categoryId,
             Long brandId,
             Short status,

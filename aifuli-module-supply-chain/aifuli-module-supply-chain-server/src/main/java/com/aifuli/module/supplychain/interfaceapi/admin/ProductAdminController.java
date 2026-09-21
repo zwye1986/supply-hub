@@ -167,7 +167,10 @@ public class ProductAdminController {
     public CommonResult<PageResult<ProductCatalogQueryService.ProductManagementSpuItem>> managementPage(
             @Parameter(description = "业务 Tab 标识", example = "VIRTUAL_CARD") @RequestParam(required = false) String tabCode,
             @Parameter(description = "SPU 编码、名称模糊搜索", example = "爱奇艺") @RequestParam(required = false) String keyword,
-            @Parameter(description = "商品类型编码", example = "PT_CARD") @RequestParam(required = false) String productType,
+            @Parameter(description = "商品类型编码，可多选；兼容单个 productType。"
+                    + "重复键 productType=A&productType=B，或逗号拼接 productType=A,B",
+                    example = "EQUITY_PRODUCT")
+            @RequestParam(required = false) List<String> productType,
             @Parameter(description = "主类目内部主键", example = "10") @RequestParam(required = false) Long categoryId,
             @Parameter(description = "品牌内部主键", example = "1") @RequestParam(required = false) Long brandId,
             @Parameter(description = "SKU商品状态：0草稿，10已上架，20已下架；字典supply_chain_sku_status", example = "10") @RequestParam(required = false) Short status,

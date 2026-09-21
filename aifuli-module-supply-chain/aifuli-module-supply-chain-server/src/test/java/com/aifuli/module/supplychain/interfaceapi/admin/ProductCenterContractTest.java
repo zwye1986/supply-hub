@@ -492,6 +492,27 @@ class ProductCenterContractTest {
     }
 
     /**
+     * 管理端聚合列表商品类型筛选必须声明为可多选 List，并兼容单个 productType。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线}（d39）。
+     */
+    @Test
+    void managementPageProductTypeAcceptsMultipleValues() {
+        Method managementPage = Arrays.stream(ProductAdminController.class.getDeclaredMethods())
+                .filter(method -> method.getName().equals("managementPage"))
+                .findFirst()
+                .orElseThrow();
+        java.lang.reflect.Parameter productType = Arrays.stream(managementPage.getParameters())
+                .filter(parameter -> parameter.getName().equals("productType"))
+                .findFirst()
+                .orElseThrow();
+
+        assertThat(List.class.isAssignableFrom(productType.getType())).isTrue();
+        assertThat(productType.getAnnotation(Parameter.class).description())
+                .contains("可多选")
+                .contains("兼容");
+    }
+
+    /**
      * 商品类型管理端 OpenAPI 参数与模型字段必须明确状态口径及对应字典类型，且去除历史笔误（如0草稿）。
      * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#53-商品中心数据字典与配置变更}。
      */
