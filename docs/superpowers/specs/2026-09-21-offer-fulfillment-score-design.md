@@ -22,7 +22,7 @@
 ## 2. 领域不变量
 
 1. 评分粒度是 **未退役 Offer**，业务上等于 SKU × 供应商。未退役 Offer 在 `(supplier_id, platform_sku_id)` 上唯一，商品侧可用 `supplierCode` 寻址。
-2. 稳定性与时效性必须成对，都是 0–100 的整数。新建合作商品两列默认 **80**；80 是默认分，不是「未评分」。
+2. 库内两列都是 0–100 的整数，新建默认 **80**。写入可只改其中一列，省略的列保持原值；已提交的值必须是 0–100。
 3. `PUT .../offers/{offerNo}` 改价 **不碰** 评分。存量 `NULL` 由 Liquibase `043` 回填为 80。
 4. 展示与写入范围 = `PUBLISHED` + `SUSPENDED`。`RETIRED` 不展示、不可写。
 5. 单一写入服务 `OfferFulfillmentScoreService` 位于 `tradecore.supply`。商品侧 Controller 只调该服务，catalog 不得直接 UPDATE Offer 评分列。
@@ -62,11 +62,11 @@ Java：`SupplierOfferDO.stabilityScore` / `timelinessScore`，类型 `Integer`�
 
 请求：
 
-- `stabilityScore`（必填，0–100，请求 VO `@Min`/`@Max`）
-- `timelinessScore`（必填，0–100，请求 VO `@Min`/`@Max`）
+- `stabilityScore`（可选，0–100，请求 VO `@Min`/`@Max`；省略则该列保持原值）
+- `timelinessScore`（可选，0–100，请求 VO `@Min`/`@Max`；省略则该列保持原值）
 - `platformSkuCodes`（可选 `List<String>`）：省略、null 或空列表 = 覆盖该供应商全部未退役 Offer；非空 = 只覆盖这些 SKU，整批校验，任一 SKU 不存在或该供应商当前无未退役 Offer 则整单拒绝。
 
-响应：`{ "updatedCount": n }`。供应商不存在 → `SUPPLIER_NOT_FOUND`。无未退役 Offer 且未指定 SKU 列表 → `updatedCount=0`，不报错。
+响应：`{ "updatedCount": n }`。供应商不存在 → `SUPPLIER_NOT_FOUND`。无未退役 Offer 且未指定 SKU 列表 → `updatedCount=0`，不报错。两列都省略时不改分数，`updatedCount=0`，不报错。
 
 ### 4.3 商品履约能力弹窗（PRD 8.4.1.1）
 
@@ -91,6 +91,7 @@ Java：`SupplierOfferDO.stabilityScore` / `timelinessScore`，类型 `Integer`�
 请求：`{ "items": [{ "supplierCode", "stabilityScore", "timelinessScore" }] }`。行内分数请求 VO `@Min`/`@Max` 约束 0–100，`items` 加 `@Valid` 级联校验。
 
 - `items` 必填且非空。
+- 行内可只填 `stabilityScore` 或 `timelinessScore`；省略的列保持该 Offer 原值。
 - 只更新提交行；未出现的当前合作供应商保持原值。
 - `supplierCode` 对该 SKU 无未退役 Offer → `FULFILLMENT_SCORE_SUPPLIER_NOT_COOPERATING`，整单回滚。
 - 同一请求重复 `supplierCode` → `FULFILLMENT_SCORE_INVALID`。
@@ -103,7 +104,7 @@ Java：`SupplierOfferDO.stabilityScore` / `timelinessScore`，类型 `Integer`�
 
 | 码 | 常量 | 文案 |
 | --- | --- | --- |
-| 1_050_001_116 | `FULFILLMENT_SCORE_INVALID` | 稳定性评分与时效性评分必须同时给出且为 0-100 的整数 |
+| 1_050_001_116 | `FULFILLMENT_SCORE_INVALID` | 稳定性评分与时效性评分为 0-100 的整数 |
 | 1_050_001_117 | `FULFILLMENT_SCORE_SUPPLIER_NOT_COOPERATING` | 该供应商当前未合作供应此 SKU |
 | 1_050_001_118 | `FULFILLMENT_SCORE_ITEMS_REQUIRED` | 履约能力评分至少提交一行 |
 
@@ -119,7 +120,7 @@ Offer 身份上的分数是路由的**预备输入**。`SupplierRoutingEngine` �
 
 ## 8. 测试门禁
 
-- `*Test`：新建默认 80、分数成对校验、批量覆盖全部/子集、RETIRED 不可见不可写、改价不清分、商品侧非合作供应商拒绝、空 items 拒绝、两侧互读同一值。
+- `*Test`：新建默认 80、可单列更新、越界拒绝、批量覆盖全部/子集、RETIRED 不可见不可写、改价不清分、商品侧非合作供应商拒绝、空 items 拒绝、两侧互读同一值。
 - `*IntegrationTest`（profile `supply-chain-integration`）：真实 MySQL + Liquibase `042`/`043`；新建为 80；供应商 PUT 后商品 GET 一致，反向亦然。
 - `*ContractTest`：`OfferListItem` 新字段 Schema；新映射 `@PreAuthorize`；DTO 注释与 DDL COMMENT 一致。
 - `*ArchitectureTest`：`routing.domain` 不依赖新服务、不出现稳定性/时效分字段。

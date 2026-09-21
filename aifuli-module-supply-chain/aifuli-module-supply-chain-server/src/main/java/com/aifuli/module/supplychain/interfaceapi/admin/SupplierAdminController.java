@@ -260,6 +260,7 @@ public class SupplierAdminController {
     @PreAuthorize(SUPPLIER_UPDATE_EXPRESSION)
     @Operation(summary = "保存供应商合作商品履约能力评分",
             description = "人工录入稳定性与时效性评分，挂在未退役 Offer 身份列。"
+                    + "可只改其中一列，省略的列保持原值。"
                     + "省略 platformSkuCodes 则覆盖该供应商全部未退役 Offer；给出列表则只覆盖这些 SKU。"
                     + "改价 PUT .../offers/{offerNo} 不碰评分。")
     public CommonResult<ScoreUpdateResult> saveFulfillmentScores(

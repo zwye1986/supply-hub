@@ -106,6 +106,11 @@ class OfferFulfillmentScoreIntegrationTest {
                     new SkuSupplierScoreLine(supplierCode, 90, 91)), 1L);
             assertThat(skuUpdated).isEqualTo(1);
 
+            assertThat(scores.saveSupplierScores(supplierCode, null, 65,
+                    List.of("MOVIE_100"), 1L)).isEqualTo(1);
+            assertThat(scores.getSkuScores("MOVIE_100").items().getFirst().stabilityScore()).isEqualTo(90);
+            assertThat(scores.getSkuScores("MOVIE_100").items().getFirst().timelinessScore()).isEqualTo(65);
+
             var remainingPage = offers.page(supplierCode, null, null, null, 1, 20);
             OfferListItem movie100 = remainingPage.getList().stream()
                     .filter(item -> "MOVIE_100".equals(item.platformSkuCode()))
@@ -116,7 +121,7 @@ class OfferFulfillmentScoreIntegrationTest {
                     .findFirst()
                     .orElseThrow();
             assertThat(movie100.stabilityScore()).isEqualTo(90);
-            assertThat(movie100.timelinessScore()).isEqualTo(91);
+            assertThat(movie100.timelinessScore()).isEqualTo(65);
             assertThat(movie200.stabilityScore()).isEqualTo(80);
             assertThat(movie200.timelinessScore()).isEqualTo(70);
 

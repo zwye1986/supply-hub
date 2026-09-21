@@ -322,6 +322,7 @@ public class ProductAdminController {
     @PreAuthorize(PRODUCT_UPDATE_EXPRESSION)
     @Operation(summary = "保存SKU当前合作供应商履约能力评分",
             description = "只更新提交行；未出现的当前合作供应商保持原值。"
+                    + "行内可只改一列分数，省略的列保持原值。"
                     + "supplierCode 对该 SKU 无未退役 Offer 则整单拒绝。")
     public CommonResult<ScoreUpdateResult> saveSkuFulfillmentScores(
             @Parameter(description = "平台SKU永久业务编码") @PathVariable String skuCode,

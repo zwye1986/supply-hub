@@ -744,7 +744,7 @@ system-server 通过追加变更集 `006-product-list-filter-dictionaries` 写�
 对齐 PRD 8.4.1.1。数据与供应商合作商品共用 `sc_supplier_offer.stability_score` / `timeliness_score`，不在商品中心另存一份。权威契约、错误码与不变量见 `docs/superpowers/specs/2026-09-21-offer-fulfillment-score-design.md`。
 
 * **GET 权限**：`PRODUCT_QUERY_EXPRESSION`。SKU 不存在返回 `PLATFORM_SKU_NOT_FOUND`；无当前合作供应商返回空 `items`。
-* **PUT 权限**：`PRODUCT_UPDATE_EXPRESSION`。只更新提交的供应商行；未退役 Offer 以外的 `supplierCode` 整单拒绝。
+* **PUT 权限**：`PRODUCT_UPDATE_EXPRESSION`。只更新提交的供应商行；行内可只改一列分数；未退役 Offer 以外的 `supplierCode` 整单拒绝。
 * **管理列表**：`GET /products/management-page` 的 `suppliers[]` 仍只含编码与名称，不加分数。
 
 ---
