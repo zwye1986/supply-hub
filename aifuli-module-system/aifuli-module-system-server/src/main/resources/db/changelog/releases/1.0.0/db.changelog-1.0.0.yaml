@@ -120,3 +120,14 @@ databaseChangeLog:
             encoding: UTF-8
             splitStatements: true
             stripComments: false
+  - changeSet:
+      id: 012-offer-price-mode-dictionary
+      author: supply-chain
+      runInTransaction: true
+      changes:
+        - sqlFile:
+            path: 012-offer-price-mode-dictionary.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false

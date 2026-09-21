@@ -235,6 +235,33 @@ class AdminFormDictionaryMigrationIntegrationTest {
                 SELECT COUNT(*) FROM DATABASECHANGELOG
                 WHERE ID = '011-suggested-sale-price-operator-dictionary' AND AUTHOR = 'supply-chain'
                 """));
+        assertEquals(1, queryCount("""
+                SELECT COUNT(*) FROM system_dict_type
+                WHERE type = 'supply_chain_offer_price_mode' AND deleted = b'0'
+                """));
+        assertEquals(3, queryCount("""
+                SELECT COUNT(*) FROM system_dict_data
+                WHERE dict_type = 'supply_chain_offer_price_mode' AND deleted = b'0'
+                """));
+        assertEquals("固定值", queryText("""
+                SELECT label FROM system_dict_data
+                WHERE dict_type = 'supply_chain_offer_price_mode'
+                  AND value = 'FIXED' AND deleted = b'0'
+                """));
+        assertEquals("实时更新", queryText("""
+                SELECT label FROM system_dict_data
+                WHERE dict_type = 'supply_chain_offer_price_mode'
+                  AND value = 'REALTIME' AND deleted = b'0'
+                """));
+        assertEquals("按供货折扣", queryText("""
+                SELECT label FROM system_dict_data
+                WHERE dict_type = 'supply_chain_offer_price_mode'
+                  AND value = 'DISCOUNT' AND deleted = b'0'
+                """));
+        assertEquals(1, queryCount("""
+                SELECT COUNT(*) FROM DATABASECHANGELOG
+                WHERE ID = '012-offer-price-mode-dictionary' AND AUTHOR = 'supply-chain'
+                """));
 
         updateLiquibase();
         assertEquals(14, queryCount("""
@@ -300,6 +327,18 @@ class AdminFormDictionaryMigrationIntegrationTest {
         assertEquals(1, queryCount("""
                 SELECT COUNT(*) FROM DATABASECHANGELOG
                 WHERE ID = '011-suggested-sale-price-operator-dictionary' AND AUTHOR = 'supply-chain'
+                """));
+        assertEquals(1, queryCount("""
+                SELECT COUNT(*) FROM system_dict_type
+                WHERE type = 'supply_chain_offer_price_mode' AND deleted = b'0'
+                """));
+        assertEquals(3, queryCount("""
+                SELECT COUNT(*) FROM system_dict_data
+                WHERE dict_type = 'supply_chain_offer_price_mode' AND deleted = b'0'
+                """));
+        assertEquals(1, queryCount("""
+                SELECT COUNT(*) FROM DATABASECHANGELOG
+                WHERE ID = '012-offer-price-mode-dictionary' AND AUTHOR = 'supply-chain'
                 """));
     }
 
