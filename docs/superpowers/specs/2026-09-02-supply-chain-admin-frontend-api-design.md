@@ -344,12 +344,15 @@ SPU / 供货范围写入的 `productClassification` 不走 `ClosedEnums`：类�
 - `GET /supply-chain/suppliers/{supplierCode}/offers` 分页，筛选 `sellableCategory`/`productType`/`productClassification`
 - `POST /supply-chain/suppliers/{supplierCode}/offers` body `{ items: [...] }` 批量新增，默认 `PUBLISHED`
 - `PUT /supply-chain/suppliers/{supplierCode}/offers/{offerNo}` 编辑（上架中改价发新版本）
+- `PUT /supply-chain/suppliers/{supplierCode}/fulfillment-scores` 人工录入稳定性/时效评分（可按 SKU 子集）
 - `PATCH /supply-chain/suppliers/{supplierCode}/offers/{offerNo}` `{ "status": "PUBLISHED"|"SUSPENDED" }` 上架/下架
 - `DELETE /supply-chain/suppliers/{supplierCode}/offers/{offerNo}` 逻辑移除（`RETIRED`，列表不再返回）
 
 行字段：平台 SPU/SKU 编码与名称、SPU 三码（`sellableCategory`/`productType`/`productClassification`）、`suggestPriceCents`、`priceMode`（字典 `supply_chain_offer_price_mode`）、`unitPriceCents`、`discountBp`（10000=100%）、`offerSupplyMode`、`maxQuantity`、`minQuantity`、`status`。`FIXED` 单价>0；`DISCOUNT` 折扣 ∈[1,10000] 且建议价>0；`REALTIME` 禁止填固定价。必须按三码整体唯一命中一条供货配置。
 
 SKU 未填供货上限时继承供货配置 `maxQuantity`；未填最低起购量时固定取 1。供货配置 `minQuantity` 是预留字段，不得被合作商品继承。
+
+履约能力评分挂点、批量评分与商品列表弹窗契约见 `docs/superpowers/specs/2026-09-21-offer-fulfillment-score-design.md`。`PUT /supply-chain/suppliers/{supplierCode}/fulfillment-scores` 覆盖未退役 Offer 的两列分数；改价 `PUT .../offers/{offerNo}` 不碰评分。
 
 ### 5.6 开票信息
 

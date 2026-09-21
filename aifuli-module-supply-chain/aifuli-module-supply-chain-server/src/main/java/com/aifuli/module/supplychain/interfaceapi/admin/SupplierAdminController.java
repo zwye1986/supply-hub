@@ -5,6 +5,8 @@ import com.aifuli.framework.common.pojo.CommonResult;
 import com.aifuli.framework.common.pojo.PageResult;
 import com.aifuli.framework.common.util.monitor.TracerUtils;
 import com.aifuli.module.supplychain.tradecore.profile.domain.ClosedEnums;
+import com.aifuli.module.supplychain.tradecore.supply.application.OfferFulfillmentScoreService;
+import com.aifuli.module.supplychain.tradecore.supply.application.OfferFulfillmentScoreService.ScoreUpdateResult;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierInvoiceService;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierInvoiceService.SaveInvoiceCommand;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierInvoiceService.SupplierInvoiceView;
@@ -83,6 +85,7 @@ public class SupplierAdminController {
     private final SupplierSupplyScopeService scopeService;
     private final SupplierCooperativeProductService cooperativeProductService;
     private final SupplierInvoiceService invoiceService;
+    private final OfferFulfillmentScoreService offerFulfillmentScoreService;
 
     @GetMapping
     @PreAuthorize(SUPPLIER_QUERY_EXPRESSION)
@@ -251,11 +254,26 @@ public class SupplierAdminController {
         return success(true);
     }
 
+    @PutMapping("/{supplierCode}/fulfillment-scores")
+    @PreAuthorize(SUPPLIER_UPDATE_EXPRESSION)
+    @Operation(summary = "保存供应商合作商品履约能力评分",
+            description = "人工录入稳定性与时效性评分，挂在未退役 Offer 身份列。"
+                    + "省略 platformSkuCodes 则覆盖该供应商全部未退役 Offer；给出列表则只覆盖这些 SKU。"
+                    + "改价 PUT .../offers/{offerNo} 不碰评分。")
+    public CommonResult<ScoreUpdateResult> saveFulfillmentScores(
+            @Parameter(description = "供应商永久业务编码") @PathVariable String supplierCode,
+            @Valid @RequestBody FulfillmentScoreSaveReqVO request) {
+        int updated = offerFulfillmentScoreService.saveSupplierScores(
+                supplierCode, request.getStabilityScore(), request.getTimelinessScore(),
+                request.getPlatformSkuCodes(), getLoginUserId());
+        return success(new ScoreUpdateResult(updated));
+    }
+
     @GetMapping("/{supplierCode}/offers")
     @PreAuthorize(SUPPLIER_QUERY_EXPRESSION)
     @Operation(summary = "合作商品列表（不含已移除）",
             description = "分页，默认 pageNo=1 pageSize=20，按 createdAt 倒序。可筛 sellableCategory/productType/productClassification。"
-                    + "身份用 supplierCode。金额单位 CNY 分。不暴露 DO。")
+                    + "身份用 supplierCode。金额单位 CNY 分。含可空稳定性/时效性评分。不暴露 DO。")
     public CommonResult<PageResult<OfferListItem>> listOffers(
             @PathVariable String supplierCode,
             @Parameter(description = "可售品类枚举名") @RequestParam(required = false) String sellableCategory,
@@ -698,5 +716,17 @@ public class SupplierAdminController {
         @Min(1)
         @Schema(description = "草稿最低起购量，空则取1，不继承供货配置预留字段")
         private Long minQuantity;
+    }
+
+    @Data
+    @Schema(description = "供应商合作商品履约能力评分保存")
+    public static class FulfillmentScoreSaveReqVO {
+        @Schema(description = "稳定性评分，人工录入，0-100", example = "80")
+        private Integer stabilityScore;
+        @Schema(description = "时效性评分，人工录入，0-100", example = "70")
+        private Integer timelinessScore;
+        @Schema(description = "平台SKU永久业务编码列表；省略则覆盖该供应商全部未退役 Offer",
+                example = "[\"MOVIE_100\"]")
+        private List<String> platformSkuCodes;
     }
 }

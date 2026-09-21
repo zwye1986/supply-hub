@@ -5,6 +5,7 @@ import com.aifuli.module.supplychain.tradecore.catalog.application.BrandAdminSer
 import com.aifuli.module.supplychain.tradecore.catalog.application.CategoryCommandService;
 import com.aifuli.module.supplychain.tradecore.catalog.application.ProductDeletionValidator;
 import com.aifuli.module.supplychain.tradecore.catalog.application.PlatformSkuSchemaRegistry;
+import com.aifuli.module.supplychain.tradecore.catalog.application.ProductClassificationValidationService;
 import com.aifuli.module.supplychain.tradecore.catalog.application.ProductSellabilityService;
 import com.aifuli.module.supplychain.tradecore.catalog.application.ProductTypeValidationService;
 import org.springframework.context.annotation.Configuration;
@@ -14,6 +15,6 @@ import org.springframework.context.annotation.Import;
 @Configuration(proxyBeanMethods = false)
 @Import({BrandAdminService.class, CategoryCommandService.class, ProductTypeValidationService.class,
         ProductSellabilityService.class, ProductDeletionValidator.class, FulfillmentTargetSchemaRegistry.class,
-        PlatformSkuSchemaRegistry.class})
+        PlatformSkuSchemaRegistry.class, ProductClassificationValidationService.class})
 public class ProductCenterTestConfiguration {
 }

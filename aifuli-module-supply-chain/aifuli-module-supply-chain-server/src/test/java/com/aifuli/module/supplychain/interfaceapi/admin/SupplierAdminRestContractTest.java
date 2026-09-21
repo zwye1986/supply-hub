@@ -1,5 +1,6 @@
 package com.aifuli.module.supplychain.interfaceapi.admin;
 
+import com.aifuli.module.supplychain.tradecore.supply.application.SupplierCooperativeProductService.OfferListItem;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import io.swagger.v3.oas.annotations.Operation;
@@ -154,6 +155,42 @@ class SupplierAdminRestContractTest {
                 .getAnnotation(io.swagger.v3.oas.annotations.media.Schema.class)
                 .description())
                 .contains("supply_chain_offer_price_mode");
+    }
+
+    @Test
+    void fulfillmentScoresUseNounResourceAndOfferListExposesScores() {
+        boolean scoresPut = Arrays.stream(SupplierAdminController.class.getDeclaredMethods())
+                .anyMatch(method -> {
+                    org.springframework.web.bind.annotation.PutMapping put =
+                            method.getAnnotation(org.springframework.web.bind.annotation.PutMapping.class);
+                    return put != null
+                            && String.join(",", put.value()).equals("/{supplierCode}/fulfillment-scores");
+                });
+        assertThat(scoresPut).isTrue();
+        assertThat(Arrays.stream(SupplierAdminController.class.getDeclaredMethods())
+                .filter(method -> {
+                    org.springframework.web.bind.annotation.PutMapping put =
+                            method.getAnnotation(org.springframework.web.bind.annotation.PutMapping.class);
+                    return put != null
+                            && String.join(",", put.value()).contains("fulfillment-scores");
+                })
+                .map(SupplierAdminRestContractTest::joinedPaths)
+                .noneMatch(path -> path.contains("/batch"))).isTrue();
+        assertThat(Arrays.stream(OfferListItem.class.getRecordComponents())
+                .map(java.lang.reflect.RecordComponent::getName))
+                .contains("stabilityScore", "timelinessScore");
+        java.lang.reflect.RecordComponent stability = Arrays.stream(OfferListItem.class.getRecordComponents())
+                .filter(component -> "stabilityScore".equals(component.getName()))
+                .findFirst()
+                .orElseThrow();
+        java.lang.reflect.RecordComponent timeliness = Arrays.stream(OfferListItem.class.getRecordComponents())
+                .filter(component -> "timelinessScore".equals(component.getName()))
+                .findFirst()
+                .orElseThrow();
+        assertThat(stability.getAccessor().getAnnotation(io.swagger.v3.oas.annotations.media.Schema.class)
+                .description()).isEqualTo("稳定性评分，人工录入，0-100");
+        assertThat(timeliness.getAccessor().getAnnotation(io.swagger.v3.oas.annotations.media.Schema.class)
+                .description()).isEqualTo("时效性评分，人工录入，0-100");
     }
 
     private static boolean hasHttpMapping(Method method) {

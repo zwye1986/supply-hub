@@ -1072,7 +1072,7 @@ RoutingDecision decide(
 
 标准候选配置只绑定 Supplier，不绑定报价版本；运行时按 Buyer、PlatformSKU、数量和业务时间解析唯一适用的 SupplierOfferVersion，使报价正常发布不必同步重发路由策略。场景路由不依赖中台 PlatformSKU、SupplierOffer、菜品、影片、场次或座位。
 
-一期实现 `STANDARD_PRODUCT` 路由；奇那梦也必须通过该路由模块选出，不能由业务代码硬编码。本期保持现有规则维度和静态优先级（`candidatePriority` → `supplierCode` → `offerId`，原因码 `SELECTED_BY_STABLE_PRIORITY`），不物化四级配置组，不启用 `PRICE_ASC`、综合权重、稳定性/时效评分、自动学习、表达式 DSL 或拆量路由。`SCENARIO` 表保留但不建设应用服务；淘宝闪购与大润发继续使用渠道绑定的固定商户，不进入标准商品路由。边界见[《供应链中台 PRD 一期范围对齐》§7](./2026-09-12-supply-chain-prd-scope-alignment-design.md#7-路由)。
+一期实现 `STANDARD_PRODUCT` 路由；奇那梦也必须通过该路由模块选出，不能由业务代码硬编码。本期保持现有规则维度和静态优先级（`candidatePriority` → `supplierCode` → `offerId`，原因码 `SELECTED_BY_STABLE_PRIORITY`），不物化四级配置组，不启用 `PRICE_ASC`、综合权重、自动学习、表达式 DSL 或拆量路由。稳定性/时效评分允许运营人工写在 `sc_supplier_offer` 身份列，作为预备输入；`SupplierRoutingEngine` 本期不读这些分，`routing.domain` 不引入分数字段。挂点契约见[《合作商品履约能力评分》](./2026-09-21-offer-fulfillment-score-design.md)。`SCENARIO` 表保留但不建设应用服务；淘宝闪购与大润发继续使用渠道绑定的固定商户，不进入标准商品路由。边界见[《供应链中台 PRD 一期范围对齐》§7](./2026-09-12-supply-chain-prd-scope-alignment-design.md#7-路由)。
 
 ### 8.3 策略、版本和强类型规则
 
