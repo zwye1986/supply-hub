@@ -10,6 +10,7 @@ import com.aifuli.module.supplychain.tradecore.catalog.application.ProductCatalo
 import com.aifuli.module.supplychain.tradecore.catalog.application.ProductCatalogQueryService.SpuListItem;
 import com.aifuli.module.supplychain.tradecore.catalog.application.ProductTypeAdminService.ProductTypeView;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
+import com.aifuli.module.supplychain.tradecore.supply.domain.OfferFulfillmentScore;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.swagger.v3.core.converter.ModelConverters;
@@ -18,6 +19,8 @@ import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
 import org.junit.jupiter.api.Test;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -516,6 +519,12 @@ class ProductCenterContractTest {
         assertThat(ProductAdminController.SkuFulfillmentScoreItemReqVO.class
                 .getDeclaredField("timelinessScore").getAnnotation(Schema.class).description())
                 .isEqualTo("时效性评分，人工录入，0-100，默认80");
+        assertScoreRange(ProductAdminController.SkuFulfillmentScoreItemReqVO.class
+                .getDeclaredField("stabilityScore"));
+        assertScoreRange(ProductAdminController.SkuFulfillmentScoreItemReqVO.class
+                .getDeclaredField("timelinessScore"));
+        assertThat(ProductAdminController.SkuFulfillmentScoreSaveReqVO.class
+                .getDeclaredField("items").isAnnotationPresent(Valid.class)).isTrue();
     }
 
     /**
@@ -681,6 +690,11 @@ class ProductCenterContractTest {
 
     private static String[] fieldNames(Class<?> type) {
         return Arrays.stream(type.getDeclaredFields()).map(field -> field.getName()).toArray(String[]::new);
+    }
+
+    private static void assertScoreRange(java.lang.reflect.Field field) {
+        assertThat(field.getAnnotation(Min.class).value()).isEqualTo(OfferFulfillmentScore.MIN);
+        assertThat(field.getAnnotation(Max.class).value()).isEqualTo(OfferFulfillmentScore.MAX);
     }
 
     private static Set<String> jsonFieldNames(JsonNode node) {

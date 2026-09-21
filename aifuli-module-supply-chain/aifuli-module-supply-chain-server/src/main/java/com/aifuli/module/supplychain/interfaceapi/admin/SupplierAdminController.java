@@ -35,6 +35,7 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.AssertTrue;
+import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
@@ -722,8 +723,12 @@ public class SupplierAdminController {
     @Data
     @Schema(description = "供应商合作商品履约能力评分保存")
     public static class FulfillmentScoreSaveReqVO {
+        @Min(OfferFulfillmentScore.MIN)
+        @Max(OfferFulfillmentScore.MAX)
         @Schema(description = OfferFulfillmentScore.STABILITY_COMMENT, example = "80")
         private Integer stabilityScore;
+        @Min(OfferFulfillmentScore.MIN)
+        @Max(OfferFulfillmentScore.MAX)
         @Schema(description = OfferFulfillmentScore.TIMELINESS_COMMENT, example = "70")
         private Integer timelinessScore;
         @Schema(description = "平台SKU永久业务编码列表；省略则覆盖该供应商全部未退役 Offer",

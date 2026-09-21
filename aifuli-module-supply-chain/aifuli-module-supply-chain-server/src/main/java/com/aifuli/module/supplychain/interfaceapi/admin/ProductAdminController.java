@@ -27,6 +27,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.DecimalMax;
 import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
@@ -597,6 +598,7 @@ public class ProductAdminController {
     @Data
     @Schema(description = "SKU履约能力评分保存")
     public static class SkuFulfillmentScoreSaveReqVO {
+        @Valid
         @Schema(description = "当前合作供应商评分行", example = "[{\"supplierCode\":\"SPL_A\",\"stabilityScore\":80,\"timelinessScore\":70}]")
         private List<SkuFulfillmentScoreItemReqVO> items;
     }
@@ -606,8 +608,12 @@ public class ProductAdminController {
     public static class SkuFulfillmentScoreItemReqVO {
         @Schema(description = "供应商永久业务编码", example = "SPL_A")
         private String supplierCode;
+        @Min(OfferFulfillmentScore.MIN)
+        @Max(OfferFulfillmentScore.MAX)
         @Schema(description = OfferFulfillmentScore.STABILITY_COMMENT, example = "80")
         private Integer stabilityScore;
+        @Min(OfferFulfillmentScore.MIN)
+        @Max(OfferFulfillmentScore.MAX)
         @Schema(description = OfferFulfillmentScore.TIMELINESS_COMMENT, example = "70")
         private Integer timelinessScore;
     }

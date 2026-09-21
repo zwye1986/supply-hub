@@ -62,8 +62,8 @@ Java：`SupplierOfferDO.stabilityScore` / `timelinessScore`，类型 `Integer`�
 
 请求：
 
-- `stabilityScore`（必填，0–100）
-- `timelinessScore`（必填，0–100）
+- `stabilityScore`（必填，0–100，请求 VO `@Min`/`@Max`）
+- `timelinessScore`（必填，0–100，请求 VO `@Min`/`@Max`）
 - `platformSkuCodes`（可选 `List<String>`）：省略、null 或空列表 = 覆盖该供应商全部未退役 Offer；非空 = 只覆盖这些 SKU，整批校验，任一 SKU 不存在或该供应商当前无未退役 Offer 则整单拒绝。
 
 响应：`{ "updatedCount": n }`。供应商不存在 → `SUPPLIER_NOT_FOUND`。无未退役 Offer 且未指定 SKU 列表 → `updatedCount=0`，不报错。
@@ -88,7 +88,7 @@ Java：`SupplierOfferDO.stabilityScore` / `timelinessScore`，类型 `Integer`�
 
 权限：`product:update`。
 
-请求：`{ "items": [{ "supplierCode", "stabilityScore", "timelinessScore" }] }`。
+请求：`{ "items": [{ "supplierCode", "stabilityScore", "timelinessScore" }] }`。行内分数请求 VO `@Min`/`@Max` 约束 0–100，`items` 加 `@Valid` 级联校验。
 
 - `items` 必填且非空。
 - 只更新提交行；未出现的当前合作供应商保持原值。
