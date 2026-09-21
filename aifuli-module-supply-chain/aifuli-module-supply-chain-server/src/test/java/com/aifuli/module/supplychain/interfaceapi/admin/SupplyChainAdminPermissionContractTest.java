@@ -75,7 +75,8 @@ class SupplyChainAdminPermissionContractTest {
                 Map.entry("createDrafts", SUPPLIER_UPDATE_EXPRESSION),
                 Map.entry("retire", SUPPLIER_DELETE_EXPRESSION),
                 Map.entry("getInvoice", SUPPLIER_QUERY_EXPRESSION),
-                Map.entry("saveInvoice", SUPPLIER_UPDATE_EXPRESSION)));
+                Map.entry("saveInvoice", SUPPLIER_UPDATE_EXPRESSION),
+                Map.entry("saveFulfillmentScores", SUPPLIER_UPDATE_EXPRESSION)));
     }
 
     @Test
@@ -144,7 +145,9 @@ class SupplyChainAdminPermissionContractTest {
                 Map.entry("batchUpdateSkuTaxMetadata", PRODUCT_UPDATE_EXPRESSION),
                 Map.entry("changeSkuStatus", PRODUCT_UPDATE_STATUS_EXPRESSION),
                 Map.entry("deleteSpu", PRODUCT_DELETE_EXPRESSION),
-                Map.entry("deleteSku", PRODUCT_DELETE_EXPRESSION)));
+                Map.entry("deleteSku", PRODUCT_DELETE_EXPRESSION),
+                Map.entry("getSkuFulfillmentScores", PRODUCT_QUERY_EXPRESSION),
+                Map.entry("saveSkuFulfillmentScores", PRODUCT_UPDATE_EXPRESSION)));
         assertMethodPermissions(BrandAdminController.class, Map.ofEntries(
                 Map.entry("page", BRAND_QUERY_EXPRESSION), Map.entry("detail", BRAND_QUERY_EXPRESSION),
                 Map.entry("create", BRAND_CREATE_EXPRESSION), Map.entry("update", BRAND_UPDATE_EXPRESSION),

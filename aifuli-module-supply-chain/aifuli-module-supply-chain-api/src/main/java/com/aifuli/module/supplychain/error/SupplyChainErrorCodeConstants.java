@@ -144,6 +144,12 @@ public interface SupplyChainErrorCodeConstants {
             error(1_050_001_114, "SKU销售建议价规则不合法");
     ErrorCode FULFILLMENT_ASSET_SCOPE_DENIED =
             error(1_050_001_115, "缺少独立授予的 FULFILLMENT_ASSET_READ 权限");
+    ErrorCode FULFILLMENT_SCORE_INVALID =
+            error(1_050_001_116, "稳定性评分与时效性评分必须同时给出且为 0-100 的整数");
+    ErrorCode FULFILLMENT_SCORE_SUPPLIER_NOT_COOPERATING =
+            error(1_050_001_117, "该供应商当前未合作供应此 SKU");
+    ErrorCode FULFILLMENT_SCORE_ITEMS_REQUIRED =
+            error(1_050_001_118, "履约能力评分至少提交一行");
 
     /** 订单详情不可用只作为成功响应中的详情标记，不作为 CommonResult 失败码。 */
     String DETAIL_UNAVAILABLE = "DETAIL_UNAVAILABLE";
@@ -263,7 +269,10 @@ public interface SupplyChainErrorCodeConstants {
             entry(CATEGORY_PRODUCT_TYPE_REQUIRED, RetryDirective.DO_NOT_RETRY),
             entry(PRODUCT_FULFILLMENT_TYPE_IMMUTABLE, RetryDirective.DO_NOT_RETRY),
             entry(PRODUCT_SUGGESTED_PRICE_RULE_INVALID, RetryDirective.DO_NOT_RETRY),
-            entry(FULFILLMENT_ASSET_SCOPE_DENIED, RetryDirective.DO_NOT_RETRY));
+            entry(FULFILLMENT_ASSET_SCOPE_DENIED, RetryDirective.DO_NOT_RETRY),
+            entry(FULFILLMENT_SCORE_INVALID, RetryDirective.DO_NOT_RETRY),
+            entry(FULFILLMENT_SCORE_SUPPLIER_NOT_COOPERATING, RetryDirective.DO_NOT_RETRY),
+            entry(FULFILLMENT_SCORE_ITEMS_REQUIRED, RetryDirective.DO_NOT_RETRY));
 
     static RetryDirective retryDirective(int errorCode) {
         return RETRY_DIRECTIVES.getOrDefault(errorCode, RetryDirective.DO_NOT_RETRY);

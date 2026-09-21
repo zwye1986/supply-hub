@@ -340,7 +340,9 @@ public class SupplierCooperativeProductService {
                 offer.getOfferSupplyMode(),
                 offer.getDraftMaxQuantity(),
                 offer.getDraftMinQuantity(),
-                OfferStatus.fromCode(offer.getStatus()).name());
+                OfferStatus.fromCode(offer.getStatus()).name(),
+                offer.getStabilityScore(),
+                offer.getTimelinessScore());
     }
 
     private Long resolveSuggestPriceCents(Long skuId) {
@@ -437,6 +439,8 @@ public class SupplierCooperativeProductService {
             @Schema(description = "该Offer供货模式") String offerSupplyMode,
             @Schema(description = "草稿供货上限") Long maxQuantity,
             @Schema(description = "草稿最低起购量") Long minQuantity,
-            @Schema(description = "生命周期：PUBLISHED已发布，SUSPENDED暂停") String status) {
+            @Schema(description = "生命周期：PUBLISHED已发布，SUSPENDED暂停") String status,
+            @Schema(description = "稳定性评分，人工录入，0-100") Integer stabilityScore,
+            @Schema(description = "时效性评分，人工录入，0-100") Integer timelinessScore) {
     }
 }

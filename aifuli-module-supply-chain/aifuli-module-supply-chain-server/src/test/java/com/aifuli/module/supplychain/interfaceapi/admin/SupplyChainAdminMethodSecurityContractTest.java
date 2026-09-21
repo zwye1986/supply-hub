@@ -10,7 +10,10 @@ import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerAdminQuery
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerInvoiceService;
 import com.aifuli.module.supplychain.tradecore.catalog.application.BuyerProductCommandService;
 import com.aifuli.module.supplychain.tradecore.catalog.application.BuyerProductQueryService;
+import com.aifuli.module.supplychain.tradecore.catalog.application.ProductCatalogCommandService;
+import com.aifuli.module.supplychain.tradecore.catalog.application.ProductCatalogQueryService;
 import com.aifuli.module.supplychain.tradecore.catalog.application.PlatformSkuQueryService;
+import com.aifuli.module.supplychain.tradecore.supply.application.OfferFulfillmentScoreService;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierCooperativeProductService;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierInvoiceService;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierProfileCommandService;
@@ -41,7 +44,9 @@ import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminP
 import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.BUYER_QUERY;
 import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.ORDER_QUERY;
 import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.PRODUCT_QUERY;
+import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.PRODUCT_UPDATE;
 import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.SUPPLIER_QUERY;
+import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.SUPPLIER_UPDATE;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -68,6 +73,8 @@ class SupplyChainAdminMethodSecurityContractTest {
     @Resource
     private SupplierAdminController supplierController;
     @Resource
+    private ProductAdminController productController;
+    @Resource
     private BuyerAdminController buyerController;
     @Resource
     private PlatformSkuAdminController platformSkuController;
@@ -92,6 +99,7 @@ class SupplyChainAdminMethodSecurityContractTest {
     @Test
     void methodSecurityProxyIsActive() {
         assertThat(AopUtils.isAopProxy(supplierController)).isTrue();
+        assertThat(AopUtils.isAopProxy(productController)).isTrue();
         assertThat(AopUtils.isAopProxy(buyerController)).isTrue();
         assertThat(AopUtils.isAopProxy(platformSkuController)).isTrue();
         assertThat(AopUtils.isAopProxy(orderController)).isTrue();
@@ -186,6 +194,41 @@ class SupplyChainAdminMethodSecurityContractTest {
     }
 
     @Test
+    void supplierUpdateCanSaveFulfillmentScores() {
+        grant(SUPPLIER_UPDATE);
+
+        assertThatCode(this::saveSupplierFulfillmentScores).doesNotThrowAnyException();
+    }
+
+    @Test
+    void supplierQueryCannotSaveFulfillmentScores() {
+        grant(SUPPLIER_QUERY);
+
+        assertThatThrownBy(this::saveSupplierFulfillmentScores).isInstanceOf(AccessDeniedException.class);
+    }
+
+    @Test
+    void productQueryCanReadSkuFulfillmentScores() {
+        grant(PRODUCT_QUERY);
+
+        assertThatCode(this::getSkuFulfillmentScores).doesNotThrowAnyException();
+    }
+
+    @Test
+    void productQueryCannotSaveSkuFulfillmentScores() {
+        grant(PRODUCT_QUERY);
+
+        assertThatThrownBy(this::saveSkuFulfillmentScores).isInstanceOf(AccessDeniedException.class);
+    }
+
+    @Test
+    void productUpdateCanSaveSkuFulfillmentScores() {
+        grant(PRODUCT_UPDATE);
+
+        assertThatCode(this::saveSkuFulfillmentScores).doesNotThrowAnyException();
+    }
+
+    @Test
     void buyerQueryCannotReadSingleSkuPricing() {
         grant(BUYER_QUERY);
 
@@ -236,6 +279,30 @@ class SupplyChainAdminMethodSecurityContractTest {
                 null, null, 1, 20);
     }
 
+    private void saveSupplierFulfillmentScores() {
+        SupplierAdminController.FulfillmentScoreSaveReqVO request =
+                new SupplierAdminController.FulfillmentScoreSaveReqVO();
+        request.setStabilityScore(80);
+        request.setTimelinessScore(70);
+        supplierController.saveFulfillmentScores("SPL_1", request);
+    }
+
+    private void getSkuFulfillmentScores() {
+        productController.getSkuFulfillmentScores("SKU_1");
+    }
+
+    private void saveSkuFulfillmentScores() {
+        ProductAdminController.SkuFulfillmentScoreSaveReqVO request =
+                new ProductAdminController.SkuFulfillmentScoreSaveReqVO();
+        ProductAdminController.SkuFulfillmentScoreItemReqVO item =
+                new ProductAdminController.SkuFulfillmentScoreItemReqVO();
+        item.setSupplierCode("SPL_1");
+        item.setStabilityScore(80);
+        item.setTimelinessScore(70);
+        request.setItems(List.of(item));
+        productController.saveSkuFulfillmentScores("SKU_1", request);
+    }
+
     private static void grant(String... permissions) {
         GRANTED_PERMISSIONS.set(Set.of(permissions));
     }
@@ -281,7 +348,16 @@ class SupplyChainAdminMethodSecurityContractTest {
                     mock(SupplierProfileQueryService.class),
                     mock(SupplierSupplyScopeService.class),
                     mock(SupplierCooperativeProductService.class),
-                    mock(SupplierInvoiceService.class));
+                    mock(SupplierInvoiceService.class),
+                    mock(OfferFulfillmentScoreService.class));
+        }
+
+        @Bean
+        ProductAdminController productAdminController() {
+            return new ProductAdminController(
+                    mock(ProductCatalogQueryService.class),
+                    mock(ProductCatalogCommandService.class),
+                    mock(OfferFulfillmentScoreService.class));
         }
 
         @Bean
