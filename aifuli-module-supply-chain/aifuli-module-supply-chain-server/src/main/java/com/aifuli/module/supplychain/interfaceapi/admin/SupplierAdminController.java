@@ -681,7 +681,7 @@ public class SupplierAdminController {
         @Schema(description = "平台SKU永久业务编码")
         private String platformSkuCode;
         @NotBlank
-        @Schema(description = "供应价模式：FIXED固定值，REALTIME实时，DISCOUNT折扣")
+        @Schema(description = "供应价模式（字典supply_chain_offer_price_mode）：FIXED固定值，REALTIME实时更新，DISCOUNT按供货折扣")
         private String priceMode;
         @Schema(description = "草稿供应价，CNY分；REALTIME为空")
         private Long unitPriceCents;

@@ -431,7 +431,7 @@ public class SupplierCooperativeProductService {
             @Schema(description = "动态商品类型编码") String productType,
             @Schema(description = "商品分类封闭枚举名") String productClassification,
             @Schema(description = "L1 B端结算单价，CNY分，允许0") Long suggestPriceCents,
-            @Schema(description = "供应价模式：FIXED固定值，REALTIME实时，DISCOUNT折扣") String priceMode,
+            @Schema(description = "供应价模式（字典supply_chain_offer_price_mode）：FIXED固定值，REALTIME实时更新，DISCOUNT按供货折扣") String priceMode,
             @Schema(description = "草稿供应价，CNY分；REALTIME为空") Long unitPriceCents,
             @Schema(description = "折扣基点，10000=100%") Integer discountBp,
             @Schema(description = "该Offer供货模式") String offerSupplyMode,

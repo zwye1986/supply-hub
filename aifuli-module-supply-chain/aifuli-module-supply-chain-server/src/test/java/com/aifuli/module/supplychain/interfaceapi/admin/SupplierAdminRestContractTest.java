@@ -140,6 +140,20 @@ class SupplierAdminRestContractTest {
         vo.setItems(List.of(item));
         String json = new ObjectMapper().writeValueAsString(vo);
         assertThat(json).contains("items").contains("MOVIE_100");
+        io.swagger.v3.oas.annotations.media.Schema priceModeSchema =
+                SupplierAdminController.DraftReqVO.class.getDeclaredField("priceMode")
+                        .getAnnotation(io.swagger.v3.oas.annotations.media.Schema.class);
+        assertThat(priceModeSchema.description()).contains("supply_chain_offer_price_mode");
+        java.lang.reflect.RecordComponent listPriceMode =
+                Arrays.stream(com.aifuli.module.supplychain.tradecore.supply.application
+                                .SupplierCooperativeProductService.OfferListItem.class.getRecordComponents())
+                        .filter(component -> "priceMode".equals(component.getName()))
+                        .findFirst()
+                        .orElseThrow();
+        assertThat(listPriceMode.getAccessor()
+                .getAnnotation(io.swagger.v3.oas.annotations.media.Schema.class)
+                .description())
+                .contains("supply_chain_offer_price_mode");
     }
 
     private static boolean hasHttpMapping(Method method) {
