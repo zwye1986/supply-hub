@@ -171,7 +171,10 @@ public class ProductAdminController {
                     + "重复键 productType=A&productType=B，或逗号拼接 productType=A,B",
                     example = "EQUITY_PRODUCT")
             @RequestParam(required = false) List<String> productType,
-            @Parameter(description = "主类目内部主键", example = "10") @RequestParam(required = false) Long categoryId,
+            @Parameter(description = "主类目内部主键，可多选；兼容单个 categoryId。"
+                    + "重复键 categoryId=10&categoryId=20，或逗号拼接 categoryId=10,20",
+                    example = "10")
+            @RequestParam(required = false) List<String> categoryId,
             @Parameter(description = "品牌内部主键", example = "1") @RequestParam(required = false) Long brandId,
             @Parameter(description = "SKU商品状态：0草稿，10已上架，20已下架；字典supply_chain_sku_status", example = "10") @RequestParam(required = false) Short status,
             @Parameter(description = "下架方式：MANUAL_UNSHELVE手动下架，SYSTEM_UNSHELVE系统下架", example = "MANUAL_UNSHELVE") @RequestParam(required = false) String unshelveMode,

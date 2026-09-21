@@ -47,6 +47,7 @@
 | **d37** | **关闭限购开关时忽略表单残留周期/数量** | 管理端关掉每人限购或绑定手机号限购后仍会提交对应周期、数量。`userLimitEnabled=false` 时忽略 `userLimitPeriod`/`userLimitQuantity`；`phoneBindLimitEnabled=false` 时忽略 `phoneBindLimitPeriod`/`phoneBindLimitQuantity`。落库规范化为 `NULL`，不得返回 `PRODUCT_PURCHASE_LIMIT_CONFIG_INVALID`（1050001107）。开启时周期和正整数数量仍必填。每订单限购仅有开关 `orderLimitEnabled`，数量复用 `maxQuantity`，关闭开关不因 `maxQuantity` 拒绝。 | 避免编辑表单开关关闭后因下拉残留值整单保存失败 |
 | **d38** | **SKU 资料库存可写可回显** | 管理端复合创建/编辑在 SKU 上读写 `skuInventory`（Java 字段名固定为此），持久化为 `sc_platform_sku.sku_inventory`。未传时创建落库 0，编辑省略保留原值，负数拒绝。详情 `SkuDetail` 原样回显；管理列表既有 `totalInventory` 改为投影该列，同时输出同值 JSON 别名 `skuInventory`。本列是商品资料数量，不接入 `InventorySource`，本期履约不预占、不扣减，公开契约仍为 `quantity=1`。变更由 `041` 执行。 | 对齐商品编辑表单库存字段，结束列表总库存写死 0 |
 | **d39** | **管理端商品列表 productType 可多选且兼容单值** | `GET /supply-chain/products/management-page` 的 Query 参数 `productType` 改为 `List<String>`，HTTP 参数名不变。单个 `productType=PT_CARD` 仍按该类型过滤；重复键 `productType=A&productType=B` 与逗号拼接 `productType=A,B` 均规范化为去空白、去重后的编码列表，以 `product_type IN (...)` OR 命中。显式传入时覆盖 `tabCode` 解出的单个类型；未传、空列表或全空白视为未筛选类型。筛选参数不校验类型是否存在，非法编码得到空页。响应仍按 SPU 返回单个 `productType`/`productTypeName`。`GET /supply-chain/products/spus` 保持单值，不在本决策范围。 | 商品列表支持按多个商品类型筛选，同时兼容存量单值调用 |
+| **d40** | **管理端商品列表 categoryId 可多选且兼容单值** | `GET /supply-chain/products/management-page` 的 Query 参数 `categoryId` 改为可多选，HTTP 参数名不变。单个 `categoryId=10` 仍按该主分类过滤；重复键 `categoryId=10&categoryId=20` 与逗号拼接 `categoryId=10,20` 均规范化为去空白、去重后的 Long 主键列表，以 `primary_category_id IN (...)` OR 命中。未传、空列表、全空白或无法解析为 Long 的片段视为未提供该片段；规范化后为空则不按分类过滤。只匹配 SPU 主分类，不扩展辅助分类。`GET /supply-chain/products/spus` 保持单值，不在本决策范围。 | 商品列表支持按多个主分类筛选，同时兼容存量单值调用 |
 
 ---
 
@@ -615,7 +616,7 @@ PRD 8.4.1 的列表 Tab 支持从 `GET /supply-chain/product-types` 动态拉取
 * **Query 参数**：
   * `keyword` (String, 可选): SPU 编码、名称模糊检索
   * `productType` (`List<String>`, 可选): 商品类型编码，可多选。兼容单个 `productType=PT_CARD`；多个使用重复键 `productType=A&productType=B` 或逗号拼接 `productType=A,B`。规范化时 trim、丢空白、去重并保持传入顺序；多个类型为 OR（`product_type IN (...)`）。显式传入时覆盖 `tabCode` 解出的类型；未传、空列表或全空白不按类型过滤。筛选参数不校验类型是否存在。
-  * `categoryId` (Long, 可选): 商品主分类 ID
+  * `categoryId` (`List<String>` → Long 主键, 可选): 商品主分类内部主键，可多选。兼容单个 `categoryId=10`；多个使用重复键 `categoryId=10&categoryId=20` 或逗号拼接 `categoryId=10,20`。规范化时 trim、丢空白、去重、解析为 Long 并保持传入顺序；无法解析的片段忽略；多个分类为 OR（`primary_category_id IN (...)`）。未传、空列表、全空白或规范化后为空不按分类过滤。只匹配主分类。
   * `brandId` (Long, 可选): 品牌 ID
   * `status` (Short, 可选): SKU 状态（0-草稿，10-已上架，20-已下架；字典 `supply_chain_sku_status`）
   * `fulfillmentType` (String, 可选): 兑换方式（`CARD_CODE_SECRET` 卡号卡密、`DIRECT_RECHARGE` 直充；字典 `supply_chain_fulfillment_type`）
@@ -904,3 +905,6 @@ system-server 通过追加变更集 `011-suggested-sale-price-operator-dictionar
 15. `ProductManagementPageQueryTest` 与 `ProductCenterContractTest` 必须覆盖 d39：管理端聚合列表
     `productType` 参数类型为 `List`；单个编码、重复多个编码、逗号拼接均按 `IN` 过滤；空列表不加类型条件；
     显式 `productType` 覆盖 `tabCode` 解出的类型。
+16. `ProductManagementPageQueryTest` 与 `ProductCenterContractTest` 必须覆盖 d40：管理端聚合列表
+    `categoryId` 参数类型为 `List`；单个主键、重复多个主键、逗号拼接均按 `primary_category_id IN` 过滤；
+    空列表不加分类条件。

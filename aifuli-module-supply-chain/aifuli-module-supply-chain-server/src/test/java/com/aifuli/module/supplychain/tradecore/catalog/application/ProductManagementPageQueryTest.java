@@ -410,9 +410,68 @@ class ProductManagementPageQueryTest {
         assertThat(captor.getValue().getParamNameValuePairs().values()).contains("JD");
     }
 
+    @Test
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    void managementPageFiltersBySingleCategoryId() {
+        when(spuMapper.selectPage(any(PageParam.class), any())).thenReturn(new PageResult<>(List.of(), 0L));
+
+        service.managementPage(managementQuery(null, List.of("10")));
+
+        ArgumentCaptor<LambdaQueryWrapper<PlatformSpuDO>> captor =
+                ArgumentCaptor.forClass((Class) LambdaQueryWrapper.class);
+        verify(spuMapper).selectPage(any(PageParam.class), captor.capture());
+        assertThat(captor.getValue().getSqlSegment()).contains("IN");
+        assertThat(captor.getValue().getParamNameValuePairs().values()).contains(10L);
+    }
+
+    @Test
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    void managementPageFiltersByMultipleCategoryIdsWithInClause() {
+        when(spuMapper.selectPage(any(PageParam.class), any())).thenReturn(new PageResult<>(List.of(), 0L));
+
+        service.managementPage(managementQuery(null, List.of("10", "20")));
+
+        ArgumentCaptor<LambdaQueryWrapper<PlatformSpuDO>> captor =
+                ArgumentCaptor.forClass((Class) LambdaQueryWrapper.class);
+        verify(spuMapper).selectPage(any(PageParam.class), captor.capture());
+        assertThat(captor.getValue().getSqlSegment()).contains("IN");
+        assertThat(captor.getValue().getParamNameValuePairs().values()).contains(10L, 20L);
+    }
+
+    @Test
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    void managementPageSplitsCommaSeparatedCategoryIds() {
+        when(spuMapper.selectPage(any(PageParam.class), any())).thenReturn(new PageResult<>(List.of(), 0L));
+
+        service.managementPage(managementQuery(null, List.of("10, 20")));
+
+        ArgumentCaptor<LambdaQueryWrapper<PlatformSpuDO>> captor =
+                ArgumentCaptor.forClass((Class) LambdaQueryWrapper.class);
+        verify(spuMapper).selectPage(any(PageParam.class), captor.capture());
+        assertThat(captor.getValue().getSqlSegment()).contains("IN");
+        assertThat(captor.getValue().getParamNameValuePairs().values()).contains(10L, 20L);
+    }
+
+    @Test
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    void managementPageSkipsBlankCategoryIds() {
+        when(spuMapper.selectPage(any(PageParam.class), any())).thenReturn(new PageResult<>(List.of(), 0L));
+
+        service.managementPage(managementQuery(null, List.of("  ", "")));
+
+        ArgumentCaptor<LambdaQueryWrapper<PlatformSpuDO>> captor =
+                ArgumentCaptor.forClass((Class) LambdaQueryWrapper.class);
+        verify(spuMapper).selectPage(any(PageParam.class), captor.capture());
+        assertThat(captor.getValue().getSqlSegment()).doesNotContain("primary_category_id");
+    }
+
     private static ProductManagementPageQuery managementQuery(List<String> productTypes) {
+        return managementQuery(productTypes, null);
+    }
+
+    private static ProductManagementPageQuery managementQuery(List<String> productTypes, List<String> categoryIds) {
         return new ProductManagementPageQuery(
-                null, null, productTypes, null, null, null, null, null,
+                null, null, productTypes, categoryIds, null, null, null, null,
                 null, null, null, null, null, null, null, 1, 20);
     }
 }
