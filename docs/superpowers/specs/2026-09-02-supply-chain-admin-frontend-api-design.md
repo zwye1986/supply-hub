@@ -352,7 +352,7 @@ SPU / 供货范围写入的 `productClassification` 不走 `ClosedEnums`：类�
 
 SKU 未填供货上限时继承供货配置 `maxQuantity`；未填最低起购量时固定取 1。供货配置 `minQuantity` 是预留字段，不得被合作商品继承。
 
-履约能力评分挂点、批量评分与商品列表弹窗契约见 `docs/superpowers/specs/2026-09-21-offer-fulfillment-score-design.md`。`PUT /supply-chain/suppliers/{supplierCode}/fulfillment-scores` 覆盖未退役 Offer 的两列分数；改价 `PUT .../offers/{offerNo}` 不碰评分。
+履约能力评分挂点、批量评分与商品列表弹窗契约见 `docs/superpowers/specs/2026-09-21-offer-fulfillment-score-design.md`。`PUT /supply-chain/suppliers/{supplierCode}/fulfillment-scores` 可只改稳定性或时效性一列，省略的列保持原值；新建合作商品默认 80；改价 `PUT .../offers/{offerNo}` 不碰评分。
 
 ### 5.6 开票信息
 

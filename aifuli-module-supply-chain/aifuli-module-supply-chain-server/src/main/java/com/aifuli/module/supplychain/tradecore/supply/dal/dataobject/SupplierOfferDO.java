@@ -30,9 +30,9 @@ public class SupplierOfferDO {
     private String offerSupplyMode;
     private Long draftMaxQuantity;
     private Long draftMinQuantity;
-    /** 稳定性评分，人工录入，0-100 */
+    /** 稳定性评分，人工录入，0-100，默认80 */
     private Integer stabilityScore;
-    /** 时效性评分，人工录入，0-100 */
+    /** 时效性评分，人工录入，0-100，默认80 */
     private Integer timelinessScore;
     private Long currentVersionId;
     private Short status;

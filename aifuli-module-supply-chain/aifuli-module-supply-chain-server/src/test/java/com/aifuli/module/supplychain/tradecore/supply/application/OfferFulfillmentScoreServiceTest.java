@@ -91,21 +91,33 @@ class OfferFulfillmentScoreServiceTest {
     }
 
     @Test
-    void saveSupplierScoresRejectsInvalidPair() {
+    void saveSupplierScoresRejectsOutOfRange() {
         stubSupplier();
         assertThatThrownBy(() -> service.saveSupplierScores("SPL_A", 101, 10, null, 1L))
                 .isInstanceOf(ServiceException.class)
                 .extracting(ex -> ((ServiceException) ex).getCode())
                 .isEqualTo(FULFILLMENT_SCORE_INVALID.getCode());
-        assertThatThrownBy(() -> service.saveSupplierScores("SPL_A", -1, 10, null, 1L))
-                .isInstanceOf(ServiceException.class)
-                .extracting(ex -> ((ServiceException) ex).getCode())
-                .isEqualTo(FULFILLMENT_SCORE_INVALID.getCode());
-        assertThatThrownBy(() -> service.saveSupplierScores("SPL_A", null, 10, null, 1L))
+        assertThatThrownBy(() -> service.saveSupplierScores("SPL_A", -1, null, null, 1L))
                 .isInstanceOf(ServiceException.class)
                 .extracting(ex -> ((ServiceException) ex).getCode())
                 .isEqualTo(FULFILLMENT_SCORE_INVALID.getCode());
         verify(offerMapper, never()).updateById(any(SupplierOfferDO.class));
+    }
+
+    @Test
+    void saveSupplierScoresUpdatesOnlySubmittedColumn() {
+        stubSupplier();
+        SupplierOfferDO offer = liveOffer(77L, "OFR_1", 11L, 80, 70);
+        when(offerMapper.selectLiveBySupplierId(9L)).thenReturn(List.of(offer));
+        when(offerMapper.selectByNoForUpdate("OFR_1")).thenReturn(offer);
+
+        int updated = service.saveSupplierScores("SPL_A", 90, null, null, 1L);
+
+        assertThat(updated).isEqualTo(1);
+        ArgumentCaptor<SupplierOfferDO> captor = ArgumentCaptor.forClass(SupplierOfferDO.class);
+        verify(offerMapper).updateById(captor.capture());
+        assertThat(captor.getValue().getStabilityScore()).isEqualTo(90);
+        assertThat(captor.getValue().getTimelinessScore()).isEqualTo(70);
     }
 
     @Test
@@ -196,6 +208,24 @@ class OfferFulfillmentScoreServiceTest {
         verify(offerMapper).updateById(captor.capture());
         assertThat(captor.getValue().getStabilityScore()).isEqualTo(90);
         assertThat(captor.getValue().getTimelinessScore()).isEqualTo(90);
+    }
+
+    @Test
+    void saveSkuScoresUpdatesOnlySubmittedColumn() {
+        stubSku();
+        stubSupplier();
+        SupplierOfferDO offer = liveOffer(77L, "OFR_1", 11L, 80, 70);
+        when(offerMapper.selectLiveBySupplierAndSku(9L, 11L)).thenReturn(offer);
+        when(offerMapper.selectByNoForUpdate("OFR_1")).thenReturn(offer);
+
+        int updated = service.saveSkuScores("MOVIE_100", List.of(
+                new SkuSupplierScoreLine("SPL_A", null, 55)), 1L);
+
+        assertThat(updated).isEqualTo(1);
+        ArgumentCaptor<SupplierOfferDO> captor = ArgumentCaptor.forClass(SupplierOfferDO.class);
+        verify(offerMapper).updateById(captor.capture());
+        assertThat(captor.getValue().getStabilityScore()).isEqualTo(80);
+        assertThat(captor.getValue().getTimelinessScore()).isEqualTo(55);
     }
 
     @Test

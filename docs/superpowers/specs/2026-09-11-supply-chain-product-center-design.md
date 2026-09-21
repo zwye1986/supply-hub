@@ -50,7 +50,7 @@
 | **d40** | **管理端商品列表 categoryId 可多选且兼容单值** | `GET /supply-chain/products/management-page` 的 Query 参数 `categoryId` 改为可多选，HTTP 参数名不变。单个 `categoryId=10` 仍按该主分类过滤；重复键 `categoryId=10&categoryId=20` 与逗号拼接 `categoryId=10,20` 均规范化为去空白、去重后的 Long 主键列表，以 `primary_category_id IN (...)` OR 命中。未传、空列表、全空白或无法解析为 Long 的片段视为未提供该片段；规范化后为空则不按分类过滤。只匹配 SPU 主分类，不扩展辅助分类。子孙展开见 d42。`GET /supply-chain/products/spus` 保持单值，不在本决策范围。 | 商品列表支持按多个主分类筛选，同时兼容存量单值调用 |
 | **d41** | **供货配置查询回显 categoryId（归档即视为不可回显）** | `GET /supply-chain/suppliers/{supplierCode}/supply-scopes` 与供应商详情 `scopes[]` 的 `SupplyScopeView` 新增只读字段 `categoryId`：`productClassification` 为未归档类目编码（`sc_product_category.category_code`）时经 `CategoryQueryService.resolveCategoryIdsByCodes` 批量解析回填内部主键；为封闭枚举名、编码已删除或类目已归档时为 `null`（归档即视为不可回显，前端兜底展示编码）。批量解析一次查库。`PUT` 保存不接收该字段，写入口径不变。 | 前端类目树级联组件需内部主键回显，当前只回编码无法定位节点 |
 | **d42** | **管理端商品列表 categoryId 含子类目** | 管理端商品列表从类目树勾选父节点时，语义为「该节点及其未归档子孙」下的商品。`GET /supply-chain/products/management-page` 在 d40 规范化出选中主键后，一次加载未归档类目（`status != 90`），按 `parent_id` 在内存 BFS 展开子孙，再与选中主键去重合并，以 `primary_category_id IN (选中 ∪ 未归档子孙)` 过滤。仍只匹配 SPU 主分类，不扩展辅助分类；归档子孙不进入展开集；选中主键即使自身已归档仍保留，以便历史主键精确命中。未传或规范化后为空则不查类目树、不加分类条件。无限级（d5）下用访问集合防环，禁止递归 SQL。 | 勾选父级（如 id=1）时须命中挂在叶子（如 id=3）上的商品，避免精确匹配空页 |
-| **d43** | **SKU×供应商履约能力评分人工挂点** | 稳定性/时效评分写在 `sc_supplier_offer` 身份列（Liquibase `042`），供应商合作商品与 `GET/PUT /supply-chain/products/skus/{skuCode}/fulfillment-scores` 读写同一事实。`management-page` 的 `suppliers[]` 不加分数。路由引擎本期不读分。权威契约见 `docs/superpowers/specs/2026-09-21-offer-fulfillment-score-design.md`。 | 对齐新 PRD 8.4.1.1 / 8.1.3.4，纠正独立路由能力配置挂点 |
+| **d43** | **SKU×供应商履约能力评分人工挂点** | 稳定性/时效评分写在 `sc_supplier_offer` 身份列（Liquibase `042`/`043`），新建默认 80。供应商合作商品与 `GET/PUT /supply-chain/products/skus/{skuCode}/fulfillment-scores` 读写同一事实。`management-page` 的 `suppliers[]` 不加分数。路由引擎本期不读分。权威契约见 `docs/superpowers/specs/2026-09-21-offer-fulfillment-score-design.md`。 | 对齐新 PRD 8.4.1.1 / 8.1.3.4，纠正独立路由能力配置挂点 |
 
 ---
 
@@ -744,7 +744,7 @@ system-server 通过追加变更集 `006-product-list-filter-dictionaries` 写�
 对齐 PRD 8.4.1.1。数据与供应商合作商品共用 `sc_supplier_offer.stability_score` / `timeliness_score`，不在商品中心另存一份。权威契约、错误码与不变量见 `docs/superpowers/specs/2026-09-21-offer-fulfillment-score-design.md`。
 
 * **GET 权限**：`PRODUCT_QUERY_EXPRESSION`。SKU 不存在返回 `PLATFORM_SKU_NOT_FOUND`；无当前合作供应商返回空 `items`。
-* **PUT 权限**：`PRODUCT_UPDATE_EXPRESSION`。只更新提交的供应商行；未退役 Offer 以外的 `supplierCode` 整单拒绝。
+* **PUT 权限**：`PRODUCT_UPDATE_EXPRESSION`。只更新提交的供应商行；行内可只改一列分数；未退役 Offer 以外的 `supplierCode` 整单拒绝。
 * **管理列表**：`GET /products/management-page` 的 `suppliers[]` 仍只含编码与名称，不加分数。
 
 ---

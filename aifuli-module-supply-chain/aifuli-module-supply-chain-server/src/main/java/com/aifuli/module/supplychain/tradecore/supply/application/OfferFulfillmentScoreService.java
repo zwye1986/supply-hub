@@ -9,6 +9,7 @@ import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierOfferDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferMapper;
+import com.aifuli.module.supplychain.tradecore.supply.domain.OfferFulfillmentScore;
 import com.aifuli.module.supplychain.tradecore.supply.domain.OfferStatus;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.RequiredArgsConstructor;
@@ -40,8 +41,6 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
 public class OfferFulfillmentScoreService {
 
     private static final String TRANSACTION_MANAGER = "supplyChainTransactionManager";
-    private static final int SCORE_MIN = 0;
-    private static final int SCORE_MAX = 100;
 
     private final SupplyChainDatabaseClock databaseClock;
     private final SupplierMapper supplierMapper;
@@ -51,13 +50,15 @@ public class OfferFulfillmentScoreService {
 
     /**
      * 供应商侧写入：省略 SKU 列表则覆盖该供应商全部未退役 Offer；非空列表只覆盖这些 SKU，整批校验。
+     * 稳定性/时效性可只提交一列，省略的列保持原值。
      */
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public int saveSupplierScores(String supplierCode, Integer stabilityScore, Integer timelinessScore,
                                   List<String> platformSkuCodes, Long operatorId) {
         log.info("保存供应商履约评分 supplierCode={} skuSubsetSize={} operatorId={}",
                 supplierCode, platformSkuCodes == null ? null : platformSkuCodes.size(), operatorId);
-        requireScorePair(stabilityScore, timelinessScore);
+        requireScoreIfPresent(stabilityScore);
+        requireScoreIfPresent(timelinessScore);
         SupplierDO supplier = supplierMapper.selectByCodeForUpdate(supplierCode);
         if (supplier == null) {
             throw exception(SUPPLIER_NOT_FOUND);
@@ -113,6 +114,7 @@ public class OfferFulfillmentScoreService {
 
     /**
      * 商品侧写入：只更新提交行；未出现的当前合作供应商保持原值。整单拒绝非合作供应商。
+     * 行内可只提交一列分数，省略的列保持原值。
      */
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public int saveSkuScores(String skuCode, List<SkuSupplierScoreLine> items, Long operatorId) {
@@ -129,7 +131,8 @@ public class OfferFulfillmentScoreService {
             if (!seen.add(line.supplierCode())) {
                 throw exception(FULFILLMENT_SCORE_INVALID);
             }
-            requireScorePair(line.stabilityScore(), line.timelinessScore());
+            requireScoreIfPresent(line.stabilityScore());
+            requireScoreIfPresent(line.timelinessScore());
         }
         PlatformSkuDO sku = requireSku(skuCode);
         List<SupplierOfferDO> targets = new ArrayList<>();
@@ -159,7 +162,7 @@ public class OfferFulfillmentScoreService {
 
     private int writeScores(List<SupplierOfferDO> offers, Integer stabilityScore, Integer timelinessScore,
                             Long operatorId) {
-        if (offers == null || offers.isEmpty()) {
+        if (offers == null || offers.isEmpty() || (stabilityScore == null && timelinessScore == null)) {
             return 0;
         }
         LocalDateTime now = databaseClock.now();
@@ -169,8 +172,12 @@ public class OfferFulfillmentScoreService {
             if (locked == null || !isLive(locked)) {
                 throw exception(FULFILLMENT_SCORE_SUPPLIER_NOT_COOPERATING);
             }
-            locked.setStabilityScore(stabilityScore);
-            locked.setTimelinessScore(timelinessScore);
+            if (stabilityScore != null) {
+                locked.setStabilityScore(stabilityScore);
+            }
+            if (timelinessScore != null) {
+                locked.setTimelinessScore(timelinessScore);
+            }
             locked.setUpdatedBy(operatorId);
             locked.setUpdatedAt(now);
             offerMapper.updateById(locked);
@@ -190,14 +197,10 @@ public class OfferFulfillmentScoreService {
         return sku;
     }
 
-    private static void requireScorePair(Integer stabilityScore, Integer timelinessScore) {
-        if (!isScore(stabilityScore) || !isScore(timelinessScore)) {
+    private static void requireScoreIfPresent(Integer value) {
+        if (value != null && !OfferFulfillmentScore.isValid(value)) {
             throw exception(FULFILLMENT_SCORE_INVALID);
         }
-    }
-
-    private static boolean isScore(Integer value) {
-        return value != null && value >= SCORE_MIN && value <= SCORE_MAX;
     }
 
     private static boolean isLive(SupplierOfferDO offer) {
@@ -227,7 +230,7 @@ public class OfferFulfillmentScoreService {
             @Schema(description = "供应商永久业务编码") String supplierCode,
             @Schema(description = "供应商标准名称") String supplierName,
             @Schema(description = "供应商报价稳定业务编号") String offerNo,
-            @Schema(description = "稳定性评分，人工录入，0-100") Integer stabilityScore,
-            @Schema(description = "时效性评分，人工录入，0-100") Integer timelinessScore) {
+            @Schema(description = OfferFulfillmentScore.STABILITY_COMMENT) Integer stabilityScore,
+            @Schema(description = OfferFulfillmentScore.TIMELINESS_COMMENT) Integer timelinessScore) {
     }
 }

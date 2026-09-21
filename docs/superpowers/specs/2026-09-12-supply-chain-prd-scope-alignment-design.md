@@ -4,7 +4,7 @@
 
 本文把 2026-09-12 对照《供应链中台管理系统一期产品需求文档（PRD）》的架构评审结论，收成**本期实际交付范围**。它裁剪的是「本仓供应链进程接下来做什么 / 明确不做什么」，不是重写 PRD。
 
-**冲突时以本文为准的主题：** 售后聚合位置与状态机范围、路由节点（谁走路由 / 谁不走）、下单前选源 API、点餐实现责任、运营数据权限。通用批量定价、销售价、分销价、服务费和税务归属自 2026-09-15 起以 `docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md` 为准。
+**冲突时以本文为准的主题：** 售后聚合位置与状态机范围、路由节点（谁走路由 / 谁不走）、下单前选源 API、点餐实现责任、运营数据权限、**订单基数（禁止拆单）**。通用批量定价、销售价、分销价、服务费和税务归属自 2026-09-15 起以 `docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md` 为准。
 
 其余主题仍沿用既有权威：
 
@@ -44,6 +44,7 @@ PRD 来源：飞书文档本地导出
 | s12 | 标准商品路由保持现有静态优先级（`candidatePriority` → `supplierCode` → `offerId`，原因码 `SELECTED_BY_STABLE_PRIORITY`）。综合排序、权重、topN、`PRICE_ASC`、自动学习本期不做。稳定性/时效评分由运营对 SKU×供应商 **人工录入**，挂在 `sc_supplier_offer` 身份列（见 `2026-09-21-offer-fulfillment-score-design.md`）；引擎本期 **不读** 这些分。 |
 | s13 | 运营数据权限 / 多租户数据隔离本期不做。维持 `docs/superpowers/specs/2026-09-03-supply-chain-admin-rbac-design.md` 的 r4「本轮落地 B：功能权限 + 数据全量」，ArchUnit 继续禁止管理端 `@DataPermission`。PRD 11.2 记为已知偏差。 |
 | s14 | 术语双轨：PRD「分销商」= 代码 `Buyer`。代码、表名、日志不改名。 |
+| s15 | **禁止拆单。** 一张 `sc_supply_chain_order` 不得同时（或拆成）多张有效供应商履约订单。CARD 是 `1 总单 + 1 履约请求 + 串行 0..N 次尝试`（同时最多一张活动 B 单）；O2O/INSTORE 是固定商户 `0..1`。2026-09-21 新 PRD 8.11.1 / 8.12.1 的「平台总单 / 供应商子单 1:N」不纳入本期。串行失败降级不是拆单。 |
 
 ## 3. 术语
 
@@ -56,6 +57,8 @@ PRD 来源：飞书文档本地导出
 | 跟模板（页面） | `L2AdjustMode.FOLLOW_TEMPLATE` | **清手工 L2，继承 L1**；无模板可跟 |
 | 下单前路由 | — | 本期无此节点 |
 | 平台售后单 | 规划中的 `border.aftersale` | 挂 `sc_supply_chain_order`；渠道退款 Case 不是它 |
+| 平台总单 / 供应商子单（新 PRD 8.11.1 / 8.12.1） | — | **本期不采用**；见 s15 |
+| 供应商订单（CARD） | `sc_b_order` 串行履约尝试 | 同时最多一张活动尝试，不是并行子单 |
 
 O2O / INSTORE 的 B 端冻结金额继续 `buyerSettlementAmount = channelPayAmount`，不读三级结算价，也不读 `suggested_sale_price`。
 
@@ -93,6 +96,7 @@ O2O / INSTORE 的 B 端冻结金额继续 `buyerSettlementAmount = channelPayAmo
 - yudao `@DataPermission`、按供应商/分销商/项目 code 的数据范围（RBAC 目标 C）。
 - 将 `Buyer` 重命名为 Distributor。
 - O2O/INSTORE 改走标准商品路由。
+- 一张供应链订单拆成多张并行供应商子单（新 PRD 8.11.1 / 8.12.1）。
 
 ## 5. 销售价与分销价（无模板）
 

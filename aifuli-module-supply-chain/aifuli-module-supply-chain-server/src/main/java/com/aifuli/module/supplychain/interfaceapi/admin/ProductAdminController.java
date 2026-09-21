@@ -15,6 +15,7 @@ import com.aifuli.module.supplychain.tradecore.supply.application.OfferFulfillme
 import com.aifuli.module.supplychain.tradecore.supply.application.OfferFulfillmentScoreService.ScoreUpdateResult;
 import com.aifuli.module.supplychain.tradecore.supply.application.OfferFulfillmentScoreService.SkuFulfillmentScoreView;
 import com.aifuli.module.supplychain.tradecore.supply.application.OfferFulfillmentScoreService.SkuSupplierScoreLine;
+import com.aifuli.module.supplychain.tradecore.supply.domain.OfferFulfillmentScore;
 import com.fasterxml.jackson.annotation.JsonAlias;
 import com.fasterxml.jackson.annotation.JsonFormat;
 import io.swagger.v3.oas.annotations.Operation;
@@ -26,6 +27,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.DecimalMax;
 import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
@@ -320,6 +322,7 @@ public class ProductAdminController {
     @PreAuthorize(PRODUCT_UPDATE_EXPRESSION)
     @Operation(summary = "保存SKU当前合作供应商履约能力评分",
             description = "只更新提交行；未出现的当前合作供应商保持原值。"
+                    + "行内可只改一列分数，省略的列保持原值。"
                     + "supplierCode 对该 SKU 无未退役 Offer 则整单拒绝。")
     public CommonResult<ScoreUpdateResult> saveSkuFulfillmentScores(
             @Parameter(description = "平台SKU永久业务编码") @PathVariable String skuCode,
@@ -596,6 +599,7 @@ public class ProductAdminController {
     @Data
     @Schema(description = "SKU履约能力评分保存")
     public static class SkuFulfillmentScoreSaveReqVO {
+        @Valid
         @Schema(description = "当前合作供应商评分行", example = "[{\"supplierCode\":\"SPL_A\",\"stabilityScore\":80,\"timelinessScore\":70}]")
         private List<SkuFulfillmentScoreItemReqVO> items;
     }
@@ -605,9 +609,13 @@ public class ProductAdminController {
     public static class SkuFulfillmentScoreItemReqVO {
         @Schema(description = "供应商永久业务编码", example = "SPL_A")
         private String supplierCode;
-        @Schema(description = "稳定性评分，人工录入，0-100", example = "80")
+        @Min(OfferFulfillmentScore.MIN)
+        @Max(OfferFulfillmentScore.MAX)
+        @Schema(description = OfferFulfillmentScore.STABILITY_COMMENT, example = "80")
         private Integer stabilityScore;
-        @Schema(description = "时效性评分，人工录入，0-100", example = "70")
+        @Min(OfferFulfillmentScore.MIN)
+        @Max(OfferFulfillmentScore.MAX)
+        @Schema(description = OfferFulfillmentScore.TIMELINESS_COMMENT, example = "70")
         private Integer timelinessScore;
     }
 }

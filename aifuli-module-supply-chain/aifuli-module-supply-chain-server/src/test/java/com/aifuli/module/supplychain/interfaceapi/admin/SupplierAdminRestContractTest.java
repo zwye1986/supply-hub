@@ -1,10 +1,13 @@
 package com.aifuli.module.supplychain.interfaceapi.admin;
 
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierCooperativeProductService.OfferListItem;
+import com.aifuli.module.supplychain.tradecore.supply.domain.OfferFulfillmentScore;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import org.junit.jupiter.api.Test;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -158,7 +161,7 @@ class SupplierAdminRestContractTest {
     }
 
     @Test
-    void fulfillmentScoresUseNounResourceAndOfferListExposesScores() {
+    void fulfillmentScoresUseNounResourceAndOfferListExposesScores() throws Exception {
         boolean scoresPut = Arrays.stream(SupplierAdminController.class.getDeclaredMethods())
                 .anyMatch(method -> {
                     org.springframework.web.bind.annotation.PutMapping put =
@@ -188,9 +191,13 @@ class SupplierAdminRestContractTest {
                 .findFirst()
                 .orElseThrow();
         assertThat(stability.getAccessor().getAnnotation(io.swagger.v3.oas.annotations.media.Schema.class)
-                .description()).isEqualTo("稳定性评分，人工录入，0-100");
+                .description()).isEqualTo("稳定性评分，人工录入，0-100，默认80");
         assertThat(timeliness.getAccessor().getAnnotation(io.swagger.v3.oas.annotations.media.Schema.class)
-                .description()).isEqualTo("时效性评分，人工录入，0-100");
+                .description()).isEqualTo("时效性评分，人工录入，0-100，默认80");
+        assertScoreRange(SupplierAdminController.FulfillmentScoreSaveReqVO.class
+                .getDeclaredField("stabilityScore"));
+        assertScoreRange(SupplierAdminController.FulfillmentScoreSaveReqVO.class
+                .getDeclaredField("timelinessScore"));
     }
 
     private static boolean hasHttpMapping(Method method) {
@@ -226,5 +233,10 @@ class SupplierAdminRestContractTest {
             return String.join(",", delete.value());
         }
         return "";
+    }
+
+    private static void assertScoreRange(java.lang.reflect.Field field) {
+        assertThat(field.getAnnotation(Min.class).value()).isEqualTo(OfferFulfillmentScore.MIN);
+        assertThat(field.getAnnotation(Max.class).value()).isEqualTo(OfferFulfillmentScore.MAX);
     }
 }

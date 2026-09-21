@@ -19,8 +19,11 @@ class OfferFulfillmentScoreLiquibaseTest {
 
     private static final String STABILITY_COMMENT = "稳定性评分，人工录入，0-100";
     private static final String TIMELINESS_COMMENT = "时效性评分，人工录入，0-100";
+    private static final String STABILITY_DEFAULT_COMMENT = "稳定性评分，人工录入，0-100，默认80";
+    private static final String TIMELINESS_DEFAULT_COMMENT = "时效性评分，人工录入，0-100，默认80";
 
     private static String migrationSql;
+    private static String defaultMigrationSql;
     private static String releaseChangelog;
 
     @BeforeAll
@@ -30,6 +33,8 @@ class OfferFulfillmentScoreLiquibaseTest {
                         + "db/changelog/releases/1.0.0");
         migrationSql = Files.readString(releaseDir.resolve("042-offer-fulfillment-score.sql"),
                 StandardCharsets.UTF_8);
+        defaultMigrationSql = Files.readString(releaseDir.resolve("043-offer-fulfillment-score-default.sql"),
+                StandardCharsets.UTF_8);
         releaseChangelog = Files.readString(releaseDir.resolve("db.changelog-1.0.0.yaml"),
                 StandardCharsets.UTF_8);
     }
@@ -38,7 +43,9 @@ class OfferFulfillmentScoreLiquibaseTest {
     void changelogRegistersMigration() {
         assertThat(releaseChangelog)
                 .contains("id: 042-offer-fulfillment-score")
-                .contains("path: 042-offer-fulfillment-score.sql");
+                .contains("path: 042-offer-fulfillment-score.sql")
+                .contains("id: 043-offer-fulfillment-score-default")
+                .contains("path: 043-offer-fulfillment-score-default.sql");
     }
 
     @Test
@@ -49,6 +56,21 @@ class OfferFulfillmentScoreLiquibaseTest {
                 .contains("AFTER draft_min_quantity")
                 .contains("ADD CONSTRAINT ck_sc_offer_fulfillment_score CHECK")
                 .contains("stability_score IS NULL AND timeliness_score IS NULL")
+                .contains("stability_score BETWEEN 0 AND 100 AND timeliness_score BETWEEN 0 AND 100")
+                .doesNotContain("primary_capability_code");
+    }
+
+    @Test
+    void backfillsNullScoresToDefaultEighty() {
+        assertThat(defaultMigrationSql)
+                .contains("SET stability_score = 80, timeliness_score = 80")
+                .contains("stability_score IS NULL OR timeliness_score IS NULL")
+                .contains("DROP CHECK ck_sc_offer_fulfillment_score")
+                .contains("MODIFY COLUMN stability_score TINYINT NOT NULL DEFAULT 80 COMMENT '"
+                        + STABILITY_DEFAULT_COMMENT + "'")
+                .contains("MODIFY COLUMN timeliness_score TINYINT NOT NULL DEFAULT 80 COMMENT '"
+                        + TIMELINESS_DEFAULT_COMMENT + "'")
+                .contains("ADD CONSTRAINT ck_sc_offer_fulfillment_score CHECK")
                 .contains("stability_score BETWEEN 0 AND 100 AND timeliness_score BETWEEN 0 AND 100")
                 .doesNotContain("primary_capability_code");
     }

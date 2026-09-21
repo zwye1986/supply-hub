@@ -22,24 +22,24 @@
 ## 2. 领域不变量
 
 1. 评分粒度是 **未退役 Offer**，业务上等于 SKU × 供应商。未退役 Offer 在 `(supplier_id, platform_sku_id)` 上唯一，商品侧可用 `supplierCode` 寻址。
-2. 稳定性与时效性必须成对：同为 `NULL`（未评分，不等于 0），或两列都是 0–100 的整数。
-3. 新建合作商品两列默认 `NULL`。`PUT .../offers/{offerNo}` 改价 **不碰** 评分。
+2. 库内两列都是 0–100 的整数，新建默认 **80**。写入可只改其中一列，省略的列保持原值；已提交的值必须是 0–100。
+3. `PUT .../offers/{offerNo}` 改价 **不碰** 评分。存量 `NULL` 由 Liquibase `043` 回填为 80。
 4. 展示与写入范围 = `PUBLISHED` + `SUSPENDED`。`RETIRED` 不展示、不可写。
 5. 单一写入服务 `OfferFulfillmentScoreService` 位于 `tradecore.supply`。商品侧 Controller 只调该服务，catalog 不得直接 UPDATE Offer 评分列。
 6. `sc_supplier_offer_version.primary_capability_code` 是履约协议能力码，禁止复用为分数。
 
 ## 3. 存储
 
-Liquibase `042-offer-fulfillment-score.sql`：
+Liquibase `042-offer-fulfillment-score.sql` 先加可空列；`043-offer-fulfillment-score-default.sql` 回填并把列改为非空默认 80：
 
 | 列 | 类型 | COMMENT |
 | --- | --- | --- |
-| `stability_score` | TINYINT NULL | 稳定性评分，人工录入，0-100 |
-| `timeliness_score` | TINYINT NULL | 时效性评分，人工录入，0-100 |
+| `stability_score` | TINYINT NOT NULL DEFAULT 80 | 稳定性评分，人工录入，0-100，默认80 |
+| `timeliness_score` | TINYINT NOT NULL DEFAULT 80 | 时效性评分，人工录入，0-100，默认80 |
 
-CHECK：两列同为 NULL，或两列均 `BETWEEN 0 AND 100`。
+CHECK：两列均 `BETWEEN 0 AND 100`。
 
-Java：`SupplierOfferDO.stabilityScore` / `timelinessScore`，类型 `Integer`。DTO `@Schema` 必须与上表 COMMENT 同一表述。
+Java：`SupplierOfferDO.stabilityScore` / `timelinessScore`，类型 `Integer`。DTO `@Schema` 必须与上表 COMMENT 同一表述。常量 `OfferFulfillmentScore.DEFAULT = 80`。
 
 ## 4. 管理端 REST
 
@@ -47,10 +47,10 @@ Java：`SupplierOfferDO.stabilityScore` / `timelinessScore`，类型 `Integer`�
 
 ### 4.1 合作商品列表回显
 
-`GET /supply-chain/suppliers/{supplierCode}/offers` 的 `OfferListItem` 增加可空：
+`GET /supply-chain/suppliers/{supplierCode}/offers` 的 `OfferListItem` 增加：
 
-- `stabilityScore`：稳定性评分，人工录入，0-100
-- `timelinessScore`：时效性评分，人工录入，0-100
+- `stabilityScore`：稳定性评分，人工录入，0-100，默认80
+- `timelinessScore`：时效性评分，人工录入，0-100，默认80
 
 权限不变：`supplier:query`（含 `supply-chain:admin` 超集）。
 
@@ -62,11 +62,11 @@ Java：`SupplierOfferDO.stabilityScore` / `timelinessScore`，类型 `Integer`�
 
 请求：
 
-- `stabilityScore`（必填，0–100）
-- `timelinessScore`（必填，0–100）
+- `stabilityScore`（可选，0–100，请求 VO `@Min`/`@Max`；省略则该列保持原值）
+- `timelinessScore`（可选，0–100，请求 VO `@Min`/`@Max`；省略则该列保持原值）
 - `platformSkuCodes`（可选 `List<String>`）：省略、null 或空列表 = 覆盖该供应商全部未退役 Offer；非空 = 只覆盖这些 SKU，整批校验，任一 SKU 不存在或该供应商当前无未退役 Offer 则整单拒绝。
 
-响应：`{ "updatedCount": n }`。供应商不存在 → `SUPPLIER_NOT_FOUND`。无未退役 Offer 且未指定 SKU 列表 → `updatedCount=0`，不报错。
+响应：`{ "updatedCount": n }`。供应商不存在 → `SUPPLIER_NOT_FOUND`。无未退役 Offer 且未指定 SKU 列表 → `updatedCount=0`，不报错。两列都省略时不改分数，`updatedCount=0`，不报错。
 
 ### 4.3 商品履约能力弹窗（PRD 8.4.1.1）
 
@@ -82,15 +82,16 @@ Java：`SupplierOfferDO.stabilityScore` / `timelinessScore`，类型 `Integer`�
 响应：
 
 - `skuCode` / `skuName` / `spuCode` / `spuName`
-- `items[]`：`supplierCode`、`supplierName`、`offerNo`、`stabilityScore`、`timelinessScore`（可空）
+- `items[]`：`supplierCode`、`supplierName`、`offerNo`、`stabilityScore`、`timelinessScore`（整数，默认 80）
 
 `PUT /supply-chain/products/skus/{skuCode}/fulfillment-scores`
 
 权限：`product:update`。
 
-请求：`{ "items": [{ "supplierCode", "stabilityScore", "timelinessScore" }] }`。
+请求：`{ "items": [{ "supplierCode", "stabilityScore", "timelinessScore" }] }`。行内分数请求 VO `@Min`/`@Max` 约束 0–100，`items` 加 `@Valid` 级联校验。
 
 - `items` 必填且非空。
+- 行内可只填 `stabilityScore` 或 `timelinessScore`；省略的列保持该 Offer 原值。
 - 只更新提交行；未出现的当前合作供应商保持原值。
 - `supplierCode` 对该 SKU 无未退役 Offer → `FULFILLMENT_SCORE_SUPPLIER_NOT_COOPERATING`，整单回滚。
 - 同一请求重复 `supplierCode` → `FULFILLMENT_SCORE_INVALID`。
@@ -103,7 +104,7 @@ Java：`SupplierOfferDO.stabilityScore` / `timelinessScore`，类型 `Integer`�
 
 | 码 | 常量 | 文案 |
 | --- | --- | --- |
-| 1_050_001_116 | `FULFILLMENT_SCORE_INVALID` | 稳定性评分与时效性评分必须同时给出且为 0-100 的整数 |
+| 1_050_001_116 | `FULFILLMENT_SCORE_INVALID` | 稳定性评分与时效性评分为 0-100 的整数 |
 | 1_050_001_117 | `FULFILLMENT_SCORE_SUPPLIER_NOT_COOPERATING` | 该供应商当前未合作供应此 SKU |
 | 1_050_001_118 | `FULFILLMENT_SCORE_ITEMS_REQUIRED` | 履约能力评分至少提交一行 |
 
@@ -119,7 +120,7 @@ Offer 身份上的分数是路由的**预备输入**。`SupplierRoutingEngine` �
 
 ## 8. 测试门禁
 
-- `*Test`：分数成对校验、批量覆盖全部/子集、RETIRED 不可见不可写、改价不清分、商品侧非合作供应商拒绝、空 items 拒绝、两侧互读同一值。
-- `*IntegrationTest`（profile `supply-chain-integration`）：真实 MySQL + Liquibase `042`；供应商 PUT 后商品 GET 一致，反向亦然。
+- `*Test`：新建默认 80、可单列更新、越界拒绝、批量覆盖全部/子集、RETIRED 不可见不可写、改价不清分、商品侧非合作供应商拒绝、空 items 拒绝、两侧互读同一值。
+- `*IntegrationTest`（profile `supply-chain-integration`）：真实 MySQL + Liquibase `042`/`043`；新建为 80；供应商 PUT 后商品 GET 一致，反向亦然。
 - `*ContractTest`：`OfferListItem` 新字段 Schema；新映射 `@PreAuthorize`；DTO 注释与 DDL COMMENT 一致。
 - `*ArchitectureTest`：`routing.domain` 不依赖新服务、不出现稳定性/时效分字段。

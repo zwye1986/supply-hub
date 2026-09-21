@@ -145,7 +145,7 @@ public interface SupplyChainErrorCodeConstants {
     ErrorCode FULFILLMENT_ASSET_SCOPE_DENIED =
             error(1_050_001_115, "缺少独立授予的 FULFILLMENT_ASSET_READ 权限");
     ErrorCode FULFILLMENT_SCORE_INVALID =
-            error(1_050_001_116, "稳定性评分与时效性评分必须同时给出且为 0-100 的整数");
+            error(1_050_001_116, "稳定性评分与时效性评分为 0-100 的整数");
     ErrorCode FULFILLMENT_SCORE_SUPPLIER_NOT_COOPERATING =
             error(1_050_001_117, "该供应商当前未合作供应此 SKU");
     ErrorCode FULFILLMENT_SCORE_ITEMS_REQUIRED =

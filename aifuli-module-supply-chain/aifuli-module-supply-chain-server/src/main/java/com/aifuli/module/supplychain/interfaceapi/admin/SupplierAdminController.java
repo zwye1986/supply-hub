@@ -23,6 +23,7 @@ import com.aifuli.module.supplychain.tradecore.supply.application.SupplierProfil
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierProfileQueryService.SupplyScopeView;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierSupplyScopeService;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierSupplyScopeService.ScopeLine;
+import com.aifuli.module.supplychain.tradecore.supply.domain.OfferFulfillmentScore;
 import com.aifuli.module.supplychain.tradecore.supply.domain.OfferStatus;
 import com.aifuli.module.supplychain.tradecore.supply.domain.SupplierStatus;
 import com.fasterxml.jackson.annotation.JsonAlias;
@@ -34,6 +35,7 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.AssertTrue;
+import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
@@ -258,6 +260,7 @@ public class SupplierAdminController {
     @PreAuthorize(SUPPLIER_UPDATE_EXPRESSION)
     @Operation(summary = "保存供应商合作商品履约能力评分",
             description = "人工录入稳定性与时效性评分，挂在未退役 Offer 身份列。"
+                    + "可只改其中一列，省略的列保持原值。"
                     + "省略 platformSkuCodes 则覆盖该供应商全部未退役 Offer；给出列表则只覆盖这些 SKU。"
                     + "改价 PUT .../offers/{offerNo} 不碰评分。")
     public CommonResult<ScoreUpdateResult> saveFulfillmentScores(
@@ -721,9 +724,13 @@ public class SupplierAdminController {
     @Data
     @Schema(description = "供应商合作商品履约能力评分保存")
     public static class FulfillmentScoreSaveReqVO {
-        @Schema(description = "稳定性评分，人工录入，0-100", example = "80")
+        @Min(OfferFulfillmentScore.MIN)
+        @Max(OfferFulfillmentScore.MAX)
+        @Schema(description = OfferFulfillmentScore.STABILITY_COMMENT, example = "80")
         private Integer stabilityScore;
-        @Schema(description = "时效性评分，人工录入，0-100", example = "70")
+        @Min(OfferFulfillmentScore.MIN)
+        @Max(OfferFulfillmentScore.MAX)
+        @Schema(description = OfferFulfillmentScore.TIMELINESS_COMMENT, example = "70")
         private Integer timelinessScore;
         @Schema(description = "平台SKU永久业务编码列表；省略则覆盖该供应商全部未退役 Offer",
                 example = "[\"MOVIE_100\"]")
