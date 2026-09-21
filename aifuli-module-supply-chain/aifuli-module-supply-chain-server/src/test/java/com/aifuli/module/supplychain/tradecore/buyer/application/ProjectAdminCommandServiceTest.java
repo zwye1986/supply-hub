@@ -131,6 +131,15 @@ class ProjectAdminCommandServiceTest {
     }
 
     @Test
+    void fullUpdateMayChangeStatusThroughSameStateMachine() {
+        service.create(create(BUYER_A, null, null, null));
+
+        service.update(update(BUYER_A, BuyerProjectStatus.ACTIVE.name()));
+
+        assertThat(stored.getStatus()).isEqualTo(BuyerProjectStatus.ACTIVE.getCode());
+    }
+
+    @Test
     void createAllowsDraftOrActiveAndGeneratesPrjCode() {
         String draftCode = service.create(create(BUYER_A, null, null, null));
         assertThat(draftCode).isEqualTo(PROJECT_CODE);
@@ -195,10 +204,14 @@ class ProjectAdminCommandServiceTest {
     }
 
     private static UpdateProjectCommand update(String buyerCode) {
+        return update(buyerCode, null);
+    }
+
+    private static UpdateProjectCommand update(String buyerCode, String status) {
         return new UpdateProjectCommand(
                 PROJECT_CODE, "福利项目", buyerCode, null,
                 LocalDate.of(2026, 9, 1), LocalDate.of(2026, 9, 30),
-                null, "说明", 1L);
+                null, "说明", status, 1L);
     }
 
     private static BuyerDO activeBuyer(Long id, String code) {

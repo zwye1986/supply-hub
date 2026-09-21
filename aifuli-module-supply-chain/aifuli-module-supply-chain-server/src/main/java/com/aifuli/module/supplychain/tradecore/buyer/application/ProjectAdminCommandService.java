@@ -34,7 +34,7 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
 
 /**
  * 项目管理端档案命令：草稿可改归属，启用后冻结分销商；结算方仅 DISTRIBUTOR；
- * 状态机含 CLOSED。不返回 app 密钥。
+ * 档案整档更新可选变更状态，但仍必须经过项目状态机。不返回 app 密钥。
  * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#71-档案}。
  */
 @Slf4j
@@ -90,12 +90,14 @@ public class ProjectAdminCommandService {
         String settlementParty = resolveSettlementParty(command.settlementPartyType());
         ProjectType projectType = ClosedEnums.parse(ProjectType.class, command.projectType());
         BuyerProjectDO project = requireForUpdate(command.projectCode());
+        BuyerProjectStatus currentStatus = BuyerProjectStatus.fromCode(project.getStatus());
+        BuyerProjectStatus targetStatus = resolveUpdateStatus(command.status(), currentStatus);
         log.info("更新项目档案 projectName={} buyerCode={} status={} operatorId={}",
                 command.projectName(), command.buyerCode(),
-                BuyerProjectStatus.fromCode(project.getStatus()), command.operatorId());
+                targetStatus, command.operatorId());
         BuyerDO targetBuyer = requireBuyer(command.buyerCode());
         if (!targetBuyer.getId().equals(project.getBuyerId())) {
-            if (BuyerProjectStatus.fromCode(project.getStatus()) != BuyerProjectStatus.DRAFT) {
+            if (currentStatus != BuyerProjectStatus.DRAFT) {
                 throw exception(PROJECT_BUYER_IMMUTABLE);
             }
             requireActive(targetBuyer);
@@ -108,6 +110,7 @@ public class ProjectAdminCommandService {
         project.setEndDate(command.endDate());
         project.setSettlementPartyType(settlementParty);
         project.setDescription(command.description());
+        project.setStatus(targetStatus.getCode());
         project.setUpdatedBy(command.operatorId());
         project.setUpdatedAt(now);
         if (projectMapper.updateById(project) != 1) {
@@ -146,6 +149,29 @@ public class ProjectAdminCommandService {
             throw exception(PROJECT_NOT_FOUND);
         }
         return project;
+    }
+
+    /**
+     * 整档更新的状态字段为空时保持当前状态；显式状态仍必须经过同一套项目状态机。
+     * 相同状态视为幂等保存，避免编辑页面回显当前状态后无法再次保存档案。
+     * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#71-档案}。
+     */
+    private static BuyerProjectStatus resolveUpdateStatus(String rawStatus, BuyerProjectStatus currentStatus) {
+        if (isBlank(rawStatus)) {
+            return currentStatus;
+        }
+        BuyerProjectStatus targetStatus;
+        try {
+            targetStatus = BuyerProjectStatus.valueOf(rawStatus.trim());
+        } catch (IllegalArgumentException ex) {
+            ServiceException invalid = exception(ENUM_NOT_OPEN);
+            invalid.initCause(ex);
+            throw invalid;
+        }
+        if (targetStatus != currentStatus && !currentStatus.canTransitionTo(targetStatus)) {
+            throw exception(PROJECT_STATUS_INVALID);
+        }
+        return targetStatus;
     }
 
     private BuyerDO requireActiveBuyer(String buyerCode) {
@@ -238,6 +264,7 @@ public class ProjectAdminCommandService {
             LocalDate endDate,
             String settlementPartyType,
             String description,
+            String status,
             Long operatorId) {
     }
 }

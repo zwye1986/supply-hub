@@ -457,13 +457,13 @@ Springdoc `components.schemas` 中冲突的通用简单类名。生成契约必�
 
 `GET /supply-chain/projects?view=simple`：名称/编号下拉。
 
-`GET /supply-chain/projects/{projectCode}`、`POST /supply-chain/projects`、`PUT /supply-chain/projects/{projectCode}`：`projectName`、`buyerCode`、`projectType`、`startDate`、`endDate`、`settlementPartyType`（仅 `DISTRIBUTOR`）、`description`（≤500）。创建允许 `DRAFT` 或 `ACTIVE`（`POST` body 可带 `status`）。`skuCount`、`projectPriceSkuCount` 只读统计。
+`GET /supply-chain/projects/{projectCode}`、`POST /supply-chain/projects`、`PUT /supply-chain/projects/{projectCode}`：`projectName`、`buyerCode`、`projectType`、`startDate`、`endDate`、`settlementPartyType`（仅 `DISTRIBUTOR`）、`description`（≤500）。创建允许 `DRAFT` 或 `ACTIVE`（`POST` body 可带 `status`）；整档更新 body 可选带 `status`，未传时保持原状态，传入时按第 4.2 节状态机执行迁移，目标状态与当前状态相同时按幂等保存处理。`skuCount`、`projectPriceSkuCount` 只读统计。
 
 `catalogMode` 默认 `MANAGED`，本批页面不展示。`appId`/`appKey` 本批不返回（避免密钥进入管理端列表）。
 
 归属：`DRAFT` 可改 `buyerCode`；`ACTIVE`/`SUSPENDED`/`CLOSED` 改归属 → `PROJECT_BUYER_IMMUTABLE`。
 
-`PATCH /supply-chain/projects/{projectCode}` `{ "status": "ACTIVE"|"SUSPENDED"|"CLOSED" }` 按第 4.2 节迁移。页面按钮：启动、暂停、恢复、结束。
+`PATCH /supply-chain/projects/{projectCode}` `{ "status": "ACTIVE"|"SUSPENDED"|"CLOSED" }` 按第 4.2 节迁移，作为状态操作的兼容入口；`PUT` 传入 `status` 时执行相同状态机校验。页面按钮：启动、暂停、恢复、结束。
 
 ### 7.2 项目商品
 

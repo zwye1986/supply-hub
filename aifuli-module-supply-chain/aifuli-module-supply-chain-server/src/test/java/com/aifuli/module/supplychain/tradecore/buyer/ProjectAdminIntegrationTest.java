@@ -134,6 +134,7 @@ class ProjectAdminIntegrationTest {
         try (ConfigurableApplicationContext context = applicationContext()) {
             BuyerAdminCommandService buyers = context.getBean(BuyerAdminCommandService.class);
             BuyerAdminQueryService buyerQueries = context.getBean(BuyerAdminQueryService.class);
+            ProjectAdminQueryService projectQueries = context.getBean(ProjectAdminQueryService.class);
             BuyerProductCommandService products = context.getBean(BuyerProductCommandService.class);
             ProjectAdminCommandService projects = context.getBean(ProjectAdminCommandService.class);
             ProjectListingCommandService listings = context.getBean(ProjectListingCommandService.class);
@@ -154,8 +155,13 @@ class ProjectAdminIntegrationTest {
             String projectCode = projects.create(new CreateProjectCommand(
                     "福利项目", buyerA, "WELFARE",
                     LocalDate.of(2026, 9, 1), LocalDate.of(2026, 12, 31),
-                    null, "说明", "ACTIVE", 1L));
+                    null, "说明", "DRAFT", 1L));
             assertThat(projectCode).startsWith("PRJ_");
+            projects.update(new UpdateProjectCommand(
+                    projectCode, "福利项目", buyerA, "WELFARE",
+                    LocalDate.of(2026, 9, 1), LocalDate.of(2026, 12, 31),
+                    null, "说明", "ACTIVE", 1L));
+            assertThat(projectQueries.get(projectCode).status()).isEqualTo("ACTIVE");
 
             var buyerPage = buyerQueries.page(new BuyerAdminQueryService.BuyerPageQuery(
                     null, buyerA, List.of(), List.of(), List.of(), List.of(), null, null, 1, 20));
@@ -225,7 +231,7 @@ class ProjectAdminIntegrationTest {
             assertThatThrownBy(() -> projects.update(new UpdateProjectCommand(
                     projectCode, "福利项目", buyerB, "WELFARE",
                     LocalDate.of(2026, 9, 1), LocalDate.of(2026, 12, 31),
-                    null, "说明", 1L)))
+                    null, "说明", null, 1L)))
                     .isInstanceOf(ServiceException.class)
                     .extracting(ex -> ((ServiceException) ex).getCode())
                     .isEqualTo(PROJECT_BUYER_IMMUTABLE.getCode());

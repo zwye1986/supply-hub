@@ -127,7 +127,7 @@ public class ProjectAdminController {
     @PutMapping("/{projectCode}")
     @PreAuthorize(PROJECT_UPDATE_EXPRESSION)
     @Operation(summary = "整档替换项目档案",
-            description = "身份用 projectCode。非草稿改 buyerCode 拒绝。")
+            description = "身份用 projectCode。可选传 status 变更状态；未传保持原状态。非草稿改 buyerCode 拒绝。")
     public CommonResult<Boolean> update(@PathVariable String projectCode,
                                         @Valid @RequestBody ProjectSaveReqVO request) {
         commandService.update(toUpdateCommand(projectCode, request));
@@ -227,7 +227,7 @@ public class ProjectAdminController {
         return new UpdateProjectCommand(
                 projectCode, request.getProjectName(), request.getBuyerCode(), request.getProjectType(),
                 request.getStartDate(), request.getEndDate(), request.getSettlementPartyType(),
-                request.getDescription(), getLoginUserId());
+                request.getDescription(), request.getStatus(), getLoginUserId());
     }
 
     /**
@@ -291,7 +291,7 @@ public class ProjectAdminController {
         @Size(max = 500)
         @Schema(description = "项目说明")
         private String description;
-        @Schema(description = "创建时允许 DRAFT 或 ACTIVE，空视为草稿")
+        @Schema(description = "创建时允许 DRAFT 或 ACTIVE；整档更新时可选传入目标状态，空表示保持原状态")
         private String status;
     }
 
