@@ -4,7 +4,7 @@
 
 本文根据 `supplychainhubweb` 已落地的供应链中台页面（`src/views/supplier`、`src/api/supplier`）定义管理端 REST，供前端关掉 mock 后对接。
 
-前端范围仅三块：**供应商、分销商、项目**（含供货配置、合作商品、分销商品、项目商品、分销层级）。新增供应商供货配置、新增分销商的品类/类型/分类下拉改为 system 数据字典，不再用分类树。加价模板 / 订单 / 售后 / 路由页面尚未建设，不在本文。
+前端范围仅三块：**供应商、分销商、项目**（含供货配置、合作商品、分销商品、项目商品、分销层级）。新增供应商供货配置、新增分销商的品类/类型/分类下拉改为 system 数据字典，不再用分类树。加价模板不在本文。`supplychainhubweb` 已有订单/售后/路由规则页面与 mock（`src/views/supplier/order`、`src/api/order`、`src/api/routing`），关掉 mock 后的订单只读与路由记录 REST 分别见 `docs/superpowers/specs/2026-09-12-supply-chain-order-admin-readonly-design.md` 与 `docs/superpowers/specs/2026-09-21-order-routing-records-admin-design.md`；金额仍按 a2 用分，不按 mock 的元适配。
 
 与 `docs/superpowers/specs/2026-08-28-supply-chain-prd-alignment-design.md` 冲突时：
 

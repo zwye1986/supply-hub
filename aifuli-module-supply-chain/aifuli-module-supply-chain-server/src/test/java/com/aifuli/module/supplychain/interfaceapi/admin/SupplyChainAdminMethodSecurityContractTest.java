@@ -277,6 +277,8 @@ class SupplyChainAdminMethodSecurityContractTest {
     private void queryOrders() {
         orderController.page(null, null, null, null, null, null, null, null,
                 null, null, 1, 20);
+        orderController.get("SC_1");
+        orderController.getRoutingRecords("SC_1");
     }
 
     private void saveSupplierFulfillmentScores() {

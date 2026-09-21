@@ -6,8 +6,14 @@ import com.aifuli.framework.common.pojo.PageResult;
 import com.aifuli.module.supplychain.api.order.dto.DetailAvailability;
 import com.aifuli.module.supplychain.api.order.dto.SupplyChainAftersaleStatus;
 import com.aifuli.module.supplychain.api.order.dto.SupplyChainOrderStatus;
+import com.aifuli.module.supplychain.border.fulfillment.dal.dataobject.BOrderDO;
 import com.aifuli.module.supplychain.border.fulfillment.dal.dataobject.FulfillmentRequestDO;
+import com.aifuli.module.supplychain.border.fulfillment.dal.dataobject.SupplierRoutingRecordDO;
+import com.aifuli.module.supplychain.border.fulfillment.dal.dataobject.SupplierRoutingRoundDO;
+import com.aifuli.module.supplychain.border.fulfillment.dal.mysql.BOrderMapper;
 import com.aifuli.module.supplychain.border.fulfillment.dal.mysql.FulfillmentRequestMapper;
+import com.aifuli.module.supplychain.border.fulfillment.dal.mysql.SupplierRoutingRecordMapper;
+import com.aifuli.module.supplychain.border.fulfillment.dal.mysql.SupplierRoutingRoundMapper;
 import com.aifuli.module.supplychain.border.fulfillment.domain.FulfillmentRequestStatus;
 import com.aifuli.module.supplychain.border.instore.dal.dataobject.InstoreChannelOrderDO;
 import com.aifuli.module.supplychain.border.instore.dal.dataobject.InstorePaymentFlowDO;
@@ -26,6 +32,7 @@ import com.aifuli.module.supplychain.border.order.dal.dataobject.SupplyChainOrde
 import com.aifuli.module.supplychain.border.order.dal.mysql.SupplyChainOrderMapper;
 import com.aifuli.module.supplychain.border.order.domain.SupplyChainOrderType;
 import com.aifuli.module.supplychain.border.order.domain.SupplyChainOrderTypes;
+import com.aifuli.module.supplychain.routing.domain.RoutingDecisionStatus;
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -44,8 +51,10 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
- * 平台订单查询只读契约：列表只读总表，详情按类型单分支加载并剔除敏感字段。
- * 设计见 {@code docs/superpowers/specs/2026-09-12-supply-chain-order-admin-readonly-design.md#7-测试与联调门禁}。
+ * 平台订单查询只读契约：列表只读总表，详情按类型单分支加载并剔除敏感字段；
+ * 路由记录按冻结轮次回放。
+ * 设计见 {@code docs/superpowers/specs/2026-09-12-supply-chain-order-admin-readonly-design.md#7-测试与联调门禁}
+ * 与 {@code docs/superpowers/specs/2026-09-21-order-routing-records-admin-design.md}。
  */
 class OrderAdminQueryServiceTest {
 
@@ -56,11 +65,15 @@ class OrderAdminQueryServiceTest {
     private final O2OChannelDetailMapper o2oMapper = mock(O2OChannelDetailMapper.class);
     private final InstoreChannelOrderMapper instoreMapper = mock(InstoreChannelOrderMapper.class);
     private final InstorePaymentFlowMapper flowMapper = mock(InstorePaymentFlowMapper.class);
+    private final SupplierRoutingRoundMapper roundMapper = mock(SupplierRoutingRoundMapper.class);
+    private final SupplierRoutingRecordMapper recordMapper = mock(SupplierRoutingRecordMapper.class);
+    private final BOrderMapper bOrderMapper = mock(BOrderMapper.class);
     private OrderAdminQueryService service;
 
     @BeforeEach
     void setUp() {
-        service = new OrderAdminQueryService(orderMapper, fulfillmentMapper, o2oMapper, instoreMapper, flowMapper);
+        service = new OrderAdminQueryService(orderMapper, fulfillmentMapper, o2oMapper, instoreMapper, flowMapper,
+                roundMapper, recordMapper, bOrderMapper);
     }
 
     @Test
@@ -81,6 +94,7 @@ class OrderAdminQueryServiceTest {
         assertThat(result.getList().getFirst().serviceFeeCents()).isEqualTo(100L);
         assertThat(result.getList().getFirst().userPayableAmountCents()).isEqualTo(10_100L);
         verifyNoInteractions(fulfillmentMapper, o2oMapper, instoreMapper, flowMapper);
+        verifyNoInteractions(roundMapper, recordMapper, bOrderMapper);
     }
 
     @Test
@@ -190,6 +204,115 @@ class OrderAdminQueryServiceTest {
                 .isInstanceOf(ServiceException.class)
                 .extracting(ex -> ((ServiceException) ex).getCode())
                 .isEqualTo(SUPPLY_CHAIN_ORDER_NOT_FOUND.getCode());
+    }
+
+    @Test
+    void getRoutingRecordsReplaysCardCandidatesInSequence() {
+        SupplyChainOrderDO order = order(1L, "SC_CARD", SupplyChainOrderTypes.ORDER_TYPE_CARD,
+                SupplyChainOrderTypes.DETAIL_TYPE_FULFILLMENT);
+        when(orderMapper.selectByOrderNo("SC_CARD")).thenReturn(order);
+        when(roundMapper.selectList(any(Wrapper.class))).thenReturn(List.of(SupplierRoutingRoundDO.builder()
+                .id(10L).routingRoundNo("RR_1").roundSequence(1).routingType("STANDARD_PRODUCT")
+                .decisionStatus(RoutingDecisionStatus.SELECTED.getCode())
+                .decisionReasonCode("SELECTED_BY_STABLE_PRIORITY")
+                .decisionReasonMessage("按已发布路由规则选中首个合格供应商")
+                .candidateCount(2).computedAt(NOW).build()));
+        when(recordMapper.selectList(any(Wrapper.class))).thenReturn(List.of(
+                SupplierRoutingRecordDO.builder().id(21L).routingRoundId(10L).candidateSequence(1)
+                        .supplierCodeSnapshot("SPL_A").supplierNameSnapshot("甲供应商")
+                        .configuredPriority(0).availabilityClass("CONFIRMED")
+                        .supplierSettlementUnitPrice(9_800L).eligibleFlag(true).selectedFlag(true)
+                        .decisionReasonCode("SELECTED").decisionReasonMessage("SELECTED")
+                        .attemptBOrderId(88L)
+                        .checkResultJson("{\"inventory\":\"UNUSED\",\"balance\":\"UNUSED\",\"health\":\"UNUSED\",\"reasons\":[]}")
+                        .build(),
+                SupplierRoutingRecordDO.builder().id(22L).routingRoundId(10L).candidateSequence(2)
+                        .supplierCodeSnapshot("SPL_B").supplierNameSnapshot("乙供应商")
+                        .configuredPriority(10).availabilityClass("CONFIRMED")
+                        .supplierSettlementUnitPrice(10_800L).eligibleFlag(true).selectedFlag(null)
+                        .decisionReasonCode("ELIGIBLE_NOT_SELECTED").decisionReasonMessage("ELIGIBLE_NOT_SELECTED")
+                        .checkResultJson("{\"inventory\":\"UNUSED\",\"balance\":\"UNUSED\",\"health\":\"UNUSED\",\"reasons\":[]}")
+                        .build()));
+        when(bOrderMapper.selectBatchIds(any())).thenReturn(List.of(
+                BOrderDO.builder().id(88L).bOrderNo("BO_1").build()));
+
+        var view = service.getRoutingRecords("SC_CARD");
+
+        assertThat(view.orderNo()).isEqualTo("SC_CARD");
+        assertThat(view.orderType()).isEqualTo(SupplyChainOrderType.CARD);
+        assertThat(view.rounds()).hasSize(1);
+        assertThat(view.rounds().getFirst().routingRoundNo()).isEqualTo("RR_1");
+        assertThat(view.rounds().getFirst().decisionStatus()).isEqualTo(RoutingDecisionStatus.SELECTED);
+        assertThat(view.rounds().getFirst().candidates()).extracting(candidate -> candidate.supplierCode())
+                .containsExactly("SPL_A", "SPL_B");
+        assertThat(view.rounds().getFirst().candidates().getFirst().selected()).isTrue();
+        assertThat(view.rounds().getFirst().candidates().getFirst().attemptBOrderNo()).isEqualTo("BO_1");
+        assertThat(view.rounds().getFirst().candidates().getFirst().supplierSettlementUnitPrice()).isEqualTo(9_800L);
+        assertThat(view.rounds().getFirst().candidates().getFirst().checkResult().inventory()).isEqualTo("UNUSED");
+        assertThat(view.rounds().getFirst().candidates().getFirst().eligible()).isTrue();
+        assertThat(view.rounds().getFirst().candidates().get(1).selected()).isFalse();
+        assertThat(view.getClass().getRecordComponents()).extracting(component -> component.getName())
+                .doesNotContain("routingInputDigest", "factSnapshotJson");
+        assertThat(view.rounds().getFirst().candidates().getFirst().getClass().getRecordComponents())
+                .extracting(component -> component.getName())
+                .doesNotContain("id", "offerId", "offerVersionId", "healthScore", "checkResultJson",
+                        "attemptBOrderId", "inventorySourceId");
+        verifyNoInteractions(fulfillmentMapper, o2oMapper, instoreMapper, flowMapper);
+    }
+
+    @Test
+    void getRoutingRecordsReturnsEmptyRoundsForO2OAndMissingCardRound() {
+        SupplyChainOrderDO o2o = order(2L, "SC_O2O", SupplyChainOrderTypes.ORDER_TYPE_O2O,
+                SupplyChainOrderTypes.DETAIL_TYPE_O2O_CHANNEL);
+        when(orderMapper.selectByOrderNo("SC_O2O")).thenReturn(o2o);
+
+        var o2oView = service.getRoutingRecords("SC_O2O");
+
+        assertThat(o2oView.orderType()).isEqualTo(SupplyChainOrderType.O2O);
+        assertThat(o2oView.rounds()).isEmpty();
+        verifyNoInteractions(roundMapper, recordMapper, bOrderMapper);
+
+        SupplyChainOrderDO instore = order(3L, "SC_INSTORE", SupplyChainOrderTypes.ORDER_TYPE_INSTORE,
+                SupplyChainOrderTypes.DETAIL_TYPE_INSTORE_CHANNEL);
+        when(orderMapper.selectByOrderNo("SC_INSTORE")).thenReturn(instore);
+        assertThat(service.getRoutingRecords("SC_INSTORE").rounds()).isEmpty();
+        verifyNoInteractions(roundMapper, recordMapper, bOrderMapper);
+
+        SupplyChainOrderDO card = order(1L, "SC_CARD", SupplyChainOrderTypes.ORDER_TYPE_CARD,
+                SupplyChainOrderTypes.DETAIL_TYPE_FULFILLMENT);
+        when(orderMapper.selectByOrderNo("SC_EMPTY")).thenReturn(card);
+        when(roundMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
+
+        assertThat(service.getRoutingRecords("SC_EMPTY").rounds()).isEmpty();
+
+        assertThatThrownBy(() -> service.getRoutingRecords("SC_NOT_FOUND"))
+                .isInstanceOf(ServiceException.class)
+                .extracting(ex -> ((ServiceException) ex).getCode())
+                .isEqualTo(SUPPLY_CHAIN_ORDER_NOT_FOUND.getCode());
+    }
+
+    @Test
+    void getRoutingRecordsFailsWhenCheckResultJsonIsCorrupted() {
+        SupplyChainOrderDO order = order(1L, "SC_CARD", SupplyChainOrderTypes.ORDER_TYPE_CARD,
+                SupplyChainOrderTypes.DETAIL_TYPE_FULFILLMENT);
+        when(orderMapper.selectByOrderNo("SC_CARD")).thenReturn(order);
+        when(roundMapper.selectList(any(Wrapper.class))).thenReturn(List.of(SupplierRoutingRoundDO.builder()
+                .id(10L).routingRoundNo("RR_1").roundSequence(1).routingType("STANDARD_PRODUCT")
+                .decisionStatus(RoutingDecisionStatus.SELECTED.getCode())
+                .decisionReasonCode("SELECTED_BY_STABLE_PRIORITY")
+                .decisionReasonMessage("按已发布路由规则选中首个合格供应商")
+                .candidateCount(1).computedAt(NOW).build()));
+        when(recordMapper.selectList(any(Wrapper.class))).thenReturn(List.of(
+                SupplierRoutingRecordDO.builder().id(21L).routingRoundId(10L).candidateSequence(1)
+                        .supplierCodeSnapshot("SPL_A").supplierNameSnapshot("甲供应商")
+                        .configuredPriority(0).availabilityClass("CONFIRMED")
+                        .supplierSettlementUnitPrice(9_800L).eligibleFlag(true).selectedFlag(true)
+                        .decisionReasonCode("SELECTED").decisionReasonMessage("SELECTED")
+                        .checkResultJson("{not-json").build()));
+
+        assertThatThrownBy(() -> service.getRoutingRecords("SC_CARD"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Routing check snapshot JSON is corrupted");
     }
 
     private static OrderPageQuery query() {

@@ -75,7 +75,7 @@ O2O / INSTORE 的 B 端冻结金额继续 `buyerSettlementAmount = channelPayAmo
 - `FOLLOW_TEMPLATE` 已统一为清手工覆盖并回退 L1，应用层禁止读取历史模板价预留表。
 - 标准商品受理、资金冻结、下单后静态路由（仅卡券/直充等已接入履约类型）。
 - O2O（淘宝闪购）与 INSTORE（大润发）固定商户链路：入口、建单、资金、渠道退款 Case。
-- 平台订单管理端只读列表/类型化详情（虚拟 + O2O/到店安全字段；不接包裹与履约资产），详见 `docs/superpowers/specs/2026-09-12-supply-chain-order-admin-readonly-design.md`。
+- 平台订单管理端只读列表/类型化详情（虚拟 + O2O/到店安全字段；不接包裹与履约资产），详见 `docs/superpowers/specs/2026-09-12-supply-chain-order-admin-readonly-design.md`。CARD 路由记录只读见 `docs/superpowers/specs/2026-09-21-order-routing-records-admin-design.md`。
 
 待建设（本文锁定边界，实施另立变更集）：
 
@@ -236,6 +236,7 @@ PRD 11.2 要求数据权限与多租户隔离。中台 `sc_*` 无 `tenant_id`。
 1. 本文 + CONTEXT 词汇（本次）。
 2. `FOLLOW_TEMPLATE` 注释与管理端 Schema 文案与 s4 对齐。
 3. 平台订单管理端只读查询（虚拟 + O2O/到店；已按 `2026-09-12-supply-chain-order-admin-readonly-design.md` 落地）。
+3.1 平台订单路由记录只读（PRD 8.11.6；已按 `2026-09-21-order-routing-records-admin-design.md` 落地 `GET /supply-chain/orders/{orderNo}/routing-records`）。
 4. `border.aftersale` 表结构、状态机单测、管理端审核 REST、资金 Port 协同。
 5. 商品/供应商/分销/项目相对 PRD 的剩余交互缺口（仍以 09-02 / 09-11 字段为准），不改分层。
 

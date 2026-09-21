@@ -162,7 +162,8 @@ class SupplyChainAdminPermissionContractTest {
     void orderReadMethodsUseOrderQueryPermissionWithAdminFallback() {
         assertMethodPermissions(OrderAdminController.class, Map.of(
                 "page", ORDER_QUERY_EXPRESSION,
-                "get", ORDER_QUERY_EXPRESSION));
+                "get", ORDER_QUERY_EXPRESSION,
+                "getRoutingRecords", ORDER_QUERY_EXPRESSION));
         assertThat(ORDER_QUERY_EXPRESSION).contains("supply-chain:admin", "supply-chain:order:query");
     }
 
