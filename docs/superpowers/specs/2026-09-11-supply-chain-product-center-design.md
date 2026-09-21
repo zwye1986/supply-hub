@@ -48,6 +48,7 @@
 | **d38** | **SKU 资料库存可写可回显** | 管理端复合创建/编辑在 SKU 上读写 `skuInventory`（Java 字段名固定为此），持久化为 `sc_platform_sku.sku_inventory`。未传时创建落库 0，编辑省略保留原值，负数拒绝。详情 `SkuDetail` 原样回显；管理列表既有 `totalInventory` 改为投影该列，同时输出同值 JSON 别名 `skuInventory`。本列是商品资料数量，不接入 `InventorySource`，本期履约不预占、不扣减，公开契约仍为 `quantity=1`。变更由 `041` 执行。 | 对齐商品编辑表单库存字段，结束列表总库存写死 0 |
 | **d39** | **管理端商品列表 productType 可多选且兼容单值** | `GET /supply-chain/products/management-page` 的 Query 参数 `productType` 改为 `List<String>`，HTTP 参数名不变。单个 `productType=PT_CARD` 仍按该类型过滤；重复键 `productType=A&productType=B` 与逗号拼接 `productType=A,B` 均规范化为去空白、去重后的编码列表，以 `product_type IN (...)` OR 命中。显式传入时覆盖 `tabCode` 解出的单个类型；未传、空列表或全空白视为未筛选类型。筛选参数不校验类型是否存在，非法编码得到空页。响应仍按 SPU 返回单个 `productType`/`productTypeName`。`GET /supply-chain/products/spus` 保持单值，不在本决策范围。 | 商品列表支持按多个商品类型筛选，同时兼容存量单值调用 |
 | **d40** | **管理端商品列表 categoryId 可多选且兼容单值** | `GET /supply-chain/products/management-page` 的 Query 参数 `categoryId` 改为可多选，HTTP 参数名不变。单个 `categoryId=10` 仍按该主分类过滤；重复键 `categoryId=10&categoryId=20` 与逗号拼接 `categoryId=10,20` 均规范化为去空白、去重后的 Long 主键列表，以 `primary_category_id IN (...)` OR 命中。未传、空列表、全空白或无法解析为 Long 的片段视为未提供该片段；规范化后为空则不按分类过滤。只匹配 SPU 主分类，不扩展辅助分类。`GET /supply-chain/products/spus` 保持单值，不在本决策范围。 | 商品列表支持按多个主分类筛选，同时兼容存量单值调用 |
+| **d41** | **供货配置查询回显 categoryId（归档即视为不可回显）** | `GET /supply-chain/suppliers/{supplierCode}/supply-scopes` 与供应商详情 `scopes[]` 的 `SupplyScopeView` 新增只读字段 `categoryId`：`productClassification` 为未归档类目编码（`sc_product_category.category_code`）时经 `CategoryQueryService.resolveCategoryIdsByCodes` 批量解析回填内部主键；为封闭枚举名、编码已删除或类目已归档时为 `null`（归档即视为不可回显，前端兜底展示编码）。批量解析一次查库。`PUT` 保存不接收该字段，写入口径不变。 | 前端类目树级联组件需内部主键回显，当前只回编码无法定位节点 |
 
 ---
 
@@ -908,3 +909,6 @@ system-server 通过追加变更集 `011-suggested-sale-price-operator-dictionar
 16. `ProductManagementPageQueryTest` 与 `ProductCenterContractTest` 必须覆盖 d40：管理端聚合列表
     `categoryId` 参数类型为 `List`；单个主键、重复多个主键、逗号拼接均按 `primary_category_id IN` 过滤；
     空列表不加分类条件。
+17. `SupplierProfileQueryServiceTest` 与 `SupplierAdminRestContractTest` 必须覆盖 d41：类目编码行回填
+    `categoryId`、封闭枚举名行为 `null`、类目已删除或已归档行为 `null` 且不抛异常；批量解析只查一次库；
+    契约断言 `SupplyScopeView` 存在 `categoryId` 记录组件且 `@Schema` 描述含回填与归档口径。

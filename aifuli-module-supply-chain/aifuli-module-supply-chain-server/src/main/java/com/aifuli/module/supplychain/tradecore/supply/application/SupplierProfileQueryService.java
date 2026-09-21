@@ -5,8 +5,10 @@ import com.aifuli.framework.common.pojo.PageResult;
 import com.aifuli.framework.ip.core.Area;
 import com.aifuli.framework.ip.core.utils.AreaUtils;
 import com.aifuli.module.supplychain.infrastructure.security.EnvelopeCryptoPort;
+import com.aifuli.module.supplychain.tradecore.catalog.application.CategoryQueryService;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
+import com.aifuli.module.supplychain.tradecore.profile.domain.ProductClassification;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierContactDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierDeliveryRegionDO;
@@ -71,6 +73,7 @@ public class SupplierProfileQueryService {
     private final SupplierFileRefMapper fileRefMapper;
     private final SupplierIntegrationModeMapper integrationModeMapper;
     private final EnvelopeCryptoPort envelopeCrypto;
+    private final CategoryQueryService categoryQueryService;
 
     /**
      * 分页查询供应商。按更新时间倒序；归档行永不出现。
@@ -348,6 +351,11 @@ public class SupplierProfileQueryService {
         return List.copyOf(unique);
     }
 
+    /**
+     * 供货配置视图批量装配：供货模式与类目主键均为一次批量查询，避免逐行 N+1。
+     * categoryId 回显口径见 {@link #toScopeView}。设计见
+     * {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#54-供货配置}。
+     */
     private List<SupplyScopeView> toScopeViews(List<SupplierSupplyScopeDO> scopes) {
         List<Long> scopeIds = scopes.stream().map(SupplierSupplyScopeDO::getId).toList();
         Map<Long, List<String>> modesByScopeId = new LinkedHashMap<>();
@@ -355,19 +363,46 @@ public class SupplierProfileQueryService {
             modesByScopeId.computeIfAbsent(mode.getSupplyScopeId(), ignored -> new ArrayList<>())
                     .add(mode.getSupplyMode());
         }
+        Map<String, Long> categoryIdByCode = resolveCategoryIds(scopes);
         List<SupplyScopeView> views = new ArrayList<>();
         for (SupplierSupplyScopeDO scope : scopes) {
-            views.add(toScopeView(scope, modesByScopeId.getOrDefault(scope.getId(), List.of())));
+            views.add(toScopeView(scope, modesByScopeId.getOrDefault(scope.getId(), List.of()), categoryIdByCode));
         }
         return views;
     }
 
-    private SupplyScopeView toScopeView(SupplierSupplyScopeDO scope, List<String> supplyModes) {
+    /**
+     * 过滤封闭枚举名后，把剩余商品分类编码一次批量解析为 {@code sc_product_category.id}。
+     * 枚举名、未知编码与归档类目（归档即视为不可回显）均不出现在结果中，装配时按 {@code null} 兜底。
+     */
+    private Map<String, Long> resolveCategoryIds(List<SupplierSupplyScopeDO> scopes) {
+        Set<String> closedNames = new HashSet<>();
+        for (ProductClassification classification : ProductClassification.values()) {
+            closedNames.add(classification.name());
+        }
+        Set<String> codesToResolve = new LinkedHashSet<>();
+        for (SupplierSupplyScopeDO scope : scopes) {
+            String code = scope.getProductClassification();
+            if (code != null && !code.isBlank() && !closedNames.contains(code)) {
+                codesToResolve.add(code);
+            }
+        }
+        return categoryQueryService.resolveCategoryIdsByCodes(codesToResolve);
+    }
+
+    /**
+     * 单行视图装配。{@code categoryId} 为商品分类内部主键回显字段：
+     * {@code productClassification} 为类目编码且未归档时回填，封闭枚举名、
+     * 编码已删除或类目已归档时为 {@code null}（前端按编码兜底展示）。
+     */
+    private SupplyScopeView toScopeView(SupplierSupplyScopeDO scope, List<String> supplyModes,
+                                         Map<String, Long> categoryIdByCode) {
         return new SupplyScopeView(
                 scope.getId(),
                 scope.getSellableCategory(),
                 scope.getProductType(),
                 scope.getProductClassification(),
+                categoryIdByCode.get(scope.getProductClassification()),
                 supplyModes,
                 scope.getMaxQuantity(),
                 scope.getMinQuantity());
@@ -480,6 +515,9 @@ public class SupplierProfileQueryService {
             @Schema(description = "可售品类封闭枚举名") String sellableCategory,
             @Schema(description = "动态商品类型编码") String productType,
             @Schema(description = "商品分类封闭枚举名") String productClassification,
+            @Schema(description = "商品分类内部主键；productClassification 为未归档类目编码时回填，"
+                    + "封闭枚举名、编码已删除或类目已归档（归档即视为不可回显）时为 null")
+            Long categoryId,
             @Schema(description = "供货模式枚举名列表") List<String> supplyModes,
             @Schema(description = "供货上限") Long maxQuantity,
             @Schema(description = "允许最低起订量，预留字段") Long minQuantity) {

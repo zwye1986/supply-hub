@@ -329,7 +329,9 @@ SPU / 供货范围写入的 `productClassification` 不走 `ClosedEnums`：类�
 - `GET /supply-chain/suppliers/{supplierCode}/supply-scopes`
 - `PUT /supply-chain/suppliers/{supplierCode}/supply-scopes` 全量替换
 
-行：`sellableCategory`、`productType`、`productClassification`、`supplyModes[]`、`maxQuantity`、`minQuantity`。三码与模式、数量缺一拦截；`maxQuantity`、`minQuantity` 分别只校验正整数，不建立大小关系。`minQuantity` 是允许最低起订量预留字段，仅存储、回显，不参与当前业务判断。改配置不改已发布 Offer；收窄只阻止新关联。命中规则见字典专文。
+行：`sellableCategory`、`productType`、`productClassification`、`categoryId`、`supplyModes[]`、`maxQuantity`、`minQuantity`。三码与模式、数量缺一拦截；`maxQuantity`、`minQuantity` 分别只校验正整数，不建立大小关系。`minQuantity` 是允许最低起订量预留字段，仅存储、回显，不参与当前业务判断。改配置不改已发布 Offer；收窄只阻止新关联。命中规则见字典专文。
+
+`categoryId` 是查询接口的回显增强字段（2026-09-21 新增，只读）：`productClassification` 为未归档类目编码（`sc_product_category.category_code`）时回填其内部主键，供前端类目树级联组件回显；为封闭枚举名（`ELECTRONICS`/`VIRTUAL_CARD`/`MOVIE_TICKET`）、类目编码已删除或类目已归档时为 `null`（归档即视为不可回显，前端兜底展示编码原样）。批量解析一次查库，不引入 N+1。`PUT` 保存接口不接收该字段，写入口径仍按 `productClassification` 编码提交。
 
 ### 5.5 合作商品
 
