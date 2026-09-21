@@ -107,6 +107,7 @@ class SupplyChainLiquibaseIntegrationTest {
                         "sc_platform_sku.phone_bind_limit_enabled",
                         "sc_platform_sku.phone_bind_limit_period",
                         "sc_platform_sku.phone_bind_limit_quantity",
+                        "sc_platform_sku.sku_inventory",
                         "sc_platform_sku.main_image_url",
                         "sc_platform_sku.detail_image_urls",
                         "sc_platform_sku.description",
@@ -136,7 +137,7 @@ class SupplyChainLiquibaseIntegrationTest {
                 "expire_at:DATETIME:-:3:NO");
         assertThat(firstStartup.projectAuthNoncePrimaryKeyColumns())
                 .containsExactly("app_id", "nonce");
-        assertThat(firstStartup.changeSetCount()).isEqualTo(41L);
+        assertThat(firstStartup.changeSetCount()).isEqualTo(43L);
         assertThat(firstStartup.uniqueIndexes())
                 .contains("sc_instore_payment_flow.uk_sc_instore_flow_order",
                         "sc_instore_channel_user_binding.uk_sc_instore_user_binding_project",

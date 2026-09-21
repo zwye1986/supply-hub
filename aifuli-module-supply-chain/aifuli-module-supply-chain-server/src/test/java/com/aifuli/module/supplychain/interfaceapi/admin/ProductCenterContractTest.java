@@ -77,7 +77,8 @@ class ProductCenterContractTest {
                         "suggestedSalePrice", "suggestedSalePriceRule",
                         "fulfillmentType", "taxIncluded", "taxRate",
                         "userLimitEnabled", "userLimitPeriod", "userLimitQuantity", "orderLimitEnabled",
-                        "phoneBindLimitEnabled", "phoneBindLimitPeriod", "phoneBindLimitQuantity");
+                        "phoneBindLimitEnabled", "phoneBindLimitPeriod", "phoneBindLimitQuantity",
+                        "skuInventory");
     }
 
     /** SKU 展示资料字段注释必须与 034 DDL COMMENT 完全一致。 */
@@ -89,6 +90,28 @@ class ProductCenterContractTest {
                 .getAnnotation(Schema.class).description()).isEqualTo("SKU详情图地址列表(JSON数组)");
         assertThat(ProductAdminController.SkuItemSaveReqVO.class.getDeclaredField("description")
                 .getAnnotation(Schema.class).description()).isEqualTo("SKU商品描述");
+    }
+
+    /**
+     * skuInventory 字段注释必须与 041 DDL COMMENT 完全一致。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线}（d38）。
+     */
+    @Test
+    void skuInventoryCommentsMatchDdl() throws Exception {
+        String comment = "SKU库存数量，管理端创建或编辑商品时设置";
+        assertThat(ProductAdminController.SkuItemSaveReqVO.class.getDeclaredField("skuInventory")
+                .getAnnotation(Schema.class).description()).isEqualTo(comment);
+        assertThat(SkuDetail.class.getDeclaredField("skuInventory")
+                .getAnnotation(Schema.class).description()).isEqualTo(comment);
+        assertThat(ProductCatalogQueryService.ProductManagementSkuItem.class
+                .getDeclaredMethod("skuInventory")
+                .getAnnotation(Schema.class).description()).isEqualTo(comment);
+        Map<String, io.swagger.v3.oas.models.media.Schema> detailSchemas =
+                ModelConverters.getInstance().readAll(SkuDetail.class);
+        io.swagger.v3.oas.models.media.Schema<?> skuInventorySchema =
+                (io.swagger.v3.oas.models.media.Schema<?>) detailSchemas.get("SkuDetail")
+                        .getProperties().get("skuInventory");
+        assertThat(skuInventorySchema.getDescription()).isEqualTo(comment);
     }
 
     /** 销售建议价规则只随复合保存写入，并在详情中完整回显，不得保留独立旁路接口。 */
@@ -167,6 +190,7 @@ class ProductCenterContractTest {
         assertThat(rule.get("operator").asText()).isEqualTo("ADD");
         assertThat(rule.get("operand").decimalValue()).isEqualByComparingTo("1.00");
         assertThat(sku.get("suggestedSalePrice").asLong()).isEqualTo(6_100L);
+        assertThat(sku.get("skuInventory").asLong()).isEqualTo(1000L);
     }
 
     /** 原型商品分类绑定分类树主键；供货命中码可同时接受字典枚举名或类目编码。 */
@@ -211,6 +235,7 @@ class ProductCenterContractTest {
                     "description":"SKU商品描述",
                     "marketPrice":9700,
                     "faceValue":10000,
+                    "skuInventory":1000,
                     "suggestedSalePriceRule":{
                       "mode":"CUSTOM",
                       "base":"MARKET_PRICE",
@@ -233,6 +258,7 @@ class ProductCenterContractTest {
             assertThat(sku.getMainImageUrl()).isEqualTo("https://cdn.example.com/main.png");
             assertThat(sku.getDetailImageUrls()).containsExactly("https://cdn.example.com/detail.png");
             assertThat(sku.getDescription()).isEqualTo("SKU商品描述");
+            assertThat(sku.getSkuInventory()).isEqualTo(1000L);
         });
 
         ProductCatalogCommandService.SaveSpuCommand command =
@@ -248,6 +274,7 @@ class ProductCenterContractTest {
             assertThat(sku.phoneBindLimitEnabled()).isTrue();
             assertThat(sku.phoneBindLimitPeriod()).isEqualTo("DAY");
             assertThat(sku.phoneBindLimitQuantity()).isEqualTo(1L);
+            assertThat(sku.skuInventory()).isEqualTo(1000L);
             assertThat(sku.suggestedSalePriceRule()).isNotNull();
             assertThat(sku.suggestedSalePriceRule().mode().name()).isEqualTo("CUSTOM");
         });
@@ -264,7 +291,7 @@ class ProductCenterContractTest {
                 "https://cdn.example.com/main.png", List.of("https://cdn.example.com/detail.png"),
                 "描述", "DIRECT_RECHARGE",
                 10_000L, 9_700L, 10_500L, null, false, null, 1L, 10L,
-                true, "DAY", 1L, false, true, "DAY", 1L,
+                true, "DAY", 1L, false, true, "DAY", 1L, 1000L,
                 "DIRECT_RECHARGE_TARGET", 1, "DIRECT_RECHARGE_RESULT", 1, (short) 0, false);
 
         JsonNode json = new ObjectMapper().valueToTree(sku);
@@ -273,6 +300,7 @@ class ProductCenterContractTest {
         assertThat(json.get("picUrl").asText()).isEqualTo("https://cdn.example.com/main.png");
         assertThat(json.get("detailImageUrls").get(0).asText()).isEqualTo("https://cdn.example.com/detail.png");
         assertThat(json.get("detailPics").get(0).asText()).isEqualTo("https://cdn.example.com/detail.png");
+        assertThat(json.get("skuInventory").asLong()).isEqualTo(1000L);
     }
 
     /**
@@ -284,7 +312,7 @@ class ProductCenterContractTest {
         ObjectMapper mapper = new ObjectMapper();
         SkuDetail sku = new SkuDetail("SKU_1", "规格", null, null, "描述", "DIRECT_RECHARGE",
                 10_000L, 9_700L, 10_500L, null, false, null, 1L, 10L,
-                true, "DAY", 1L, false, true, "DAY", 1L,
+                true, "DAY", 1L, false, true, "DAY", 1L, 0L,
                 "DIRECT_RECHARGE_TARGET", 1, "DIRECT_RECHARGE_RESULT", 1, (short) 0, false);
         JsonNode skuJson = mapper.valueToTree(sku);
         assertThat(skuJson.get("status").isTextual()).isTrue();
@@ -302,6 +330,8 @@ class ProductCenterContractTest {
         JsonNode managementSkuJson = mapper.valueToTree(managementSku);
         assertThat(managementSkuJson.get("status").isTextual()).isTrue();
         assertThat(managementSkuJson.get("status").asText()).isEqualTo("20");
+        assertThat(managementSkuJson.get("totalInventory").asLong()).isEqualTo(0L);
+        assertThat(managementSkuJson.get("skuInventory").asLong()).isEqualTo(0L);
 
         var managementSpu = new ProductCatalogQueryService.ProductManagementSpuItem(
                 "SPU_1", "商品", null, "MOVIE", "电影", "分类", "品牌", (short) 0,
@@ -459,6 +489,48 @@ class ProductCenterContractTest {
                 .contains("SKU商品状态", "supply_chain_sku_status");
         assertThat(descriptions.get("fulfillmentType"))
                 .contains("CARD_CODE_SECRET", "DIRECT_RECHARGE", "supply_chain_fulfillment_type");
+    }
+
+    /**
+     * 管理端聚合列表商品类型筛选必须声明为可多选 List，并兼容单个 productType。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线}（d39）。
+     */
+    @Test
+    void managementPageProductTypeAcceptsMultipleValues() {
+        Method managementPage = Arrays.stream(ProductAdminController.class.getDeclaredMethods())
+                .filter(method -> method.getName().equals("managementPage"))
+                .findFirst()
+                .orElseThrow();
+        java.lang.reflect.Parameter productType = Arrays.stream(managementPage.getParameters())
+                .filter(parameter -> parameter.getName().equals("productType"))
+                .findFirst()
+                .orElseThrow();
+
+        assertThat(List.class.isAssignableFrom(productType.getType())).isTrue();
+        assertThat(productType.getAnnotation(Parameter.class).description())
+                .contains("可多选")
+                .contains("兼容");
+    }
+
+    /**
+     * 管理端聚合列表主分类筛选必须声明为可多选 List，并兼容单个 categoryId。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线}（d40）。
+     */
+    @Test
+    void managementPageCategoryIdAcceptsMultipleValues() {
+        Method managementPage = Arrays.stream(ProductAdminController.class.getDeclaredMethods())
+                .filter(method -> method.getName().equals("managementPage"))
+                .findFirst()
+                .orElseThrow();
+        java.lang.reflect.Parameter categoryId = Arrays.stream(managementPage.getParameters())
+                .filter(parameter -> parameter.getName().equals("categoryId"))
+                .findFirst()
+                .orElseThrow();
+
+        assertThat(List.class.isAssignableFrom(categoryId.getType())).isTrue();
+        assertThat(categoryId.getAnnotation(Parameter.class).description())
+                .contains("可多选")
+                .contains("兼容");
     }
 
     /**

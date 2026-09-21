@@ -78,6 +78,8 @@ public class PlatformSkuDO {
     /** 同一履约手机号每周期最多购买数量 */
     @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private Long phoneBindLimitQuantity;
+    /** SKU库存数量，管理端创建或编辑商品时设置 */
+    private Long skuInventory;
     private String currency;
     private String targetSchemaCode;
     private Integer targetSchemaVersion;

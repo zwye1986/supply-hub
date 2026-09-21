@@ -23,6 +23,7 @@ import org.springframework.stereotype.Service;
 import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -113,6 +114,7 @@ public class ProductCatalogQueryService {
                         sku.getUserLimitQuantity(), sku.getOrderLimitEnabled(),
                         sku.getPhoneBindLimitEnabled(), sku.getPhoneBindLimitPeriod(),
                         sku.getPhoneBindLimitQuantity(),
+                        sku.getSkuInventory(),
                         sku.getTargetSchemaCode(), sku.getTargetSchemaVersion(),
                         sku.getResultSchemaCode(), sku.getResultSchemaVersion(), sku.getStatus(),
                         sellabilityService.isSellable(sku, spu)))
@@ -207,6 +209,57 @@ public class ProductCatalogQueryService {
         return value != null && !value.isBlank();
     }
 
+    /**
+     * 规范化管理端商品类型筛选：兼容单个编码、重复键多值与逗号拼接，trim、丢空白并去重。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线}（d39）。
+     */
+    private static List<String> normalizeProductTypes(List<String> raw) {
+        if (raw == null || raw.isEmpty()) {
+            return List.of();
+        }
+        LinkedHashSet<String> codes = new LinkedHashSet<>();
+        for (String item : raw) {
+            if (item == null || item.isBlank()) {
+                continue;
+            }
+            for (String part : item.split(",")) {
+                String code = part.trim();
+                if (!code.isEmpty()) {
+                    codes.add(code);
+                }
+            }
+        }
+        return List.copyOf(codes);
+    }
+
+    /**
+     * 规范化管理端主分类筛选：兼容单个主键、重复键多值与逗号拼接，trim、丢空白、解析 Long 并去重。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线}（d40）。
+     */
+    private static List<Long> normalizeCategoryIds(List<String> raw) {
+        if (raw == null || raw.isEmpty()) {
+            return List.of();
+        }
+        LinkedHashSet<Long> ids = new LinkedHashSet<>();
+        for (String item : raw) {
+            if (item == null || item.isBlank()) {
+                continue;
+            }
+            for (String part : item.split(",")) {
+                String token = part.trim();
+                if (token.isEmpty()) {
+                    continue;
+                }
+                try {
+                    ids.add(Long.valueOf(token));
+                } catch (NumberFormatException ignored) {
+                    // 筛选参数不因非法片段 400；无法解析的值丢弃，与空白片段相同。
+                }
+            }
+        }
+        return List.copyOf(ids);
+    }
+
     private record TabFilter(String productType, String fulfillmentType) {
     }
 
@@ -294,6 +347,7 @@ public class ProductCatalogQueryService {
             @Schema(description = "是否启用绑定手机号限购：1启用，0停用") Boolean phoneBindLimitEnabled,
             @Schema(description = "绑定手机号限购周期：LIFETIME终身，YEAR每年，MONTH每月，WEEK每周，DAY每天") String phoneBindLimitPeriod,
             @Schema(description = "同一履约手机号每周期最多购买数量") Long phoneBindLimitQuantity,
+            @Schema(description = "SKU库存数量，管理端创建或编辑商品时设置") Long skuInventory,
             @Schema(description = "履约目标封闭Schema编码") String targetSchemaCode,
             @Schema(description = "履约目标Schema版本") Integer targetSchemaVersion,
             @Schema(description = "履约结果封闭Schema编码") String resultSchemaCode,
@@ -324,11 +378,15 @@ public class ProductCatalogQueryService {
 
     /**
      * 管理端商品列表聚合查询。
-     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#419-管理端商品列表聚合查询get-supply-chainproductsmanagement-page}。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#419-管理端商品列表聚合查询get-supply-chainproductsmanagement-page}（d39、d40）。
      */
     public PageResult<ProductManagementSpuItem> managementPage(ProductManagementPageQuery query) {
         TabFilter tab = resolveTab(query.tabCode());
-        String productType = hasText(query.productType()) ? query.productType().trim() : tab.productType();
+        List<String> productTypes = normalizeProductTypes(query.productType());
+        if (productTypes.isEmpty() && hasText(tab.productType())) {
+            productTypes = List.of(tab.productType());
+        }
+        List<Long> filterCategoryIds = normalizeCategoryIds(query.categoryId());
         String fulfillmentType = hasText(query.fulfillmentType()) ? query.fulfillmentType().trim() : tab.fulfillmentType();
 
         Set<Long> candidateSpuIds = null;
@@ -399,8 +457,8 @@ public class ProductCatalogQueryService {
         LambdaQueryWrapper<PlatformSpuDO> spuWrapper = new LambdaQueryWrapper<PlatformSpuDO>()
                 .ne(PlatformSpuDO::getStatus, CatalogEntityStatus.ARCHIVED.getCode())
                 .eq(query.brandId() != null, PlatformSpuDO::getBrandId, query.brandId())
-                .eq(query.categoryId() != null, PlatformSpuDO::getPrimaryCategoryId, query.categoryId())
-                .eq(hasText(productType), PlatformSpuDO::getProductType, productType)
+                .in(!filterCategoryIds.isEmpty(), PlatformSpuDO::getPrimaryCategoryId, filterCategoryIds)
+                .in(!productTypes.isEmpty(), PlatformSpuDO::getProductType, productTypes)
                 .eq(hasText(query.unshelveMode()), PlatformSpuDO::getUnshelveMode, query.unshelveMode())
                 .ge(query.updateTimeStart() != null, PlatformSpuDO::getUpdatedAt, query.updateTimeStart())
                 .le(query.updateTimeEnd() != null, PlatformSpuDO::getUpdatedAt, query.updateTimeEnd())
@@ -521,7 +579,7 @@ public class ProductCatalogQueryService {
                         taxRateDisplay,
                         taxAmount,
                         suppliers,
-                        0L,
+                        sku.getSkuInventory() == null ? 0L : sku.getSkuInventory(),
                         sku.getFulfillmentType(),
                         fulfillmentDisplay,
                         sku.getStatus()
@@ -556,8 +614,8 @@ public class ProductCatalogQueryService {
             ));
         }
 
-        log.info("查询管理端平台商品聚合分页 tabCode={} pageNo={} pageSize={} resultCount={}",
-                query.tabCode(), param.getPageNo(), param.getPageSize(), items.size());
+        log.info("查询管理端平台商品聚合分页 tabCode={} productTypes={} categoryIds={} pageNo={} pageSize={} resultCount={}",
+                query.tabCode(), productTypes, filterCategoryIds, param.getPageNo(), param.getPageSize(), items.size());
         return new PageResult<>(items, page.getTotal());
     }
 
@@ -602,8 +660,8 @@ public class ProductCatalogQueryService {
     public record ProductManagementPageQuery(
             String tabCode,
             String keyword,
-            String productType,
-            Long categoryId,
+            List<String> productType,
+            List<String> categoryId,
             Long brandId,
             Short status,
             String unshelveMode,
@@ -640,11 +698,20 @@ public class ProductCatalogQueryService {
             @Schema(description = "税率展示文本，如6%、不含税、含税（税率未配置）") String taxRateDisplay,
             @Schema(description = "税额，单位CNY分") Long taxAmount,
             @Schema(description = "供应商列表") List<SupplierSimpleInfo> suppliers,
-            @Schema(description = "总库存") Long totalInventory,
+            @Schema(description = "总库存；本期取值SKU库存数量，管理端创建或编辑商品时设置") Long totalInventory,
             @Schema(description = "履约方式封闭枚举名") String fulfillmentType,
             @Schema(description = "履约方式中文展示名称") String fulfillmentTypeDisplay,
             @JsonFormat(shape = JsonFormat.Shape.STRING)
             @Schema(description = "SKU管理状态：0草稿，10启用，20停用；字典值以字符串返回", type = "string") Short status) {
+        /**
+         * 管理端编辑表单与详情使用 skuInventory；列表既有列仍读 totalInventory。
+         * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线}（d38）。
+         */
+        @JsonProperty("skuInventory")
+        @Schema(description = "SKU库存数量，管理端创建或编辑商品时设置")
+        public Long skuInventory() {
+            return totalInventory;
+        }
     }
 
     /** SKU销售建议价规则管理端投影；字段语义与 suggested_sale_price_rule_json DDL COMMENT 对齐。 */

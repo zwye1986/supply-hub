@@ -118,6 +118,7 @@ public class ProductAdminController {
                   "phoneBindLimitEnabled": true,
                   "phoneBindLimitPeriod": "DAY",
                   "phoneBindLimitQuantity": 1,
+                  "skuInventory": 1000,
                   "status": "10"
                 }
               ]
@@ -166,8 +167,14 @@ public class ProductAdminController {
     public CommonResult<PageResult<ProductCatalogQueryService.ProductManagementSpuItem>> managementPage(
             @Parameter(description = "业务 Tab 标识", example = "VIRTUAL_CARD") @RequestParam(required = false) String tabCode,
             @Parameter(description = "SPU 编码、名称模糊搜索", example = "爱奇艺") @RequestParam(required = false) String keyword,
-            @Parameter(description = "商品类型编码", example = "PT_CARD") @RequestParam(required = false) String productType,
-            @Parameter(description = "主类目内部主键", example = "10") @RequestParam(required = false) Long categoryId,
+            @Parameter(description = "商品类型编码，可多选；兼容单个 productType。"
+                    + "重复键 productType=A&productType=B，或逗号拼接 productType=A,B",
+                    example = "EQUITY_PRODUCT")
+            @RequestParam(required = false) List<String> productType,
+            @Parameter(description = "主类目内部主键，可多选；兼容单个 categoryId。"
+                    + "重复键 categoryId=10&categoryId=20，或逗号拼接 categoryId=10,20",
+                    example = "10")
+            @RequestParam(required = false) List<String> categoryId,
             @Parameter(description = "品牌内部主键", example = "1") @RequestParam(required = false) Long brandId,
             @Parameter(description = "SKU商品状态：0草稿，10已上架，20已下架；字典supply_chain_sku_status", example = "10") @RequestParam(required = false) Short status,
             @Parameter(description = "下架方式：MANUAL_UNSHELVE手动下架，SYSTEM_UNSHELVE系统下架", example = "MANUAL_UNSHELVE") @RequestParam(required = false) String unshelveMode,
@@ -329,7 +336,7 @@ public class ProductAdminController {
                 line.taxIncluded, line.taxRate, line.minQuantity, line.maxQuantity,
                 userLimitEnabled, userLimitPeriod, userLimitQuantity,
                 orderLimitEnabled, phoneBindLimitEnabled, phoneBindLimitPeriod,
-                phoneBindLimitQuantity, line.status);
+                phoneBindLimitQuantity, line.skuInventory, line.status);
     }
 
     private static boolean hasText(String value) {
@@ -414,7 +421,7 @@ public class ProductAdminController {
         private Long phoneBindLimitQuantity;
         @Valid @NotEmpty
         @Schema(description = "至少一个 SKU",
-                example = "[{\"skuCode\":\"SKU_DEMO_001\",\"skuName\":\"爱奇艺黄金会员月卡\",\"mainImageUrl\":\"https://cdn.example.com/products/iqiyi-month-main.png\",\"detailImageUrls\":[\"https://cdn.example.com/products/iqiyi-month-detail-1.png\"],\"description\":\"爱奇艺黄金会员直充月卡\",\"fulfillmentType\":\"DIRECT_RECHARGE\",\"faceValue\":10000,\"marketPrice\":12000,\"suggestedSalePrice\":6100,\"suggestedSalePriceRule\":{\"mode\":\"CUSTOM\",\"base\":\"MARKET_PRICE\",\"percentage\":50,\"operator\":\"ADD\",\"operand\":1.00,\"fixedPriceCents\":6100},\"taxIncluded\":true,\"taxRate\":0.0600,\"minQuantity\":1,\"maxQuantity\":10,\"userLimitEnabled\":true,\"userLimitPeriod\":\"MONTH\",\"userLimitQuantity\":2,\"orderLimitEnabled\":true,\"phoneBindLimitEnabled\":true,\"phoneBindLimitPeriod\":\"DAY\",\"phoneBindLimitQuantity\":1,\"status\":\"10\"}]")
+                example = "[{\"skuCode\":\"SKU_DEMO_001\",\"skuName\":\"爱奇艺黄金会员月卡\",\"mainImageUrl\":\"https://cdn.example.com/products/iqiyi-month-main.png\",\"detailImageUrls\":[\"https://cdn.example.com/products/iqiyi-month-detail-1.png\"],\"description\":\"爱奇艺黄金会员直充月卡\",\"fulfillmentType\":\"DIRECT_RECHARGE\",\"faceValue\":10000,\"marketPrice\":12000,\"suggestedSalePrice\":6100,\"suggestedSalePriceRule\":{\"mode\":\"CUSTOM\",\"base\":\"MARKET_PRICE\",\"percentage\":50,\"operator\":\"ADD\",\"operand\":1.00,\"fixedPriceCents\":6100},\"taxIncluded\":true,\"taxRate\":0.0600,\"minQuantity\":1,\"maxQuantity\":10,\"userLimitEnabled\":true,\"userLimitPeriod\":\"MONTH\",\"userLimitQuantity\":2,\"orderLimitEnabled\":true,\"phoneBindLimitEnabled\":true,\"phoneBindLimitPeriod\":\"DAY\",\"phoneBindLimitQuantity\":1,\"skuInventory\":1000,\"status\":\"10\"}]")
         private List<SkuItemSaveReqVO> skus;
     }
 
@@ -473,6 +480,8 @@ public class ProductAdminController {
         private String phoneBindLimitPeriod;
         @Positive @Schema(description = "同一履约手机号每周期最多购买数量", example = "1")
         private Long phoneBindLimitQuantity;
+        @Min(0) @Schema(description = "SKU库存数量，管理端创建或编辑商品时设置", example = "1000")
+        private Long skuInventory;
         @JsonFormat(shape = JsonFormat.Shape.STRING)
         @Schema(description = "SKU 状态；默认继承 SPU；字典值以字符串返回", type = "string", example = "10")
         private Short status;

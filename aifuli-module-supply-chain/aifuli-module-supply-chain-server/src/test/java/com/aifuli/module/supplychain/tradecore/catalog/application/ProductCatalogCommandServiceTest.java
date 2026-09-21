@@ -628,6 +628,73 @@ class ProductCatalogCommandServiceTest {
         verify(brandMapper).selectByCode("BRD_TEST");
     }
 
+    /**
+     * 复合创建未传 skuInventory 时落库 0；显式提交时按原值写入。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线}（d38）。
+     */
+    @Test
+    void createProductPersistsSkuInventory() {
+        stubCreateProductLookups("BRD_INV");
+        when(generator.next(any())).thenReturn("SPU_INV");
+
+        service.createProduct(createCommand("SKU_DEFAULT", null));
+        ArgumentCaptor<PlatformSkuDO> defaultCaptor = ArgumentCaptor.forClass(PlatformSkuDO.class);
+        verify(skuMapper).insert(defaultCaptor.capture());
+        assertThat(defaultCaptor.getValue().getSkuInventory()).isEqualTo(0L);
+
+        stubCreateProductLookups("BRD_INV2");
+        when(generator.next(any())).thenReturn("SPU_INV2");
+        service.createProduct(createCommand("SKU_EXPLICIT", 1000L));
+        ArgumentCaptor<PlatformSkuDO> explicitCaptor = ArgumentCaptor.forClass(PlatformSkuDO.class);
+        verify(skuMapper, atLeastOnce()).insert(explicitCaptor.capture());
+        assertThat(explicitCaptor.getAllValues()).filteredOn(sku -> "SKU_EXPLICIT".equals(sku.getSkuCode()))
+                .singleElement().extracting(PlatformSkuDO::getSkuInventory).isEqualTo(1000L);
+    }
+
+    /**
+     * 复合更新写入 skuInventory。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线}（d38）。
+     */
+    @Test
+    void updateProductWritesSkuInventory() {
+        givenUpdateWithOneOmittedSku();
+
+        service.updateProduct(SPU_CODE, saveCommand(skuLineWithInventory(500L)));
+        ArgumentCaptor<PlatformSkuDO> written = ArgumentCaptor.forClass(PlatformSkuDO.class);
+        verify(skuMapper, atLeastOnce()).updateById(written.capture());
+        assertThat(written.getAllValues()).filteredOn(sku -> "SKU_KEEP".equals(sku.getSkuCode()))
+                .singleElement().extracting(PlatformSkuDO::getSkuInventory).isEqualTo(500L);
+    }
+
+    /**
+     * 复合更新省略 skuInventory 时保留原值。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线}（d38）。
+     */
+    @Test
+    void omittedSkuInventoryPreservesExistingValue() {
+        givenUpdateWithOneOmittedSku();
+
+        service.updateProduct(SPU_CODE, saveCommand());
+        ArgumentCaptor<PlatformSkuDO> preserved = ArgumentCaptor.forClass(PlatformSkuDO.class);
+        verify(skuMapper, atLeastOnce()).updateById(preserved.capture());
+        assertThat(preserved.getAllValues()).filteredOn(sku -> "SKU_KEEP".equals(sku.getSkuCode()))
+                .singleElement().extracting(PlatformSkuDO::getSkuInventory).isEqualTo(88L);
+    }
+
+    /**
+     * 负库存拒绝整单保存。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线}（d38）。
+     */
+    @Test
+    void rejectsNegativeSkuInventory() {
+        givenUpdateWithOneOmittedSku();
+
+        assertThatThrownBy(() -> service.updateProduct(SPU_CODE, saveCommand(skuLineWithInventory(-1L))))
+                .isInstanceOf(ServiceException.class)
+                .extracting(ex -> ((ServiceException) ex).getCode())
+                .isEqualTo(PRODUCT_SKU_FIELD_INVALID.getCode());
+    }
+
     @Test
     void createProductWithNumericBrandCodeInBrandIdFallbackSuccess() {
         // 前端将纯数字 brandCode 如 "1111" 传到了 brandId 字段，selectById(1111L) 返回 null，兜底按 selectByCode("1111") 解析成功
@@ -757,6 +824,7 @@ class ProductCatalogCommandServiceTest {
                 .fulfillmentType(FulfillmentType.CARD_CODE_SECRET.code())
                 .userLimitEnabled(true).userLimitPeriod("MONTH").userLimitQuantity(2L)
                 .orderLimitEnabled(true)
+                .skuInventory(88L)
                 .status(CatalogEntityStatus.ACTIVE.getCode()).build();
         PlatformSkuDO omitted = PlatformSkuDO.builder().id(11L).spuId(1L).skuCode("SKU_OMITTED")
                 .fulfillmentType(FulfillmentType.CARD_CODE_SECRET.code())
@@ -782,5 +850,37 @@ class ProductCatalogCommandServiceTest {
                 SellableCategory.EQUITY.name(), "EQUITY_PRODUCT", ProductClassification.VIRTUAL_CARD.name(),
                 null, null, null, null, null, fulfillmentType, 1L, 10L,
                 CatalogEntityStatus.ACTIVE.getCode(), List.of(keepLine), 1L);
+    }
+
+    private void stubCreateProductLookups(String brandCode) {
+        BrandDO brand = BrandDO.builder().id(99L).brandCode(brandCode)
+                .status(CatalogEntityStatus.ACTIVE.getCode()).build();
+        when(brandMapper.selectByCode(brandCode)).thenReturn(brand);
+        when(categoryMapper.selectById(3L)).thenReturn(ProductCategoryDO.builder().id(3L)
+                .status(CatalogEntityStatus.ACTIVE.getCode()).build());
+        when(productTypeValidationService.requireActiveForUpdate("EQUITY_PRODUCT"))
+                .thenReturn(ProductTypeDO.builder().typeCode("EQUITY_PRODUCT").build());
+        when(clock.now()).thenReturn(LocalDateTime.now());
+    }
+
+    private ProductCatalogCommandService.SaveSpuCommand createCommand(String skuCode, Long skuInventory) {
+        return new ProductCatalogCommandService.SaveSpuCommand(
+                null, "测试SPU", null, null, skuCode.startsWith("SKU_EXPLICIT") ? "BRD_INV2" : "BRD_INV", 3L, null,
+                SellableCategory.EQUITY.name(), "EQUITY_PRODUCT", ProductClassification.VIRTUAL_CARD.name(),
+                null, null, null, null, null, FulfillmentType.CARD_CODE_SECRET.code(), 1L, 10L,
+                CatalogEntityStatus.ACTIVE.getCode(), List.of(skuLine(skuCode, skuInventory)), 1L);
+    }
+
+    private static ProductCatalogCommandService.SaveSkuLine skuLineWithInventory(Long skuInventory) {
+        return skuLine("SKU_KEEP", skuInventory);
+    }
+
+    private static ProductCatalogCommandService.SaveSkuLine skuLine(String skuCode, Long skuInventory) {
+        return new ProductCatalogCommandService.SaveSkuLine(
+                skuCode, "SKU名称", null, null, null,
+                FulfillmentType.CARD_CODE_SECRET.code(), 100L, 100L, 100L, null,
+                false, null, 1L, 10L,
+                null, null, null, null, null, null, null,
+                skuInventory, CatalogEntityStatus.ACTIVE.getCode());
     }
 }
