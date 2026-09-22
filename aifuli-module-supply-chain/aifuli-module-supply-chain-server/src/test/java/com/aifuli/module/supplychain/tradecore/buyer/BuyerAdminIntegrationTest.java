@@ -343,7 +343,11 @@ class BuyerAdminIntegrationTest {
                 .version(0L)
                 .updatedAt(now)
                 .build());
-        var listed = productQuery.page(buyerCode, 1, 20).getList();
+        var listed = productQuery.page(buyerCode, null, 1, 20).getList();
+        assertThat(productQuery.page(buyerCode, "MOVIE", 1, 20).getList())
+                .extracting(BuyerProductListItem::buyerProductCode).containsExactly(buyerProductCode);
+        assertThat(productQuery.page(buyerCode, "OTHER_TYPE", 1, 20).getList()).isEmpty();
+        assertThat(productQuery.page(buyerCode, "OTHER_TYPE", 1, 20).getTotal()).isEqualTo(0L);
         assertThat(listed).extracting(BuyerProductListItem::buyerProductCode).containsExactly(buyerProductCode);
         assertThat(listed.getFirst().sellableCategory()).isEqualTo("MOVIE");
         assertThat(listed.getFirst().productType()).isEqualTo("MOVIE");
@@ -365,7 +369,7 @@ class BuyerAdminIntegrationTest {
         assertThat(templateMapper.selectByBuyerProductId(product.getId()).getCurrentVersionId())
                 .isEqualTo(legacyTemplateVersion.getId());
 
-        var afterCustom = productQuery.page(buyerCode, 1, 20).getList().getFirst();
+        var afterCustom = productQuery.page(buyerCode, null, 1, 20).getList().getFirst();
         assertThat(afterCustom.distPriceCents()).isEqualTo(CUSTOM_RESOLVED_CENTS);
         assertThat(afterCustom.finalPriceCents()).isEqualTo(CUSTOM_RESOLVED_CENTS);
         assertThat(afterCustom.pricingRule()).isEqualTo("自定义公式");
@@ -373,7 +377,7 @@ class BuyerAdminIntegrationTest {
         products.patchL2(buyerCode, buyerProductCode, L2AdjustMode.FOLLOW_TEMPLATE, null, null, 5, 1L);
         BuyerProductL2OverrideDO cleared = overrideMapper.selectByBuyerProductId(product.getId());
         assertThat(cleared.getCurrentVersionId()).isNull();
-        var afterFollowTemplate = productQuery.page(buyerCode, 1, 20).getList().getFirst();
+        var afterFollowTemplate = productQuery.page(buyerCode, null, 1, 20).getList().getFirst();
         assertThat(afterFollowTemplate.distPriceCents()).isEqualTo(L1_CENTS);
         assertThat(afterFollowTemplate.finalPriceCents()).isEqualTo(L1_CENTS);
         assertThat(afterFollowTemplate.pricingRule()).isEqualTo("继承L1");

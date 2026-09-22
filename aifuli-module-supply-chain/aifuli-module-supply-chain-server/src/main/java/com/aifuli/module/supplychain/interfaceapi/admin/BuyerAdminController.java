@@ -227,12 +227,14 @@ public class BuyerAdminController {
     @GetMapping("/{buyerCode}/products")
     @PreAuthorize(BUYER_QUERY_EXPRESSION)
     @Operation(summary = "分页查询分销商品",
-            description = "只返回未移除行。金额单位 CNY 分；pricingRule 为继承L1/等于L1/自定义公式。")
+            description = "只返回未移除行。可筛 productType（动态商品类型编码，命中关联平台 SPU）。"
+                    + "省略或空白不筛选，无命中返回空页。金额单位 CNY 分；pricingRule 为继承L1/等于L1/自定义公式。")
     public CommonResult<PageResult<BuyerProductListItem>> pageProducts(
             @PathVariable String buyerCode,
+            @Parameter(description = "动态商品类型编码") @RequestParam(required = false) String productType,
             @Parameter(description = "页码，从 1 开始") @RequestParam(required = false) Integer pageNo,
             @Parameter(description = "每页条数") @RequestParam(required = false) Integer pageSize) {
-        return success(productQueryService.page(buyerCode, pageNo, pageSize));
+        return success(productQueryService.page(buyerCode, productType, pageNo, pageSize));
     }
 
     @PostMapping("/{buyerCode}/products")

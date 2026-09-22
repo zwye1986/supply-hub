@@ -37,8 +37,10 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 
 import static com.aifuli.framework.common.exception.util.ServiceExceptionUtil.exception;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BUYER_PROFILE_NOT_FOUND;
@@ -76,26 +78,85 @@ public class BuyerProductQueryService {
 
     /**
      * 分页查询未移除分销商品。按更新时间倒序。
+     * {@code productType} 省略或空白时不筛选；传入后只保留关联平台 SPU 商品类型相等的行，无命中返回空页。
      * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#63-分销商品}。
      */
-    public PageResult<BuyerProductListItem> page(String buyerCode, Integer pageNo, Integer pageSize) {
-        log.info("分页查询分销商品 buyerCode={} pageNo={} pageSize={}", buyerCode, pageNo, pageSize);
+    public PageResult<BuyerProductListItem> page(String buyerCode, String productType,
+                                                  Integer pageNo, Integer pageSize) {
+        log.info("分页查询分销商品 buyerCode={} productType={} pageNo={} pageSize={}",
+                buyerCode, productType, pageNo, pageSize);
         BuyerDO buyer = buyerMapper.selectByBuyerCode(buyerCode);
         if (buyer == null) {
             throw exception(BUYER_PROFILE_NOT_FOUND);
         }
+        LambdaQueryWrapper<BuyerProductDO> wrapper = new LambdaQueryWrapper<BuyerProductDO>()
+                .eq(BuyerProductDO::getBuyerId, buyer.getId())
+                .eq(BuyerProductDO::getStatus, BuyerProductStatus.ACTIVE.getCode())
+                .orderByDesc(BuyerProductDO::getUpdatedAt);
+        if (hasText(productType)) {
+            Set<Long> skuIds = matchingSkuIds(buyer.getId(), productType);
+            if (skuIds.isEmpty()) {
+                return new PageResult<>(List.of(), 0L);
+            }
+            wrapper.in(BuyerProductDO::getPlatformSkuId, skuIds);
+        }
         PageParam pageParam = new PageParam();
         pageParam.setPageNo(pageNo == null ? DEFAULT_PAGE_NO : pageNo);
         pageParam.setPageSize(pageSize == null ? DEFAULT_PAGE_SIZE : pageSize);
-        PageResult<BuyerProductDO> page = productMapper.selectPage(pageParam, new LambdaQueryWrapper<BuyerProductDO>()
-                .eq(BuyerProductDO::getBuyerId, buyer.getId())
-                .eq(BuyerProductDO::getStatus, BuyerProductStatus.ACTIVE.getCode())
-                .orderByDesc(BuyerProductDO::getUpdatedAt));
+        PageResult<BuyerProductDO> page = productMapper.selectPage(pageParam, wrapper);
         List<BuyerProductListItem> items = new ArrayList<>();
         for (BuyerProductDO product : page.getList()) {
             items.add(toListItem(product));
         }
         return new PageResult<>(items, page.getTotal());
+    }
+
+    /**
+     * 只在当前分销商未移除分销商品关联的平台 SKU 中，按 SPU {@code productType} 精确匹配。
+     * 先收窄再分页，避免类型条件落在内存页上导致 total 失真。
+     * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#63-分销商品}。
+     */
+    private Set<Long> matchingSkuIds(Long buyerId, String productType) {
+        List<BuyerProductDO> products = productMapper.selectList(new LambdaQueryWrapper<BuyerProductDO>()
+                .eq(BuyerProductDO::getBuyerId, buyerId)
+                .eq(BuyerProductDO::getStatus, BuyerProductStatus.ACTIVE.getCode()));
+        Set<Long> skuIds = new HashSet<>();
+        for (BuyerProductDO product : products) {
+            if (product.getPlatformSkuId() != null) {
+                skuIds.add(product.getPlatformSkuId());
+            }
+        }
+        if (skuIds.isEmpty()) {
+            return Set.of();
+        }
+        List<PlatformSkuDO> skus = skuMapper.selectList(new LambdaQueryWrapper<PlatformSkuDO>()
+                .in(PlatformSkuDO::getId, skuIds));
+        Set<Long> spuIds = new HashSet<>();
+        for (PlatformSkuDO sku : skus) {
+            if (sku.getSpuId() != null) {
+                spuIds.add(sku.getSpuId());
+            }
+        }
+        if (spuIds.isEmpty()) {
+            return Set.of();
+        }
+        Set<Long> matchedSpuIds = new HashSet<>();
+        for (PlatformSpuDO spu : spuMapper.selectList(new LambdaQueryWrapper<PlatformSpuDO>()
+                .in(PlatformSpuDO::getId, spuIds)
+                .eq(PlatformSpuDO::getProductType, productType))) {
+            matchedSpuIds.add(spu.getId());
+        }
+        Set<Long> matchedSkuIds = new HashSet<>();
+        for (PlatformSkuDO sku : skus) {
+            if (sku.getSpuId() != null && matchedSpuIds.contains(sku.getSpuId())) {
+                matchedSkuIds.add(sku.getId());
+            }
+        }
+        return matchedSkuIds;
+    }
+
+    private static boolean hasText(String value) {
+        return value != null && !value.isBlank();
     }
 
     private BuyerProductListItem toListItem(BuyerProductDO product) {
