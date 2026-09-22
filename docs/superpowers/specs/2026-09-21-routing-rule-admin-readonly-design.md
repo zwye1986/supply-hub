@@ -1,8 +1,8 @@
 # 管理端路由规则只读投影
 
-本文落实前端「路由规则」页（`supplychainhubweb` `src/views/supplier/routing/rule`）在本期的只读对齐：运营查看**当前正在生效**的标准商品路由规则与候选顺序，不改选供算法，不物化 PRD 四级配置组，不落综合权重。
+本文落实前端「路由规则」页（`supplychainhubweb` `src/views/supplier/routing/rule`）的 **GET 投影**：运营查看**当前正在生效**的标准商品路由规则与候选顺序，不改选供算法，不物化 PRD 四级配置组，不落综合权重。
 
-冲突时：路径、字段与写拒绝以本文为准；引擎排序仍以 `docs/superpowers/specs/2026-09-12-supply-chain-prd-scope-alignment-design.md` s12 为准（`candidatePriority → supplierCode → offerId`，原因码 `SELECTED_BY_STABLE_PRIORITY`）；草稿创建与不可变发布仍走既有 `POST /supply-chain/routing-policies/drafts` 与 `POST /supply-chain/routing-policies/versions/{versionId}/publish`。金额与路径身份口径沿用 `docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md` a2。前端关 mock 后对齐本文，后端不为 mock 的元、点餐/电影类型或全局权重再做适配层。
+冲突时：**GET 路径与响应字段以本文为准**；写入口（POST/PUT/DELETE/`PUT /status`）以 `docs/superpowers/specs/2026-09-21-routing-rule-admin-write-design.md` 为准（方案 A：克隆生效版本打补丁并立即发布，不再一律 `ROUTING_RULE_WRITE_NOT_OPEN`）。引擎排序仍以 `docs/superpowers/specs/2026-09-12-supply-chain-prd-scope-alignment-design.md` s12 为准（`candidatePriority → supplierCode → offerId`，原因码 `SELECTED_BY_STABLE_PRIORITY`）；整包草稿仍可走既有 `POST /supply-chain/routing-policies/drafts` 与 `POST /supply-chain/routing-policies/versions/{versionId}/publish`。金额与路径身份口径沿用 `docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md` a2。前端关 mock 后列表/详情对齐本文；保存必须同时对齐写设计第 9 节，后端不为 mock 的元、点餐/电影类型或全局权重再做适配层。
 
 ## 1. 范围
 
@@ -11,7 +11,7 @@
 - `GET /supply-chain/routing-rules`
 - `GET /supply-chain/routing-rules/{ruleCode}`
 - 只读当前 **启用中** 的 `STANDARD_PRODUCT` 策略、在数据库时钟 `now` 下 **已发布且生效** 的版本中的 `sc_standard_product_routing_rule` + 候选
-- 为对齐前端已写路径，登记 `POST /`、`PUT /{ruleCode}`、`DELETE /{ruleCode}`、`PUT /{ruleCode}/status`，一律业务拒绝
+- 写入口字段与发布事务见 `docs/superpowers/specs/2026-09-21-routing-rule-admin-write-design.md`，本文不再规定写拒绝
 - 权限沿用既有路由管理：仅 `supply-chain:admin`（不新增 `routing:query`，不改菜单 SQL）
 
 本期不做：
@@ -30,7 +30,7 @@
 3. 无启用策略或无生效版本 → HTTP 成功空页，不 404。规则编码在当前生效版本中不存在 → `ROUTING_RULE_NOT_FOUND`。
 4. `buyer_id` / `platform_sku_id` / `supplier_id` 档案缺失：分销商、SKU、供应商编码名称为空，不 404。空候选按数据损坏失败（与发布门禁「禁止空候选」一致）。
 5. `projectMode` / `productTypeMode` 固定 `ALL`；`priorities` 固定稳定第一，价格/综合仅占位；`weights` 仅展示占位，不落库、引擎不读。
-6. 写入口无论入参是否像页面 VO，一律 `ROUTING_RULE_WRITE_NOT_OPEN`，禁止部分落库。
+6. 写入口校验与补丁发布见写设计；GET 不得把草稿或已关闭区间版本投影进来。
 7. DTO `@Schema` 必须与下表表述一致。
 
 ## 3. REST
@@ -65,16 +65,9 @@
 
 `GET /supply-chain/routing-rules/{ruleCode}` 返回与列表同一映射。只在当前生效版本内查找。
 
-### 3.3 写入口（拒绝）
+### 3.3 写入口
 
-| 方法 | 路径 | 结果 |
-| --- | --- | --- |
-| POST | `/supply-chain/routing-rules` | `ROUTING_RULE_WRITE_NOT_OPEN` |
-| PUT | `/supply-chain/routing-rules/{ruleCode}` | 同上 |
-| DELETE | `/supply-chain/routing-rules/{ruleCode}` | 同上 |
-| PUT | `/supply-chain/routing-rules/{ruleCode}/status` | 同上 |
-
-`PUT .../status` 仅为对齐前端已写动词路径，**不是**真启停，也不把 `/status` 扩散到其它资源。请求体不校验、不落库。
+已改由 `docs/superpowers/specs/2026-09-21-routing-rule-admin-write-design.md` 定义：保存 = 对当前生效版本打补丁并发布后继版本。`PUT .../status` 仍是前端兼容路径，语义见该文 §3.5。
 
 ### 3.4 响应字段
 
@@ -125,7 +118,7 @@
 | `status` 枚举未知 | `ENUM_NOT_OPEN` |
 | `updateTo < updateFrom` | `ORDER_QUERY_TIME_RANGE_INVALID` |
 | 当前生效版本无此 `ruleCode` | `ROUTING_RULE_NOT_FOUND` |
-| POST/PUT/DELETE/启停 | `ROUTING_RULE_WRITE_NOT_OPEN` |
+| POST/PUT/DELETE/启停 | 见写设计 §7，不再使用 `ROUTING_RULE_WRITE_NOT_OPEN` |
 | 规则存在但候选为空 | 数据损坏失败 |
 | 权限不足 | 框架 `403` |
 
@@ -133,14 +126,13 @@
 
 对照 `src/api/routing/index.ts`（`USE_ROUTING_MOCK=true`）与 `src/views/supplier/routing/rule`：
 
-- 关 mock 后列表/详情打本资源。页面仍展示项目、商品类型、价格/综合列：后端固定「全部」与占位优先级，避免假装已按 mock 规则选供。
-- 新增 / 编辑 / 删除 / 启停会收到 `ROUTING_RULE_WRITE_NOT_OPEN`。页面按钮可留，不在本仓改前端。
-- 表单要求的 SKU、履约类型、检查模式不在 mock VO 里；真要可写必须另开设计，不能从本 VO 推断。
-- 真要改候选顺序：继续用既有 `/routing-policies` 发不可变版本，不在本页假装 CRUD。
+- 关 mock 后列表/详情打本资源。在前端按写设计第 9 节改形之前，项目/商品类型/价格/综合列仍可能展示：后端 GET 固定「全部」与占位优先级，避免假装已按 mock 规则选供。
+- 新增 / 编辑 / 删除 / 启停的请求体与发布语义见写设计。本仓不改前端。
+- 真要整包替换规则集：仍可用既有 `/routing-policies` 发不可变版本；日常改一条走本页补丁发布。
 
 ## 8. 测试门禁
 
-- `*Test`：生效版本两条规则按更新时间倒序；1 候选=`FIXED`、2 候选=`AUTO`；名称包含匹配；无启用策略空页；缺规则 404；时间逆序拒绝；写入口拒绝；DTO 不含内部主键；`priorities[0]=STABLE`。
+- `*Test`：生效版本两条规则按更新时间倒序；1 候选=`FIXED`、2 候选=`AUTO`；名称包含匹配；无启用策略空页；缺规则 404；时间逆序拒绝；DTO 不含内部主键；`priorities[0]=STABLE`。写入口用例见写设计 §10。
 - `*ContractTest`：六个 HTTP 映射 `@PreAuthorize` 均为 `admin`；方法安全覆盖 GET 与一个写入口。
 - `*IntegrationTest`：真实 MySQL 插入启用策略、已发布生效版本、一条双候选规则后，列表与详情读到同一 `ruleCode` 与供应商顺序。
 - `*ArchitectureTest`：管理端 `@PreAuthorize` 覆盖新 Controller；查询服务不得依赖账户/账本 DAL；`routing.domain` 仍不出现分数字段。

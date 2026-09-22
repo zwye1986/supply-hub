@@ -4,7 +4,7 @@
 
 本文根据 `supplychainhubweb` 已落地的供应链中台页面（`src/views/supplier`、`src/api/supplier`）定义管理端 REST，供前端关掉 mock 后对接。
 
-前端范围仅三块：**供应商、分销商、项目**（含供货配置、合作商品、分销商品、项目商品、分销层级）。新增供应商供货配置、新增分销商的品类/类型/分类下拉改为 system 数据字典，不再用分类树。加价模板不在本文。`supplychainhubweb` 已有订单/售后/路由规则页面与 mock（`src/views/supplier/order`、`src/api/order`、`src/api/routing`），关掉 mock 后的平台订单只读、路由记录、供应商订单、路由规则只读投影分别见 `docs/superpowers/specs/2026-09-12-supply-chain-order-admin-readonly-design.md`、`docs/superpowers/specs/2026-09-21-order-routing-records-admin-design.md`、`docs/superpowers/specs/2026-09-21-supplier-order-admin-readonly-design.md` 与 `docs/superpowers/specs/2026-09-21-routing-rule-admin-readonly-design.md`；金额仍按 a2 用分，不按 mock 的元适配。平台列表不得用 `source=SUPPLIER` 冒充供应商订单聚合。路由规则页不得把 mock 的综合权重、项目/商品类型四级当成已生效配置。
+前端范围仅三块：**供应商、分销商、项目**（含供货配置、合作商品、分销商品、项目商品、分销层级）。新增供应商供货配置、新增分销商的品类/类型/分类下拉改为 system 数据字典，不再用分类树。加价模板不在本文。`supplychainhubweb` 已有订单/售后/路由规则页面与 mock（`src/views/supplier/order`、`src/api/order`、`src/api/routing`），关掉 mock 后的平台订单只读、路由记录、供应商订单、路由规则 GET 投影分别见 `docs/superpowers/specs/2026-09-12-supply-chain-order-admin-readonly-design.md`、`docs/superpowers/specs/2026-09-21-order-routing-records-admin-design.md`、`docs/superpowers/specs/2026-09-21-supplier-order-admin-readonly-design.md` 与 `docs/superpowers/specs/2026-09-21-routing-rule-admin-readonly-design.md`；路由规则页保存（补丁发布）见 `docs/superpowers/specs/2026-09-21-routing-rule-admin-write-design.md`。金额仍按 a2 用分，不按 mock 的元适配。平台列表不得用 `source=SUPPLIER` 冒充供应商订单聚合。路由规则页不得把 mock 的综合权重、项目/商品类型四级当成已生效配置；可写请求必须带 SKU、履约类型与有序候选。
 
 与 `docs/superpowers/specs/2026-08-28-supply-chain-prd-alignment-design.md` 冲突时：
 
