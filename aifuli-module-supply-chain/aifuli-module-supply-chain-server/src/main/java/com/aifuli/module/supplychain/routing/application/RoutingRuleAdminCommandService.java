@@ -69,7 +69,7 @@ public class RoutingRuleAdminCommandService {
     private static final String TRANSACTION_MANAGER = "supplyChainTransactionManager";
     /** 无启用策略时引导首版的策略编码，见设计 w6 / §5。 */
     static final String BOOTSTRAP_POLICY_CODE = "STANDARD_PRODUCT_PRIMARY";
-    /** 无启用策略时引导首版的策略名称，见设计 w6 / §5。 */
+    /** 无启用策略且库中尚无引导策略时的默认名称，见设计 w6 / §5。 */
     static final String BOOTSTRAP_POLICY_NAME = "标准商品供给路由";
     private static final String SUPPLIER_TYPE_STANDARD = "STANDARD_SUPPLIER";
     private static final String RULE_CODE_PREFIX = "RR";
@@ -210,8 +210,16 @@ public class RoutingRuleAdminCommandService {
             if (!create) {
                 throw exception(ROUTING_RULE_NOT_FOUND);
             }
-            log.info("路由规则页引导首版策略 policyCode={}", BOOTSTRAP_POLICY_CODE);
-            return new WriteScope(BOOTSTRAP_POLICY_CODE, BOOTSTRAP_POLICY_NAME, null, 0L, null);
+            // 引导首版：code 已存在（含未启用）时必须复用库中 policyName，否则 createDraft 因「名称不可改」抛 IllegalArgumentException → 500。
+            // 设计见 docs/superpowers/specs/2026-09-21-routing-rule-admin-write-design.md#5-保存事务
+            SupplierRoutingPolicyDO existing = policyMapper.selectByCode(BOOTSTRAP_POLICY_CODE);
+            String policyName = existing != null && existing.getPolicyName() != null
+                    && !existing.getPolicyName().isBlank()
+                    ? existing.getPolicyName()
+                    : BOOTSTRAP_POLICY_NAME;
+            log.info("路由规则页引导首版策略 policyCode={} policyName={} reusedExisting={}",
+                    BOOTSTRAP_POLICY_CODE, policyName, existing != null);
+            return new WriteScope(BOOTSTRAP_POLICY_CODE, policyName, null, 0L, null);
         }
         SupplierRoutingPolicyDO policy = active.getFirst();
         List<SupplierRoutingPolicyVersionDO> versions = versionMapper.selectEffective(policy.getId(), now);

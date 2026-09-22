@@ -84,6 +84,7 @@ class RoutingRuleAdminCommandServiceTest {
     @Test
     void createFirstRuleBootstrapsWithNullCloseVersion() {
         when(policyMapper.selectActiveByType(RoutingType.STANDARD_PRODUCT.code())).thenReturn(List.of());
+        when(policyMapper.selectByCode(RoutingRuleAdminCommandService.BOOTSTRAP_POLICY_CODE)).thenReturn(null);
         stubBuyerSkuSuppliersForCreate("BYR_1", "SKU_1", List.of("SPL_A"));
         RoutingRuleView view = sampleView("RR20260922001");
         when(queryService.get("RR20260922001")).thenReturn(view);
@@ -109,6 +110,30 @@ class RoutingRuleAdminCommandServiceTest {
         assertThat(rule.candidates().getFirst().candidatePriority()).isZero();
         assertThat(rule.candidates().getFirst().inventoryCheckMode())
                 .isEqualTo(RoutingRuleSaveSupport.DEFAULT_INVENTORY_CHECK_MODE);
+    }
+
+    @Test
+    void createBootstrapReusesExistingInactivePolicyName() {
+        when(policyMapper.selectActiveByType(RoutingType.STANDARD_PRODUCT.code())).thenReturn(List.of());
+        String existingName = "历史标准路由策略名";
+        when(policyMapper.selectByCode(RoutingRuleAdminCommandService.BOOTSTRAP_POLICY_CODE))
+                .thenReturn(SupplierRoutingPolicyDO.builder().id(7L)
+                        .policyCode(RoutingRuleAdminCommandService.BOOTSTRAP_POLICY_CODE)
+                        .policyName(existingName)
+                        .routingType(RoutingType.STANDARD_PRODUCT.code())
+                        .status((short) 0).activeFlag(null).version(0L).build());
+        stubBuyerSkuSuppliersForCreate("BYR_1", "SKU_1", List.of("SPL_A"));
+        when(queryService.get("RR20260922001")).thenReturn(sampleView("RR20260922001"));
+
+        service.create(fixedPatch("BYR_1", "SKU_1", "SPL_A"), OPERATOR_ID);
+
+        ArgumentCaptor<SuccessorPublishCommand> captor = ArgumentCaptor.forClass(SuccessorPublishCommand.class);
+        verify(publicationService).publishSuccessorStandardProductRules(captor.capture());
+        SuccessorPublishCommand command = captor.getValue();
+        assertThat(command.policyCode()).isEqualTo(RoutingRuleAdminCommandService.BOOTSTRAP_POLICY_CODE);
+        assertThat(command.policyName()).isEqualTo(existingName);
+        assertThat(command.policyName()).isNotEqualTo(RoutingRuleAdminCommandService.BOOTSTRAP_POLICY_NAME);
+        assertThat(command.closeVersionId()).isNull();
     }
 
     @Test

@@ -162,8 +162,9 @@ publish：原因「管理端路由规则页保存」；仍写既有 Outbox ROUTI
 
 引导（无启用策略）：
 
-- `policyCode` 固定 `STANDARD_PRODUCT_PRIMARY`，`policyName` 固定 `标准商品供给路由`
-- 若该 code 已存在但未启用（例如曾用 `/routing-policies` 建过草稿），沿用其名称校验规则（名称不得通过版本草稿改掉）；没有则插入
+- `policyCode` 固定 `STANDARD_PRODUCT_PRIMARY`
+- `policyName`：`selectByCode(STANDARD_PRODUCT_PRIMARY)` 若已存在则复用库中名称；不存在则使用 `标准商品供给路由`
+- 若该 code 已存在但未启用（例如曾用 `/routing-policies` 建过草稿），沿用其名称通过 createDraft 的「名称不得改」校验；没有则插入
 - 不得在已有**另一份**启用中的 `STANDARD_PRODUCT` 策略时再启用第二份（沿用发布门禁）
 
 未改动的规则必须原样进入新版本（含候选顺序与检查模式），禁止「只插一条、丢掉同版本其它规则」。
