@@ -93,7 +93,7 @@ class BuyerAdminRestContractTest {
                 .collect(Collectors.toSet());
 
         assertThat(propertyNames).contains(
-                "sellableCategories", "productTypes", "projectCount", "skuCount", "cooperationTime");
+                "sellableCategories", "productTypes", "projectCount", "skuCount", "cooperationTime", "children");
     }
 
     @Test
@@ -156,10 +156,12 @@ class BuyerAdminRestContractTest {
         Schema<?> itemSchema = referencedSchema(schemas, pageSchema.getProperties().get("list").getItems());
 
         assertThat(itemSchema.getProperties()).containsKeys(
-                "productTypes", "projectCount", "skuCount", "cooperationTime");
-        assertThat(itemSchema.getProperties().get("productTypes").getDescription()).isEqualTo("商品类型");
-        assertThat(itemSchema.getProperties().get("projectCount").getDescription()).isEqualTo("未归档关联项目数");
-        assertThat(itemSchema.getProperties().get("skuCount").getDescription()).isEqualTo("有效分销SKU商品数");
+                "productTypes", "projectCount", "skuCount", "cooperationTime", "children");
+        assertThat(itemSchema.getProperties().get("productTypes").getDescription()).isEqualTo("本级及可见下级商品类型并集");
+        assertThat(itemSchema.getProperties().get("projectCount").getDescription()).isEqualTo("本级及可见下级未归档项目数合计");
+        assertThat(itemSchema.getProperties().get("skuCount").getDescription()).isEqualTo("本级及可见下级有效分销商品数合计");
+        assertThat(itemSchema.getProperties().get("children").getDescription())
+                .isEqualTo("直属下级。一级包含二级，二级包含三级，三级为空列表");
         assertThat(itemSchema.getProperties().get("cooperationTime").getDescription())
                 .isEqualTo("合作时间，取档案合作开始时间；未填或年份不晚于1970时回落创建时间，Asia/Shanghai");
     }

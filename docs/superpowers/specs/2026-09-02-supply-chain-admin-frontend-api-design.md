@@ -385,7 +385,17 @@ SKU 未填供货上限时继承供货配置 `maxQuantity`；未填最低起购�
 
 ### 6.2 列表与档案
 
-`GET /supply-chain/buyers` 筛选：`buyerName`、`buyerCode`、`distributionLevels`、`cooperationModes`、`sellableCategories`、`status`、`updatedFrom`/`updatedTo`。
+`GET /supply-chain/buyers` 筛选：`buyerName`、`buyerCode`、`distributionLevels`、`cooperationModes`、`sellableCategories`、`status`、`updatedFrom`/`updatedTo`。名称筛选是包含匹配。
+
+默认分页（不带 `view`）按组织树返回。根列表只放一级分销商；一级的 `children` 是它的二级分销商，二级的 `children` 是它的三级分销商，三级的 `children` 为空数组。列表行不返回 `parentBuyerCode`。`pageNo`、`pageSize`、`total` 只统计一级；二级和三级挂在对应一级下面，不占分页名额。同一层按 `updatedAt DESC, id DESC` 排序。`distributionLevel` 为空的历史数据按一级参与筛选和挂接。
+
+筛选决定命中节点，不把树拍扁后再过滤：
+
+1. 命中节点必须同时满足全部筛选条件。`cooperationModes`、`sellableCategories` 各自内部是「命中任一」，两个条件同时出现时取交集。
+2. 命中一级时，带上该一级下全部能挂接的二级和三级。
+3. 命中二级或三级时，带回其一级祖先。祖先本身可以不满足筛选条件。`children` 只保留通往命中节点的分支，命中节点的全部可挂接下级仍保留；不在这条分支上的同级不返回。
+4. 无法沿未归档的「一级 → 二级 → 三级」挂接的节点从列表丢掉。上级已归档、上级不存在、等级和上级深度不一致，都算挂不回。三级不能直接挂到一级下面。
+5. `GET /buyers/{buyerCode}/children` 仍是扁平后代列表，口径见 6.1，不随这次列表嵌套改变。
 
 投影（同一集合，不用独立路径）：
 
@@ -396,14 +406,16 @@ SKU 未填供货上限时继承供货配置 `maxQuantity`；未填最低起购�
 
 详情响应中的 `productTypes[]` 为对象数组，字段固定为 `{ id, name }`：按已保存的 `scope_kind=PRODUCT_TYPE` 范围编码关联 `sc_product_type.type_code`，`id` 取商品类型业务编码，`name` 取商品类型名称，不暴露商品类型表内部自增主键。创建/编辑请求的 `productTypes[]` 仍提交商品类型业务编码；列表响应继续返回编码数组，避免改变列表筛选与既有投影契约。
 
-分页列表行除基础档案字段外，还返回以下只读聚合字段：
+分页列表行除基础档案字段外，还返回以下只读字段。数量和集合按**本次响应里可见的子树**汇总，不把被筛选掉的同级算进去：
 
-- `productTypes[]`：`sc_buyer_category_scope` 中 `scope_kind=PRODUCT_TYPE` 的商品类型枚举名；`sellableCategories[]` 继续只读取 `scope_kind=SELLABLE`，两者互相独立，禁止相互推导；
-- `projectCount`：该分销商未归档项目数，`ARCHIVED` 项目不计入；
-- `skuCount`：该分销商状态为有效的分销商品数，已移除分销商品不计入；
-- `cooperationTime`：列表展示用合作时间，与详情 `cooperationStartedAt` 取同一回显口径，来源是 `sc_buyer.cooperation_started_at`。管理端日期选择器空值常以 Unix 0 提交。`null`、Unix 0、年份 `<=1970` 视为未填：创建回落当前业务时间（Asia/Shanghai），更新忽略该字段以免用空值覆盖已有合作开始时间；列表与详情读取历史脏值时回落到 `created_at`。已填写且年份晚于 1970 的值原样回传。
+- `children`：直属下级。一级装二级，二级装三级，三级为空数组；
+- `productTypes[]`：本节点与可见下级的并集，来源仍是 `sc_buyer_category_scope` 中 `scope_kind=PRODUCT_TYPE` 的商品类型编码。`sellableCategories[]` 同样取并集，并且只读取 `scope_kind=SELLABLE`。两类范围互相独立，禁止相互推导。并集保留本节点原有顺序，再按子节点顺序追加未见过的值；
+- `cooperationModes[]`：本节点与可见下级的合作模式并集，顺序规则与品类相同；
+- `projectCount`：本节点未归档项目数，加上 `children` 已汇总的项目数。`ARCHIVED` 项目不计入；
+- `skuCount`：本节点有效分销商品数，加上 `children` 已汇总的商品数。已移除分销商品不计入；
+- `cooperationTime`：列表展示用合作时间，与详情 `cooperationStartedAt` 取同一回显口径，来源是 `sc_buyer.cooperation_started_at`。管理端日期选择器空值常以 Unix 0 提交。`null`、Unix 0、年份 `<=1970` 视为未填：创建回落当前业务时间（Asia/Shanghai），更新忽略该字段以免用空值覆盖已有合作开始时间；列表与详情读取历史脏值时回落到 `created_at`。已填写且年份晚于 1970 的值原样回传。名称、状态、等级、联系人和更新时间不参与汇总，仍是该节点自己的值。
 
-分页聚合必须按当页 Buyer 集合批量读取，禁止为每行追加项目数、SKU 数等 N+1 查询。详情的 `sellableCategories[]` / `productTypes[]` 只返回已经保存的独立范围行；历史记录缺少 `SELLABLE` 行时返回空数组，由前端按新字段重新保存或由有明确业务映射的数据修复任务补齐，后端不得根据商品类型猜测分销品类。
+列表先一次读出未归档分销商，在内存中筛选、挂接和分页；合作模式、可售品类、商品类型按这批分销商各查一次。项目数、SKU 数和主联系人只按当前页可见节点批量读取，禁止为每行追加查询。详情的 `sellableCategories[]` / `productTypes[]` 只返回已经保存的独立范围行，不按组织树汇总；历史记录缺少 `SELLABLE` 行时返回空数组，由前端按新字段重新保存或由有明确业务映射的数据修复任务补齐，后端不得根据商品类型猜测分销品类。
 
 由于同一集合接口还兼容 `view=simple` 与 `view=parent-options` 投影，Java 运行时返回类型允许保持 `CommonResult<?>`；但 OpenAPI 的默认 `200` 响应必须显式声明为 `CommonResult<PageResult<BuyerListItem>>` 对应的具体文档模型，不能退化为 `CommonResultObject`。Swagger / Knife4j 的默认分页响应必须能展开 `BuyerListItem`，并展示上述全部列表字段。
 

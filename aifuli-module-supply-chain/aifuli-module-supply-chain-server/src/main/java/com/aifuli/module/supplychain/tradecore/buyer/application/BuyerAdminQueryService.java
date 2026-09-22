@@ -1,6 +1,5 @@
 package com.aifuli.module.supplychain.tradecore.buyer.application;
 
-import com.aifuli.framework.common.pojo.PageParam;
 import com.aifuli.framework.common.pojo.PageResult;
 import com.aifuli.module.supplychain.infrastructure.security.EnvelopeCryptoPort;
 import com.aifuli.module.supplychain.tradecore.account.dal.dataobject.BuyerAccountDO;
@@ -46,6 +45,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Function;
 
 import static com.aifuli.framework.common.exception.util.ServiceExceptionUtil.exception;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BUYER_PARENT_INVALID;
@@ -62,10 +62,13 @@ public class BuyerAdminQueryService {
 
     private static final int DEFAULT_PAGE_NO = 1;
     private static final int DEFAULT_PAGE_SIZE = 20;
-    private static final int PARENT_OPTION_LEVEL_TWO = 2;
-    private static final int PARENT_OPTION_LEVEL_THREE = 3;
-    private static final int DEFAULT_DISTRIBUTION_LEVEL = 1;
-    private static final int MAX_DISTRIBUTION_LEVEL = 3;
+    private static final int DISTRIBUTION_LEVEL_ONE = 1;
+    private static final int DISTRIBUTION_LEVEL_TWO = 2;
+    private static final int DISTRIBUTION_LEVEL_THREE = 3;
+    private static final int PARENT_OPTION_LEVEL_TWO = DISTRIBUTION_LEVEL_TWO;
+    private static final int PARENT_OPTION_LEVEL_THREE = DISTRIBUTION_LEVEL_THREE;
+    private static final int DEFAULT_DISTRIBUTION_LEVEL = DISTRIBUTION_LEVEL_ONE;
+    private static final int MAX_DISTRIBUTION_LEVEL = DISTRIBUTION_LEVEL_THREE;
 
     private final BuyerMapper buyerMapper;
     private final BuyerContactMapper contactMapper;
@@ -80,8 +83,12 @@ public class BuyerAdminQueryService {
     private final EnvelopeCryptoPort envelopeCrypto;
 
     /**
-     * 分页查询分销商。按更新时间倒序；归档行永不出现。
-     * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#62-列表与档案}。
+     * 分页查询分销商组织树。根列表只含一级，二级和三级放进 {@code children}；归档行永不出现。
+     *
+     * <p>先一次读出未归档分销商，再在内存中筛选、挂接和按一级分页。命中二级或三级时带回一级祖先，
+     * 并且只保留命中分支；挂不回未归档一级的节点丢弃。项目数、SKU 数按可见子树累加，合作模式、
+     * 可售品类、商品类型取可见子树并集。设计见
+     * {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#62-列表与档案}。</p>
      */
     public PageResult<BuyerListItem> page(BuyerPageQuery query) {
         log.info("分页查询分销商 buyerName={} buyerCode={} distributionLevels={} cooperationModes={} "
@@ -89,29 +96,64 @@ public class BuyerAdminQueryService {
                 query.buyerName(), query.buyerCode(), query.distributionLevels(), query.cooperationModes(),
                 query.sellableCategories(), query.statuses(), query.updatedFrom(), query.updatedTo(),
                 query.pageNo(), query.pageSize());
-        List<Short> statusCodes = toStatusCodes(query.statuses());
-        LambdaQueryWrapper<BuyerDO> wrapper = new LambdaQueryWrapper<BuyerDO>()
-                .like(hasText(query.buyerName()), BuyerDO::getBuyerName, query.buyerName())
-                .eq(hasText(query.buyerCode()), BuyerDO::getBuyerCode, query.buyerCode())
-                .in(hasValues(query.distributionLevels()), BuyerDO::getDistributionLevel,
-                        toShorts(query.distributionLevels()))
-                .in(!statusCodes.isEmpty(), BuyerDO::getStatus, statusCodes)
-                .ge(query.updatedFrom() != null, BuyerDO::getUpdatedAt, query.updatedFrom())
-                .le(query.updatedTo() != null, BuyerDO::getUpdatedAt, query.updatedTo())
-                .ne(BuyerDO::getStatus, BuyerStatus.ARCHIVED.getCode())
-                .orderByDesc(BuyerDO::getUpdatedAt);
-        Set<Long> scopedIds = matchingBuyerIds(query.cooperationModes(), query.sellableCategories());
-        if (scopedIds != null) {
-            if (scopedIds.isEmpty()) {
-                return new PageResult<>(List.of(), 0L);
-            }
-            wrapper.in(BuyerDO::getId, scopedIds);
+        List<BuyerDO> buyers = buyerMapper.selectList(new LambdaQueryWrapper<BuyerDO>()
+                .ne(BuyerDO::getStatus, BuyerStatus.ARCHIVED.getCode()));
+        if (buyers == null || buyers.isEmpty()) {
+            return new PageResult<>(List.of(), 0L);
         }
-        PageParam pageParam = new PageParam();
-        pageParam.setPageNo(query.pageNo() == null ? DEFAULT_PAGE_NO : query.pageNo());
-        pageParam.setPageSize(query.pageSize() == null ? DEFAULT_PAGE_SIZE : query.pageSize());
-        PageResult<BuyerDO> page = buyerMapper.selectPage(pageParam, wrapper);
-        return new PageResult<>(toListItems(page.getList()), page.getTotal());
+        List<Long> buyerIds = buyers.stream().map(BuyerDO::getId).toList();
+        Map<Long, List<String>> sellableCategories = new HashMap<>();
+        Map<Long, List<String>> productTypes = new HashMap<>();
+        loadScopeCodes(buyerIds, sellableCategories, productTypes);
+        Map<Long, List<String>> cooperationModes = loadCooperationModes(buyerIds);
+
+        Map<Long, BuyerDO> buyersById = new HashMap<>();
+        Map<Long, List<BuyerDO>> childrenByParent = new HashMap<>();
+        for (BuyerDO buyer : buyers) {
+            buyersById.put(buyer.getId(), buyer);
+            if (buyer.getParentBuyerId() != null) {
+                childrenByParent.computeIfAbsent(buyer.getParentBuyerId(), ignored -> new ArrayList<>())
+                        .add(buyer);
+            }
+        }
+        Comparator<BuyerDO> order = buyerTreeOrder();
+        for (List<BuyerDO> children : childrenByParent.values()) {
+            children.sort(order);
+        }
+
+        Set<Long> included = new HashSet<>();
+        for (BuyerDO buyer : buyers) {
+            if (!matchesListFilter(buyer, query, sellableCategories, cooperationModes)) {
+                continue;
+            }
+            includeHitBranch(buyer, buyersById, childrenByParent, included);
+        }
+        List<BuyerDO> roots = new ArrayList<>();
+        for (BuyerDO buyer : buyers) {
+            if (included.contains(buyer.getId()) && isLevelOneRoot(buyer)) {
+                roots.add(buyer);
+            }
+        }
+        roots.sort(order);
+
+        long total = roots.size();
+        List<BuyerDO> pageRoots = sliceRoots(roots, normalizePageNo(query.pageNo()), normalizePageSize(query.pageSize()));
+        if (pageRoots.isEmpty()) {
+            return new PageResult<>(List.of(), total);
+        }
+        List<Long> visibleIds = new ArrayList<>();
+        for (BuyerDO root : pageRoots) {
+            collectVisibleIds(root, childrenByParent, included, visibleIds);
+        }
+        Map<Long, BuyerContactDO> primaryContacts = loadPrimaryContacts(visibleIds);
+        Map<Long, Long> projectCounts = loadProjectCounts(visibleIds);
+        Map<Long, Long> skuCounts = loadSkuCounts(visibleIds);
+        List<BuyerListItem> items = new ArrayList<>(pageRoots.size());
+        for (BuyerDO root : pageRoots) {
+            items.add(toTreeNode(root, childrenByParent, included, sellableCategories, productTypes,
+                    cooperationModes, primaryContacts, projectCounts, skuCounts));
+        }
+        return new PageResult<>(items, total);
     }
 
     public List<SimpleBuyerItem> listSimple(String buyerName, String buyerCode) {
@@ -339,106 +381,280 @@ public class BuyerAdminQueryService {
     }
 
     /**
-     * 合作模式与可售品类筛选取交集；两者都空时返回 null 表示不加 id 约束。
+     * 命中节点满足全部筛选条件。合作模式、可售品类各自命中任一；两者同时出现时必须同时满足。
+     * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#62-列表与档案}。
      */
-    private Set<Long> matchingBuyerIds(List<String> cooperationModes, List<String> sellableCategories) {
-        Set<Long> byMode = null;
-        if (hasValues(cooperationModes)) {
-            byMode = new HashSet<>();
-            for (BuyerCooperationModeDO row : cooperationModeMapper.selectList(
-                    new LambdaQueryWrapper<BuyerCooperationModeDO>()
-                            .in(BuyerCooperationModeDO::getCooperationMode, cooperationModes))) {
-                byMode.add(row.getBuyerId());
+    private static boolean matchesListFilter(BuyerDO buyer, BuyerPageQuery query,
+                                             Map<Long, List<String>> sellableCategories,
+                                             Map<Long, List<String>> cooperationModes) {
+        if (hasText(query.buyerName())
+                && (buyer.getBuyerName() == null || !buyer.getBuyerName().contains(query.buyerName()))) {
+            return false;
+        }
+        if (hasText(query.buyerCode()) && !query.buyerCode().equals(buyer.getBuyerCode())) {
+            return false;
+        }
+        if (hasValues(query.distributionLevels())
+                && !query.distributionLevels().contains(effectiveLevel(buyer))) {
+            return false;
+        }
+        if (!matchesStatus(buyer, query.statuses())) {
+            return false;
+        }
+        if (query.updatedFrom() != null
+                && (buyer.getUpdatedAt() == null || buyer.getUpdatedAt().isBefore(query.updatedFrom()))) {
+            return false;
+        }
+        if (query.updatedTo() != null
+                && (buyer.getUpdatedAt() == null || buyer.getUpdatedAt().isAfter(query.updatedTo()))) {
+            return false;
+        }
+        if (hasValues(query.cooperationModes())
+                && !containsAny(cooperationModes.get(buyer.getId()), query.cooperationModes())) {
+            return false;
+        }
+        return !hasValues(query.sellableCategories())
+                || containsAny(sellableCategories.get(buyer.getId()), query.sellableCategories());
+    }
+
+    private static boolean matchesStatus(BuyerDO buyer, List<BuyerStatus> statuses) {
+        if (!hasValues(statuses)) {
+            return true;
+        }
+        if (buyer.getStatus() == null) {
+            return false;
+        }
+        for (BuyerStatus status : statuses) {
+            if (status != null && buyer.getStatus() == status.getCode()) {
+                return true;
             }
         }
-        Set<Long> byCategory = null;
-        if (hasValues(sellableCategories)) {
-            byCategory = new HashSet<>();
-            for (BuyerCategoryScopeDO row : categoryScopeMapper.selectList(
-                    new LambdaQueryWrapper<BuyerCategoryScopeDO>()
-                            .eq(BuyerCategoryScopeDO::getScopeKind, BuyerScopeKind.SELLABLE.name())
-                            .in(BuyerCategoryScopeDO::getScopeCode, sellableCategories))) {
-                byCategory.add(row.getBuyerId());
+        return false;
+    }
+
+    private static boolean containsAny(List<String> owned, List<String> requested) {
+        if (owned == null || owned.isEmpty()) {
+            return false;
+        }
+        for (String value : requested) {
+            if (value != null && owned.contains(value)) {
+                return true;
             }
         }
-        if (byMode == null && byCategory == null) {
-            return null;
-        }
-        if (byMode == null) {
-            return byCategory;
-        }
-        if (byCategory == null) {
-            return byMode;
-        }
-        byMode.retainAll(byCategory);
-        return byMode;
+        return false;
     }
 
     /**
-     * 一次批量装配当页分销商的范围、项目、分销商品和联系人，避免列表字段扩展形成 N+1 查询。
-     * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#62-列表与档案}。
+     * 把命中节点、它的一级祖先，以及命中节点下面仍能挂接的下级放进可见集合。
+     * 等级链中断或上级不在未归档集合中时，整条分支丢弃。
      */
-    private List<BuyerListItem> toListItems(List<BuyerDO> buyers) {
-        if (buyers.isEmpty()) {
+    private void includeHitBranch(BuyerDO hit, Map<Long, BuyerDO> buyersById,
+                                  Map<Long, List<BuyerDO>> childrenByParent, Set<Long> included) {
+        if (!attachable(hit, buyersById)) {
+            return;
+        }
+        BuyerDO cursor = hit;
+        for (int depth = 0; depth < MAX_DISTRIBUTION_LEVEL && cursor != null; depth++) {
+            included.add(cursor.getId());
+            if (effectiveLevel(cursor) == DISTRIBUTION_LEVEL_ONE) {
+                break;
+            }
+            cursor = buyersById.get(cursor.getParentBuyerId());
+        }
+        includeDescendants(hit, buyersById, childrenByParent, included);
+    }
+
+    private void includeDescendants(BuyerDO node, Map<Long, BuyerDO> buyersById,
+                                    Map<Long, List<BuyerDO>> childrenByParent, Set<Long> included) {
+        int level = effectiveLevel(node);
+        if (level >= DISTRIBUTION_LEVEL_THREE) {
+            return;
+        }
+        int childLevel = level + 1;
+        for (BuyerDO child : childrenByParent.getOrDefault(node.getId(), List.of())) {
+            if (effectiveLevel(child) != childLevel || !attachable(child, buyersById)) {
+                continue;
+            }
+            included.add(child.getId());
+            includeDescendants(child, buyersById, childrenByParent, included);
+        }
+    }
+
+    /**
+     * 一级必须没有上级；二级的上级必须是没有上级的一级；三级的上级必须是这样的二级。
+     * 历史空等级按一级处理。上级已归档时不在 {@code buyersById} 中，因此挂不回去。
+     */
+    private static boolean attachable(BuyerDO node, Map<Long, BuyerDO> buyersById) {
+        int level = effectiveLevel(node);
+        if (level == DISTRIBUTION_LEVEL_ONE) {
+            return node.getParentBuyerId() == null;
+        }
+        BuyerDO parent = node.getParentBuyerId() == null ? null : buyersById.get(node.getParentBuyerId());
+        if (parent == null) {
+            return false;
+        }
+        if (level == DISTRIBUTION_LEVEL_TWO) {
+            return effectiveLevel(parent) == DISTRIBUTION_LEVEL_ONE && parent.getParentBuyerId() == null;
+        }
+        if (level == DISTRIBUTION_LEVEL_THREE) {
+            return effectiveLevel(parent) == DISTRIBUTION_LEVEL_TWO && attachable(parent, buyersById);
+        }
+        return false;
+    }
+
+    private static boolean isLevelOneRoot(BuyerDO buyer) {
+        return effectiveLevel(buyer) == DISTRIBUTION_LEVEL_ONE && buyer.getParentBuyerId() == null;
+    }
+
+    private static int effectiveLevel(BuyerDO buyer) {
+        return buyer.getDistributionLevel() == null
+                ? DEFAULT_DISTRIBUTION_LEVEL : buyer.getDistributionLevel().intValue();
+    }
+
+    private static Comparator<BuyerDO> buyerTreeOrder() {
+        return Comparator
+                .comparing(BuyerDO::getUpdatedAt, Comparator.nullsLast(Comparator.reverseOrder()))
+                .thenComparing(BuyerDO::getId, Comparator.nullsLast(Comparator.reverseOrder()));
+    }
+
+    private static int normalizePageNo(Integer pageNo) {
+        return pageNo == null || pageNo < 1 ? DEFAULT_PAGE_NO : pageNo;
+    }
+
+    private static int normalizePageSize(Integer pageSize) {
+        return pageSize == null || pageSize < 1 ? DEFAULT_PAGE_SIZE : pageSize;
+    }
+
+    private static List<BuyerDO> sliceRoots(List<BuyerDO> roots, int pageNo, int pageSize) {
+        long from = (long) (pageNo - 1) * pageSize;
+        if (from >= roots.size()) {
             return List.of();
         }
-        List<Long> buyerIds = buyers.stream().map(BuyerDO::getId).toList();
-        Map<Long, LinkedHashSet<String>> sellableCategories = new HashMap<>();
-        Map<Long, LinkedHashSet<String>> productTypes = new HashMap<>();
+        int start = (int) from;
+        return roots.subList(start, Math.min(start + pageSize, roots.size()));
+    }
+
+    private void collectVisibleIds(BuyerDO node, Map<Long, List<BuyerDO>> childrenByParent,
+                                   Set<Long> included, List<Long> visibleIds) {
+        visibleIds.add(node.getId());
+        for (BuyerDO child : childrenByParent.getOrDefault(node.getId(), List.of())) {
+            if (included.contains(child.getId())) {
+                collectVisibleIds(child, childrenByParent, included, visibleIds);
+            }
+        }
+    }
+
+    /**
+     * 按可见子树生成列表节点。数量先加子节点已经汇总的值，集合先保留本节点顺序再追加下级新值。
+     */
+    private BuyerListItem toTreeNode(BuyerDO buyer, Map<Long, List<BuyerDO>> childrenByParent, Set<Long> included,
+                                     Map<Long, List<String>> sellableCategories, Map<Long, List<String>> productTypes,
+                                     Map<Long, List<String>> cooperationModes, Map<Long, BuyerContactDO> primaryContacts,
+                                     Map<Long, Long> projectCounts, Map<Long, Long> skuCounts) {
+        List<BuyerListItem> children = new ArrayList<>();
+        for (BuyerDO child : childrenByParent.getOrDefault(buyer.getId(), List.of())) {
+            if (!included.contains(child.getId())) {
+                continue;
+            }
+            children.add(toTreeNode(child, childrenByParent, included, sellableCategories, productTypes,
+                    cooperationModes, primaryContacts, projectCounts, skuCounts));
+        }
+        BuyerContactDO primary = primaryContacts.get(buyer.getId());
+        List<String> categories = unionValues(
+                sellableCategories.getOrDefault(buyer.getId(), List.of()), children, BuyerListItem::sellableCategories);
+        List<String> types = unionValues(
+                productTypes.getOrDefault(buyer.getId(), List.of()), children, BuyerListItem::productTypes);
+        List<String> modes = unionValues(
+                cooperationModes.getOrDefault(buyer.getId(), List.of()), children, BuyerListItem::cooperationModes);
+        long projectCount = projectCounts.getOrDefault(buyer.getId(), 0L);
+        long skuCount = skuCounts.getOrDefault(buyer.getId(), 0L);
+        for (BuyerListItem child : children) {
+            projectCount += child.projectCount();
+            skuCount += child.skuCount();
+        }
+        return new BuyerListItem(
+                buyer.getId(),
+                buyer.getBuyerCode(),
+                buyer.getBuyerName(),
+                buyer.getDistributionLevel() == null ? null : buyer.getDistributionLevel().intValue(),
+                BuyerStatus.fromCode(buyer.getStatus()).name(),
+                buyer.getUpdatedAt(),
+                categories,
+                types,
+                modes,
+                projectCount,
+                skuCount,
+                echoCooperationStartedAt(buyer),
+                primary == null ? null : primary.getContactName(),
+                primary == null ? null : primary.getContactMobile(),
+                List.copyOf(children));
+    }
+
+    private static List<String> unionValues(List<String> own, List<BuyerListItem> children,
+                                            Function<BuyerListItem, List<String>> extractor) {
+        LinkedHashSet<String> values = new LinkedHashSet<>();
+        if (own != null) {
+            values.addAll(own);
+        }
+        for (BuyerListItem child : children) {
+            List<String> childValues = extractor.apply(child);
+            if (childValues != null) {
+                values.addAll(childValues);
+            }
+        }
+        return new ArrayList<>(values);
+    }
+
+    /**
+     * 一次读出范围内分销商的可售品类和商品类型。两类范围分开收集，不互相推导。
+     */
+    private void loadScopeCodes(List<Long> buyerIds, Map<Long, List<String>> sellableCategories,
+                                Map<Long, List<String>> productTypes) {
+        Map<Long, LinkedHashSet<String>> categories = new HashMap<>();
+        Map<Long, LinkedHashSet<String>> types = new HashMap<>();
         for (BuyerCategoryScopeDO scope : categoryScopeMapper.selectList(
                 new LambdaQueryWrapper<BuyerCategoryScopeDO>()
                         .in(BuyerCategoryScopeDO::getBuyerId, buyerIds)
                         .orderByAsc(BuyerCategoryScopeDO::getId))) {
-            if (scope.getScopeCode() == null) {
+            if (scope.getScopeCode() == null || scope.getBuyerId() == null) {
                 continue;
             }
             if (BuyerScopeKind.SELLABLE.name().equals(scope.getScopeKind())) {
-                sellableCategories.computeIfAbsent(scope.getBuyerId(), ignored -> new LinkedHashSet<>())
+                categories.computeIfAbsent(scope.getBuyerId(), ignored -> new LinkedHashSet<>())
                         .add(scope.getScopeCode());
             } else if (BuyerScopeKind.PRODUCT_TYPE.name().equals(scope.getScopeKind())) {
-                productTypes.computeIfAbsent(scope.getBuyerId(), ignored -> new LinkedHashSet<>())
+                types.computeIfAbsent(scope.getBuyerId(), ignored -> new LinkedHashSet<>())
                         .add(scope.getScopeCode());
             }
         }
+        categories.forEach((buyerId, codes) -> sellableCategories.put(buyerId, new ArrayList<>(codes)));
+        types.forEach((buyerId, codes) -> productTypes.put(buyerId, new ArrayList<>(codes)));
+    }
 
-        Map<Long, List<String>> cooperationModes = loadCooperationModes(buyerIds);
-
+    private Map<Long, BuyerContactDO> loadPrimaryContacts(List<Long> buyerIds) {
         Map<Long, BuyerContactDO> primaryContacts = new HashMap<>();
+        if (buyerIds.isEmpty()) {
+            return primaryContacts;
+        }
         for (BuyerContactDO contact : contactMapper.selectList(new LambdaQueryWrapper<BuyerContactDO>()
                 .in(BuyerContactDO::getBuyerId, buyerIds)
                 .orderByAsc(BuyerContactDO::getBuyerId, BuyerContactDO::getSortNo))) {
             primaryContacts.putIfAbsent(contact.getBuyerId(), contact);
         }
+        return primaryContacts;
+    }
 
-        Map<Long, Long> projectCounts = loadProjectCounts(buyerIds);
-
+    private Map<Long, Long> loadSkuCounts(List<Long> buyerIds) {
         Map<Long, Long> skuCounts = new HashMap<>();
+        if (buyerIds.isEmpty()) {
+            return skuCounts;
+        }
         productMapper.selectList(new LambdaQueryWrapper<BuyerProductDO>()
                         .select(BuyerProductDO::getBuyerId)
                         .in(BuyerProductDO::getBuyerId, buyerIds)
                         .eq(BuyerProductDO::getStatus, CatalogEntityStatus.ACTIVE.getCode()))
                 .forEach(product -> skuCounts.merge(product.getBuyerId(), 1L, Long::sum));
-
-        List<BuyerListItem> items = new ArrayList<>(buyers.size());
-        for (BuyerDO buyer : buyers) {
-            BuyerContactDO primary = primaryContacts.get(buyer.getId());
-            items.add(new BuyerListItem(
-                    buyer.getId(),
-                    buyer.getBuyerCode(),
-                    buyer.getBuyerName(),
-                    buyer.getDistributionLevel() == null ? null : buyer.getDistributionLevel().intValue(),
-                    BuyerStatus.fromCode(buyer.getStatus()).name(),
-                    buyer.getUpdatedAt(),
-                    new ArrayList<>(sellableCategories.getOrDefault(buyer.getId(), new LinkedHashSet<>())),
-                    new ArrayList<>(productTypes.getOrDefault(buyer.getId(), new LinkedHashSet<>())),
-                    cooperationModes.getOrDefault(buyer.getId(), List.of()),
-                    projectCounts.getOrDefault(buyer.getId(), 0L),
-                    skuCounts.getOrDefault(buyer.getId(), 0L),
-                    echoCooperationStartedAt(buyer),
-                    primary == null ? null : primary.getContactName(),
-                    primary == null ? null : primary.getContactMobile()));
-        }
-        return items;
+        return skuCounts;
     }
 
     private Map<Long, List<String>> loadCooperationModes(List<Long> buyerIds) {
@@ -501,32 +717,6 @@ public class BuyerAdminQueryService {
         return keys;
     }
 
-    private static List<Short> toStatusCodes(List<BuyerStatus> statuses) {
-        if (statuses == null || statuses.isEmpty()) {
-            return List.of();
-        }
-        List<Short> codes = new ArrayList<>();
-        for (BuyerStatus status : statuses) {
-            if (status != null) {
-                codes.add(status.getCode());
-            }
-        }
-        return codes;
-    }
-
-    private static List<Short> toShorts(List<Integer> values) {
-        if (values == null) {
-            return List.of();
-        }
-        List<Short> shorts = new ArrayList<>();
-        for (Integer value : values) {
-            if (value != null) {
-                shorts.add(value.shortValue());
-            }
-        }
-        return shorts;
-    }
-
     private static boolean hasText(String value) {
         return value != null && !value.isBlank();
     }
@@ -560,7 +750,7 @@ public class BuyerAdminQueryService {
             @Schema(description = "创建时间，Asia/Shanghai") LocalDateTime createdAt) {
     }
 
-    @Schema(description = "分销商列表行")
+    @Schema(description = "分销商列表行。一级的 children 为二级，二级的 children 为三级，三级为空列表")
     public record BuyerListItem(
             @Schema(description = "采购商内部主键") Long id,
             @Schema(description = "采购商永久业务编码") String buyerCode,
@@ -568,14 +758,15 @@ public class BuyerAdminQueryService {
             @Schema(description = "组织等级：1一级 2二级 3三级") Integer distributionLevel,
             @Schema(description = "管理状态：ACTIVE / SUSPENDED / BLACKLIST") String status,
             @Schema(description = "最后修改时间，Asia/Shanghai") LocalDateTime updatedAt,
-            @Schema(description = "可售品类") List<String> sellableCategories,
-            @Schema(description = "商品类型") List<String> productTypes,
-            @Schema(description = "合作模式") List<String> cooperationModes,
-            @Schema(description = "未归档关联项目数") long projectCount,
-            @Schema(description = "有效分销SKU商品数") long skuCount,
+            @Schema(description = "本级及可见下级可售品类并集") List<String> sellableCategories,
+            @Schema(description = "本级及可见下级商品类型并集") List<String> productTypes,
+            @Schema(description = "本级及可见下级合作模式并集") List<String> cooperationModes,
+            @Schema(description = "本级及可见下级未归档项目数合计") long projectCount,
+            @Schema(description = "本级及可见下级有效分销商品数合计") long skuCount,
             @Schema(description = "合作时间，取档案合作开始时间；未填或年份不晚于1970时回落创建时间，Asia/Shanghai") LocalDateTime cooperationTime,
             @Schema(description = "主联系人姓名") String primaryContactName,
-            @Schema(description = "主联系人手机号") String primaryContactMobile) {
+            @Schema(description = "主联系人手机号") String primaryContactMobile,
+            @Schema(description = "直属下级。一级包含二级，二级包含三级，三级为空列表") List<BuyerListItem> children) {
     }
 
     /**

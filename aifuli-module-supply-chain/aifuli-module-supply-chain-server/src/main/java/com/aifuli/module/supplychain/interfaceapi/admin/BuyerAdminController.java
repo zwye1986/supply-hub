@@ -96,8 +96,11 @@ public class BuyerAdminController {
     @GetMapping
     @PreAuthorize(BUYER_QUERY_EXPRESSION)
     @Operation(summary = "分页查询分销商",
-            description = "筛选用 buyerName/buyerCode/distributionLevels/cooperationModes/sellableCategories/status"
-                    + " 与 updatedFrom/To。view=simple 返回 {buyerCode,buyerName}[]；"
+            description = "默认分页按组织树返回：根列表只有一级，children 嵌套二级和三级。"
+                    + "pageNo/pageSize/total 只计一级。筛选用 buyerName/buyerCode/distributionLevels/"
+                    + "cooperationModes/sellableCategories/status 与 updatedFrom/To。"
+                    + "命中二级或三级时带回一级祖先，children 只保留命中分支。"
+                    + "view=simple 返回 {buyerCode,buyerName}[]；"
                     + "view=parent-options 收 excludeBuyerCode、forLevel。金额单位 CNY 分。",
             responses = @ApiResponse(responseCode = "200", description = "默认分销商分页响应",
                     content = @Content(schema = @Schema(implementation = BuyerPageResponse.class))))
