@@ -28,8 +28,10 @@ import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerMapper;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerProductMapper;
 import com.aifuli.module.supplychain.tradecore.buyer.domain.BuyerProductStatus;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferVersionMapper;
+import com.aifuli.module.supplychain.tradecore.supply.domain.OfferStatus;
 import com.aifuli.module.supplychain.tradecore.supply.domain.SupplierStatus;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.toolkit.support.SFunction;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
@@ -42,9 +44,12 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BUYER_PROFILE_NOT_FOUND;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.SUPPLIER_CODE_REQUIRED;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.SUPPLIER_NOT_FOUND;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -186,7 +191,7 @@ class ProductManagementPageQueryTest {
 
         ProductManagementPageQuery query = new ProductManagementPageQuery(
                 null, "腾讯", null, null, null, null, null, null,
-                null, null, null, null, null, null, null, 1, 20, null);
+                null, null, null, null, null, null, null, 1, 20, null, null);
 
         PageResult<ProductManagementSpuItem> result = service.managementPage(query);
 
@@ -265,7 +270,7 @@ class ProductManagementPageQueryTest {
 
         ProductManagementPageQuery query = new ProductManagementPageQuery(
                 null, null, null, null, null, CatalogEntityStatus.ACTIVE.getCode(), null,
-                "CARD_CODE_SECRET", null, null, null, null, null, null, null, 1, 20, null);
+                "CARD_CODE_SECRET", null, null, null, null, null, null, null, 1, 20, null, null);
 
         PageResult<ProductManagementSpuItem> result = service.managementPage(query);
 
@@ -325,7 +330,7 @@ class ProductManagementPageQueryTest {
 
         ProductManagementPageQuery query = new ProductManagementPageQuery(
                 null, null, null, null, null, null, null,
-                null, null, null, null, null, null, null, null, 1, 20, null);
+                null, null, null, null, null, null, null, null, 1, 20, null, null);
 
         PageResult<ProductManagementSpuItem> result = service.managementPage(query);
 
@@ -407,7 +412,7 @@ class ProductManagementPageQueryTest {
 
         service.managementPage(new ProductManagementPageQuery(
                 "JD", null, List.of("EQUITY_PRODUCT"), null, null, null, null, null,
-                null, null, null, null, null, null, null, 1, 20, null));
+                null, null, null, null, null, null, null, 1, 20, null, null));
 
         ArgumentCaptor<LambdaQueryWrapper<PlatformSpuDO>> captor =
                 ArgumentCaptor.forClass((Class) LambdaQueryWrapper.class);
@@ -424,7 +429,7 @@ class ProductManagementPageQueryTest {
 
         service.managementPage(new ProductManagementPageQuery(
                 "JD", null, null, null, null, null, null, null,
-                null, null, null, null, null, null, null, 1, 20, null));
+                null, null, null, null, null, null, null, 1, 20, null, null));
 
         ArgumentCaptor<LambdaQueryWrapper<PlatformSpuDO>> captor =
                 ArgumentCaptor.forClass((Class) LambdaQueryWrapper.class);
@@ -567,7 +572,7 @@ class ProductManagementPageQueryTest {
 
         PageResult<ProductManagementSpuItem> result = service.managementPage(new ProductManagementPageQuery(
                 null, "IQY-GOLD-Q", null, null, null, null, null, null,
-                null, null, null, null, null, null, null, 1, 20, null));
+                null, null, null, null, null, null, null, 1, 20, null, null));
 
         assertThat(result.getList()).singleElement().satisfies(item ->
                 assertThat(item.skus()).extracting(ProductCatalogQueryService.ProductManagementSkuItem::skuCode)
@@ -594,7 +599,7 @@ class ProductManagementPageQueryTest {
 
         PageResult<ProductManagementSpuItem> result = service.managementPage(new ProductManagementPageQuery(
                 null, null, null, null, null, null, null, null,
-                null, null, null, null, null, null, null, 1, 20, "BYR_A"));
+                null, null, null, null, null, null, null, 1, 20, "BYR_A", null));
 
         assertThat(result.getList()).singleElement().satisfies(item ->
                 assertThat(item.skus()).extracting(ProductCatalogQueryService.ProductManagementSkuItem::skuCode)
@@ -607,8 +612,85 @@ class ProductManagementPageQueryTest {
 
         assertThatThrownBy(() -> service.managementPage(new ProductManagementPageQuery(
                 null, null, null, null, null, null, null, null,
-                null, null, null, null, null, null, null, 1, 20, "BYR_MISSING")))
+                null, null, null, null, null, null, null, 1, 20, "BYR_MISSING", null)))
                 .hasFieldOrPropertyWithValue("code", BUYER_PROFILE_NOT_FOUND.getCode());
+    }
+
+    @Test
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    void managementPageExcludeAddedSupplierOffersDropsLiveSkuAndKeepsRetiredSibling() {
+        PlatformSpuDO spu = PlatformSpuDO.builder()
+                .id(1001L).spuCode("SPU_IQY").spuName("爱奇艺黄金会员").status(CatalogEntityStatus.ACTIVE.getCode())
+                .updatedAt(NOW).build();
+        PlatformSkuDO kept = PlatformSkuDO.builder()
+                .id(2001L).spuId(1001L).skuCode("IQY-GOLD-M").skuName("月卡")
+                .status(CatalogEntityStatus.ACTIVE.getCode()).build();
+        PlatformSkuDO live = PlatformSkuDO.builder()
+                .id(2002L).spuId(1001L).skuCode("IQY-GOLD-Q").skuName("季卡")
+                .status(CatalogEntityStatus.ACTIVE.getCode()).build();
+        PlatformSkuDO retired = PlatformSkuDO.builder()
+                .id(2003L).spuId(1001L).skuCode("IQY-GOLD-Y").skuName("年卡")
+                .status(CatalogEntityStatus.ACTIVE.getCode()).build();
+        when(supplierMapper.selectByCode("SPL_A")).thenReturn(
+                SupplierDO.builder().id(11L).supplierCode("SPL_A").supplierName("供应商甲").build());
+        when(offerMapper.selectList(any())).thenReturn(List.of(
+                SupplierOfferDO.builder().id(1L).supplierId(11L).platformSkuId(2002L)
+                        .status(OfferStatus.PUBLISHED.getCode()).build(),
+                SupplierOfferDO.builder().id(2L).supplierId(11L).platformSkuId(2003L)
+                        .status(OfferStatus.RETIRED.getCode()).build()));
+        when(spuMapper.selectPage(any(PageParam.class), any())).thenReturn(new PageResult<>(List.of(spu), 1L));
+        when(skuMapper.selectList(any())).thenReturn(List.of(kept, live, retired));
+
+        PageResult<ProductManagementSpuItem> result = service.managementPage(new ProductManagementPageQuery(
+                null, null, null, null, null, null, null, null,
+                null, null, null, null, "SPL_A", null, null, 1, 20, null, true));
+
+        assertThat(result.getList()).singleElement().satisfies(item ->
+                assertThat(item.skus()).extracting(ProductCatalogQueryService.ProductManagementSkuItem::skuCode)
+                        .containsExactly("IQY-GOLD-M", "IQY-GOLD-Y"));
+        verify(buyerMapper, never()).selectByBuyerCode(any());
+        ArgumentCaptor<LambdaQueryWrapper<SupplierOfferDO>> offerQuery =
+                ArgumentCaptor.forClass((Class) LambdaQueryWrapper.class);
+        verify(offerMapper, times(2)).selectList(offerQuery.capture());
+        assertThat(offerQuery.getAllValues().getFirst().getSqlSegment()).contains("supplier_id", "status");
+        assertThat(offerQuery.getAllValues().getFirst().getParamNameValuePairs().values())
+                .contains(11L, OfferStatus.RETIRED.getCode());
+    }
+
+    @Test
+    void managementPageExcludeAddedSupplierOffersRequiresSupplierCode() {
+        assertThatThrownBy(() -> service.managementPage(new ProductManagementPageQuery(
+                null, null, null, null, null, null, null, null,
+                null, null, null, null, "  ", null, null, 1, 20, null, true)))
+                .hasFieldOrPropertyWithValue("code", SUPPLIER_CODE_REQUIRED.getCode());
+        verify(supplierMapper, never()).selectByCode(any());
+    }
+
+    @Test
+    void managementPageExcludeAddedSupplierOffersRejectsUnknownSupplier() {
+        when(supplierMapper.selectByCode("SPL_MISSING")).thenReturn(null);
+
+        assertThatThrownBy(() -> service.managementPage(new ProductManagementPageQuery(
+                null, null, null, null, null, null, null, null,
+                null, null, null, null, "SPL_MISSING", null, null, 1, 20, null, true)))
+                .hasFieldOrPropertyWithValue("code", SUPPLIER_NOT_FOUND.getCode());
+    }
+
+    @Test
+    void managementPageSupplierCodeWithoutExcludeFlagStillKeepsOnlySuppliedSpus() {
+        when(supplierMapper.selectOne(org.mockito.ArgumentMatchers.<SFunction<SupplierDO, ?>>any(), eq("SPL_A"))).thenReturn(
+                SupplierDO.builder().id(11L).supplierCode("SPL_A").build());
+        when(offerMapper.selectList(any())).thenReturn(List.of());
+
+        PageResult<ProductManagementSpuItem> result = service.managementPage(new ProductManagementPageQuery(
+                null, null, null, null, null, null, null, null,
+                null, null, null, null, "SPL_A", null, null, 1, 20, null, null));
+
+        assertThat(result.getList()).isEmpty();
+        assertThat(result.getTotal()).isZero();
+        verify(offerMapper).selectList(any());
+        verify(spuMapper, never()).selectPage(any(PageParam.class), any());
+        verify(buyerMapper, never()).selectByBuyerCode(any());
     }
 
     @Test
@@ -639,7 +721,7 @@ class ProductManagementPageQueryTest {
 
         PageResult<ProductManagementSpuItem> result = service.managementPage(new ProductManagementPageQuery(
                 null, null, null, null, null, null, null, null,
-                null, null, null, null, null, null, null, 1, 20, null));
+                null, null, null, null, null, null, null, 1, 20, null, null));
 
         assertThat(result.getList().getFirst().skus().getFirst().supplyPrice()).isEqualTo(1800L);
     }
@@ -664,7 +746,7 @@ class ProductManagementPageQueryTest {
 
         PageResult<ProductManagementSpuItem> result = service.managementPage(new ProductManagementPageQuery(
                 null, null, null, null, null, null, null, null,
-                null, null, null, null, null, null, null, 1, 20, null));
+                null, null, null, null, null, null, null, 1, 20, null, null));
 
         assertThat(result.getList().getFirst().skus().getFirst().supplyPrice()).isEqualTo(20_000L);
         assertThat(result.getList().getFirst().skus().getFirst().suppliers()).hasSize(1);
@@ -691,7 +773,7 @@ class ProductManagementPageQueryTest {
 
         PageResult<ProductManagementSpuItem> result = service.managementPage(new ProductManagementPageQuery(
                 null, null, null, null, null, null, null, null,
-                null, null, 15_000L, 25_000L, null, null, null, 1, 20, null));
+                null, null, 15_000L, 25_000L, null, null, null, 1, 20, null, null));
 
         assertThat(result.getList().getFirst().skus().getFirst().supplyPrice()).isEqualTo(20_000L);
     }
@@ -711,6 +793,6 @@ class ProductManagementPageQueryTest {
     private static ProductManagementPageQuery managementQuery(List<String> productTypes, List<String> categoryIds) {
         return new ProductManagementPageQuery(
                 null, null, productTypes, categoryIds, null, null, null, null,
-                null, null, null, null, null, null, null, 1, 20, null);
+                null, null, null, null, null, null, null, 1, 20, null, null);
     }
 }

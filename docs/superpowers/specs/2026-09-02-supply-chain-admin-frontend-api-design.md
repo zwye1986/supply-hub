@@ -344,7 +344,7 @@ SPU / 供货范围写入的 `productClassification` 不走 `ClosedEnums`：类�
 ### 5.5 合作商品
 
 - `GET /supply-chain/suppliers/{supplierCode}/offers` 分页，筛选 `sellableCategory`/`productType`/`productClassification`
-- `POST /supply-chain/suppliers/{supplierCode}/offers` body `{ items: [...] }` 批量新增，默认 `PUBLISHED`
+- `POST /supply-chain/suppliers/{supplierCode}/offers` body `{ items: [...] }` 批量新增，默认 `PUBLISHED`。未退役的同一 SKU 再提交仍拒绝，不改成更新。新增供应商品选品走 `GET /supply-chain/products/management-page`，并传 `excludeAddedSupplierOffers=true` 与 `supplierCode` 排除未退役供应商品；省略该开关时 `supplierCode` 仍表示只看该供应商已供商品。已退役 SKU 会再次出现。不按供货配置三码收窄，也不改变 `buyerCode` 排除未移除分销商品。`supplierCode` 空白返回 `SUPPLIER_CODE_REQUIRED`，供应商不存在返回 `SUPPLIER_NOT_FOUND`。
 - `PUT /supply-chain/suppliers/{supplierCode}/offers/{offerNo}` 编辑（上架中改价只更新身份列，不写 OfferVersion；列表与定价按身份列回退）
 - `PUT /supply-chain/suppliers/{supplierCode}/fulfillment-scores` 人工录入稳定性/时效评分（可按 SKU 子集）
 - `PATCH /supply-chain/suppliers/{supplierCode}/offers/{offerNo}` `{ "status": "PUBLISHED"|"SUSPENDED" }` 上架/下架
@@ -531,6 +531,7 @@ O2O / INSTORE 仍 `buyerSettlementAmount = channelPayAmount`，不读三级价�
 | `BUYER_OPENING_ALREADY_DONE` | 分销商期初已入账，禁止再改余额字段 |
 | `BUYER_CREDIT_CODE_DUPLICATE` | 公司名称+统一社会信用代码联合重复 |
 | `INVOICE_FIELD_INVALID` | 开票信息字段不完整或与抬头类型冲突 |
+| `SUPPLIER_CODE_REQUIRED` | 排除已添加供应商品时必须指定供应商（`excludeAddedSupplierOffers=true` 但 `supplierCode` 空白） |
 
 原 `SUPPLIER_ENUM_NOT_OPEN` 收敛为 `ENUM_NOT_OPEN` 的别名或停止新抛，实现时只保留一个码。
 

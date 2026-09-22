@@ -570,6 +570,9 @@ class ProductCenterContractTest {
                 .contains("不按档案商品类型过滤");
         assertThat(managementPage.getAnnotation(Operation.class).description())
                 .contains("最低有效供货价");
+        assertThat(descriptions.get("excludeAddedSupplierOffers"))
+                .contains("未退役", "已退役")
+                .contains("SUPPLIER_CODE_REQUIRED");
     }
 
     /**

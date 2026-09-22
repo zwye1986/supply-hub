@@ -178,6 +178,8 @@ public interface SupplyChainErrorCodeConstants {
             error(1_050_001_131, "履约类型必须与平台SKU档案一致");
     ErrorCode PLATFORM_DEFAULT_PRICING_MISSING =
             error(1_050_001_132, "标准商品尚未配置默认定价，无法保存分销价");
+    ErrorCode SUPPLIER_CODE_REQUIRED =
+            error(1_050_001_133, "排除已添加供应商品时必须指定供应商");
 
     /** 订单详情不可用只作为成功响应中的详情标记，不作为 CommonResult 失败码。 */
     String DETAIL_UNAVAILABLE = "DETAIL_UNAVAILABLE";
@@ -314,7 +316,8 @@ public interface SupplyChainErrorCodeConstants {
             entry(ROUTING_RULE_LAST_CANNOT_REMOVE, RetryDirective.DO_NOT_RETRY),
             entry(ROUTING_RULE_VERSION_CONFLICT, RetryDirective.DO_NOT_RETRY),
             entry(ROUTING_RULE_FULFILLMENT_MISMATCH, RetryDirective.DO_NOT_RETRY),
-            entry(PLATFORM_DEFAULT_PRICING_MISSING, RetryDirective.DO_NOT_RETRY));
+            entry(PLATFORM_DEFAULT_PRICING_MISSING, RetryDirective.DO_NOT_RETRY),
+            entry(SUPPLIER_CODE_REQUIRED, RetryDirective.DO_NOT_RETRY));
 
     static RetryDirective retryDirective(int errorCode) {
         return RETRY_DIRECTIVES.getOrDefault(errorCode, RetryDirective.DO_NOT_RETRY);

@@ -29,6 +29,7 @@ import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierOff
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferVersionMapper;
+import com.aifuli.module.supplychain.tradecore.supply.domain.OfferStatus;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.annotation.JsonFormat;
 import com.fasterxml.jackson.annotation.JsonProperty;
@@ -55,6 +56,8 @@ import java.util.stream.Collectors;
 import static com.aifuli.framework.common.exception.util.ServiceExceptionUtil.exception;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BUYER_PROFILE_NOT_FOUND;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PLATFORM_SPU_NOT_FOUND;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.SUPPLIER_CODE_REQUIRED;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.SUPPLIER_NOT_FOUND;
 
 /**
  * 商品中心 SPU 聚合查询。
@@ -442,7 +445,11 @@ public class ProductCatalogQueryService {
         String keyword = hasText(query.keyword()) ? query.keyword().trim() : null;
         KeywordSkuMatch keywordMatch = keywordSkuMatch(keyword);
         Set<Long> keywordMatchedSpuIds = keywordMatch.spuIds();
-        Set<Long> excludedSkuIds = excludedActiveBuyerSkuIds(query.buyerCode());
+        Set<Long> excludedSkuIds = new HashSet<>(excludedActiveBuyerSkuIds(query.buyerCode()));
+        boolean excludeAddedSupplierOffers = Boolean.TRUE.equals(query.excludeAddedSupplierOffers());
+        if (excludeAddedSupplierOffers) {
+            excludedSkuIds.addAll(liveSupplierOfferSkuIds(query.supplierCode()));
+        }
 
         // 1. SKU 商品状态 / 兑换方式 / 市场价区间预过滤。
         // 设计见 docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#419-管理端商品列表聚合查询get-supply-chainproductsmanagement-page
@@ -457,10 +464,12 @@ public class ProductCatalogQueryService {
             }
         }
 
-        // 2. 供应商 / 供货价区间预过滤
-        if (hasText(query.supplierCode()) || query.supplyPriceMin() != null || query.supplyPriceMax() != null) {
+        // 2. 供应商 / 供货价区间预过滤。排除已添加供应商品时，supplierCode 不再表示「只看该供应商已供商品」。
+        // 设计见 docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线（d46）
+        boolean supplierInclusion = hasText(query.supplierCode()) && !excludeAddedSupplierOffers;
+        if (supplierInclusion || query.supplyPriceMin() != null || query.supplyPriceMax() != null) {
             Long supplierId = null;
-            if (hasText(query.supplierCode())) {
+            if (supplierInclusion) {
                 SupplierDO supplier = supplierMapper.selectOne(SupplierDO::getSupplierCode, query.supplierCode().trim());
                 if (supplier == null) {
                     return new PageResult<>(List.of(), 0L);
@@ -750,6 +759,32 @@ public class ProductCatalogQueryService {
     }
 
     /**
+     * 新增供应商品选品要去掉该供应商未退役 Offer。已退役行不排除，供货配置三码不参与。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线}（d46）。
+     */
+    private Set<Long> liveSupplierOfferSkuIds(String supplierCode) {
+        if (!hasText(supplierCode)) {
+            throw exception(SUPPLIER_CODE_REQUIRED);
+        }
+        SupplierDO supplier = supplierMapper.selectByCode(supplierCode.trim());
+        if (supplier == null) {
+            throw exception(SUPPLIER_NOT_FOUND);
+        }
+        List<SupplierOfferDO> offers = offerMapper.selectList(new LambdaQueryWrapper<SupplierOfferDO>()
+                .eq(SupplierOfferDO::getSupplierId, supplier.getId())
+                .ne(SupplierOfferDO::getStatus, OfferStatus.RETIRED.getCode()));
+        Set<Long> skuIds = new HashSet<>();
+        for (SupplierOfferDO offer : offers) {
+            if (offer.getPlatformSkuId() == null || offer.getStatus() == null
+                    || offer.getStatus() == OfferStatus.RETIRED.getCode()) {
+                continue;
+            }
+            skuIds.add(offer.getPlatformSkuId());
+        }
+        return skuIds;
+    }
+
+    /**
      * 分销商必须存在。已有效关联的平台 SKU 从新增分销商品候选中排除，已移除行不排除。
      * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#419-管理端商品列表聚合查询get-supply-chainproductsmanagement-page}。
      */
@@ -848,7 +883,8 @@ public class ProductCatalogQueryService {
             LocalDateTime updateTimeEnd,
             Integer pageNo,
             Integer pageSize,
-            String buyerCode) {
+            String buyerCode,
+            Boolean excludeAddedSupplierOffers) {
     }
 
     /** 供应商精简信息（用于支撑原型列表多供应商换行展示）。 */

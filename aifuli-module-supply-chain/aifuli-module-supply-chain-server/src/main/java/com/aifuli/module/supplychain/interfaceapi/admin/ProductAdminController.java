@@ -173,6 +173,8 @@ public class ProductAdminController {
             description = "支撑运营管理端商品列表，以及新增分销商品选品。"
                     + "keyword 包含匹配 SPU 名称、SPU 编码、副标题、SKU 名称、SKU 编码；只命中 SKU 时不返回未命中规格。"
                     + "buyerCode 排除该分销商未移除的分销商品，已移除 SKU 会再次出现，且不按档案商品类型收窄。"
+                    + "excludeAddedSupplierOffers=true 时排除该供应商未退役的供应商品，已退役 SKU 会再次出现；"
+                    + "省略该开关时 supplierCode 仍只保留该供应商已供商品。"
                     + "supplyPrice 为当前最低有效供货价：有效报价版本优先，否则回退合作商品身份列，单位 CNY 分。")
     public CommonResult<PageResult<ProductCatalogQueryService.ProductManagementSpuItem>> managementPage(
             @Parameter(description = "业务 Tab 标识", example = "VIRTUAL_CARD") @RequestParam(required = false) String tabCode,
@@ -195,7 +197,16 @@ public class ProductAdminController {
             @Parameter(description = "市场价最大金额，单位CNY分", example = "5000") @RequestParam(required = false) Long marketPriceMax,
             @Parameter(description = "供货价最小金额，单位CNY分", example = "800") @RequestParam(required = false) Long supplyPriceMin,
             @Parameter(description = "供货价最大金额，单位CNY分", example = "4000") @RequestParam(required = false) Long supplyPriceMax,
-            @Parameter(description = "供应商编码", example = "SUP_01ABC") @RequestParam(required = false) String supplierCode,
+            @Parameter(description = "供应商编码。省略 excludeAddedSupplierOffers 或为 false 时，"
+                    + "只保留该供应商已有未退役供应商品的 SPU", example = "SUP_01ABC")
+            @RequestParam(required = false) String supplierCode,
+            @Parameter(description = "是否排除该供应商已添加且未退役的供应商品。省略或 false 不排除，"
+                    + "supplierCode 仍表示只看该供应商已供商品。"
+                    + "true 时必须同时传 supplierCode，去掉未退役 Offer，已退役 SKU 会再次出现，"
+                    + "且不再按已供商品收窄，也不按供货配置三码收窄。"
+                    + "supplierCode 空白返回 SUPPLIER_CODE_REQUIRED；供应商不存在返回 SUPPLIER_NOT_FOUND",
+                    example = "true")
+            @RequestParam(required = false) Boolean excludeAddedSupplierOffers,
             @Parameter(description = "分销商永久业务编码。传入后排除该分销商未移除的分销商品；已移除 SKU 会再次出现。"
                     + "不按档案商品类型过滤", example = "BYR_01ABC")
             @RequestParam(required = false) String buyerCode,
@@ -206,7 +217,7 @@ public class ProductAdminController {
         return success(queryService.managementPage(new ProductCatalogQueryService.ProductManagementPageQuery(
                 tabCode, keyword, productType, categoryId, brandId, status, unshelveMode, fulfillmentType,
                 marketPriceMin, marketPriceMax, supplyPriceMin, supplyPriceMax, supplierCode,
-                updateTimeStart, updateTimeEnd, pageNo, pageSize, buyerCode)));
+                updateTimeStart, updateTimeEnd, pageNo, pageSize, buyerCode, excludeAddedSupplierOffers)));
     }
 
     @PutMapping("/batch-status")
