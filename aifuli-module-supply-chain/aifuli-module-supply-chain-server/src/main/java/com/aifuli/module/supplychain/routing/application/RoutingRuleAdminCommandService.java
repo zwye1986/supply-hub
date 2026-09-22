@@ -94,9 +94,11 @@ public class RoutingRuleAdminCommandService {
     public RoutingRuleView create(NormalizedRulePatch patch, Long operatorId) {
         Objects.requireNonNull(patch, "patch");
         Objects.requireNonNull(operatorId, "operatorId");
-        log.info("路由规则页新增 operatorId={} routeMode={} buyerCode={} skuCode={} suppliers={} bootstrapEligible=true",
+        // 仅当发布前尚无启用中的 STANDARD_PRODUCT 策略时为引导首版；已有启用策略时后续 POST 不是 bootstrap。
+        boolean bootstrapEligible = policyMapper.selectActiveByType(RoutingType.STANDARD_PRODUCT.code()).isEmpty();
+        log.info("路由规则页新增 operatorId={} routeMode={} buyerCode={} skuCode={} suppliers={} bootstrapEligible={}",
                 operatorId, patch.routeMode(), patch.buyerCode(), patch.skuCode(),
-                patch.orderedSupplierCodes());
+                patch.orderedSupplierCodes(), bootstrapEligible);
         String focus = publishPatchedRules(true, (current, now) -> {
             String ruleCode = generateRuleCode(current, now);
             List<MutableRuleState> next = new ArrayList<>(current);
