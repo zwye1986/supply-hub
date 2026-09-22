@@ -161,7 +161,7 @@ class BuyerAdminRestContractTest {
         assertThat(itemSchema.getProperties().get("projectCount").getDescription()).isEqualTo("未归档关联项目数");
         assertThat(itemSchema.getProperties().get("skuCount").getDescription()).isEqualTo("有效分销SKU商品数");
         assertThat(itemSchema.getProperties().get("cooperationTime").getDescription())
-                .isEqualTo("合作时间，取档案合作开始时间，Asia/Shanghai");
+                .isEqualTo("合作时间，取档案合作开始时间；未填或年份不晚于1970时回落创建时间，Asia/Shanghai");
     }
 
     @SuppressWarnings("rawtypes")

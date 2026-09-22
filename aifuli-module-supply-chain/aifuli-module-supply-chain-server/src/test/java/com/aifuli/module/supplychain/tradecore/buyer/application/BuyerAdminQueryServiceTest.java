@@ -123,6 +123,55 @@ class BuyerAdminQueryServiceTest {
     }
 
     @Test
+    @SuppressWarnings("unchecked")
+    void pageFallsBackToCreatedAtWhenCooperationStartedAtIsEpoch() {
+        LocalDateTime createdAt = LocalDateTime.of(2026, 9, 21, 15, 0);
+        BuyerDO buyer = BuyerDO.builder()
+                .id(22L)
+                .buyerCode("BYR_EPOCH")
+                .buyerName("纪元合作时间")
+                .distributionLevel((short) 1)
+                .status(BuyerStatus.ACTIVE.getCode())
+                .cooperationStartedAt(LocalDateTime.of(1970, 1, 1, 8, 0))
+                .createdAt(createdAt)
+                .updatedAt(createdAt)
+                .build();
+        when(buyerMapper.selectPage(any(PageParam.class), any(LambdaQueryWrapper.class)))
+                .thenReturn(new PageResult<>(List.of(buyer), 1L));
+        when(categoryScopeMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of());
+        when(cooperationModeMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of());
+        when(contactMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of());
+        when(projectMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of());
+        when(productMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of());
+
+        var result = service.page(new BuyerAdminQueryService.BuyerPageQuery(
+                null, null, List.of(), List.of(), List.of(), List.of(), null, null, 1, 20));
+
+        assertThat(result.getList().getFirst().cooperationTime()).isEqualTo(createdAt);
+    }
+
+    @Test
+    void getFallsBackToCreatedAtWhenCooperationStartedAtIsMissing() {
+        LocalDateTime createdAt = LocalDateTime.of(2026, 9, 3, 18, 45);
+        BuyerDO buyer = BuyerDO.builder()
+                .id(23L)
+                .buyerCode("BYR_NO_START")
+                .buyerName("未填合作时间")
+                .distributionLevel((short) 1)
+                .status(BuyerStatus.ACTIVE.getCode())
+                .createdAt(createdAt)
+                .build();
+        when(buyerMapper.selectByBuyerCode("BYR_NO_START")).thenReturn(buyer);
+        when(contactMapper.selectByBuyerId(23L)).thenReturn(List.of());
+        when(fileRefMapper.selectByBuyerId(23L)).thenReturn(List.of());
+        when(integrationModeMapper.selectByBuyerId(23L)).thenReturn(List.of());
+        when(cooperationModeMapper.selectByBuyerId(23L)).thenReturn(List.of());
+        when(categoryScopeMapper.selectByBuyerId(23L)).thenReturn(List.of());
+
+        assertThat(service.get("BYR_NO_START").cooperationStartedAt()).isEqualTo(createdAt);
+    }
+
+    @Test
     void getReturnsSellableCategoriesAndProductTypesFromIndependentScopeRows() {
         BuyerDO buyer = BuyerDO.builder()
                 .id(21L)

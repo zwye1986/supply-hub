@@ -192,7 +192,7 @@ public class BuyerAdminQueryService {
                 buyer.getSupplyPreference(),
                 buyer.getSettlementMethod(),
                 buyer.getSettlementCycleDays(),
-                buyer.getCooperationStartedAt(),
+                echoCooperationStartedAt(buyer),
                 buyer.getCooperationNote(),
                 buyer.getLegalEntityName(),
                 buyer.getCreditCode(),
@@ -434,7 +434,7 @@ public class BuyerAdminQueryService {
                     cooperationModes.getOrDefault(buyer.getId(), List.of()),
                     projectCounts.getOrDefault(buyer.getId(), 0L),
                     skuCounts.getOrDefault(buyer.getId(), 0L),
-                    buyer.getCooperationStartedAt(),
+                    echoCooperationStartedAt(buyer),
                     primary == null ? null : primary.getContactName(),
                     primary == null ? null : primary.getContactMobile()));
         }
@@ -460,6 +460,16 @@ public class BuyerAdminQueryService {
                         .ne(BuyerProjectDO::getStatus, BuyerProjectStatus.ARCHIVED.getCode()))
                 .forEach(project -> projectCounts.merge(project.getBuyerId(), 1L, Long::sum));
         return projectCounts;
+    }
+
+    /**
+     * 列表合作时间与详情合作开始时间共用回显口径：未填或 Unix 纪元脏值回落到创建时间。
+     * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#62-列表与档案}。
+     */
+    private static LocalDateTime echoCooperationStartedAt(BuyerDO buyer) {
+        LocalDateTime startedAt = BuyerAdminCommandService.normalizeCooperationStartedAt(
+                buyer.getCooperationStartedAt());
+        return startedAt != null ? startedAt : buyer.getCreatedAt();
     }
 
     private static String firstVersion(BuyerDO buyer) {
@@ -563,7 +573,7 @@ public class BuyerAdminQueryService {
             @Schema(description = "合作模式") List<String> cooperationModes,
             @Schema(description = "未归档关联项目数") long projectCount,
             @Schema(description = "有效分销SKU商品数") long skuCount,
-            @Schema(description = "合作时间，取档案合作开始时间，Asia/Shanghai") LocalDateTime cooperationTime,
+            @Schema(description = "合作时间，取档案合作开始时间；未填或年份不晚于1970时回落创建时间，Asia/Shanghai") LocalDateTime cooperationTime,
             @Schema(description = "主联系人姓名") String primaryContactName,
             @Schema(description = "主联系人手机号") String primaryContactMobile) {
     }
@@ -584,7 +594,7 @@ public class BuyerAdminQueryService {
             @Schema(description = "供货择优倾向，不改变路由引擎") String supplyPreference,
             @Schema(description = "结算方式封闭枚举") String settlementMethod,
             @Schema(description = "结算周期天数") Integer settlementCycleDays,
-            @Schema(description = "合作开始时间，Asia/Shanghai") LocalDateTime cooperationStartedAt,
+            @Schema(description = "合作开始时间；未填或年份不晚于1970时回落创建时间，Asia/Shanghai") LocalDateTime cooperationStartedAt,
             @Schema(description = "合作说明") String cooperationNote,
             @Schema(description = "公司名称") String legalEntityName,
             @Schema(description = "统一社会信用代码") String creditCode,

@@ -140,6 +140,55 @@ class BuyerAdminCommandServiceTest {
     }
 
     @Test
+    void createReplacesUnsetCooperationStartedAtWithNow() {
+        when(businessNoGenerator.next(BusinessNoPrefixes.BYR)).thenReturn("BYR_EPOCH000000000000000001");
+        when(buyerMapper.insert(any(BuyerDO.class))).thenAnswer(inv -> {
+            BuyerDO row = inv.getArgument(0);
+            row.setId(9L);
+            return 1;
+        });
+
+        service.create(commandWithCooperation(LocalDateTime.of(1970, 1, 1, 8, 0)));
+
+        ArgumentCaptor<BuyerDO> inserted = ArgumentCaptor.forClass(BuyerDO.class);
+        verify(buyerMapper).insert(inserted.capture());
+        assertThat(inserted.getValue().getCooperationStartedAt())
+                .isEqualTo(LocalDateTime.of(2026, 9, 4, 11, 0));
+    }
+
+    @Test
+    void createKeepsExplicitCooperationStartedAt() {
+        when(businessNoGenerator.next(BusinessNoPrefixes.BYR)).thenReturn("BYR_START000000000000000001");
+        when(buyerMapper.insert(any(BuyerDO.class))).thenAnswer(inv -> {
+            BuyerDO row = inv.getArgument(0);
+            row.setId(10L);
+            return 1;
+        });
+        LocalDateTime startedAt = LocalDateTime.of(2026, 9, 1, 9, 30);
+
+        service.create(commandWithCooperation(startedAt));
+
+        ArgumentCaptor<BuyerDO> inserted = ArgumentCaptor.forClass(BuyerDO.class);
+        verify(buyerMapper).insert(inserted.capture());
+        assertThat(inserted.getValue().getCooperationStartedAt()).isEqualTo(startedAt);
+    }
+
+    @Test
+    void updateIgnoresEpochCooperationStartedAt() {
+        BuyerDO existing = buyer(BuyerStatus.ACTIVE);
+        existing.setBuyerCode("BYR_EXISTING");
+        existing.setCooperationStartedAt(LocalDateTime.of(2026, 8, 1, 9, 0));
+        when(buyerMapper.selectByBuyerCodeForUpdate("BYR_EXISTING")).thenReturn(existing);
+
+        service.update(updateWithCooperation(LocalDateTime.of(1970, 1, 1, 8, 0)));
+
+        ArgumentCaptor<BuyerDO> updated = ArgumentCaptor.forClass(BuyerDO.class);
+        verify(buyerMapper).updateById(updated.capture());
+        assertThat(updated.getValue().getCooperationStartedAt())
+                .isEqualTo(LocalDateTime.of(2026, 8, 1, 9, 0));
+    }
+
+    @Test
     void createRejectsUnknownSellableCategoryCode() {
         CreateBuyerCommand command = new CreateBuyerCommand(
                 "测试分销商", List.of(new ContactLine("张三", "13800138000", "a@b.c")),
@@ -207,6 +256,16 @@ class BuyerAdminCommandServiceTest {
                 opening, 1L, "buyer-admin-test");
     }
 
+    private static CreateBuyerCommand commandWithCooperation(LocalDateTime cooperationStartedAt) {
+        return new CreateBuyerCommand(
+                "测试分销商", List.of(new ContactLine("张三", "13800138000", "a@b.c")),
+                null, null, null, null, null, 7, List.of(), List.of(),
+                cooperationStartedAt, null, "测试科技有限公司", "91110000000000001X",
+                "李四", "13900139000", "上海市浦东新区", "测试银行", "6222021234567890",
+                null, null, null, null, List.of(), List.of(), List.of(), List.of(),
+                0L, 1L, "buyer-admin-test");
+    }
+
     private static UpdateBuyerCommand updateWithOpening(Long opening) {
         return new UpdateBuyerCommand(
                 "BYR_EXISTING", "测试分销商", List.of(new ContactLine("张三", "13800138000", "a@b.c")),
@@ -215,6 +274,16 @@ class BuyerAdminCommandServiceTest {
                 "李四", "13900139000", "上海市浦东新区", "测试银行", "6222021234567890",
                 null, null, null, null, List.of(), List.of(), List.of(), List.of(),
                 opening, 1L);
+    }
+
+    private static UpdateBuyerCommand updateWithCooperation(LocalDateTime cooperationStartedAt) {
+        return new UpdateBuyerCommand(
+                "BYR_EXISTING", "测试分销商", List.of(new ContactLine("张三", "13800138000", "a@b.c")),
+                null, 1, null, null, null, 7, List.of(), List.of(),
+                cooperationStartedAt, null, "测试科技有限公司", "91110000000000001X",
+                "李四", "13900139000", "上海市浦东新区", "测试银行", "6222021234567890",
+                null, null, null, null, List.of(), List.of(), List.of(), List.of(),
+                null, 1L);
     }
 
     private static BuyerDO buyer(BuyerStatus status) {

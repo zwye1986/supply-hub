@@ -399,7 +399,7 @@ SKU 未填供货上限时继承供货配置 `maxQuantity`；未填最低起购�
 - `productTypes[]`：`sc_buyer_category_scope` 中 `scope_kind=PRODUCT_TYPE` 的商品类型枚举名；`sellableCategories[]` 继续只读取 `scope_kind=SELLABLE`，两者互相独立，禁止相互推导；
 - `projectCount`：该分销商未归档项目数，`ARCHIVED` 项目不计入；
 - `skuCount`：该分销商状态为有效的分销商品数，已移除分销商品不计入；
-- `cooperationTime`：列表展示用合作时间，与档案 `cooperationStartedAt` 取同一 `sc_buyer.cooperation_started_at` 值。
+- `cooperationTime`：列表展示用合作时间，与详情 `cooperationStartedAt` 取同一回显口径，来源是 `sc_buyer.cooperation_started_at`。管理端日期选择器空值常以 Unix 0 提交。`null`、Unix 0、年份 `<=1970` 视为未填：创建回落当前业务时间（Asia/Shanghai），更新忽略该字段以免用空值覆盖已有合作开始时间；列表与详情读取历史脏值时回落到 `created_at`。已填写且年份晚于 1970 的值原样回传。
 
 分页聚合必须按当页 Buyer 集合批量读取，禁止为每行追加项目数、SKU 数等 N+1 查询。详情的 `sellableCategories[]` / `productTypes[]` 只返回已经保存的独立范围行；历史记录缺少 `SELLABLE` 行时返回空数组，由前端按新字段重新保存或由有明确业务映射的数据修复任务补齐，后端不得根据商品类型猜测分销品类。
 
