@@ -1,5 +1,6 @@
 package com.aifuli.module.supplychain.tradecore.catalog.pricing;
 
+import com.aifuli.framework.common.exception.ServiceException;
 import com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock;
 import com.aifuli.module.supplychain.integration.system.TaxRateDictionaryAdapter;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerDO;
@@ -13,6 +14,7 @@ import com.aifuli.module.supplychain.tradecore.buyer.domain.BuyerStatus;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuPricingDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuPricingVersionDO;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSpuDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerSkuPricingMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerSkuPricingVersionMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
@@ -21,6 +23,7 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuPric
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSpuMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProjectSkuPricingMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProjectSkuPricingVersionMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
 import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericPricingCalculator.FixedOperator;
 import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericPricingCalculator.FormulaRule;
 import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericPricingCalculator.HideRule;
@@ -32,6 +35,11 @@ import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericPricingCal
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferVersionMapper;
+import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierDO;
+import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierOfferDO;
+import com.aifuli.module.supplychain.tradecore.supply.domain.OfferPriceMode;
+import com.aifuli.module.supplychain.tradecore.supply.domain.OfferStatus;
+import com.aifuli.module.supplychain.tradecore.supply.domain.SupplierStatus;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -41,6 +49,7 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PLATFORM_DEFAULT_PRICING_MISSING;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
@@ -174,6 +183,48 @@ class GenericBatchPricingServiceTest {
         assertThat(detail.marketPriceCents()).isNull();
         verify(platformVersionMapper, never()).selectById(any());
         verifyNoInteractions(taxDictionary);
+    }
+
+    @Test
+    void saveBuyerRejectsMissingPlatformDefaultPricing() {
+        when(buyerMapper.selectByBuyerCodeForUpdate("BYR_A")).thenReturn(
+                BuyerDO.builder().id(5L).buyerCode("BYR_A").status(BuyerStatus.ACTIVE.getCode()).build());
+        when(buyerProductMapper.selectByCodeForUpdate("BPD_1")).thenReturn(BuyerProductDO.builder()
+                .id(77L).buyerProductCode("BPD_1").buyerId(5L).platformSkuId(11L)
+                .status(BuyerProductStatus.ACTIVE.getCode()).build());
+        when(skuMapper.selectById(11L)).thenReturn(PlatformSkuDO.builder().id(11L).skuCode("SKU_1").build());
+        when(platformPricingMapper.selectById(11L)).thenReturn(null);
+
+        assertThatThrownBy(() -> service.saveBuyer("BYR_A", List.of("BPD_1"),
+                GenericBatchPricingService.ProjectOverrides.allInherited(), 1L))
+                .isInstanceOf(ServiceException.class)
+                .extracting(ex -> ((ServiceException) ex).getCode())
+                .isEqualTo(PLATFORM_DEFAULT_PRICING_MISSING.getCode());
+        verify(buyerPricingMapper, never()).insert(any(com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerSkuPricingDO.class));
+        verify(buyerVersionMapper, never()).insert(any(com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerSkuPricingVersionDO.class));
+    }
+
+    @Test
+    void previewUsesFixedIdentitySupplyPriceWhenOfferHasNoVersion() {
+        PlatformSkuDO sku = PlatformSkuDO.builder().id(8L).skuCode("SKU_1").spuId(2L)
+                .marketPrice(10_000L).suggestedSalePrice(9_800L)
+                .status(CatalogEntityStatus.ACTIVE.getCode()).build();
+        when(skuMapper.selectByCode("SKU_1")).thenReturn(sku);
+        when(spuMapper.selectById(2L)).thenReturn(PlatformSpuDO.builder().id(2L)
+                .status(CatalogEntityStatus.ACTIVE.getCode()).build());
+        when(taxDictionary.requireEnabled(any(), anyString())).thenReturn(config().taxMetadata());
+        when(offerMapper.selectPublishedBySku(8L)).thenReturn(List.of(
+                SupplierOfferDO.builder().id(1L).platformSkuId(8L).supplierId(4L)
+                        .status(OfferStatus.PUBLISHED.getCode())
+                        .priceMode(OfferPriceMode.FIXED.name())
+                        .draftUnitPrice(8_000L).build()));
+        when(supplierMapper.selectById(4L)).thenReturn(
+                SupplierDO.builder().id(4L).status(SupplierStatus.ACTIVE.getCode()).build());
+
+        List<GenericBatchPricingService.PricingPreview> previews = service.previewPlatform(List.of("SKU_1"), config());
+
+        assertThat(previews.getFirst().supplyPriceCents()).isEqualTo(8_000L);
+        verify(offerVersionMapper, never()).selectById(any());
     }
 
     private static PricingConfig config() {

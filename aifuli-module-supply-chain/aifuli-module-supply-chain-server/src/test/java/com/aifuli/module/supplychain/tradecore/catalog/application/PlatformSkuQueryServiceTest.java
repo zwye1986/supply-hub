@@ -241,4 +241,32 @@ class PlatformSkuQueryServiceTest {
         assertThat(row.marketPriceCents()).isEqualTo(3_000L);
         assertThat(row.supplyPriceCents()).isEqualTo(1_800L);
     }
+
+    @Test
+    void projectsFixedIdentitySupplyPriceWhenOfferHasNoVersion() {
+        PlatformSpuDO spu = PlatformSpuDO.builder()
+                .id(8L).spuCode("SPU_IQY").spuName("爱奇艺黄金会员")
+                .status(CatalogEntityStatus.ACTIVE.getCode()).build();
+        PlatformSkuDO sku = PlatformSkuDO.builder()
+                .id(11L).skuCode("IQY-GOLD-M").spuId(8L).skuName("月卡")
+                .suggestedSalePrice(9_800L)
+                .status(CatalogEntityStatus.ACTIVE.getCode())
+                .createdAt(LocalDateTime.of(2026, 9, 22, 10, 0)).build();
+        when(spuMapper.selectList(any())).thenReturn(List.of(spu));
+        when(skuMapper.selectPage(any(PageParam.class), any()))
+                .thenReturn(new PageResult<>(List.of(sku), 1L));
+        when(offerMapper.selectList(any())).thenReturn(List.of(
+                SupplierOfferDO.builder().id(1L).platformSkuId(11L).supplierId(4L)
+                        .status(OfferStatus.PUBLISHED.getCode())
+                        .priceMode("FIXED").draftUnitPrice(20_000L).build()));
+        when(supplierMapper.selectList(any())).thenReturn(List.of(
+                SupplierDO.builder().id(4L).status(SupplierStatus.ACTIVE.getCode()).build()));
+
+        PlatformSkuQueryService.SkuListItem row = service.page(
+                new PlatformSkuQueryService.SkuPageQuery(
+                        null, null, null, null, null, null, null, 1, 10))
+                .getList().getFirst();
+
+        assertThat(row.supplyPriceCents()).isEqualTo(20_000L);
+    }
 }

@@ -65,8 +65,8 @@ public class PlatformSkuAdminController {
                     + "不按分销商档案的可售品类或商品类型收窄，类型筛选请传 productType。"
                     + "projectCode 只返回所属分销商已有分销商品且项目目录尚未关联的 SKU。"
                     + "categoryName 是 SPU 主类目名称，归档或未挂类目为空，只展示、不参与筛选。"
-                    + "supplyPriceCents 是当前最低有效供货价，单位 CNY 分：供应商启用、Offer 已发布、"
-                    + "当前版本已到 validFrom 且未到 validTo，多条取最低；没有有效报价为空，0 是有效价格。"
+                    + "supplyPriceCents 是当前最低有效供货价，单位 CNY 分：供应商启用、Offer 已发布；"
+                    + "当前版本有效则用版本单价，否则回退合作商品身份列，多条取最低；没有有效报价为空，0 是有效价格。"
                     + "不要调用 /page。")
     public CommonResult<PageResult<SkuListItem>> page(
             @Parameter(description = "包含匹配 SKU 名称、SKU 编码、SPU 名称、SPU 编码。省略或空白不筛选",

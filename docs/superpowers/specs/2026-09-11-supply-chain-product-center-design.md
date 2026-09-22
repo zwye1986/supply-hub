@@ -51,6 +51,7 @@
 | **d41** | **供货配置查询回显 categoryId（归档即视为不可回显）** | `GET /supply-chain/suppliers/{supplierCode}/supply-scopes` 与供应商详情 `scopes[]` 的 `SupplyScopeView` 新增只读字段 `categoryId`：`productClassification` 为未归档类目编码（`sc_product_category.category_code`）时经 `CategoryQueryService.resolveCategoryIdsByCodes` 批量解析回填内部主键；为封闭枚举名、编码已删除或类目已归档时为 `null`（归档即视为不可回显，前端兜底展示编码）。批量解析一次查库。`PUT` 保存不接收该字段，写入口径不变。 | 前端类目树级联组件需内部主键回显，当前只回编码无法定位节点 |
 | **d42** | **管理端商品列表 categoryId 含子类目** | 管理端商品列表从类目树勾选父节点时，语义为「该节点及其未归档子孙」下的商品。`GET /supply-chain/products/management-page` 在 d40 规范化出选中主键后，一次加载未归档类目（`status != 90`），按 `parent_id` 在内存 BFS 展开子孙，再与选中主键去重合并，以 `primary_category_id IN (选中 ∪ 未归档子孙)` 过滤。仍只匹配 SPU 主分类，不扩展辅助分类；归档子孙不进入展开集；选中主键即使自身已归档仍保留，以便历史主键精确命中。未传或规范化后为空则不查类目树、不加分类条件。无限级（d5）下用访问集合防环，禁止递归 SQL。 | 勾选父级（如 id=1）时须命中挂在叶子（如 id=3）上的商品，避免精确匹配空页 |
 | **d43** | **SKU×供应商履约能力评分人工挂点** | 稳定性/时效评分写在 `sc_supplier_offer` 身份列（Liquibase `042`/`043`），新建默认 80。供应商合作商品与 `GET/PUT /supply-chain/products/skus/{skuCode}/fulfillment-scores` 读写同一事实。`management-page` 的 `suppliers[]` 不加分数。路由引擎本期不读分。权威契约见 `docs/superpowers/specs/2026-09-21-offer-fulfillment-score-design.md`。 | 对齐新 PRD 8.4.1.1 / 8.1.3.4，纠正独立路由能力配置挂点 |
+| **d44** | **最低有效供货价版本优先、身份列回退** | 商品列表、标品 SKU 查询与通用定价共用最低有效供货价：当前报价版本有效则用 `supplier_settlement_unit_price`；否则 `FIXED` 用 `draft_unit_price`，`DISCOUNT` 用建议价×折扣基点并 `HALF_UP` 到分，`REALTIME` 仍为空。不伪造缺连接器的 OfferVersion。权威口径见 `docs/superpowers/specs/2026-09-22-effective-supply-price-identity-fallback-design.md`。 | 管理端合作商品只写身份列时列表供应价不再全空 |
 
 ---
 
@@ -617,7 +618,7 @@ PRD 8.4.1 的列表 Tab 支持从 `GET /supply-chain/product-types` 动态拉取
 * **设计目的**：支撑商品管理后台原型中「SPU 包含多 SKU 行内平铺展开」、「复杂多维度组合检索」与「供货价、税率、税额、供应商换行展示及总库存聚合展示」，避免前端逐条查询详情造成数百次网络请求。
 * **权限**：使用 `SupplyChainAdminPermissions.PRODUCT_QUERY_EXPRESSION`。
 * **Query 参数**：
-  * `keyword` (String, 可选): SPU 编码、名称模糊检索
+  * `keyword` (String, 可选): 包含匹配 SPU 编码、SPU 名称、副标题、SKU 名称、SKU 编码。省略或空白不筛选。SPU 文本命中时返回该 SPU 下符合其它 SKU 条件的规格；只命中 SKU 时不返回同 SPU 下未命中的规格。
   * `productType` (`List<String>`, 可选): 商品类型编码，可多选。兼容单个 `productType=PT_CARD`；多个使用重复键 `productType=A&productType=B` 或逗号拼接 `productType=A,B`。规范化时 trim、丢空白、去重并保持传入顺序；多个类型为 OR（`product_type IN (...)`）。显式传入时覆盖 `tabCode` 解出的类型；未传、空列表或全空白不按类型过滤。筛选参数不校验类型是否存在。
   * `categoryId` (`List<String>` → Long 主键, 可选): 商品主分类内部主键，可多选。兼容单个 `categoryId=10`；多个使用重复键 `categoryId=10&categoryId=20` 或逗号拼接 `categoryId=10,20`。规范化时 trim、丢空白、去重、解析为 Long 并保持传入顺序；无法解析的片段忽略。规范化后将选中节点展开为自身 ∪ 未归档子孙（d42），多个分类为 OR（`primary_category_id IN (选中 ∪ 未归档子孙)`）。未传、空列表、全空白或规范化后为空不按分类过滤、不加载类目树。只匹配主分类，不扩展辅助分类。
   * `brandId` (Long, 可选): 品牌 ID
@@ -626,6 +627,7 @@ PRD 8.4.1 的列表 Tab 支持从 `GET /supply-chain/product-types` 动态拉取
   * `marketPriceMin` / `marketPriceMax` (Long, 可选): 市场价区间（单位：分）
   * `supplyPriceMin` / `supplyPriceMax` (Long, 可选): 供货价区间（单位：分）
   * `supplierCode` (String, 可选): 供应商编码
+  * `buyerCode` (String, 可选): 分销商永久业务编码。传入后从候选和返回明细中排除该分销商未移除的分销商品，已移除 SKU 会再次出现。不按分销商档案上的商品类型收窄；类型筛选仍由调用方传 `productType` 或 `tabCode`。分销商不存在时返回 `BUYER_PROFILE_NOT_FOUND`。省略时商品中心列表不排除任何分销商品。
   * `unshelveMode` (String, 可选): 下架方式（`MANUAL_UNSHELVE` 手动下架，`SYSTEM_UNSHELVE` 系统下架）
   * `updateTimeStart` / `updateTimeEnd` (LocalDateTime, 可选): SPU 更新时间区间
   * `pageNo` (Integer, 默认 1)
@@ -648,7 +650,7 @@ PRD 8.4.1 的列表 Tab 支持从 `GET /supply-chain/product-types` 动态拉取
     * `skuName` (String): 规格名称
     * `marketPrice` (Long): 市场价（分）
     * `suggestedSalePrice` (Long): 销售建议价（分）
-    * `supplyPrice` (Long): 供货价/有效结算价（分）
+    * `supplyPrice` (Long): 当前最低有效供货价（分）。供应商启用、Offer 已发布；当前版本在有效期内则用版本单价，否则回退合作商品身份列（`FIXED` 用草稿单价，`DISCOUNT` 按建议价×折扣计算，`REALTIME` 为空），多条取最低；没有有效报价为空，0 是有效价格。口径与通用定价最低供货价相同，见 `docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#3-供货价与利润隐藏`、`docs/superpowers/specs/2026-09-22-effective-supply-price-identity-fallback-design.md`。
     * `supplyPriceExclusive` (Long): 不含税供货价（分）
     * `taxIncluded` (Boolean): 是否含税；仅记录展示，不参与价格计算
     * `taxRate` (BigDecimal): 税率（例如 0.0600 代表 6%）

@@ -22,6 +22,7 @@ import com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseCloc
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSpuMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.EffectiveSupplyPrice;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierOfferDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierOfferVersionDO;
@@ -31,7 +32,6 @@ import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferMap
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferVersionMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierSupplyScopeMapper;
 import com.aifuli.module.supplychain.tradecore.supply.domain.OfferStatus;
-import com.aifuli.module.supplychain.tradecore.supply.domain.SupplierStatus;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.RequiredArgsConstructor;
@@ -275,15 +275,17 @@ public class PlatformSkuQueryService {
     }
 
     /**
-     * 当前页 SKU 的最低有效供货价。口径与通用定价一致：供应商启用、Offer 已发布、
-     * 当前版本已到 validFrom 且未到 validTo；多条取最低。0 是有效价格，没有候选则为空。
-     * 设计见 {@code docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#3-供货价与利润隐藏}。
+     * 当前页 SKU 的最低有效供货价。口径与通用定价一致：供应商启用、Offer 已发布；
+     * 当前版本有效则用版本单价，否则回退身份列；多条取最低。0 是有效价格，没有候选则为空。
+     * 设计见 {@code docs/superpowers/specs/2026-09-22-effective-supply-price-identity-fallback-design.md}。
      */
     private Map<Long, Long> minimumSupplyPrices(List<PlatformSkuDO> skus) {
         List<Long> skuIds = new ArrayList<>();
+        Map<Long, Long> suggestedBySku = new HashMap<>();
         for (PlatformSkuDO sku : skus) {
             if (sku.getId() != null) {
                 skuIds.add(sku.getId());
+                suggestedBySku.put(sku.getId(), sku.getSuggestedSalePrice());
             }
         }
         if (skuIds.isEmpty()) {
@@ -291,23 +293,26 @@ public class PlatformSkuQueryService {
         }
         List<SupplierOfferDO> offers = offerMapper.selectList(new LambdaQueryWrapper<SupplierOfferDO>()
                 .in(SupplierOfferDO::getPlatformSkuId, skuIds)
-                .eq(SupplierOfferDO::getStatus, OfferStatus.PUBLISHED.getCode())
-                .isNotNull(SupplierOfferDO::getCurrentVersionId));
+                .eq(SupplierOfferDO::getStatus, OfferStatus.PUBLISHED.getCode()));
         if (offers.isEmpty()) {
             return Map.of();
         }
         Set<Long> versionIds = new HashSet<>();
         Set<Long> supplierIds = new HashSet<>();
         for (SupplierOfferDO offer : offers) {
-            versionIds.add(offer.getCurrentVersionId());
+            if (offer.getCurrentVersionId() != null) {
+                versionIds.add(offer.getCurrentVersionId());
+            }
             if (offer.getSupplierId() != null) {
                 supplierIds.add(offer.getSupplierId());
             }
         }
         Map<Long, SupplierOfferVersionDO> versions = new HashMap<>();
-        for (SupplierOfferVersionDO version : offerVersionMapper.selectList(new LambdaQueryWrapper<SupplierOfferVersionDO>()
-                .in(SupplierOfferVersionDO::getId, versionIds))) {
-            versions.put(version.getId(), version);
+        if (!versionIds.isEmpty()) {
+            for (SupplierOfferVersionDO version : offerVersionMapper.selectList(new LambdaQueryWrapper<SupplierOfferVersionDO>()
+                    .in(SupplierOfferVersionDO::getId, versionIds))) {
+                versions.put(version.getId(), version);
+            }
         }
         Map<Long, SupplierDO> suppliers = new HashMap<>();
         if (!supplierIds.isEmpty()) {
@@ -319,24 +324,16 @@ public class PlatformSkuQueryService {
         LocalDateTime now = databaseClock.now();
         Map<Long, Long> minimumBySku = new HashMap<>();
         for (SupplierOfferDO offer : offers) {
-            if (!isEffectiveSupply(offer, suppliers.get(offer.getSupplierId()), versions.get(offer.getCurrentVersionId()), now)) {
+            SupplierOfferVersionDO version = offer.getCurrentVersionId() == null
+                    ? null : versions.get(offer.getCurrentVersionId());
+            Long suggested = offer.getPlatformSkuId() == null ? null : suggestedBySku.get(offer.getPlatformSkuId());
+            Long price = EffectiveSupplyPrice.of(offer, suppliers.get(offer.getSupplierId()), version, suggested, now);
+            if (price == null || offer.getPlatformSkuId() == null) {
                 continue;
             }
-            long price = versions.get(offer.getCurrentVersionId()).getSupplierSettlementUnitPrice();
             minimumBySku.merge(offer.getPlatformSkuId(), price, Math::min);
         }
         return minimumBySku;
-    }
-
-    private static boolean isEffectiveSupply(SupplierOfferDO offer, SupplierDO supplier,
-                                             SupplierOfferVersionDO version, LocalDateTime now) {
-        if (supplier == null || supplier.getStatus() == null
-                || supplier.getStatus() != SupplierStatus.ACTIVE.getCode()
-                || version == null || version.getValidFrom() == null || version.getSupplierSettlementUnitPrice() == null
-                || version.getValidFrom().isAfter(now)) {
-            return false;
-        }
-        return version.getValidTo() == null || version.getValidTo().isAfter(now);
     }
 
     private SkuListItem toListItem(PlatformSkuDO sku, PlatformSpuDO spu, String categoryName, Long supplyPriceCents) {
@@ -409,8 +406,8 @@ public class PlatformSkuQueryService {
             @Schema(description = "L1 B端结算单价，CNY分，允许0") Long suggestPriceCents,
             @Schema(description = "兼容字段名；C端建议价，取自平台SKU销售建议价，单位CNY分") Long marketPriceCents,
             @Schema(description = "SPU主类目名称；归档或缺失为空，只展示不参与筛选") String categoryName,
-            @Schema(description = "当前最低有效供货价，单位CNY分。供应商须启用，Offer须已发布，"
-                    + "当前版本已到validFrom且未到validTo，多条取最低；没有有效报价为空，0是有效价格")
+            @Schema(description = "当前最低有效供货价，单位CNY分。供应商须启用，Offer须已发布；"
+                    + "当前版本有效则用版本单价，否则回退身份列，多条取最低；没有有效报价为空，0是有效价格")
             Long supplyPriceCents) {
     }
 }

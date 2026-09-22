@@ -9,6 +9,7 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSp
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSpuMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.PricingDependencyChangedEvent;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceVersionMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierCooperativeProductService.DraftLine;
@@ -84,6 +85,7 @@ class SupplierCooperativeProductServiceTest {
         assertThat(inserted.getDraftMinQuantity()).isEqualTo(1L);
         assertThat(inserted.getStabilityScore()).isEqualTo(OfferFulfillmentScore.DEFAULT);
         assertThat(inserted.getTimelinessScore()).isEqualTo(OfferFulfillmentScore.DEFAULT);
+        verify(eventPublisher).publishEvent(new PricingDependencyChangedEvent(11L));
     }
 
     @Test
@@ -110,6 +112,7 @@ class SupplierCooperativeProductServiceTest {
 
         verify(offerMapper).updateById(any(SupplierOfferDO.class));
         verify(offerVersionMapper, never()).insert(any(com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierOfferVersionDO.class));
+        verify(eventPublisher).publishEvent(new PricingDependencyChangedEvent(11L));
     }
 
     @Test

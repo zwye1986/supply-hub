@@ -46,9 +46,13 @@ SKU 建议价”的限制。本文的“模板”是一次性应用到当前所�
 
 ## 3. 供货价与利润隐藏
 
-最低供货价读取供应商配置供应商品时发布到
-`sc_supplier_offer_version.supplier_settlement_unit_price` 的当前版本。有效报价必须同时满足：供应商启用、
-供应商品状态为已发布、当前版本已到 `valid_from` 且未到 `valid_to`。多个有效报价取最低价。
+最低供货价由 `EffectiveSupplyPrice` 解析，商品列表、标品 SKU 查询与本节依赖读取必须共用。对每条
+已发布且供应商启用的 Offer：当前版本已到 `valid_from` 且未到 `valid_to` 时，读取
+`sc_supplier_offer_version.supplier_settlement_unit_price`；否则回退合作商品身份列——`FIXED` 用
+`draft_unit_price`，`DISCOUNT` 用 `suggested_sale_price × discount_bp / 10000`（中间不按分舍入，最终
+`HALF_UP` 到 CNY 分），`REALTIME` 不是候选。多个有效报价取最低价。管理端合作商品不写报价版本，见
+`docs/superpowers/specs/2026-09-22-effective-supply-price-identity-fallback-design.md`。
+路由仍只使用带当前版本且连接器有效的报价。
 
 市场价、销售建议价为 0 是合法价格。没有有效供应商品或最低供货价为 0 时仍可保存规则，但状态为
 `DEPENDENCY_MISSING`，保留最后一次有效结果供管理端审计，用户端不可售；依赖恢复后发布新版本。
@@ -113,7 +117,7 @@ SKU 建议价”的限制。本文的“模板”是一次性应用到当前所�
 
 商品请求携带所选 `platformSkuCodes` 和五组完整默认配置；分销商请求携带 `buyerProductCodes`，项目请求携带 `listingCodes`，两个下游层每组都包含
 `inherit=true` 或完整覆盖配置。预览不落库，逐 SKU 返回三个依赖价格、计算结果、利润率和预期可售状态。
-保存由服务端重新计算，不能信任预览结果。
+保存由服务端重新计算，不能信任预览结果。标品尚未发布默认定价时，分销商或项目保存返回 `PLATFORM_DEFAULT_PRICING_MISSING` 并整批回滚，不落成半成品覆盖。`POST /supply-chain/buyers/{buyerCode}/products` 的行内 `pricing` 与上述保存使用同一覆盖对象，并与分销商品关联处在同一事务。
 
 商品默认定价单条查询按平台 SKU 永久业务编码读取，不要求 SKU 当前为启用状态，便于停用商品审计和编辑回显。
 响应返回当前版本主键与版本号、定价状态与不可售原因、分销价/销售价/服务费/利润隐藏/税务五组完整配置、

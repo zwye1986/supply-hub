@@ -28,21 +28,22 @@ public interface SupplierOfferMapper extends BaseMapperX<SupplierOfferDO> {
                 .orderByAsc(SupplierOfferDO::getId));
     }
 
-    /** 通用定价只读取当前已发布且具有当前版本的供应商品候选，生效期与供应商状态由应用层继续校验。 */
+    /**
+     * 通用定价读取已发布供应商品。无当前版本时由应用层按身份列回退供货价。
+     * 设计见 {@code docs/superpowers/specs/2026-09-22-effective-supply-price-identity-fallback-design.md}。
+     */
     default List<SupplierOfferDO> selectPublishedBySku(Long platformSkuId) {
         return selectList(new LambdaQueryWrapper<SupplierOfferDO>()
                 .eq(SupplierOfferDO::getPlatformSkuId, platformSkuId)
                 .eq(SupplierOfferDO::getStatus, OfferStatus.PUBLISHED.getCode())
-                .isNotNull(SupplierOfferDO::getCurrentVersionId)
                 .orderByAsc(SupplierOfferDO::getId));
     }
 
-    /** 供应商启停会同时改变其全部已发布报价的有效性，供通用定价按SKU去重重算。 */
+    /** 供应商启停会同时改变其全部已发布报价的有效性，含仅有身份列单价、尚无报价版本的合作商品。 */
     default List<SupplierOfferDO> selectPublishedBySupplier(Long supplierId) {
         return selectList(new LambdaQueryWrapper<SupplierOfferDO>()
                 .eq(SupplierOfferDO::getSupplierId, supplierId)
                 .eq(SupplierOfferDO::getStatus, OfferStatus.PUBLISHED.getCode())
-                .isNotNull(SupplierOfferDO::getCurrentVersionId)
                 .orderByAsc(SupplierOfferDO::getId));
     }
 

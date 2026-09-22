@@ -24,7 +24,6 @@ import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierOff
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferVersionMapper;
-import com.aifuli.module.supplychain.tradecore.supply.domain.SupplierStatus;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -38,6 +37,7 @@ import java.time.LocalDateTime;
 import java.util.*;
 
 import static com.aifuli.framework.common.exception.util.ServiceExceptionUtil.exception;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PLATFORM_DEFAULT_PRICING_MISSING;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PLATFORM_SKU_NOT_FOUND;
 
 /**
@@ -522,7 +522,7 @@ public class GenericBatchPricingService {
         PlatformSkuPricingVersionDO version = identity == null || identity.getCurrentVersionId() == null ? null
                 : platformVersionMapper.selectById(identity.getCurrentVersionId());
         if (version == null) {
-            throw new IllegalStateException("platform SKU default pricing is missing");
+            throw exception(PLATFORM_DEFAULT_PRICING_MISSING);
         }
         return new PlatformConfigSnapshot(version, configFrom(version));
     }
@@ -535,13 +535,12 @@ public class GenericBatchPricingService {
         Long minimum = null;
         for (SupplierOfferDO offer : offerMapper.selectPublishedBySku(sku.getId())) {
             SupplierDO supplier = supplierMapper.selectById(offer.getSupplierId());
-            SupplierOfferVersionDO version = offerVersionMapper.selectById(offer.getCurrentVersionId());
-            if (supplier == null || supplier.getStatus() != SupplierStatus.ACTIVE.getCode() || version == null
-                    || version.getValidFrom().isAfter(now)
-                    || (version.getValidTo() != null && !version.getValidTo().isAfter(now))) {
+            SupplierOfferVersionDO version = offer.getCurrentVersionId() == null
+                    ? null : offerVersionMapper.selectById(offer.getCurrentVersionId());
+            Long price = EffectiveSupplyPrice.of(offer, supplier, version, sku.getSuggestedSalePrice(), now);
+            if (price == null) {
                 continue;
             }
-            long price = version.getSupplierSettlementUnitPrice();
             minimum = minimum == null ? price : Math.min(minimum, price);
         }
         return new PriceDependencies(sku.getMarketPrice(), sku.getSuggestedSalePrice(), minimum);

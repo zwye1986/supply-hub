@@ -48,8 +48,8 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.SUPPLIER_STATUS_CONFLICT;
 
 /**
- * 合作商品：新增即上架，改价只更新身份列，不写报价版本。
- * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#55-合作商品}。
+ * 合作商品：新增即上架，改价只更新身份列，不写报价版本；新增与改价须发布定价依赖变更事件。
+ * 设计见 {@code docs/superpowers/specs/2026-09-22-effective-supply-price-identity-fallback-design.md}。
  */
 @Slf4j
 @Service
@@ -138,6 +138,8 @@ public class SupplierCooperativeProductService {
 
     /**
      * 改价与供货模式：校验与新增相同，只更新身份列，禁止 {@code offerVersionMapper.insert}。
+     * 身份列单价变化后必须发布定价依赖事件，供列表与通用定价按身份列回退。
+     * 设计见 {@code docs/superpowers/specs/2026-09-22-effective-supply-price-identity-fallback-design.md}。
      */
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public void updateCommercial(String supplierCode, String offerNo, DraftLine line, Long operatorId) {
@@ -169,6 +171,7 @@ public class SupplierCooperativeProductService {
         offer.setUpdatedBy(operatorId);
         offer.setUpdatedAt(databaseClock.now());
         offerMapper.updateById(offer);
+        eventPublisher.publishEvent(new PricingDependencyChangedEvent(offer.getPlatformSkuId()));
     }
 
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
@@ -264,6 +267,7 @@ public class SupplierCooperativeProductService {
                 .updatedAt(now)
                 .build();
         offerMapper.insert(offer);
+        eventPublisher.publishEvent(new PricingDependencyChangedEvent(resolved.sku().getId()));
         return offer.getOfferNo();
     }
 

@@ -170,10 +170,14 @@ public class ProductAdminController {
     @GetMapping("/management-page")
     @PreAuthorize(PRODUCT_QUERY_EXPRESSION)
     @Operation(summary = "管理端分页查询商品聚合列表",
-            description = "支撑运营管理端商品列表原型：SPU平铺展开多SKU明细、多维筛选及供货价、税率、税额、供应商换行聚合展示。")
+            description = "支撑运营管理端商品列表，以及新增分销商品选品。"
+                    + "keyword 包含匹配 SPU 名称、SPU 编码、副标题、SKU 名称、SKU 编码；只命中 SKU 时不返回未命中规格。"
+                    + "buyerCode 排除该分销商未移除的分销商品，已移除 SKU 会再次出现，且不按档案商品类型收窄。"
+                    + "supplyPrice 为当前最低有效供货价：有效报价版本优先，否则回退合作商品身份列，单位 CNY 分。")
     public CommonResult<PageResult<ProductCatalogQueryService.ProductManagementSpuItem>> managementPage(
             @Parameter(description = "业务 Tab 标识", example = "VIRTUAL_CARD") @RequestParam(required = false) String tabCode,
-            @Parameter(description = "SPU 编码、名称模糊搜索", example = "爱奇艺") @RequestParam(required = false) String keyword,
+            @Parameter(description = "包含匹配 SPU 名称、SPU 编码、副标题、SKU 名称、SKU 编码。省略或空白不筛选",
+                    example = "爱奇艺") @RequestParam(required = false) String keyword,
             @Parameter(description = "商品类型编码，可多选；兼容单个 productType。"
                     + "重复键 productType=A&productType=B，或逗号拼接 productType=A,B",
                     example = "EQUITY_PRODUCT")
@@ -192,6 +196,9 @@ public class ProductAdminController {
             @Parameter(description = "供货价最小金额，单位CNY分", example = "800") @RequestParam(required = false) Long supplyPriceMin,
             @Parameter(description = "供货价最大金额，单位CNY分", example = "4000") @RequestParam(required = false) Long supplyPriceMax,
             @Parameter(description = "供应商编码", example = "SUP_01ABC") @RequestParam(required = false) String supplierCode,
+            @Parameter(description = "分销商永久业务编码。传入后排除该分销商未移除的分销商品；已移除 SKU 会再次出现。"
+                    + "不按档案商品类型过滤", example = "BYR_01ABC")
+            @RequestParam(required = false) String buyerCode,
             @Parameter(description = "更新时间开始，Asia/Shanghai") @RequestParam(required = false) java.time.LocalDateTime updateTimeStart,
             @Parameter(description = "更新时间结束，Asia/Shanghai") @RequestParam(required = false) java.time.LocalDateTime updateTimeEnd,
             @Parameter(description = "页码，从1开始", example = "1") @RequestParam(required = false) Integer pageNo,
@@ -199,7 +206,7 @@ public class ProductAdminController {
         return success(queryService.managementPage(new ProductCatalogQueryService.ProductManagementPageQuery(
                 tabCode, keyword, productType, categoryId, brandId, status, unshelveMode, fulfillmentType,
                 marketPriceMin, marketPriceMax, supplyPriceMin, supplyPriceMax, supplierCode,
-                updateTimeStart, updateTimeEnd, pageNo, pageSize)));
+                updateTimeStart, updateTimeEnd, pageNo, pageSize, buyerCode)));
     }
 
     @PutMapping("/batch-status")

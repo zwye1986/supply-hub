@@ -183,7 +183,7 @@
 | `REALTIME` | 实时更新 | 按供应商 API 实时返回价格（点餐/电影票） |
 | `DISCOUNT` | 按供货折扣 | 按销售建议价 × 折扣率计算供应价 |
 
-**合作商品状态**：`PUBLISHED` 上架、`SUSPENDED` 下架、`RETIRED` 已移除（列表不返回）。新增默认 `PUBLISHED`。编辑已上架单价/模式必须发新 OfferVersion。
+**合作商品状态**：`PUBLISHED` 上架、`SUSPENDED` 下架、`RETIRED` 已移除（列表不返回）。新增默认 `PUBLISHED`。管理端编辑已上架单价/模式只更新身份列，不写 OfferVersion（避免伪造缺连接器的版本）；商品列表与通用定价按身份列回退读取，见 `docs/superpowers/specs/2026-09-22-effective-supply-price-identity-fallback-design.md`。带连接器的可路由发布仍走既有 `SupplierOfferPublicationService`，那条链路改价必须发新 OfferVersion。
 
 **分销等级** `distributionLevel`：`1` / `2` / `3`（仅组织深度，不是结算价层级）。
 
@@ -256,7 +256,7 @@ SPU / 供货范围写入的 `productClassification` 不走 `ClosedEnums`：类�
 - `buyerCode`：只返回该分销商**尚未**关联的平台 SKU（新增分销商品）。不按分销商档案上的可售品类或商品类型再收窄；类型 Tab 由调用方传 `productType`。
 - `projectCode`：只返回该项目所属分销商**已有** `BuyerProduct`、且项目目录尚未未退役关联的 SKU（新增项目商品）。缺少 `BuyerProduct` 的标品不得出现。
 
-金额与展示字段：`suggestPriceCents`（L1 结算口径）、`marketPriceCents`（兼容既有 JSON 字段名；C 端建议价，实际取 `sc_platform_sku.suggested_sale_price`，若无则空）、`supplyPriceCents`（当前最低有效供货价，口径与通用定价最低供货价相同：供应商启用、Offer 已发布、当前版本已到 `validFrom` 且未到 `validTo`，多条取最低；没有有效报价则为空，0 是有效价格）、`categoryName`（SPU 主类目名称，归档或缺失则为空）。`categoryName` 只用于弹窗「分类」列展示，不参与筛选，不按类目祖先链过滤。`marketPriceCents` 不得取履约面值 `face_value` 或市场划线价 `market_price`；销售价来源以 09-12 范围对齐 §5 为准。点餐/电影 L1 可为 0。
+金额与展示字段：`suggestPriceCents`（L1 结算口径）、`marketPriceCents`（兼容既有 JSON 字段名；C 端建议价，实际取 `sc_platform_sku.suggested_sale_price`，若无则空）、`supplyPriceCents`（当前最低有效供货价，口径与通用定价最低供货价相同：供应商启用、Offer 已发布；当前版本有效则用版本单价，否则回退身份列，多条取最低；没有有效报价则为空，0 是有效价格，见 `docs/superpowers/specs/2026-09-22-effective-supply-price-identity-fallback-design.md`）、`categoryName`（SPU 主类目名称，归档或缺失则为空）。`categoryName` 只用于弹窗「分类」列展示，不参与筛选，不按类目祖先链过滤。`marketPriceCents` 不得取履约面值 `face_value` 或市场划线价 `market_price`；销售价来源以 09-12 范围对齐 §5 为准。点餐/电影 L1 可为 0。
 
 ## 5. 供应商
 
@@ -345,7 +345,7 @@ SPU / 供货范围写入的 `productClassification` 不走 `ClosedEnums`：类�
 
 - `GET /supply-chain/suppliers/{supplierCode}/offers` 分页，筛选 `sellableCategory`/`productType`/`productClassification`
 - `POST /supply-chain/suppliers/{supplierCode}/offers` body `{ items: [...] }` 批量新增，默认 `PUBLISHED`
-- `PUT /supply-chain/suppliers/{supplierCode}/offers/{offerNo}` 编辑（上架中改价发新版本）
+- `PUT /supply-chain/suppliers/{supplierCode}/offers/{offerNo}` 编辑（上架中改价只更新身份列，不写 OfferVersion；列表与定价按身份列回退）
 - `PUT /supply-chain/suppliers/{supplierCode}/fulfillment-scores` 人工录入稳定性/时效评分（可按 SKU 子集）
 - `PATCH /supply-chain/suppliers/{supplierCode}/offers/{offerNo}` `{ "status": "PUBLISHED"|"SUSPENDED" }` 上架/下架
 - `DELETE /supply-chain/suppliers/{supplierCode}/offers/{offerNo}` 逻辑移除（`RETIRED`，列表不再返回）
@@ -448,7 +448,7 @@ Springdoc `components.schemas` 中冲突的通用简单类名。生成契约必�
 即 `BuyerProduct` + 该 SKU 的 L2。
 
 - `GET /supply-chain/buyers/{buyerCode}/products` 分页。可选查询参数 `productType`（动态商品类型编码，可多选）。兼容单个值；重复键 `productType=A&productType=B` 或逗号拼接 `productType=A,B` 均表示命中任一类型。省略、空白或拆分后无有效编码时不筛选；传入后只返回该分销商未移除、且关联平台 SPU 的 `productType` 落在入参集合内的分销商品。无命中返回空页。筛选不改变按 `updatedAt` 倒序，分页默认仍为 `pageNo=1`、`pageSize=20`。命中字段取列表行同源的平台 SPU，而不是供货配置。
-- `POST /supply-chain/buyers/{buyerCode}/products` body `{ items: [...] }` 从标品关联；已存在则 `BUYER_PRODUCT_DUPLICATE`
+- `POST /supply-chain/buyers/{buyerCode}/products` body `{ items: [...] }` 从标品关联；已存在则 `BUYER_PRODUCT_DUPLICATE`。新增分销商品弹窗的选品列表走 `GET /supply-chain/products/management-page`，并传入 `buyerCode` 排除未移除商品；「全部商品」由调用方把该分销商档案中的商品类型编码放进 `productType`。每行可带可选 `pricing`，字段与 `PUT /buyers/{buyerCode}/products/pricing` 的覆盖组相同。`pricing` 省略时只关联并按商品默认定价初始化；传入时在同一事务内保存分销商通用定价。任一条缺少平台默认定价时整单回滚，返回 `PLATFORM_DEFAULT_PRICING_MISSING`。销售价与服务费仍可标记继承。
 - `PATCH /supply-chain/buyers/{buyerCode}/products/{buyerProductCode}` 改价（写/清 L2 覆盖，body 含 `l2AdjustMode` 等）
 - `DELETE /supply-chain/buyers/{buyerCode}/products/{buyerProductCode}` 逻辑移除（不再出现在列表；已发布项目目录不回放删除，新项目不得再选）
 
