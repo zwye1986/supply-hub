@@ -149,7 +149,7 @@ class ProjectAdminIntegrationTest {
             insertL1(context, "MOVIE_100", L1_CENTS);
 
             List<String> buyerProductCodes = products.addProducts(buyerA, List.of(
-                    new ProductLine("MOVIE_100", L2AdjustMode.FOLLOW_TEMPLATE, null, null, null)), 1L);
+                    new ProductLine("MOVIE_100", L2AdjustMode.FOLLOW_TEMPLATE, null, null, null, null)), 1L);
             assertThat(buyerProductCodes).hasSize(1);
 
             String projectCode = projects.create(new CreateProjectCommand(
@@ -391,9 +391,9 @@ class ProjectAdminIntegrationTest {
 
         insertL1(context, "MOVIE_200", 19_800L);
         String buyerProductA200Code = products.addProducts(buyerA, List.of(
-                new ProductLine("MOVIE_200", L2AdjustMode.FOLLOW_TEMPLATE, null, null, null)), 1L).getFirst();
+                new ProductLine("MOVIE_200", L2AdjustMode.FOLLOW_TEMPLATE, null, null, null, null)), 1L).getFirst();
         String buyerProductB100Code = products.addProducts(buyerB, List.of(
-                new ProductLine("MOVIE_100", L2AdjustMode.FOLLOW_TEMPLATE, null, null, null)), 1L).getFirst();
+                new ProductLine("MOVIE_100", L2AdjustMode.FOLLOW_TEMPLATE, null, null, null, null)), 1L).getFirst();
         BuyerProductDO buyerProductA100 = productMapper.selectByCode(buyerProductA100Code);
         BuyerProductDO buyerProductA200 = productMapper.selectByCode(buyerProductA200Code);
 

@@ -28,6 +28,8 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSpuMapp
 import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
 import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericPricingCalculator.PricingStatus;
 import com.aifuli.module.supplychain.tradecore.catalog.pricing.BuyerProductPricingInitializationEvent;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericBatchPricingService;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericBatchPricingService.ProjectOverrides;
 import com.aifuli.module.supplychain.tradecore.profile.domain.L2AdjustMode;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -70,6 +72,7 @@ class BuyerProductCommandServiceTest {
     private final BusinessNoGenerator businessNoGenerator = mock(BusinessNoGenerator.class);
     private final SupplyChainDatabaseClock databaseClock = mock(SupplyChainDatabaseClock.class);
     private final ApplicationEventPublisher eventPublisher = mock(ApplicationEventPublisher.class);
+    private final GenericBatchPricingService genericPricingService = mock(GenericBatchPricingService.class);
     private BuyerProductCommandService service;
 
     @BeforeEach
@@ -78,7 +81,8 @@ class BuyerProductCommandServiceTest {
         service = new BuyerProductCommandService(
                 databaseClock, eventPublisher, buyerMapper, productMapper, l1Mapper, l1VersionMapper,
                 overrideMapper, overrideVersionMapper, buyerPricingMapper, businessNoGenerator,
-                new SettlementPriceResolver(), new ProductSellabilityService(skuMapper, spuMapper));
+                new SettlementPriceResolver(), new ProductSellabilityService(skuMapper, spuMapper),
+                genericPricingService);
         when(buyerMapper.selectByBuyerCodeForUpdate("BYR_A")).thenReturn(
                 BuyerDO.builder().id(5L).buyerCode("BYR_A").build());
         when(skuMapper.selectByCode("MOVIE_100")).thenReturn(PlatformSkuDO.builder()
@@ -240,6 +244,7 @@ class BuyerProductCommandServiceTest {
 
         service.addProducts("BYR_A", List.of(follow("MOVIE_100")), 1L);
 
+        verify(genericPricingService, never()).saveBuyer(any(), any(), any(), any());
         ArgumentCaptor<BuyerSkuPricingDO> identity = ArgumentCaptor.forClass(BuyerSkuPricingDO.class);
         verify(buyerPricingMapper).insert(identity.capture());
         assertThat(identity.getValue().getBuyerProductId()).isEqualTo(88L);
@@ -253,11 +258,29 @@ class BuyerProductCommandServiceTest {
     }
 
     @Test
+    void addProductsSavesGenericPricingWhenTheLineCarriesOverrides() {
+        when(productMapper.selectByBuyerAndSku(5L, 11L)).thenReturn(null);
+        when(businessNoGenerator.next(BusinessNoPrefixes.BPD)).thenReturn("BPD_NEW");
+        when(productMapper.insert(any(BuyerProductDO.class))).thenAnswer(invocation -> {
+            BuyerProductDO row = invocation.getArgument(0);
+            row.setId(88L);
+            return 1;
+        });
+        when(buyerPricingMapper.selectByBuyerProductId(88L)).thenReturn(null);
+        ProjectOverrides overrides = ProjectOverrides.allInherited();
+
+        service.addProducts("BYR_A", List.of(new ProductLine(
+                "MOVIE_100", L2AdjustMode.FOLLOW_TEMPLATE, null, null, null, overrides)), 9L);
+
+        verify(genericPricingService).saveBuyer(eq("BYR_A"), eq(List.of("BPD_NEW")), eq(overrides), eq(9L));
+    }
+
+    @Test
     void displayThresholdOutsideZeroToOneHundredIsRejected() {
         when(productMapper.selectByBuyerAndSku(5L, 11L)).thenReturn(null);
 
         assertThatThrownBy(() -> service.addProducts("BYR_A", List.of(
-                new ProductLine("MOVIE_100", L2AdjustMode.EQUAL_L1, null, null, 101)), 1L))
+                new ProductLine("MOVIE_100", L2AdjustMode.EQUAL_L1, null, null, 101, null)), 1L))
                 .isInstanceOf(ServiceException.class)
                 .extracting(ex -> ((ServiceException) ex).getCode())
                 .isEqualTo(L2_OVERRIDE_INVALID.getCode());
@@ -288,6 +311,6 @@ class BuyerProductCommandServiceTest {
     }
 
     private static ProductLine follow(String skuCode) {
-        return new ProductLine(skuCode, L2AdjustMode.FOLLOW_TEMPLATE, null, null, null);
+        return new ProductLine(skuCode, L2AdjustMode.FOLLOW_TEMPLATE, null, null, null, null);
     }
 }

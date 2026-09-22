@@ -322,7 +322,7 @@ class BuyerAdminIntegrationTest {
                 .build());
 
         List<String> codes = products.addProducts(buyerCode, List.of(
-                new ProductLine("MOVIE_100", L2AdjustMode.FOLLOW_TEMPLATE, null, null, 5)), 1L);
+                new ProductLine("MOVIE_100", L2AdjustMode.FOLLOW_TEMPLATE, null, null, 5, null)), 1L);
         assertThat(codes).hasSize(1);
         String buyerProductCode = codes.getFirst();
         assertThat(buyerProductCode).startsWith("BPD_");

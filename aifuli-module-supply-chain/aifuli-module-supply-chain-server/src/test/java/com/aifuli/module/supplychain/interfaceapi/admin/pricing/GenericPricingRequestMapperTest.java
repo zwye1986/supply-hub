@@ -1,6 +1,7 @@
 package com.aifuli.module.supplychain.interfaceapi.admin.pricing;
 
 import com.aifuli.module.supplychain.interfaceapi.admin.BuyerAdminController.BuyerProductBatchPricingReqVO;
+import com.aifuli.module.supplychain.interfaceapi.admin.BuyerAdminController.BuyerProductCreatePricingReqVO;
 import com.aifuli.module.supplychain.interfaceapi.admin.ProjectAdminController.ProjectProductBatchPricingReqVO;
 import com.aifuli.module.supplychain.interfaceapi.admin.pricing.GenericPricingAdminVos.FormulaRuleReqVO;
 import com.aifuli.module.supplychain.interfaceapi.admin.pricing.GenericPricingAdminVos.ServiceFeeRuleReqVO;
@@ -47,6 +48,25 @@ class GenericPricingRequestMapperTest {
         assertThatThrownBy(() -> GenericPricingRequestMapper.toProjectOverrides(request))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("must not carry override fields");
+    }
+
+    @Test
+    void mapsCreatePricingWithoutBuyerProductCodes() {
+        BuyerProductCreatePricingReqVO request = new BuyerProductCreatePricingReqVO();
+        request.setDistributionInherited(false);
+        request.setDistributionRule(direct());
+        request.setSalesInherited(true);
+        request.setServiceFeeInherited(true);
+        request.setHideInherited(true);
+        request.setTaxInherited(false);
+        request.setTaxIncluded(false);
+        request.setTaxRateCode(PricingTaxRateCodes.NON_TAXABLE);
+
+        var overrides = GenericPricingRequestMapper.toBuyerOverrides(request);
+        assertThat(overrides.distributionInherited()).isFalse();
+        assertThat(overrides.salesInherited()).isTrue();
+        assertThat(overrides.taxInherited()).isFalse();
+        assertThat(overrides.taxMetadata().taxIncluded()).isFalse();
     }
 
     @Test

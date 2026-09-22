@@ -251,8 +251,9 @@ public class BuyerAdminController {
                     + "页面「按分销价=销售建议价」须显式传 EQUAL_L1，覆盖值取当前 L1 结算分，不是 C 端销售建议价。"
                     + "CUSTOM 为 round(L1结算分 × percent / 100) + amountCents，结果必须大于 0，否则 L2_OVERRIDE_INVALID。"
                     + "displayThresholdPercent 省略则落空；传入须为 0～100 的整数，越界同样 L2_OVERRIDE_INVALID。"
-                    + "阈值本批只落库，不触发 C 端隐藏。编号 BPD_。已存在未移除行返回 BUYER_PRODUCT_DUPLICATE；"
-                    + "已移除同行复活而非插入。金额单位 CNY 分。")
+                    + "行内 pricing 省略时只关联并继承商品默认定价；传入时与关联处在同一事务，"
+                    + "字段与批量保存分销商通用定价相同。任一条缺少平台默认定价则整单回滚，返回 PLATFORM_DEFAULT_PRICING_MISSING。"
+                    + "编号 BPD_。已存在未移除行返回 BUYER_PRODUCT_DUPLICATE；已移除同行复活而非插入。金额单位 CNY 分。")
     public CommonResult<List<String>> addProducts(
             @Parameter(description = "采购商永久业务编码", example = "BYR_01ABC") @PathVariable String buyerCode,
                                                     @Valid @RequestBody AddBuyerProductsReqVO request) {
@@ -382,7 +383,8 @@ public class BuyerAdminController {
                 mode == null ? L2AdjustMode.FOLLOW_TEMPLATE : mode,
                 item.getPercent(),
                 item.getAmountCents(),
-                item.getDisplayThresholdPercent());
+                item.getDisplayThresholdPercent(),
+                item.getPricing() == null ? null : GenericPricingRequestMapper.toBuyerOverrides(item.getPricing()));
     }
 
     private static String traceId() {
@@ -525,6 +527,41 @@ public class BuyerAdminController {
         @Schema(description = "利润空间低于该百分比时 C 端隐藏。0 到 100 的整数；省略则该列落空。本批只落库，不触发隐藏",
                 example = "20")
         private Integer displayThresholdPercent;
+        @Valid
+        @Schema(description = "一并写入的分销商通用定价。省略则只关联并继承商品默认定价；传入时与关联同一事务")
+        private BuyerProductCreatePricingReqVO pricing;
+    }
+
+    @Data
+    @Schema(description = "新增分销商品时的通用定价覆盖。语义与批量保存分销商通用定价相同，不含商品编码")
+    public static class BuyerProductCreatePricingReqVO {
+        @Schema(description = "true时继承商品默认分销价")
+        private boolean distributionInherited;
+        @Valid
+        @Schema(description = "分销价覆盖规则")
+        private FormulaRuleReqVO distributionRule;
+        @Schema(description = "true时继承商品默认销售价")
+        private boolean salesInherited;
+        @Valid
+        @Schema(description = "销售价覆盖规则")
+        private FormulaRuleReqVO salesRule;
+        @Schema(description = "true时继承商品默认服务费")
+        private boolean serviceFeeInherited;
+        @Valid
+        @Schema(description = "服务费覆盖规则")
+        private ServiceFeeRuleReqVO serviceFeeRule;
+        @Schema(description = "true时继承商品默认利润隐藏阈值")
+        private boolean hideInherited;
+        @Schema(description = "分销区利润隐藏阈值百分数，0到100，最多2位小数")
+        private java.math.BigDecimal distributionHideThresholdPercent;
+        @Schema(description = "销售区利润隐藏阈值百分数，0到100，最多2位小数")
+        private java.math.BigDecimal salesHideThresholdPercent;
+        @Schema(description = "true时继承商品默认税务且不得携带税务字段")
+        private boolean taxInherited;
+        @Schema(description = "是否含税；覆盖时须与 taxRateCode 同时提交")
+        private Boolean taxIncluded;
+        @Schema(description = "system动态字典supply_chain_tax_rate的启用值")
+        private String taxRateCode;
     }
 
     @Data

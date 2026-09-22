@@ -549,6 +549,30 @@ class ProductCenterContractTest {
     }
 
     /**
+     * 新增分销商品选品复用管理端聚合列表：keyword 覆盖 SKU 文本，buyerCode 排除未移除商品。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#419-管理端商品列表聚合查询get-supply-chainproductsmanagement-page}。
+     */
+    @Test
+    void managementPageDocumentsKeywordAndBuyerCodeForDistributorSelect() {
+        Method managementPage = Arrays.stream(ProductAdminController.class.getDeclaredMethods())
+                .filter(method -> method.getName().equals("managementPage"))
+                .findFirst()
+                .orElseThrow();
+        Map<String, String> descriptions = Arrays.stream(managementPage.getParameters())
+                .collect(java.util.stream.Collectors.toMap(
+                        java.lang.reflect.Parameter::getName,
+                        parameter -> parameter.getAnnotation(Parameter.class).description()));
+
+        assertThat(descriptions.get("keyword"))
+                .contains("SKU 名称", "SKU 编码", "SPU 名称", "SPU 编码");
+        assertThat(descriptions.get("buyerCode"))
+                .contains("未移除", "已移除")
+                .contains("不按档案商品类型过滤");
+        assertThat(managementPage.getAnnotation(Operation.class).description())
+                .contains("最低有效供货价");
+    }
+
+    /**
      * 管理端聚合列表主分类筛选必须声明为可多选 List，兼容单个 categoryId，并声明含子类目。
      * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线}（d40、d42）。
      */

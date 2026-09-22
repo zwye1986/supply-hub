@@ -20,6 +20,8 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerProductL2O
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerSkuPricingMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceVersionMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericBatchPricingService;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericBatchPricingService.ProjectOverrides;
 import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericPricingCalculator.PricingStatus;
 import com.aifuli.module.supplychain.tradecore.catalog.pricing.BuyerProductPricingInitializationEvent;
 import com.aifuli.module.supplychain.tradecore.profile.domain.L2AdjustMode;
@@ -43,7 +45,6 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BUYER_PROFILE_NOT_FOUND;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.L2_OVERRIDE_INVALID;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PLATFORM_SETTLEMENT_PRICE_MISSING;
-import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.SKU_NOT_SALEABLE;
 
 /**
  * 分销商品命令：从标品关联、复活已移除行、写/清手工 L2；不发布模板、不写账本。
@@ -72,6 +73,7 @@ public class BuyerProductCommandService {
     private final BusinessNoGenerator businessNoGenerator;
     private final SettlementPriceResolver settlementPriceResolver;
     private final ProductSellabilityService productSellabilityService;
+    private final GenericBatchPricingService genericPricingService;
 
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public List<String> addProducts(String buyerCode, List<ProductLine> lines, Long operatorId) {
@@ -84,7 +86,12 @@ public class BuyerProductCommandService {
         LocalDateTime now = databaseClock.now();
         List<String> codes = new ArrayList<>();
         for (ProductLine line : lines) {
-            codes.add(addOrRevive(buyer, line, operatorId, now));
+            String buyerProductCode = addOrRevive(buyer, line, operatorId, now);
+            codes.add(buyerProductCode);
+            if (line.pricingOverrides() != null) {
+                genericPricingService.saveBuyer(buyerCode, List.of(buyerProductCode),
+                        line.pricingOverrides(), operatorId);
+            }
         }
         return codes;
     }
@@ -393,8 +400,14 @@ public class BuyerProductCommandService {
         return productSellabilityService.requireSellableById(skuId).sku();
     }
 
+    /**
+     * 关联一行分销商品。{@code pricingOverrides} 为空时只建立目录并初始化继承定价；
+     * 非空时与目录写入处在同一事务，缺少平台默认定价则整单回滚。
+     * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#63-分销商品}。
+     */
     public record ProductLine(String platformSkuCode, L2AdjustMode l2AdjustMode,
-                              Integer percent, Long amountCents, Integer displayThresholdPercent) {
+                              Integer percent, Long amountCents, Integer displayThresholdPercent,
+                              ProjectOverrides pricingOverrides) {
     }
 
     public record L2PricingPreview(

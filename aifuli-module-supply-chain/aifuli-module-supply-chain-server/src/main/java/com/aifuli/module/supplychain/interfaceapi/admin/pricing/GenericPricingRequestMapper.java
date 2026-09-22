@@ -1,6 +1,7 @@
 package com.aifuli.module.supplychain.interfaceapi.admin.pricing;
 
 import com.aifuli.module.supplychain.interfaceapi.admin.BuyerAdminController.BuyerProductBatchPricingReqVO;
+import com.aifuli.module.supplychain.interfaceapi.admin.BuyerAdminController.BuyerProductCreatePricingReqVO;
 import com.aifuli.module.supplychain.interfaceapi.admin.ProjectAdminController.ProjectProductBatchPricingReqVO;
 import com.aifuli.module.supplychain.interfaceapi.admin.PlatformSkuAdminController.PlatformSkuBatchPricingReqVO;
 import com.aifuli.module.supplychain.interfaceapi.admin.pricing.GenericPricingAdminVos.FormulaRuleReqVO;
@@ -37,16 +38,36 @@ public final class GenericPricingRequestMapper {
     }
 
     public static ProjectOverrides toBuyerOverrides(BuyerProductBatchPricingReqVO request) {
-        PricingTaxGroupValidator.requireProjectGroup(request.isTaxInherited(),
-                request.getTaxIncluded() != null || request.getTaxRateCode() != null,
+        return toBuyerOverrides(request.isDistributionInherited(), request.getDistributionRule(),
+                request.isSalesInherited(), request.getSalesRule(),
+                request.isServiceFeeInherited(), request.getServiceFeeRule(),
+                request.isHideInherited(), request.getDistributionHideThresholdPercent(),
+                request.getSalesHideThresholdPercent(), request.isTaxInherited(),
                 request.getTaxIncluded(), request.getTaxRateCode());
-        return new ProjectOverrides(request.isDistributionInherited(), toFormula(request.getDistributionRule(), false),
-                request.isSalesInherited(), toFormula(request.getSalesRule(), false),
-                request.isServiceFeeInherited(), toServiceFee(request.getServiceFeeRule(), false),
-                request.isHideInherited(), request.isHideInherited() ? null
-                : new HideRule(request.getDistributionHideThresholdPercent(), request.getSalesHideThresholdPercent()),
-                request.isTaxInherited(), request.isTaxInherited() ? null
-                : new TaxMetadata(request.getTaxIncluded(), request.getTaxRateCode(), null));
+    }
+
+    public static ProjectOverrides toBuyerOverrides(BuyerProductCreatePricingReqVO request) {
+        return toBuyerOverrides(request.isDistributionInherited(), request.getDistributionRule(),
+                request.isSalesInherited(), request.getSalesRule(),
+                request.isServiceFeeInherited(), request.getServiceFeeRule(),
+                request.isHideInherited(), request.getDistributionHideThresholdPercent(),
+                request.getSalesHideThresholdPercent(), request.isTaxInherited(),
+                request.getTaxIncluded(), request.getTaxRateCode());
+    }
+
+    private static ProjectOverrides toBuyerOverrides(boolean distributionInherited, FormulaRuleReqVO distributionRule,
+                                                     boolean salesInherited, FormulaRuleReqVO salesRule,
+                                                     boolean serviceFeeInherited, ServiceFeeRuleReqVO serviceFeeRule,
+                                                     boolean hideInherited, java.math.BigDecimal distributionThreshold,
+                                                     java.math.BigDecimal salesThreshold, boolean taxInherited,
+                                                     Boolean taxIncluded, String taxRateCode) {
+        PricingTaxGroupValidator.requireProjectGroup(taxInherited,
+                taxIncluded != null || taxRateCode != null, taxIncluded, taxRateCode);
+        return new ProjectOverrides(distributionInherited, toFormula(distributionRule, false),
+                salesInherited, toFormula(salesRule, false),
+                serviceFeeInherited, toServiceFee(serviceFeeRule, false),
+                hideInherited, hideInherited ? null : new HideRule(distributionThreshold, salesThreshold),
+                taxInherited, taxInherited ? null : new TaxMetadata(taxIncluded, taxRateCode, null));
     }
 
     public static ProjectOverrides toProjectOverrides(ProjectProductBatchPricingReqVO request) {

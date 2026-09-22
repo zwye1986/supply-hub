@@ -104,7 +104,7 @@ class ProjectListingCommandServiceTest {
         buyerProducts = new BuyerProductCommandService(
                 databaseClock, eventPublisher, buyerMapper, productMapper, l1Mapper, l1VersionMapper,
                 overrideMapper, overrideVersionMapper, buyerPricingMapper, businessNoGenerator, resolver,
-                new ProductSellabilityService(skuMapper, spuMapper));
+                new ProductSellabilityService(skuMapper, spuMapper), null);
         when(projectPricingMapper.selectByListingId(any())).thenReturn(ProjectSkuPricingDO.builder()
                 .id(1L).listingId(80L).pricingStatus(PricingStatus.UNPRICED.name()).build());
         when(businessNoGenerator.next(BusinessNoPrefixes.PLT)).thenReturn(LISTING_CODE);
