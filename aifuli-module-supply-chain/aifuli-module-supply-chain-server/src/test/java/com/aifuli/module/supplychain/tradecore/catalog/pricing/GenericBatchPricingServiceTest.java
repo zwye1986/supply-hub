@@ -132,6 +132,61 @@ class GenericBatchPricingServiceTest {
     }
 
     @Test
+    void initializesUnpricedSkuWithNonTaxableSystemDefault() throws Exception {
+        PlatformSkuDO sku = PlatformSkuDO.builder().id(8L).skuCode("SKU_NEW").spuId(2L)
+                .marketPrice(10_000L).suggestedSalePrice(9_800L)
+                .status(CatalogEntityStatus.ACTIVE.getCode()).build();
+        PlatformSkuPricingDO identity = PlatformSkuPricingDO.builder().platformSkuId(8L)
+                .pricingStatus(PricingStatus.UNPRICED.name()).version(0L).build();
+        TaxMetadata normalizedTax = new TaxMetadata(false, PricingTaxRateCodes.NON_TAXABLE, "不征税");
+        when(skuMapper.selectByCodeForUpdate("SKU_NEW")).thenReturn(sku);
+        when(platformPricingMapper.selectBySkuIdForUpdate(8L)).thenReturn(identity);
+        when(taxDictionary.requireEnabled(false, PricingTaxRateCodes.NON_TAXABLE)).thenReturn(normalizedTax);
+        when(offerMapper.selectPublishedBySku(8L)).thenReturn(List.of());
+        when(buyerProductMapper.selectActiveByPlatformSkuId(8L)).thenReturn(List.of());
+        when(platformVersionMapper.insert(any(PlatformSkuPricingVersionDO.class))).thenAnswer(invocation -> {
+            invocation.<PlatformSkuPricingVersionDO>getArgument(0).setId(99L);
+            return 1;
+        });
+
+        service.initializePlatformDefaults(new PlatformSkuPricingInitializationEvent(List.of("SKU_NEW"), 7L));
+
+        ArgumentCaptor<PlatformSkuPricingVersionDO> version =
+                ArgumentCaptor.forClass(PlatformSkuPricingVersionDO.class);
+        verify(platformVersionMapper).insert(version.capture());
+        PricingConfig config = new ObjectMapper().readValue(version.getValue().getEffectiveConfigJson(),
+                PricingConfig.class);
+        assertThat(config.distributionRule().mode()).isEqualTo(PriceMode.DIRECT_MARKET_PRICE);
+        assertThat(config.salesRule().mode()).isEqualTo(PriceMode.DIRECT_MARKET_PRICE);
+        assertThat(config.serviceFeeRule().percentage()).isEqualByComparingTo("100");
+        assertThat(config.serviceFeeRule().operand()).isEqualByComparingTo("0");
+        assertThat(config.serviceFeeRule().hideCopy()).isTrue();
+        assertThat(config.hideRule().distributionThresholdPercent()).isEqualByComparingTo("0");
+        assertThat(config.hideRule().salesThresholdPercent()).isEqualByComparingTo("0");
+        assertThat(config.taxMetadata()).isEqualTo(normalizedTax);
+        assertThat(version.getValue().getDistributionPriceCents()).isEqualTo(10_000L);
+        assertThat(version.getValue().getSalesPriceCents()).isEqualTo(10_000L);
+        assertThat(version.getValue().getPricingStatus()).isEqualTo(PricingStatus.DEPENDENCY_MISSING.name());
+        assertThat(identity.getCurrentVersionId()).isEqualTo(99L);
+        assertThat(identity.getPricingStatus()).isEqualTo(PricingStatus.DEPENDENCY_MISSING.name());
+    }
+
+    @Test
+    void defaultInitializationNeverOverwritesExistingVersion() {
+        PlatformSkuDO sku = PlatformSkuDO.builder().id(8L).skuCode("SKU_PRICED").build();
+        PlatformSkuPricingDO identity = PlatformSkuPricingDO.builder().platformSkuId(8L)
+                .currentVersionId(88L).pricingStatus(PricingStatus.READY.name()).build();
+        when(skuMapper.selectByCodeForUpdate("SKU_PRICED")).thenReturn(sku);
+        when(platformPricingMapper.selectBySkuIdForUpdate(8L)).thenReturn(identity);
+
+        service.initializePlatformDefaults(new PlatformSkuPricingInitializationEvent(List.of("SKU_PRICED"), 7L));
+
+        verifyNoInteractions(taxDictionary);
+        verify(platformVersionMapper, never()).insert(any(PlatformSkuPricingVersionDO.class));
+        verify(platformPricingMapper, never()).updateById(any(PlatformSkuPricingDO.class));
+    }
+
+    @Test
     void getPlatformPricingReturnsCompleteCurrentVersionWithoutRecalculation() throws Exception {
         PlatformSkuDO sku = PlatformSkuDO.builder().id(8L).skuCode("SKU_1").build();
         PlatformSkuPricingDO identity = PlatformSkuPricingDO.builder().platformSkuId(8L)

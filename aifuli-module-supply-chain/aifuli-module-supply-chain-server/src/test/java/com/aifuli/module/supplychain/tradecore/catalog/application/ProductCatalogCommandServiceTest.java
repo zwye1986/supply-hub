@@ -7,6 +7,7 @@ import com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseCloc
 import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BrandDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuDO;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuPricingDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSpuDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProductCategoryDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProductTypeDO;
@@ -21,6 +22,7 @@ import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatu
 import com.aifuli.module.supplychain.tradecore.catalog.domain.FulfillmentType;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.SuggestedSalePriceRule;
 import com.aifuli.module.supplychain.tradecore.catalog.pricing.PricingDependencyChangedEvent;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.PlatformSkuPricingInitializationEvent;
 import org.springframework.context.ApplicationEventPublisher;
 import com.aifuli.module.supplychain.tradecore.profile.domain.ProductClassification;
 import com.aifuli.module.supplychain.tradecore.profile.domain.SellableCategory;
@@ -148,6 +150,22 @@ class ProductCatalogCommandServiceTest {
                     assertThat(sku.getSuggestedSalePrice()).isEqualTo(5_100L);
                     assertThat(sku.getSuggestedSalePriceRuleJson()).isEqualTo(customRule);
                 });
+        verify(eventPublisher, never()).publishEvent(new PricingDependencyChangedEvent(10L));
+    }
+
+    /** 历史未定价 SKU 在复合更新时补发系统默认定价初始化，价格变化也不得再触发第二次依赖重算。 */
+    @Test
+    void updateInitializesUnpricedSkuWithoutPublishingDependencyRecalculation() {
+        givenUpdateWithOneOmittedSku();
+        when(platformSkuPricingMapper.selectById(10L)).thenReturn(PlatformSkuPricingDO.builder()
+                .platformSkuId(10L).pricingStatus("UNPRICED").build());
+        ProductCatalogCommandService.SaveSkuLine changed = new ProductCatalogCommandService.SaveSkuLine(
+                "SKU_KEEP", "保留SKU", FulfillmentType.CARD_CODE_SECRET.code(),
+                100L, 10_000L, 7_777L, 1L, 10L, CatalogEntityStatus.DRAFT.getCode());
+
+        service.updateProduct(SPU_CODE, saveCommand(changed));
+
+        verify(eventPublisher).publishEvent(new PlatformSkuPricingInitializationEvent(List.of("SKU_KEEP"), 1L));
         verify(eventPublisher, never()).publishEvent(new PricingDependencyChangedEvent(10L));
     }
 
@@ -831,6 +849,8 @@ class ProductCatalogCommandServiceTest {
                 .status(CatalogEntityStatus.ACTIVE.getCode()).build();
         when(skuMapper.selectList(any())).thenReturn(List.of(keep, omitted));
         when(skuMapper.updateById(any(PlatformSkuDO.class))).thenReturn(1);
+        when(platformSkuPricingMapper.selectById(10L)).thenReturn(PlatformSkuPricingDO.builder()
+                .platformSkuId(10L).currentVersionId(100L).pricingStatus("READY").build());
         return omitted;
     }
 

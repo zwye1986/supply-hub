@@ -33,6 +33,7 @@ import com.aifuli.module.supplychain.tradecore.catalog.domain.SuggestedSalePrice
 import com.aifuli.module.supplychain.tradecore.catalog.domain.SuggestedSalePriceRule;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.UnshelveMode;
 import com.aifuli.module.supplychain.tradecore.catalog.pricing.PricingDependencyChangedEvent;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.PlatformSkuPricingInitializationEvent;
 import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericPricingCalculator.PricingStatus;
 import com.aifuli.module.supplychain.tradecore.profile.domain.ClosedEnums;
 import com.aifuli.module.supplychain.tradecore.profile.domain.SellableCategory;
@@ -46,6 +47,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
@@ -356,6 +358,7 @@ public class ProductCatalogCommandService {
         PlatformSpuDO spu = insertSpu(command);
         CatalogEntityStatus spuStatus = CatalogEntityStatus.fromCode(spu.getStatus());
         Set<String> requestCodes = new HashSet<>();
+        List<String> defaultPricingInitializationSkuCodes = new ArrayList<>();
         for (SaveSkuLine line : command.skus()) {
             String skuCode = hasText(line.skuCode()) ? line.skuCode().trim()
                     : businessNoGenerator.next(BusinessNoPrefixes.SKU);
@@ -367,7 +370,10 @@ public class ProductCatalogCommandService {
             }
             SaveSkuLine inheritedLine = line.withFulfillmentType(spu.getFulfillmentType());
             insertSku(spu, skuCode, inheritedLine, spuStatus, command.operatorId(), spu.getCreatedAt());
+            defaultPricingInitializationSkuCodes.add(skuCode);
         }
+        eventPublisher.publishEvent(new PlatformSkuPricingInitializationEvent(
+                defaultPricingInitializationSkuCodes, command.operatorId()));
         return spu.getSpuCode();
     }
 
@@ -473,6 +479,7 @@ public class ProductCatalogCommandService {
         Map<String, PlatformSkuDO> byCode = new HashMap<>();
         existing.forEach(sku -> byCode.put(sku.getSkuCode(), sku));
         Set<String> requested = new HashSet<>();
+        Set<String> defaultPricingInitializationSkuCodes = new LinkedHashSet<>();
         Set<Long> priceDependencyChangedSkuIds = new LinkedHashSet<>();
         LocalDateTime now = now();
         for (SaveSkuLine line : command.skus()) {
@@ -488,12 +495,16 @@ public class ProductCatalogCommandService {
             SchemaDefinition schema = validateSkuLine(inheritedLine, skuStatus == CatalogEntityStatus.ACTIVE);
             if (sku == null) {
                 insertValidatedSku(spu, code, inheritedLine, skuStatus, schema, command.operatorId(), now);
+                defaultPricingInitializationSkuCodes.add(code);
             } else {
                 Long previousMarketPrice = sku.getMarketPrice();
                 Long previousSuggestedSalePrice = sku.getSuggestedSalePrice();
                 applySku(sku, inheritedLine, skuStatus, schema, command.operatorId(), now);
                 requireUpdated(skuMapper.updateById(sku));
-                if (!java.util.Objects.equals(previousMarketPrice, sku.getMarketPrice())
+                PlatformSkuPricingDO pricing = platformSkuPricingMapper.selectById(sku.getId());
+                if (pricing == null || pricing.getCurrentVersionId() == null) {
+                    defaultPricingInitializationSkuCodes.add(code);
+                } else if (!java.util.Objects.equals(previousMarketPrice, sku.getMarketPrice())
                         || !java.util.Objects.equals(previousSuggestedSalePrice, sku.getSuggestedSalePrice())) {
                     priceDependencyChangedSkuIds.add(sku.getId());
                 }
@@ -509,8 +520,13 @@ public class ProductCatalogCommandService {
                 }
             }
         }
-        // 基础价是公式依赖。主数据写入完成后，在同一事务中为所有已定价分销商/项目生成新不可变版本。
+        // 复合保存把尚未发布平台定价的 SKU 初始化为系统默认规则；已有版本只在基础价变化时按原规则重算。
+        // 两个集合互斥，确保一个 SKU 在单次保存中最多生成一个平台定价版本。
         // 设计见 docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#5-版本继承与可售状态。
+        if (!defaultPricingInitializationSkuCodes.isEmpty()) {
+            eventPublisher.publishEvent(new PlatformSkuPricingInitializationEvent(
+                    List.copyOf(defaultPricingInitializationSkuCodes), command.operatorId()));
+        }
         priceDependencyChangedSkuIds.forEach(id -> eventPublisher.publishEvent(new PricingDependencyChangedEvent(id)));
     }
 
@@ -550,16 +566,16 @@ public class ProductCatalogCommandService {
         applySkuStatus(skuCode, CatalogEntityStatus.ARCHIVED, operatorId);
     }
 
-    private void insertSku(PlatformSpuDO spu, String skuCode, SaveSkuLine line,
-                           CatalogEntityStatus defaultStatus, Long operatorId, LocalDateTime now) {
+    private PlatformSkuDO insertSku(PlatformSpuDO spu, String skuCode, SaveSkuLine line,
+                                    CatalogEntityStatus defaultStatus, Long operatorId, LocalDateTime now) {
         CatalogEntityStatus status = writableStatus(line.status(), defaultStatus);
         SchemaDefinition schema = validateSkuLine(line, status == CatalogEntityStatus.ACTIVE);
-        insertValidatedSku(spu, skuCode, line, status, schema, operatorId, now);
+        return insertValidatedSku(spu, skuCode, line, status, schema, operatorId, now);
     }
 
-    private void insertValidatedSku(PlatformSpuDO spu, String skuCode, SaveSkuLine line,
-                                    CatalogEntityStatus status, SchemaDefinition schema,
-                                    Long operatorId, LocalDateTime now) {
+    private PlatformSkuDO insertValidatedSku(PlatformSpuDO spu, String skuCode, SaveSkuLine line,
+                                             CatalogEntityStatus status, SchemaDefinition schema,
+                                             Long operatorId, LocalDateTime now) {
         long marketPrice = defaultLong(line.marketPrice(), DEFAULT_PRICE_FEN);
         SuggestedSalePriceCalculator.Calculation suggestedPrice = resolveSuggestedSalePrice(line, marketPrice, null);
         PlatformSkuDO sku = PlatformSkuDO.builder().skuCode(skuCode).spuId(spu.getId())
@@ -590,6 +606,7 @@ public class ProductCatalogCommandService {
         platformSkuPricingMapper.insert(PlatformSkuPricingDO.builder()
                 .platformSkuId(sku.getId()).pricingStatus(PricingStatus.UNPRICED.name())
                 .version(0L).createdAt(now).updatedAt(now).build());
+        return sku;
     }
 
     private void applySku(PlatformSkuDO sku, SaveSkuLine line, CatalogEntityStatus status, SchemaDefinition schema,

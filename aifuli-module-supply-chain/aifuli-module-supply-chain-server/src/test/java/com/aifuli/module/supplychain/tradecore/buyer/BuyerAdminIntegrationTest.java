@@ -50,15 +50,20 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlem
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.FulfillmentType;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericBatchPricingService;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericPricingCalculator.TaxMetadata;
+import com.aifuli.module.supplychain.integration.system.TaxRateDictionaryAdapter;
 import com.aifuli.module.supplychain.tradecore.ledger.application.AccountLedgerWriter;
 import com.aifuli.module.supplychain.tradecore.profile.domain.L2AdjustMode;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.context.ConfigurableApplicationContext;
+import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
 import com.aifuli.module.supplychain.testsupport.ProductCenterTestConfiguration;
@@ -75,6 +80,10 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BUYER_PARENT_INVALID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /**
  * 分销商管理端建档期初、组织树，以及分销商品手工 L2 覆盖；历史模板价预留行不得参与解析。
@@ -551,7 +560,20 @@ class BuyerAdminIntegrationTest {
             BuyerAccountOpeningService.class, AccountLedgerWriter.class,
             BuyerAdminCommandService.class, BuyerAdminQueryService.class,
             BuyerInvoiceService.class,
-            BuyerProductCommandService.class, BuyerProductQueryService.class})
+            BuyerProductCommandService.class, BuyerProductQueryService.class,
+            GenericBatchPricingService.class})
     static class TestConfiguration {
+        @Bean
+        ObjectMapper objectMapper() {
+            return new ObjectMapper().findAndRegisterModules();
+        }
+
+        @Bean
+        TaxRateDictionaryAdapter taxRateDictionaryAdapter() {
+            TaxRateDictionaryAdapter adapter = mock(TaxRateDictionaryAdapter.class);
+            when(adapter.requireEnabled(any(), anyString())).thenAnswer(invocation ->
+                    new TaxMetadata(invocation.getArgument(0), invocation.getArgument(1), "不征税"));
+            return adapter;
+        }
     }
 }

@@ -19,14 +19,21 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSe
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSettlementPriceVersionDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuPricingDO;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuPricingVersionDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BrandMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceVersionMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuPricingMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuPricingVersionMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.SuggestedSalePriceRule;
 import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericPricingCalculator.PricingStatus;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericPricingCalculator.PricingConfig;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericPricingCalculator.TaxMetadata;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericBatchPricingService;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.PricingTaxRateCodes;
+import com.aifuli.module.supplychain.integration.system.TaxRateDictionaryAdapter;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterAll;
@@ -50,6 +57,8 @@ import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /**
  * 商品中心核心链路真实 MySQL 回归。
@@ -79,7 +88,7 @@ class ProductCenterIntegrationTest {
     }
 
     @Test
-    void persistsCompositeProductAndReadsStableManagementProjections() {
+    void persistsCompositeProductAndReadsStableManagementProjections() throws Exception {
         try (ConfigurableApplicationContext context = applicationContext()) {
             BrandAdminService brandService = context.getBean(BrandAdminService.class);
             CategoryCommandService categoryService = context.getBean(CategoryCommandService.class);
@@ -90,6 +99,8 @@ class ProductCenterIntegrationTest {
             BrandMapper brandMapper = context.getBean(BrandMapper.class);
             PlatformSkuMapper skuMapper = context.getBean(PlatformSkuMapper.class);
             PlatformSkuPricingMapper platformPricingMapper = context.getBean(PlatformSkuPricingMapper.class);
+            PlatformSkuPricingVersionMapper platformPricingVersionMapper =
+                    context.getBean(PlatformSkuPricingVersionMapper.class);
             PlatformSettlementPriceMapper priceMapper = context.getBean(PlatformSettlementPriceMapper.class);
             PlatformSettlementPriceVersionMapper priceVersionMapper =
                     context.getBean(PlatformSettlementPriceVersionMapper.class);
@@ -186,8 +197,18 @@ class ProductCenterIntegrationTest {
             assertThat(platformSku.getResultSchemaCode()).isEqualTo("DIRECT_RECHARGE_RESULT");
             assertThat(platformSku.getResultSchemaVersion()).isEqualTo(1);
             PlatformSkuPricingDO defaultPricing = platformPricingMapper.selectById(platformSku.getId());
-            assertThat(defaultPricing.getPricingStatus()).isEqualTo(PricingStatus.UNPRICED.name());
-            assertThat(defaultPricing.getCurrentVersionId()).isNull();
+            assertThat(defaultPricing.getPricingStatus()).isEqualTo(PricingStatus.DEPENDENCY_MISSING.name());
+            assertThat(defaultPricing.getCurrentVersionId()).isNotNull();
+            PlatformSkuPricingVersionDO defaultVersion =
+                    platformPricingVersionMapper.selectById(defaultPricing.getCurrentVersionId());
+            assertThat(defaultVersion.getDistributionPriceCents()).isEqualTo(12_000L);
+            assertThat(defaultVersion.getSalesPriceCents()).isEqualTo(12_000L);
+            PricingConfig defaultConfig = objectMapper.readValue(
+                    defaultVersion.getEffectiveConfigJson(), PricingConfig.class);
+            assertThat(defaultConfig.hideRule().distributionThresholdPercent()).isEqualByComparingTo("0");
+            assertThat(defaultConfig.hideRule().salesThresholdPercent()).isEqualByComparingTo("0");
+            assertThat(defaultConfig.taxMetadata()).isEqualTo(
+                    new TaxMetadata(false, PricingTaxRateCodes.NON_TAXABLE, "不征税"));
             LocalDateTime now = LocalDateTime.now();
             PlatformSettlementPriceVersionDO priceVersion = PlatformSettlementPriceVersionDO.builder()
                     .platformSkuId(platformSku.getId())
@@ -361,12 +382,20 @@ class ProductCenterIntegrationTest {
     @Configuration(proxyBeanMethods = false)
     @Import({SupplyChainDataSourceConfiguration.class, UlidGenerator.class, BusinessNoGenerator.class,
             ProductCatalogCommandService.class, ProductCatalogQueryService.class, CategoryQueryService.class,
-            PlatformSkuQueryService.class,
+            PlatformSkuQueryService.class, GenericBatchPricingService.class,
             ProductCenterTestConfiguration.class})
     static class TestConfiguration {
         @Bean
         ObjectMapper objectMapper() {
             return new ObjectMapper().findAndRegisterModules();
+        }
+
+        @Bean
+        TaxRateDictionaryAdapter taxRateDictionaryAdapter() {
+            TaxRateDictionaryAdapter adapter = mock(TaxRateDictionaryAdapter.class);
+            when(adapter.requireEnabled(false, PricingTaxRateCodes.NON_TAXABLE))
+                    .thenReturn(new TaxMetadata(false, PricingTaxRateCodes.NON_TAXABLE, "不征税"));
+            return adapter;
         }
     }
 }

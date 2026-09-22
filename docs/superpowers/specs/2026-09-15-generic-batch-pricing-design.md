@@ -11,7 +11,11 @@ SKU 建议价”的限制。本文的“模板”是一次性应用到当前所�
 3. 三层解析顺序为“平台商品/SKU 默认定价 → 分销商 + SKU 继承/覆盖 → 项目 + SKU 继承/覆盖”。三层均按
    分销价、销售价、服务费、利润隐藏、税务五组配置；税务也纳入商品默认层。下游每组可整组继承或整组覆盖，
    税务覆盖时 `taxIncluded` 与 `taxRateCode` 必须同时显式传入，继承时不得携带任一税务字段。
-4. 新平台 SKU 没有商品默认定价时为 `UNPRICED`。创建 SKU 时同步插入商品定价身份；创建分销商品时必须同步
+4. 新平台 SKU 创建时同步插入商品定价身份，并由 SPU+SKU 复合创建事务自动发布第一版系统默认定价；复合更新
+   对新增 SKU 或仍无当前版本的 `UNPRICED` SKU 执行相同初始化，已有人工定价版本绝不覆盖。系统默认规则为：
+   分销价与销售价均 `DIRECT_MARKET_PRICE`，服务费按 `商品小计×100%×0` 计算且隐藏自定义文案，分销区与销售区
+   利润隐藏阈值均为 0，税务固定为 `taxIncluded=false + NON_TAXABLE`。无有效供货价时仍发布版本并进入
+   `DEPENDENCY_MISSING`；市场价低于有效供货价时以 0 阈值进入 `MARGIN_HIDDEN`。创建分销商品时必须同步
    插入 `sc_buyer_sku_pricing` 身份行（`pricing_status=UNPRICED`，`current_version_id` 为空）；创建项目
    商品时同步插入 `sc_project_sku_pricing` 身份行。采购商目录 `availableOnly=true` 只返回分销商定价
    `READY` 的标准商品；全量目录对非 `READY` 身份标记为不可用。报价与标准履约只接受项目定价 `READY`。
@@ -118,6 +122,12 @@ SKU 建议价”的限制。本文的“模板”是一次性应用到当前所�
 商品请求携带所选 `platformSkuCodes` 和五组完整默认配置；分销商请求携带 `buyerProductCodes`，项目请求携带 `listingCodes`，两个下游层每组都包含
 `inherit=true` 或完整覆盖配置。预览不落库，逐 SKU 返回三个依赖价格、计算结果、利润率和预期可售状态。
 保存由服务端重新计算，不能信任预览结果。标品尚未发布默认定价时，分销商或项目保存返回 `PLATFORM_DEFAULT_PRICING_MISSING` 并整批回滚，不落成半成品覆盖。`POST /supply-chain/buyers/{buyerCode}/products` 的行内 `pricing` 与上述保存使用同一覆盖对象，并与分销商品关联处在同一事务。
+
+SPU+SKU 复合创建/更新不是把 Controller 通过 HTTP 回调自身，而是由商品应用服务在主数据写入后发布同步领域
+事件，通用定价监听器复用与 `PUT /products/skus/pricing` 相同的校验、计算和不可变版本发布逻辑。初始化仅命中
+当前版本为空的 SKU；已有版本继续由基础价格依赖变化事件按原配置重算。同一 SKU 在一次复合保存中只能走初始化
+或依赖重算之一，禁止生成双版本。自动初始化会实时校验 `NON_TAXABLE` 字典项；RPC、计算或版本发布失败必须使
+SPU、SKU 与定价整体回滚。
 
 商品默认定价单条查询按平台 SKU 永久业务编码读取，不要求 SKU 当前为启用状态，便于停用商品审计和编辑回显。
 响应返回当前版本主键与版本号、定价状态与不可售原因、分销价/销售价/服务费/利润隐藏/税务五组完整配置、

@@ -10,17 +10,26 @@ import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerProductMappe
 import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerProjectMapper;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.ProjectListingMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuDO;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerSkuPricingDO;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerSkuPricingVersionDO;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuPricingDO;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuPricingVersionDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSpuDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerProductL2OverrideMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerProductL2OverrideVersionMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerSkuPricingMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerSkuPricingVersionMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceVersionMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuPricingMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuPricingVersionMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSpuMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProjectListingVersionMapper;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -48,6 +57,10 @@ class BuyerProductQueryServiceTest {
     private final PlatformSkuMapper skuMapper = mock(PlatformSkuMapper.class);
     private final PlatformSpuMapper spuMapper = mock(PlatformSpuMapper.class);
     private final ProjectListingMapper listingMapper = mock(ProjectListingMapper.class);
+    private final BuyerSkuPricingMapper buyerPricingMapper = mock(BuyerSkuPricingMapper.class);
+    private final BuyerSkuPricingVersionMapper buyerPricingVersionMapper = mock(BuyerSkuPricingVersionMapper.class);
+    private final PlatformSkuPricingMapper platformPricingMapper = mock(PlatformSkuPricingMapper.class);
+    private final PlatformSkuPricingVersionMapper platformPricingVersionMapper = mock(PlatformSkuPricingVersionMapper.class);
     private BuyerProductQueryService service;
 
     @BeforeEach
@@ -61,10 +74,15 @@ class BuyerProductQueryServiceTest {
                 mock(PlatformSettlementPriceVersionMapper.class),
                 mock(BuyerProductL2OverrideMapper.class),
                 mock(BuyerProductL2OverrideVersionMapper.class),
+                buyerPricingMapper,
+                buyerPricingVersionMapper,
+                platformPricingMapper,
+                platformPricingVersionMapper,
                 listingMapper,
                 mock(ProjectListingVersionMapper.class),
                 mock(BuyerProjectMapper.class),
-                mock(SettlementPriceResolver.class));
+                mock(SettlementPriceResolver.class),
+                new ObjectMapper());
         when(buyerMapper.selectByBuyerCode("BYR_A")).thenReturn(BuyerDO.builder().id(9L).buyerCode("BYR_A").build());
     }
 
@@ -139,6 +157,58 @@ class BuyerProductQueryServiceTest {
         assertThat(page.getList()).isEmpty();
         assertThat(capturedSpuQuery().getSqlSegment()).contains("IN");
         assertThat(capturedSpuQuery().getParamNameValuePairs().values()).contains("MOVIE", "FOOD");
+    }
+
+    @Test
+    void listReturnsSkuMarketPriceAndBuyerEffectiveTaxWithoutTaxAmount() {
+        BuyerProductDO product = BuyerProductDO.builder()
+                .id(31L).buyerProductCode("BPD_1").buyerId(9L).platformSkuId(11L).build();
+        when(productMapper.selectPage(any(PageParam.class), any())).thenReturn(new PageResult<>(List.of(product), 1L));
+        when(skuMapper.selectById(11L)).thenReturn(PlatformSkuDO.builder()
+                .id(11L).skuCode("SKU_1").spuId(21L).marketPrice(9600L).build());
+        when(spuMapper.selectById(21L)).thenReturn(PlatformSpuDO.builder().id(21L).build());
+        when(listingMapper.selectList(any())).thenReturn(List.of());
+        when(buyerPricingMapper.selectByBuyerProductId(31L)).thenReturn(BuyerSkuPricingDO.builder()
+                .id(71L).buyerProductId(31L).currentVersionId(72L).build());
+        when(buyerPricingVersionMapper.selectById(72L)).thenReturn(BuyerSkuPricingVersionDO.builder()
+                .id(72L).pricingId(71L)
+                .taxMetadataJson("{\"taxIncluded\":false,\"taxRateCode\":\"NON_TAXABLE\",\"taxRateLabel\":\"不征税\"}")
+                .build());
+
+        BuyerProductQueryService.BuyerProductListItem item =
+                service.page("BYR_A", List.of(), 1, 20).getList().getFirst();
+
+        assertThat(item.marketPriceCents()).isEqualTo(9600L);
+        assertThat(item.taxIncluded()).isFalse();
+        assertThat(item.taxRateCode()).isEqualTo("NON_TAXABLE");
+        assertThat(item.taxRateDisplay()).isEqualTo("不征税");
+    }
+
+    @Test
+    void listFallsBackToPlatformTaxForHistoricalBuyerWithoutPricingVersion() {
+        BuyerProductDO product = BuyerProductDO.builder()
+                .id(31L).buyerProductCode("BPD_1").buyerId(9L).platformSkuId(11L).build();
+        when(productMapper.selectPage(any(PageParam.class), any())).thenReturn(new PageResult<>(List.of(product), 1L));
+        when(skuMapper.selectById(11L)).thenReturn(PlatformSkuDO.builder()
+                .id(11L).skuCode("SKU_1").spuId(21L).marketPrice(9600L).build());
+        when(spuMapper.selectById(21L)).thenReturn(PlatformSpuDO.builder().id(21L).build());
+        when(listingMapper.selectList(any())).thenReturn(List.of());
+        when(platformPricingMapper.selectById(11L)).thenReturn(PlatformSkuPricingDO.builder()
+                .platformSkuId(11L).currentVersionId(81L).build());
+        when(platformPricingVersionMapper.selectById(81L)).thenReturn(PlatformSkuPricingVersionDO.builder()
+                .id(81L).platformSkuId(11L)
+                .effectiveConfigJson("{\"distributionRule\":null,\"salesRule\":null,"
+                        + "\"serviceFeeRule\":null,\"hideRule\":null,"
+                        + "\"taxMetadata\":{\"taxIncluded\":false,\"taxRateCode\":\"NON_TAXABLE\","
+                        + "\"taxRateLabel\":\"不征税\"}}")
+                .build());
+
+        BuyerProductQueryService.BuyerProductListItem item =
+                service.page("BYR_A", List.of(), 1, 20).getList().getFirst();
+
+        assertThat(item.taxIncluded()).isFalse();
+        assertThat(item.taxRateCode()).isEqualTo("NON_TAXABLE");
+        assertThat(item.taxRateDisplay()).isEqualTo("不征税");
     }
 
     private void stubCatalog(boolean spuMatches) {

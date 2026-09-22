@@ -144,6 +144,48 @@ public class GenericBatchPricingService {
         }
     }
 
+    /**
+     * 为复合保存产生的新 SKU 或历史 UNPRICED SKU 发布首个系统默认版本。监听器在商品事务内同步执行，
+     * 并在锁定定价身份后再次判断当前指针，防止覆盖并发完成的人工定价。
+     * 设计见 {@code docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#5-版本继承与可售状态}。
+     */
+    @EventListener
+    @Transactional(transactionManager = TX, rollbackFor = Exception.class)
+    public void initializePlatformDefaults(PlatformSkuPricingInitializationEvent event) {
+        List<String> skuCodes = event.platformSkuCodes().stream()
+                .filter(code -> code != null && !code.isBlank()).map(String::trim).distinct().toList();
+        if (skuCodes.isEmpty()) return;
+        log.info("复合保存初始化平台默认定价 skuCount={} operatorId={}", skuCodes.size(), event.operatorId());
+        List<PlatformSkuDO> unpricedSkus = new ArrayList<>();
+        for (String skuCode : skuCodes) {
+            // 复合保存允许创建草稿 SKU；默认定价是主数据完整性的一部分，不能沿用人工定价入口的“仅启用 SKU”限制。
+            PlatformSkuDO sku = skuMapper.selectByCodeForUpdate(skuCode);
+            if (sku == null) {
+                throw exception(PLATFORM_SKU_NOT_FOUND);
+            }
+            PlatformSkuPricingDO identity = platformPricingMapper.selectBySkuIdForUpdate(sku.getId());
+            if (identity != null && identity.getCurrentVersionId() != null) {
+                log.info("跳过已有版本的平台默认定价初始化 skuCode={} currentVersionId={}",
+                        sku.getSkuCode(), identity.getCurrentVersionId());
+            } else {
+                unpricedSkus.add(sku);
+            }
+        }
+        if (unpricedSkus.isEmpty()) return;
+        PricingConfig defaults = PlatformDefaultPricingPolicy.create();
+        TaxMetadata tax = taxDictionary.requireEnabled(defaults.taxMetadata().taxIncluded(),
+                defaults.taxMetadata().taxRateCode());
+        PricingConfig normalized = withTax(defaults, tax);
+        LocalDateTime now = clock.now();
+        for (PlatformSkuDO sku : unpricedSkus) {
+            PriceDependencies dependencies = dependencies(sku, now);
+            PricingResult result = calculator.calculate(normalized, dependencies);
+            PlatformSkuPricingVersionDO version = publishPlatform(sku, normalized, dependencies, result,
+                    event.operatorId(), now);
+            rebuildBuyers(sku, version, event.operatorId(), now);
+        }
+    }
+
     @Transactional(transactionManager = TX, readOnly = true)
     public List<PricingPreview> previewBuyer(String buyerCode, List<String> productCodes, ProjectOverrides overrides) {
         List<String> codes = normalize(productCodes);
