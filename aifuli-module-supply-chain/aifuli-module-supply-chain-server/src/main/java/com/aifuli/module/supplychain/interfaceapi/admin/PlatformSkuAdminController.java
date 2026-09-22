@@ -58,14 +58,19 @@ public class PlatformSkuAdminController {
     @GetMapping
     @PreAuthorize(PLATFORM_SKU_QUERY_EXPRESSION)
     @Operation(summary = "标品 SKU 分页",
-            description = "仅返回启用 SKU 与启用 SPU。keyword 包含匹配 SKU/SPU 的名称或编码。"
-                    + "supplierCode 只返回命中供货配置且尚无未退役 Offer 的 SKU；"
-                    + "buyerCode 只返回该分销商尚未关联的平台 SKU，供新增分销商品选品；"
+            description = "仅返回启用 SKU 与启用 SPU。keyword 为包含匹配，同时命中 SKU 名称、SKU 编码、SPU 名称、SPU 编码；"
+                    + "省略或空白不筛选。"
+                    + "supplierCode 只返回三码命中供货配置且尚无未退役 Offer 的 SKU。"
+                    + "buyerCode 只排除该分销商未移除的分销商品，已移除的 SKU 会再次出现；"
+                    + "不按分销商档案的可售品类或商品类型收窄，类型筛选请传 productType。"
                     + "projectCode 只返回所属分销商已有分销商品且项目目录尚未关联的 SKU。"
-                    + "categoryName 只展示主类目名称；supplyPriceCents 为当前最低有效供货价，单位 CNY 分。"
+                    + "categoryName 是 SPU 主类目名称，归档或未挂类目为空，只展示、不参与筛选。"
+                    + "supplyPriceCents 是当前最低有效供货价，单位 CNY 分：供应商启用、Offer 已发布、"
+                    + "当前版本已到 validFrom 且未到 validTo，多条取最低；没有有效报价为空，0 是有效价格。"
                     + "不要调用 /page。")
     public CommonResult<PageResult<SkuListItem>> page(
-            @Parameter(description = "SKU/SPU 名称或编码包含匹配", example = "话费")
+            @Parameter(description = "包含匹配 SKU 名称、SKU 编码、SPU 名称、SPU 编码。省略或空白不筛选",
+                    example = "话费")
             @RequestParam(required = false) String keyword,
             @Parameter(description = "可售品类编码", example = "EQUITY")
             @RequestParam(required = false) String sellableCategory,
@@ -75,7 +80,8 @@ public class PlatformSkuAdminController {
             @RequestParam(required = false) String productClassification,
             @Parameter(description = "供应商编码；筛选可新增报价的SKU", example = "SUP_01ABC")
             @RequestParam(required = false) String supplierCode,
-            @Parameter(description = "分销商编码；筛选尚未关联的SKU", example = "BUYER_01ABC")
+            @Parameter(description = "分销商永久业务编码。只排除该分销商未移除的分销商品；已移除 SKU 会再次出现。"
+                    + "不按档案可售品类或商品类型过滤", example = "BYR_01ABC")
             @RequestParam(required = false) String buyerCode,
             @Parameter(description = "项目编码；筛选项目目录尚未关联的SKU", example = "PRJ_01ABC")
             @RequestParam(required = false) String projectCode,

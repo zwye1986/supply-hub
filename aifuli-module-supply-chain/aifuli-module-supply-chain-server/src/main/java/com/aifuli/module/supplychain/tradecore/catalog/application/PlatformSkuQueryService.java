@@ -409,6 +409,8 @@ public class PlatformSkuQueryService {
             @Schema(description = "L1 B端结算单价，CNY分，允许0") Long suggestPriceCents,
             @Schema(description = "兼容字段名；C端建议价，取自平台SKU销售建议价，单位CNY分") Long marketPriceCents,
             @Schema(description = "SPU主类目名称；归档或缺失为空，只展示不参与筛选") String categoryName,
-            @Schema(description = "当前最低有效供货价，单位CNY分；没有有效报价为空，0是有效价格") Long supplyPriceCents) {
+            @Schema(description = "当前最低有效供货价，单位CNY分。供应商须启用，Offer须已发布，"
+                    + "当前版本已到validFrom且未到validTo，多条取最低；没有有效报价为空，0是有效价格")
+            Long supplyPriceCents) {
     }
 }

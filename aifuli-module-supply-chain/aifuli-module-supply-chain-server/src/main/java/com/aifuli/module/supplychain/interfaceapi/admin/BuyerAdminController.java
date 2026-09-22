@@ -244,8 +244,14 @@ public class BuyerAdminController {
     @PostMapping("/{buyerCode}/products")
     @PreAuthorize(BUYER_UPDATE_EXPRESSION)
     @Operation(summary = "从标品关联分销商品",
-            description = "默认 l2AdjustMode=FOLLOW_TEMPLATE，其语义为无手工覆盖时继承L1，不读取模板价。编号 BPD_。已移除同行复活而非插入。金额单位 CNY 分。")
-    public CommonResult<List<String>> addProducts(@PathVariable String buyerCode,
+            description = "默认 l2AdjustMode=FOLLOW_TEMPLATE，其语义为无手工覆盖时继承L1，不读取模板价。"
+                    + "页面「按分销价=销售建议价」须显式传 EQUAL_L1，覆盖值取当前 L1 结算分，不是 C 端销售建议价。"
+                    + "CUSTOM 为 round(L1结算分 × percent / 100) + amountCents，结果必须大于 0，否则 L2_OVERRIDE_INVALID。"
+                    + "displayThresholdPercent 省略则落空；传入须为 0～100 的整数，越界同样 L2_OVERRIDE_INVALID。"
+                    + "阈值本批只落库，不触发 C 端隐藏。编号 BPD_。已存在未移除行返回 BUYER_PRODUCT_DUPLICATE；"
+                    + "已移除同行复活而非插入。金额单位 CNY 分。")
+    public CommonResult<List<String>> addProducts(
+            @Parameter(description = "采购商永久业务编码", example = "BYR_01ABC") @PathVariable String buyerCode,
                                                     @Valid @RequestBody AddBuyerProductsReqVO request) {
         List<ProductLine> lines = request.getItems().stream()
                 .map(BuyerAdminController::toProductLine)
@@ -256,9 +262,14 @@ public class BuyerAdminController {
     @PatchMapping("/{buyerCode}/products/{buyerProductCode}")
     @PreAuthorize(BUYER_UPDATE_EXPRESSION)
     @Operation(summary = "改分销商品L2覆盖",
-            description = "FOLLOW_TEMPLATE 清手工覆盖并继承L1，不读取模板价；EQUAL_L1/CUSTOM 无 L1 拒绝。金额单位 CNY 分。")
-    public CommonResult<Boolean> patchProduct(@PathVariable String buyerCode,
-                                              @PathVariable String buyerProductCode,
+            description = "FOLLOW_TEMPLATE 清手工覆盖并继承L1，不读取模板价。"
+                    + "EQUAL_L1 覆盖值取当前 L1 结算分；CUSTOM 为 round(L1结算分 × percent / 100) + amountCents，"
+                    + "结果必须大于 0。无 L1 时 EQUAL_L1/CUSTOM 拒绝。"
+                    + "displayThresholdPercent 省略则不改该列；传入须为 0～100 的整数，越界返回 L2_OVERRIDE_INVALID。"
+                    + "阈值本批只落库，不触发 C 端隐藏。金额单位 CNY 分。")
+    public CommonResult<Boolean> patchProduct(
+            @Parameter(description = "采购商永久业务编码", example = "BYR_01ABC") @PathVariable String buyerCode,
+            @Parameter(description = "分销商品稳定业务编码", example = "BPD_01ABC") @PathVariable String buyerProductCode,
                                               @Valid @RequestBody PatchBuyerProductReqVO request) {
         productCommandService.patchL2(
                 buyerCode, buyerProductCode,
@@ -502,13 +513,14 @@ public class BuyerAdminController {
         private String platformSkuCode;
         @Schema(description = "L2调价方式：FOLLOW_TEMPLATE（清手工覆盖并继承L1，不读取模板价）/ EQUAL_L1 / CUSTOM，默认 FOLLOW_TEMPLATE")
         private String l2AdjustMode;
-        @Schema(description = "CUSTOM时的整数百分比，100等于L1")
+        @Schema(description = "CUSTOM 时的整数百分比，100 等于当前 L1 结算分；小于 1 返回 L2_OVERRIDE_INVALID。EQUAL_L1 可省略")
         private Integer percent;
-        @Schema(description = "CUSTOM时加减的CNY分")
+        @Schema(description = "CUSTOM 时在百分比结果上加减的金额，单位 CNY 分，可为负；省略按 0。EQUAL_L1 可省略")
         private Long amountCents;
         @Min(0)
         @Max(100)
-        @Schema(description = "利润空间低于该百分比时C端隐藏，0到100的整数；省略则落空。本批不消费")
+        @Schema(description = "利润空间低于该百分比时 C 端隐藏。0 到 100 的整数；省略则该列落空。本批只落库，不触发隐藏",
+                example = "20")
         private Integer displayThresholdPercent;
     }
 
@@ -518,13 +530,14 @@ public class BuyerAdminController {
         @NotBlank
         @Schema(description = "L2调价方式：FOLLOW_TEMPLATE（清手工覆盖并继承L1，不读取模板价）/ EQUAL_L1 / CUSTOM")
         private String l2AdjustMode;
-        @Schema(description = "CUSTOM时的整数百分比，100等于L1")
+        @Schema(description = "CUSTOM 时的整数百分比，100 等于当前 L1 结算分；小于 1 返回 L2_OVERRIDE_INVALID。非 CUSTOM 可省略")
         private Integer percent;
-        @Schema(description = "CUSTOM时加减的CNY分")
+        @Schema(description = "CUSTOM 时在百分比结果上加减的金额，单位 CNY 分，可为负；省略按 0。非 CUSTOM 可省略")
         private Long amountCents;
         @Min(0)
         @Max(100)
-        @Schema(description = "利润空间低于该百分比时C端隐藏，0到100的整数；省略则不改。本批不消费")
+        @Schema(description = "利润空间低于该百分比时 C 端隐藏。0 到 100 的整数；省略则不改原值。本批只落库，不触发隐藏",
+                example = "20")
         private Integer displayThresholdPercent;
     }
 
