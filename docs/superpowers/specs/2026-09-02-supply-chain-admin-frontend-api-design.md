@@ -433,7 +433,7 @@ Springdoc `components.schemas` 中冲突的通用简单类名。生成契约必�
 
 即 `BuyerProduct` + 该 SKU 的 L2。
 
-- `GET /supply-chain/buyers/{buyerCode}/products` 分页。可选查询参数 `productType`（动态商品类型编码）。省略或空白不筛选；传入后只返回该分销商未移除、且关联平台 SPU 的 `productType` 与入参相等的分销商品。无命中返回空页。筛选不改变按 `updatedAt` 倒序，分页默认仍为 `pageNo=1`、`pageSize=20`。口径与合作商品列表按 `productType` 收窄候选后再分页一致，命中字段取列表行同源的平台 SPU，而不是供货配置。
+- `GET /supply-chain/buyers/{buyerCode}/products` 分页。可选查询参数 `productType`（动态商品类型编码，可多选）。兼容单个值；重复键 `productType=A&productType=B` 或逗号拼接 `productType=A,B` 均表示命中任一类型。省略、空白或拆分后无有效编码时不筛选；传入后只返回该分销商未移除、且关联平台 SPU 的 `productType` 落在入参集合内的分销商品。无命中返回空页。筛选不改变按 `updatedAt` 倒序，分页默认仍为 `pageNo=1`、`pageSize=20`。命中字段取列表行同源的平台 SPU，而不是供货配置。
 - `POST /supply-chain/buyers/{buyerCode}/products` body `{ items: [...] }` 从标品关联；已存在则 `BUYER_PRODUCT_DUPLICATE`
 - `PATCH /supply-chain/buyers/{buyerCode}/products/{buyerProductCode}` 改价（写/清 L2 覆盖，body 含 `l2AdjustMode` 等）
 - `DELETE /supply-chain/buyers/{buyerCode}/products/{buyerProductCode}` 逻辑移除（不再出现在列表；已发布项目目录不回放删除，新项目不得再选）

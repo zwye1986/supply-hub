@@ -38,6 +38,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
@@ -78,13 +79,14 @@ public class BuyerProductQueryService {
 
     /**
      * 分页查询未移除分销商品。按更新时间倒序。
-     * {@code productType} 省略或空白时不筛选；传入后只保留关联平台 SPU 商品类型相等的行，无命中返回空页。
+     * {@code productType} 可多选：重复键或逗号拼接，命中任一类型。省略、空白或拆分后无有效编码时不筛选；无命中返回空页。
      * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#63-分销商品}。
      */
-    public PageResult<BuyerProductListItem> page(String buyerCode, String productType,
+    public PageResult<BuyerProductListItem> page(String buyerCode, List<String> productType,
                                                   Integer pageNo, Integer pageSize) {
-        log.info("分页查询分销商品 buyerCode={} productType={} pageNo={} pageSize={}",
-                buyerCode, productType, pageNo, pageSize);
+        List<String> productTypes = normalizeProductTypes(productType);
+        log.info("分页查询分销商品 buyerCode={} productTypes={} pageNo={} pageSize={}",
+                buyerCode, productTypes, pageNo, pageSize);
         BuyerDO buyer = buyerMapper.selectByBuyerCode(buyerCode);
         if (buyer == null) {
             throw exception(BUYER_PROFILE_NOT_FOUND);
@@ -93,8 +95,8 @@ public class BuyerProductQueryService {
                 .eq(BuyerProductDO::getBuyerId, buyer.getId())
                 .eq(BuyerProductDO::getStatus, BuyerProductStatus.ACTIVE.getCode())
                 .orderByDesc(BuyerProductDO::getUpdatedAt);
-        if (hasText(productType)) {
-            Set<Long> skuIds = matchingSkuIds(buyer.getId(), productType);
+        if (!productTypes.isEmpty()) {
+            Set<Long> skuIds = matchingSkuIds(buyer.getId(), productTypes);
             if (skuIds.isEmpty()) {
                 return new PageResult<>(List.of(), 0L);
             }
@@ -112,11 +114,11 @@ public class BuyerProductQueryService {
     }
 
     /**
-     * 只在当前分销商未移除分销商品关联的平台 SKU 中，按 SPU {@code productType} 精确匹配。
+     * 只在当前分销商未移除分销商品关联的平台 SKU 中，按 SPU {@code productType} 精确匹配任一入参。
      * 先收窄再分页，避免类型条件落在内存页上导致 total 失真。
      * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#63-分销商品}。
      */
-    private Set<Long> matchingSkuIds(Long buyerId, String productType) {
+    private Set<Long> matchingSkuIds(Long buyerId, List<String> productTypes) {
         List<BuyerProductDO> products = productMapper.selectList(new LambdaQueryWrapper<BuyerProductDO>()
                 .eq(BuyerProductDO::getBuyerId, buyerId)
                 .eq(BuyerProductDO::getStatus, BuyerProductStatus.ACTIVE.getCode()));
@@ -143,7 +145,7 @@ public class BuyerProductQueryService {
         Set<Long> matchedSpuIds = new HashSet<>();
         for (PlatformSpuDO spu : spuMapper.selectList(new LambdaQueryWrapper<PlatformSpuDO>()
                 .in(PlatformSpuDO::getId, spuIds)
-                .eq(PlatformSpuDO::getProductType, productType))) {
+                .in(PlatformSpuDO::getProductType, productTypes))) {
             matchedSpuIds.add(spu.getId());
         }
         Set<Long> matchedSkuIds = new HashSet<>();
@@ -155,8 +157,27 @@ public class BuyerProductQueryService {
         return matchedSkuIds;
     }
 
-    private static boolean hasText(String value) {
-        return value != null && !value.isBlank();
+    /**
+     * 兼容单个编码、重复查询参数和逗号拼接，trim 后去重；空白项丢弃。
+     * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#63-分销商品}。
+     */
+    private static List<String> normalizeProductTypes(List<String> raw) {
+        if (raw == null || raw.isEmpty()) {
+            return List.of();
+        }
+        LinkedHashSet<String> codes = new LinkedHashSet<>();
+        for (String item : raw) {
+            if (item == null || item.isBlank()) {
+                continue;
+            }
+            for (String part : item.split(",")) {
+                String code = part.trim();
+                if (!code.isEmpty()) {
+                    codes.add(code);
+                }
+            }
+        }
+        return List.copyOf(codes);
     }
 
     private BuyerProductListItem toListItem(BuyerProductDO product) {

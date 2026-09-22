@@ -72,7 +72,7 @@ class BuyerProductQueryServiceTest {
     void rejectsMissingBuyer() {
         when(buyerMapper.selectByBuyerCode("BYR_MISSING")).thenReturn(null);
 
-        assertThatThrownBy(() -> service.page("BYR_MISSING", "MOVIE", 1, 20))
+        assertThatThrownBy(() -> service.page("BYR_MISSING", List.of("MOVIE"), 1, 20))
                 .isInstanceOf(ServiceException.class)
                 .extracting(ex -> ((ServiceException) ex).getCode())
                 .isEqualTo(BUYER_PROFILE_NOT_FOUND.getCode());
@@ -82,7 +82,8 @@ class BuyerProductQueryServiceTest {
     void blankProductTypeDoesNotNarrowCandidates() {
         when(productMapper.selectPage(any(PageParam.class), any())).thenReturn(new PageResult<>(List.of(), 0L));
 
-        PageResult<BuyerProductQueryService.BuyerProductListItem> page = service.page("BYR_A", "  ", null, null);
+        PageResult<BuyerProductQueryService.BuyerProductListItem> page =
+                service.page("BYR_A", List.of("  ", ","), null, null);
 
         assertThat(page.getTotal()).isEqualTo(0L);
         verify(productMapper, never()).selectList(any());
@@ -93,7 +94,8 @@ class BuyerProductQueryServiceTest {
     void unknownProductTypeReturnsEmptyPage() {
         stubCatalog(false);
 
-        PageResult<BuyerProductQueryService.BuyerProductListItem> page = service.page("BYR_A", "MOVIE", 1, 20);
+        PageResult<BuyerProductQueryService.BuyerProductListItem> page =
+                service.page("BYR_A", List.of("MOVIE"), 1, 20);
 
         assertThat(page.getList()).isEmpty();
         assertThat(page.getTotal()).isEqualTo(0L);
@@ -113,7 +115,8 @@ class BuyerProductQueryServiceTest {
                 .id(21L).productType("MOVIE").build());
         when(listingMapper.selectList(any())).thenReturn(List.of());
 
-        PageResult<BuyerProductQueryService.BuyerProductListItem> page = service.page("BYR_A", "MOVIE", 1, 20);
+        PageResult<BuyerProductQueryService.BuyerProductListItem> page =
+                service.page("BYR_A", List.of("MOVIE", "FOOD"), 1, 20);
 
         assertThat(page.getTotal()).isEqualTo(1L);
         assertThat(page.getList()).extracting(BuyerProductQueryService.BuyerProductListItem::productType)
@@ -123,6 +126,19 @@ class BuyerProductQueryServiceTest {
         verify(productMapper).selectPage(any(PageParam.class), captor.capture());
         assertThat(captor.getValue().getSqlSegment()).contains("IN");
         assertThat(captor.getValue().getParamNameValuePairs().values()).contains(11L);
+        assertThat(capturedSpuQuery().getParamNameValuePairs().values()).contains("MOVIE", "FOOD");
+    }
+
+    @Test
+    void commaSeparatedProductTypesUseInClause() {
+        stubCatalog(false);
+
+        PageResult<BuyerProductQueryService.BuyerProductListItem> page =
+                service.page("BYR_A", List.of(" MOVIE, FOOD "), 1, 20);
+
+        assertThat(page.getList()).isEmpty();
+        assertThat(capturedSpuQuery().getSqlSegment()).contains("IN");
+        assertThat(capturedSpuQuery().getParamNameValuePairs().values()).contains("MOVIE", "FOOD");
     }
 
     private void stubCatalog(boolean spuMatches) {

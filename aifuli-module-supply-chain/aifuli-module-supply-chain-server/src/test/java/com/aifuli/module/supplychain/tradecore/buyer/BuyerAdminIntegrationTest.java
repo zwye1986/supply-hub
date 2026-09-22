@@ -344,10 +344,12 @@ class BuyerAdminIntegrationTest {
                 .updatedAt(now)
                 .build());
         var listed = productQuery.page(buyerCode, null, 1, 20).getList();
-        assertThat(productQuery.page(buyerCode, "MOVIE", 1, 20).getList())
+        assertThat(productQuery.page(buyerCode, List.of("MOVIE"), 1, 20).getList())
                 .extracting(BuyerProductListItem::buyerProductCode).containsExactly(buyerProductCode);
-        assertThat(productQuery.page(buyerCode, "OTHER_TYPE", 1, 20).getList()).isEmpty();
-        assertThat(productQuery.page(buyerCode, "OTHER_TYPE", 1, 20).getTotal()).isEqualTo(0L);
+        assertThat(productQuery.page(buyerCode, List.of("MOVIE", "FOOD"), 1, 20).getList())
+                .extracting(BuyerProductListItem::buyerProductCode).containsExactly(buyerProductCode);
+        assertThat(productQuery.page(buyerCode, List.of("FOOD,OTHER"), 1, 20).getList()).isEmpty();
+        assertThat(productQuery.page(buyerCode, List.of("OTHER_TYPE"), 1, 20).getTotal()).isEqualTo(0L);
         assertThat(listed).extracting(BuyerProductListItem::buyerProductCode).containsExactly(buyerProductCode);
         assertThat(listed.getFirst().sellableCategory()).isEqualTo("MOVIE");
         assertThat(listed.getFirst().productType()).isEqualTo("MOVIE");
