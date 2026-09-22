@@ -130,8 +130,9 @@ public class RoutingPolicyPublicationService {
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public SuccessorPublishResult publishSuccessorStandardProductRules(SuccessorPublishCommand command) {
         validateSuccessorCommand(command);
+        SupplierRoutingPolicyVersionDO closing = null;
         if (command.closeVersionId() != null) {
-            SupplierRoutingPolicyVersionDO closing = versionMapper.selectByIdForUpdate(command.closeVersionId());
+            closing = versionMapper.selectByIdForUpdate(command.closeVersionId());
             if (closing == null || closing.getStatus() != VERSION_PUBLISHED
                     || closing.getVersion() != command.closeExpectedVersion()) {
                 throw new IllegalStateException("Routing policy version cannot be closed for successor publish");
@@ -140,17 +141,14 @@ public class RoutingPolicyPublicationService {
                 throw new IllegalStateException(
                         "Routing policy version effective interval cannot close at or before valid_from");
             }
-            LocalDateTime stamp = now();
-            closing.setValidTo(command.effectiveAt());
-            closing.setUpdatedBy(command.operatorId());
-            closing.setUpdatedAt(stamp);
-            if (versionMapper.updateById(closing) != 1) {
-                throw new IllegalStateException("Routing policy version close lost optimistic lock");
-            }
         }
 
         SupplierRoutingPolicyDO policy = policyMapper.selectByCodeForUpdate(command.policyCode());
         if (policy == null) {
+            if (closing != null) {
+                throw new IllegalStateException(
+                        "Closing routing policy version does not belong to policy code " + command.policyCode());
+            }
             LocalDateTime stamp = now();
             policy = SupplierRoutingPolicyDO.builder()
                     .policyCode(command.policyCode()).policyName(command.policyName())
@@ -158,6 +156,19 @@ public class RoutingPolicyPublicationService {
                     .createdBy(command.operatorId()).createdAt(stamp)
                     .updatedBy(command.operatorId()).updatedAt(stamp).build();
             policyMapper.insert(policy);
+        }
+        if (closing != null && !closing.getPolicyId().equals(policy.getId())) {
+            throw new IllegalStateException(
+                    "Closing routing policy version does not belong to policy code " + command.policyCode());
+        }
+        if (closing != null) {
+            LocalDateTime stamp = now();
+            closing.setValidTo(command.effectiveAt());
+            closing.setUpdatedBy(command.operatorId());
+            closing.setUpdatedAt(stamp);
+            if (versionMapper.updateById(closing) != 1) {
+                throw new IllegalStateException("Routing policy version close lost optimistic lock");
+            }
         }
 
         DraftResult draft = createDraft(new CreateDraftCommand(
