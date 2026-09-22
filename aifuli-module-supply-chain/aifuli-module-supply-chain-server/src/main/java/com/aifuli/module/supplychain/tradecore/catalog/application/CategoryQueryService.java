@@ -191,6 +191,34 @@ public class CategoryQueryService {
         return idsByCode;
     }
 
+    /**
+     * 按主类目主键批量回显名称，供新增分销商品弹窗的「分类」列使用。
+     *
+     * <p>归档类目视为不可回显；未知主键不出现在结果中。只读名称，不参与选品筛选，不沿祖先链展开。</p>
+     * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#44-标品-sku-分页}。
+     */
+    public Map<Long, String> resolveCategoryNamesByIds(Collection<Long> categoryIds) {
+        if (categoryIds == null || categoryIds.isEmpty()) {
+            return Map.of();
+        }
+        List<ProductCategoryDO> rows = categoryMapper.selectList(new LambdaQueryWrapper<ProductCategoryDO>()
+                .in(ProductCategoryDO::getId, categoryIds)
+                .ne(ProductCategoryDO::getStatus, CatalogEntityStatus.ARCHIVED.getCode()));
+        Map<Long, String> namesById = new LinkedHashMap<>();
+        for (ProductCategoryDO row : rows) {
+            if (row.getId() == null || isArchived(row.getStatus())) {
+                continue;
+            }
+            namesById.putIfAbsent(row.getId(), row.getCategoryName());
+        }
+        log.info("批量回显类目名称 requestedIds={} resolved={}", categoryIds.size(), namesById.size());
+        return namesById;
+    }
+
+    private static boolean isArchived(Short status) {
+        return status != null && status == CatalogEntityStatus.ARCHIVED.getCode();
+    }
+
     private static List<String> resolveTypeCodes(ProductCategoryDO category) {
         if (category.getTypeCodes() != null && !category.getTypeCodes().isEmpty()) {
             return category.getTypeCodes();

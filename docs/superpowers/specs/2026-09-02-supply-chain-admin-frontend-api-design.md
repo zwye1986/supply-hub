@@ -248,13 +248,15 @@ SPU / 供货范围写入的 `productClassification` 不走 `ClosedEnums`：类�
 
 查询：`keyword`、`sellableCategory`、`productType`、`productClassification`、`pageNo`、`pageSize`。
 
+`keyword` 为包含匹配，同时命中 SKU 名称、SKU 编码、SPU 名称、SPU 编码。新增分销商品弹窗的「名称/编号」搜索走该参数；省略或空白不筛选。
+
 附加过滤：
 
 - `supplierCode`：只返回 SPU 三码命中该供应商供货配置、且尚无未退役 Offer 的 SKU。
-- `buyerCode`：只返回该分销商**尚未**关联的平台 SKU（新增分销商品）。
+- `buyerCode`：只返回该分销商**尚未**关联的平台 SKU（新增分销商品）。不按分销商档案上的可售品类或商品类型再收窄；类型 Tab 由调用方传 `productType`。
 - `projectCode`：只返回该项目所属分销商**已有** `BuyerProduct`、且项目目录尚未未退役关联的 SKU（新增项目商品）。缺少 `BuyerProduct` 的标品不得出现。
 
-金额字段：`suggestPriceCents`（L1 结算口径）、`marketPriceCents`（兼容既有 JSON 字段名；C 端建议价，实际取 `sc_platform_sku.suggested_sale_price`，若无则空）。`marketPriceCents` 不得取履约面值 `face_value` 或市场划线价 `market_price`；销售价来源以 09-12 范围对齐 §5 为准。点餐/电影 L1 可为 0。
+金额与展示字段：`suggestPriceCents`（L1 结算口径）、`marketPriceCents`（兼容既有 JSON 字段名；C 端建议价，实际取 `sc_platform_sku.suggested_sale_price`，若无则空）、`supplyPriceCents`（当前最低有效供货价，口径与通用定价最低供货价相同：供应商启用、Offer 已发布、当前版本已到 `validFrom` 且未到 `validTo`，多条取最低；没有有效报价则为空，0 是有效价格）、`categoryName`（SPU 主类目名称，归档或缺失则为空）。`categoryName` 只用于弹窗「分类」列展示，不参与筛选，不按类目祖先链过滤。`marketPriceCents` 不得取履约面值 `face_value` 或市场划线价 `market_price`；销售价来源以 09-12 范围对齐 §5 为准。点餐/电影 L1 可为 0。
 
 ## 5. 供应商
 
@@ -440,7 +442,7 @@ Springdoc `components.schemas` 中冲突的通用简单类名。生成契约必�
 
 列表列：SPU/SKU、SPU 三码、`suggestPriceCents`（L1）、`pricingRule`（文案：继承L1 / 等于L1 / 自定义公式）、`distPriceCents`（有效 L2；无手工覆盖时等于当前 L1）、`projectPriceCents`（若恰有一个项目 L3 则给出，否则空）、`finalPriceCents`（按 L3>L2>L1 对该行展示，项目价取「任意覆盖」时以 `projectPriceCovered` + `projectNames[]` 说明）、`priceSource`（`L1`/`L2`/`L3`）、`projectPriceCovered`。
 
-`displayThresholdPercent` 可存（利润空间低于该百分比时 C 端隐藏的配置），**本轮不实现 C 端隐藏消费**，只落库。
+`displayThresholdPercent` 可存（利润空间低于该百分比时 C 端隐藏的配置），**本轮不实现 C 端隐藏消费**，只落库。新增时省略则落空；改价时省略则不改该列。传入时必须是 0～100 的整数，否则 `L2_OVERRIDE_INVALID`。
 
 前端未传 `l2AdjustMode` 时默认 `FOLLOW_TEMPLATE`。页面默认选项「按分销价=销售建议价」必须显式传 `EQUAL_L1`，覆盖值取当前 `suggestPriceCents`（L1），禁止用 `marketPriceCents`。
 

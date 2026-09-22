@@ -36,6 +36,7 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
@@ -505,7 +506,9 @@ public class BuyerAdminController {
         private Integer percent;
         @Schema(description = "CUSTOM时加减的CNY分")
         private Long amountCents;
-        @Schema(description = "利润空间低于该百分比时C端隐藏，本批不消费")
+        @Min(0)
+        @Max(100)
+        @Schema(description = "利润空间低于该百分比时C端隐藏，0到100的整数；省略则落空。本批不消费")
         private Integer displayThresholdPercent;
     }
 
@@ -519,7 +522,9 @@ public class BuyerAdminController {
         private Integer percent;
         @Schema(description = "CUSTOM时加减的CNY分")
         private Long amountCents;
-        @Schema(description = "利润空间低于该百分比时C端隐藏，本批不消费")
+        @Min(0)
+        @Max(100)
+        @Schema(description = "利润空间低于该百分比时C端隐藏，0到100的整数；省略则不改。本批不消费")
         private Integer displayThresholdPercent;
     }
 

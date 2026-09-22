@@ -38,6 +38,7 @@ import java.util.List;
 import java.time.LocalDateTime;
 
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BUYER_PRODUCT_DUPLICATE;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.L2_OVERRIDE_INVALID;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PLATFORM_SETTLEMENT_PRICE_MISSING;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -249,6 +250,18 @@ class BuyerProductCommandServiceTest {
         verify(eventPublisher).publishEvent(event.capture());
         assertThat(event.getValue().buyerProductId()).isEqualTo(88L);
         assertThat(event.getValue().operatorId()).isEqualTo(1L);
+    }
+
+    @Test
+    void displayThresholdOutsideZeroToOneHundredIsRejected() {
+        when(productMapper.selectByBuyerAndSku(5L, 11L)).thenReturn(null);
+
+        assertThatThrownBy(() -> service.addProducts("BYR_A", List.of(
+                new ProductLine("MOVIE_100", L2AdjustMode.EQUAL_L1, null, null, 101)), 1L))
+                .isInstanceOf(ServiceException.class)
+                .extracting(ex -> ((ServiceException) ex).getCode())
+                .isEqualTo(L2_OVERRIDE_INVALID.getCode());
+        verify(productMapper, never()).insert(any(BuyerProductDO.class));
     }
 
     private void stubLiveProduct() {

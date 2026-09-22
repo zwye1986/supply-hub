@@ -246,6 +246,20 @@ class CategoryQueryServiceTest {
         });
     }
 
+    @Test
+    @SuppressWarnings("unchecked")
+    void resolveCategoryNamesSkipsArchivedRowsReturnedByMapper() {
+        when(categoryMapper.selectList(any())).thenReturn(List.of(
+                category(3L, null, (short) 1, CategoryVisibility.VISIBLE,
+                        CatalogEntityStatus.ACTIVE, "EQUITY", "权益商品"),
+                category(4L, null, (short) 1, CategoryVisibility.VISIBLE,
+                        CatalogEntityStatus.ARCHIVED, "OLD", "已归档")));
+
+        assertThat(service.resolveCategoryNamesByIds(List.of(3L, 4L)))
+                .containsEntry(3L, "权益商品")
+                .doesNotContainKey(4L);
+    }
+
     private void assertCategoryNotFound(String categoryCode) {
         assertThatThrownBy(() -> service.detail(categoryCode))
                 .isInstanceOf(ServiceException.class)

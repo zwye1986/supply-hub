@@ -58,13 +58,14 @@ public class PlatformSkuAdminController {
     @GetMapping
     @PreAuthorize(PLATFORM_SKU_QUERY_EXPRESSION)
     @Operation(summary = "标品 SKU 分页",
-            description = "仅返回启用 SKU 与启用 SPU。keyword 匹配 SKU 或 SPU 名称。"
+            description = "仅返回启用 SKU 与启用 SPU。keyword 包含匹配 SKU/SPU 的名称或编码。"
                     + "supplierCode 只返回命中供货配置且尚无未退役 Offer 的 SKU；"
-                    + "buyerCode 只返回该分销商尚未关联的平台 SKU；"
+                    + "buyerCode 只返回该分销商尚未关联的平台 SKU，供新增分销商品选品；"
                     + "projectCode 只返回所属分销商已有分销商品且项目目录尚未关联的 SKU。"
+                    + "categoryName 只展示主类目名称；supplyPriceCents 为当前最低有效供货价，单位 CNY 分。"
                     + "不要调用 /page。")
     public CommonResult<PageResult<SkuListItem>> page(
-            @Parameter(description = "SKU名称或SPU名称模糊搜索", example = "话费")
+            @Parameter(description = "SKU/SPU 名称或编码包含匹配", example = "话费")
             @RequestParam(required = false) String keyword,
             @Parameter(description = "可售品类编码", example = "EQUITY")
             @RequestParam(required = false) String sellableCategory,

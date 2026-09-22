@@ -812,6 +812,7 @@ system-server 通过追加变更集 `006-product-list-filter-dictionaries` 写�
    - 当传入 `supplierCode` 时，严格匹配 SPU 的 `(sellableCategory, productType, productClassification)` 三码落在该供应商的供货范围之内，且该 SKU 必须满足 `effectiveSellable == true`（即 `SPU.ACTIVE && SKU.ACTIVE`）。
 3. **分销商选品池一致性**：
    - 当传入 `buyerCode` 时，只返回 `effectiveSellable == true` 且该分销商尚未关联平台 SKU（未加入 `sc_buyer_product`）的记录。
+   - `keyword` 同时匹配名称与 SPU/SKU 编码；响应另含主类目展示名 `categoryName` 与最低有效供货价 `supplyPriceCents`。筛选与价格口径见 `docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#44-标品-sku-分页`。
 4. **项目目录一致性**：
    - 当传入 `projectCode` 时，只返回所属分销商已有关联分销商品（`sc_buyer_product`）、且该项目尚未关联（未加入 `sc_project_listing`）的 SKU。
    - 选品池响应中的 `marketPriceCents` 是兼容字段名，值必须来自 `PlatformSkuDO.suggestedSalePrice`；测试数据应让 `faceValue`、`marketPrice`、`suggestedSalePrice` 三者不同，防止再次混用。

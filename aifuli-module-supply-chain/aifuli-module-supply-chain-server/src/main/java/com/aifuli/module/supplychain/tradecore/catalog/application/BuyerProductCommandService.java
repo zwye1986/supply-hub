@@ -41,6 +41,7 @@ import static com.aifuli.framework.common.exception.util.ServiceExceptionUtil.ex
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BUYER_PRODUCT_DUPLICATE;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BUYER_PRODUCT_NOT_FOUND;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BUYER_PROFILE_NOT_FOUND;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.L2_OVERRIDE_INVALID;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PLATFORM_SETTLEMENT_PRICE_MISSING;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.SKU_NOT_SALEABLE;
 
@@ -58,6 +59,8 @@ public class BuyerProductCommandService {
 
     private static final String TRANSACTION_MANAGER = "supplyChainTransactionManager";
     private static final int MAX_BATCH_PRODUCT_COUNT = 200;
+    private static final int MIN_DISPLAY_THRESHOLD_PERCENT = 0;
+    private static final int MAX_DISPLAY_THRESHOLD_PERCENT = 100;
 
     private final BuyerMapper buyerMapper;
     private final BuyerProductMapper productMapper;
@@ -92,6 +95,7 @@ public class BuyerProductCommandService {
         log.info("改分销商品L2 buyerCode={} buyerProductCode={} l2AdjustMode={} operatorId={}",
                 buyerCode, buyerProductCode, mode, operatorId);
         BuyerProductDO product = requireLiveProduct(buyerCode, buyerProductCode);
+        requireDisplayThreshold(displayThresholdPercent);
         LocalDateTime now = databaseClock.now();
         if (displayThresholdPercent != null) {
             product.setDisplayThresholdPercent(displayThresholdPercent);
@@ -142,6 +146,7 @@ public class BuyerProductCommandService {
         log.info("批量修改分销商品L2 buyerCode={} productCount={} l2AdjustMode={} operatorId={}",
                 buyerCode, codes.size(), mode, operatorId);
         BuyerDO buyer = requireBuyerForUpdate(buyerCode);
+        requireDisplayThreshold(displayThresholdPercent);
         LocalDateTime now = databaseClock.now();
         L2AdjustMode resolvedMode = mode == null ? L2AdjustMode.FOLLOW_TEMPLATE : mode;
         for (String buyerProductCode : codes) {
@@ -172,7 +177,22 @@ public class BuyerProductCommandService {
         }
     }
 
+    /**
+     * 展示阈值省略表示不设置；传入时必须是 0～100 的整数。本批只落库，不触发 C 端隐藏。
+     * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#63-分销商品}。
+     */
+    private static void requireDisplayThreshold(Integer displayThresholdPercent) {
+        if (displayThresholdPercent == null) {
+            return;
+        }
+        if (displayThresholdPercent < MIN_DISPLAY_THRESHOLD_PERCENT
+                || displayThresholdPercent > MAX_DISPLAY_THRESHOLD_PERCENT) {
+            throw exception(L2_OVERRIDE_INVALID);
+        }
+    }
+
     private String addOrRevive(BuyerDO buyer, ProductLine line, Long operatorId, LocalDateTime now) {
+        requireDisplayThreshold(line.displayThresholdPercent());
         PlatformSkuDO sku = requireActiveSku(line.platformSkuCode());
         BuyerProductDO existing = productMapper.selectByBuyerAndSku(buyer.getId(), sku.getId());
         L2AdjustMode mode = line.l2AdjustMode() == null ? L2AdjustMode.FOLLOW_TEMPLATE : line.l2AdjustMode();
