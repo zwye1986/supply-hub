@@ -122,6 +122,56 @@ public class RoutingPolicyPublicationService {
                 HexFormat.of().formatHex(digest));
     }
 
+    /**
+     * 关闭旧生效版本的 valid_to，再以完整规则集 createDraft + publish（同一事务）。
+     * 不得改写已发布版本内的规则/候选行；仅 UPDATE 旧版本区间终点。
+     * 设计见 {@code docs/superpowers/specs/2026-09-21-routing-rule-admin-write-design.md#5-保存事务}。
+     */
+    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
+    public SuccessorPublishResult publishSuccessorStandardProductRules(SuccessorPublishCommand command) {
+        validateSuccessorCommand(command);
+        if (command.closeVersionId() != null) {
+            SupplierRoutingPolicyVersionDO closing = versionMapper.selectByIdForUpdate(command.closeVersionId());
+            if (closing == null || closing.getStatus() != VERSION_PUBLISHED
+                    || closing.getVersion() != command.closeExpectedVersion()) {
+                throw new IllegalStateException("Routing policy version cannot be closed for successor publish");
+            }
+            if (!command.effectiveAt().isAfter(closing.getValidFrom())) {
+                throw new IllegalStateException(
+                        "Routing policy version effective interval cannot close at or before valid_from");
+            }
+            LocalDateTime stamp = now();
+            closing.setValidTo(command.effectiveAt());
+            closing.setUpdatedBy(command.operatorId());
+            closing.setUpdatedAt(stamp);
+            if (versionMapper.updateById(closing) != 1) {
+                throw new IllegalStateException("Routing policy version close lost optimistic lock");
+            }
+        }
+
+        SupplierRoutingPolicyDO policy = policyMapper.selectByCodeForUpdate(command.policyCode());
+        if (policy == null) {
+            LocalDateTime stamp = now();
+            policy = SupplierRoutingPolicyDO.builder()
+                    .policyCode(command.policyCode()).policyName(command.policyName())
+                    .routingType(ROUTING_TYPE).status(POLICY_INACTIVE).activeFlag(null).version(0L)
+                    .createdBy(command.operatorId()).createdAt(stamp)
+                    .updatedBy(command.operatorId()).updatedAt(stamp).build();
+            policyMapper.insert(policy);
+        }
+
+        DraftResult draft = createDraft(new CreateDraftCommand(
+                command.policyCode(), command.policyName(),
+                "规则页保存 " + command.effectiveAt(),
+                command.effectiveAt(), null, command.rules(), command.operatorId()));
+        // createDraft 插入时乐观锁 version 固定为 0；本方法经 this 自调用，与外层同一事务。
+        PublishResult published = publish(new PublishCommand(
+                draft.policyVersionId(), 0L, "管理端路由规则页保存",
+                command.operatorId(), command.traceId(), null, null));
+        return new SuccessorPublishResult(published.policyCode(), published.policyVersionId(),
+                published.versionNo());
+    }
+
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public PublishResult publish(PublishCommand command) {
         if (command.policyVersionId() == null || command.expectedVersion() < 0
@@ -269,6 +319,15 @@ public class RoutingPolicyPublicationService {
         }
     }
 
+    private static void validateSuccessorCommand(SuccessorPublishCommand command) {
+        if (command == null || isBlank(command.policyCode()) || isBlank(command.policyName())
+                || command.operatorId() == null || isBlank(command.traceId())
+                || command.rules() == null || command.rules().isEmpty()
+                || command.effectiveAt() == null || command.closeExpectedVersion() < 0) {
+            throw new IllegalArgumentException("Routing policy successor publish command is incomplete");
+        }
+    }
+
     private static void validateCandidate(CandidateDraft candidate) {
         if (candidate == null || isBlank(candidate.supplierCode()) || candidate.candidatePriority() < 0) {
             throw new IllegalArgumentException("Routing candidate is incomplete");
@@ -360,6 +419,23 @@ public class RoutingPolicyPublicationService {
 
     public record PublishResult(String policyCode, Long policyVersionId, int versionNo,
                                 long policyAggregateVersion, String configDigestHex) {
+    }
+
+    /** 后继发布结果：新生效版本身份。 */
+    public record SuccessorPublishResult(String policyCode, Long policyVersionId, int versionNo) {
+    }
+
+    /**
+     * 后继发布命令：rules 为完整规则集；closeVersionId 为空表示无生效版本可关（引导首发）。
+     */
+    public record SuccessorPublishCommand(String policyCode, String policyName,
+                                          Long operatorId, String traceId,
+                                          List<RuleDraft> rules,
+                                          Long closeVersionId, long closeExpectedVersion,
+                                          LocalDateTime effectiveAt) {
+        public SuccessorPublishCommand {
+            rules = rules == null ? null : List.copyOf(rules);
+        }
     }
 
     public record PolicyPublishedPayload(String policyCode, Long policyVersionId,
