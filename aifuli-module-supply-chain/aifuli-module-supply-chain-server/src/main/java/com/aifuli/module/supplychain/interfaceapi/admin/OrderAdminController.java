@@ -7,6 +7,7 @@ import com.aifuli.module.supplychain.api.order.dto.SupplyChainOrderStatus;
 import com.aifuli.module.supplychain.border.order.application.OrderAdminQueryService;
 import com.aifuli.module.supplychain.border.order.application.OrderAdminQueryService.OrderDetail;
 import com.aifuli.module.supplychain.border.order.application.OrderAdminQueryService.OrderPageQuery;
+import com.aifuli.module.supplychain.border.order.application.OrderAdminQueryService.OrderRoutingRecordsView;
 import com.aifuli.module.supplychain.border.order.application.OrderAdminQueryService.OrderSummary;
 import com.aifuli.module.supplychain.border.order.domain.SupplyChainOrderType;
 import com.aifuli.module.supplychain.tradecore.profile.domain.ClosedEnums;
@@ -34,8 +35,10 @@ import static com.aifuli.framework.security.core.util.SecurityFrameworkUtils.get
 import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.ORDER_QUERY_EXPRESSION;
 
 /**
- * 平台订单管理端只读 REST。列表只返回总表摘要，详情以安全 tagged union 暴露现有三类场景字段。
- * 设计见 {@code docs/superpowers/specs/2026-09-12-supply-chain-order-admin-readonly-design.md#3-rest-契约}。
+ * 平台订单管理端只读 REST。列表只返回总表摘要，详情以安全 tagged union 暴露现有三类场景字段；
+ * 路由记录只读已冻结轮次。
+ * 设计见 {@code docs/superpowers/specs/2026-09-12-supply-chain-order-admin-readonly-design.md#3-rest-契约}
+ * 与 {@code docs/superpowers/specs/2026-09-21-order-routing-records-admin-design.md}。
  */
 @Slf4j
 @Tag(name = "管理后台 - 供应链订单")
@@ -97,5 +100,18 @@ public class OrderAdminController {
     public CommonResult<OrderDetail> get(@Size(max = 32) @PathVariable String orderNo) {
         log.info("平台订单详情入口 userId={} orderNo={}", getLoginUserId(), orderNo);
         return success(queryService.get(orderNo));
+    }
+
+    @GetMapping("/{orderNo}/routing-records")
+    @PreAuthorize(ORDER_QUERY_EXPRESSION)
+    @Operation(summary = "查询供应链订单路由记录",
+            description = "挂在前端已有的 /supply-chain/orders/{orderNo} 资源下，只读已冻结的供应商路由轮次与候选；"
+                    + "O2O/INSTORE 返回空 rounds。不返回供应商原始报文、路由输入摘要或履约资产。"
+                    + "金额单位为分，与列表/详情一致。")
+    public CommonResult<OrderRoutingRecordsView> getRoutingRecords(
+            @Parameter(description = "供应链中台订单号，与详情 GET /orders/{orderNo} 同一路径身份")
+            @Size(max = 32) @PathVariable String orderNo) {
+        log.info("平台订单路由记录入口 userId={} orderNo={}", getLoginUserId(), orderNo);
+        return success(queryService.getRoutingRecords(orderNo));
     }
 }

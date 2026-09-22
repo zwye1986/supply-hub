@@ -70,7 +70,7 @@
 | `supply-chain:project:update` | 改档案；项目商品发布/改 L3 |
 | `supply-chain:project:delete` | 逻辑移除项目商品 |
 | `supply-chain:project:update-status` | 主体进行中/暂停/已结束 |
-| `supply-chain:order:query` | 平台订单列表与类型化详情，只读 |
+| `supply-chain:order:query` | 平台订单列表、类型化详情与路由记录，只读 |
 | `supply-chain:admin` | 未拆接口兜底；并作为全部细权限的超集 |
 
 不单开 `catalog:query`。`GET /supply-chain/categories` 在调用方持有三块任一 `query` 或 `supply-chain:admin` 时通过。
@@ -131,13 +131,17 @@
 
 ### 5.5 未拆、仍仅 `supply-chain:admin`
 
-仅这四个：`BuyerAccountAdminController`、`RoutingPolicyAdminController`、`SupplierConfigurationAdminController`、`M1MasterDataAdminController`。保持只校验 `supply-chain:admin`（超管仍放行）。旧 `/master-data/buyers` 等路径不改走细权限，避免两套入口语义分叉。
+仅这五个：`BuyerAccountAdminController`、`RoutingPolicyAdminController`、`RoutingRuleAdminController`、`SupplierConfigurationAdminController`、`M1MasterDataAdminController`。保持只校验 `supply-chain:admin`（超管仍放行）。旧 `/master-data/buyers` 等路径不改走细权限，避免两套入口语义分叉。`RoutingRuleAdminController` 的 GET 见 `docs/superpowers/specs/2026-09-21-routing-rule-admin-readonly-design.md`；POST/PUT/DELETE/`PUT /{ruleCode}/status` 为当前生效标准规则的补丁发布，见 `docs/superpowers/specs/2026-09-21-routing-rule-admin-write-design.md`。不新增 `routing:query` / `routing:update`。
 
 ### 5.6 `OrderAdminController` `/supply-chain/orders`
 
-`GET /` 与 `GET /{orderNo}` 均使用 `order:query`，并保留 `supply-chain:admin` 超集；本期没有订单写接口。详细契约见 `docs/superpowers/specs/2026-09-12-supply-chain-order-admin-readonly-design.md`。
+`GET /`、`GET /{orderNo}`、`GET /{orderNo}/routing-records` 均使用 `order:query`，并保留 `supply-chain:admin` 超集；本期没有订单写接口。列表与类型化详情见 `docs/superpowers/specs/2026-09-12-supply-chain-order-admin-readonly-design.md`；路由记录见 `docs/superpowers/specs/2026-09-21-order-routing-records-admin-design.md`。
 
-当前 `interfaceapi.admin` 一共 13 个 AdminController：上述 4 个未拆，其余资源均使用本文登记的细权限与 `admin` 超集。新增 AdminController 必须先改本文再挂注解，禁止默认一把 `admin` 而不登记。
+### 5.7 `SupplierOrderAdminController` `/supply-chain/supplier-orders`
+
+`GET /`、`GET /{bOrderNo}` 使用 `order:query` 与 `supply-chain:admin` 超集；本期没有供应商订单写接口。详见 `docs/superpowers/specs/2026-09-21-supplier-order-admin-readonly-design.md`。
+
+当前 `interfaceapi.admin` 一共 15 个 AdminController：上述 5 个未拆，其余资源均使用本文登记的细权限与 `admin` 超集。新增 AdminController 必须先改本文再挂注解，禁止默认一把 `admin` 而不登记。
 
 ## 6. 错误与日志
 
