@@ -20,6 +20,8 @@ import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerProductMappe
 import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerProjectMapper;
 import com.aifuli.module.supplychain.tradecore.buyer.domain.BuyerScopeKind;
 import com.aifuli.module.supplychain.tradecore.buyer.domain.BuyerStatus;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProductTypeDO;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProductTypeMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
@@ -54,6 +56,7 @@ class BuyerAdminQueryServiceTest {
     private final BuyerAccountMapper accountMapper = mock(BuyerAccountMapper.class);
     private final BuyerProjectMapper projectMapper = mock(BuyerProjectMapper.class);
     private final BuyerProductMapper productMapper = mock(BuyerProductMapper.class);
+    private final ProductTypeMapper productTypeMapper = mock(ProductTypeMapper.class);
     private final EnvelopeCryptoPort envelopeCrypto = mock(EnvelopeCryptoPort.class);
     private BuyerAdminQueryService service;
 
@@ -63,9 +66,12 @@ class BuyerAdminQueryServiceTest {
                 new MapperBuilderAssistant(new MybatisConfiguration(), ""), BuyerProjectDO.class);
         TableInfoHelper.initTableInfo(
                 new MapperBuilderAssistant(new MybatisConfiguration(), ""), BuyerProductDO.class);
+        TableInfoHelper.initTableInfo(
+                new MapperBuilderAssistant(new MybatisConfiguration(), ""), ProductTypeDO.class);
         service = new BuyerAdminQueryService(
                 buyerMapper, contactMapper, integrationModeMapper, cooperationModeMapper,
-                categoryScopeMapper, fileRefMapper, accountMapper, projectMapper, productMapper, envelopeCrypto);
+                categoryScopeMapper, fileRefMapper, accountMapper, projectMapper, productMapper,
+                productTypeMapper, envelopeCrypto);
     }
 
     @Test
@@ -140,13 +146,18 @@ class BuyerAdminQueryServiceTest {
                         .scopeKind(BuyerScopeKind.SELLABLE.name()).scopeCode("MOVIE").build(),
                 BuyerCategoryScopeDO.builder().buyerId(21L)
                         .scopeKind(BuyerScopeKind.PRODUCT_TYPE.name()).scopeCode("MOVIE").build()));
+        when(productTypeMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of(
+                ProductTypeDO.builder().id(3L).typeCode("MOVIE").typeName("电影票").build()));
         when(envelopeCrypto.decrypt(any(), any(), any()))
                 .thenAnswer(invocation -> invocation.getArgument(0));
 
         var detail = service.get("BYR_DETAIL");
 
         assertThat(detail.sellableCategories()).containsExactly("MOVIE");
-        assertThat(detail.productTypes()).containsExactly("MOVIE");
+        assertThat(detail.productTypes()).extracting(
+                        BuyerAdminQueryService.ProductTypeItem::id,
+                        BuyerAdminQueryService.ProductTypeItem::name)
+                .containsExactly(org.assertj.core.groups.Tuple.tuple("MOVIE", "电影票"));
         assertThat(detail.legalPersonMobile()).isEqualTo("13900139000");
         assertThat(detail.bankAccount()).isEqualTo("6222021234567890");
         assertThat(detail.contacts()).extracting(BuyerAdminCommandService.ContactLine::mobile)

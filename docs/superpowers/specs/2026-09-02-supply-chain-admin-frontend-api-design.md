@@ -392,6 +392,8 @@ SKU 未填供货上限时继承供货配置 `maxQuantity`；未填最低起购�
 
 `GET /supply-chain/buyers/{buyerCode}`、`POST /supply-chain/buyers`、`PUT /supply-chain/buyers/{buyerCode}` 档案字段对齐前端分销商表单：名称、联系人、分销品类/类型（`sellableCategories[]` / `productTypes[]` 枚举名，不是类目 id）、合作模式、类型、择优倾向、结算方式/周期、对接方式、合作开始日、说明、公司/信用代码/法人/地址/银行/证件、期初 `openingBalanceCents`（创建一次，允许 0）。详情中的 `legalPersonMobile`、`bankAccount`、`contacts[].mobile`、`primaryContactMobile` 及证件 fileKey 均按原值回显，不提供 `legalPersonMobileMasked` / `bankAccountMasked` 字段。字典见专文 §3。
 
+详情响应中的 `productTypes[]` 为对象数组，字段固定为 `{ id, name }`：按已保存的 `scope_kind=PRODUCT_TYPE` 范围编码关联 `sc_product_type.type_code`，`id` 取商品类型业务编码，`name` 取商品类型名称，不暴露商品类型表内部自增主键。创建/编辑请求的 `productTypes[]` 仍提交商品类型业务编码；列表响应继续返回编码数组，避免改变列表筛选与既有投影契约。
+
 分页列表行除基础档案字段外，还返回以下只读聚合字段：
 
 - `productTypes[]`：`sc_buyer_category_scope` 中 `scope_kind=PRODUCT_TYPE` 的商品类型枚举名；`sellableCategories[]` 继续只读取 `scope_kind=SELLABLE`，两者互相独立，禁止相互推导；

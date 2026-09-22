@@ -25,6 +25,8 @@ import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerProjectMappe
 import com.aifuli.module.supplychain.tradecore.buyer.domain.BuyerProjectStatus;
 import com.aifuli.module.supplychain.tradecore.buyer.domain.BuyerScopeKind;
 import com.aifuli.module.supplychain.tradecore.buyer.domain.BuyerStatus;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProductTypeDO;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProductTypeMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -39,6 +41,7 @@ import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -73,6 +76,7 @@ public class BuyerAdminQueryService {
     private final BuyerAccountMapper accountMapper;
     private final BuyerProjectMapper projectMapper;
     private final BuyerProductMapper productMapper;
+    private final ProductTypeMapper productTypeMapper;
     private final EnvelopeCryptoPort envelopeCrypto;
 
     /**
@@ -161,14 +165,15 @@ public class BuyerAdminQueryService {
                 .map(BuyerCooperationModeDO::getCooperationMode)
                 .toList();
         List<String> sellableCategories = new ArrayList<>();
-        List<String> productTypes = new ArrayList<>();
+        List<String> productTypeCodes = new ArrayList<>();
         for (BuyerCategoryScopeDO scope : categoryScopeMapper.selectByBuyerId(buyer.getId())) {
             if (BuyerScopeKind.SELLABLE.name().equals(scope.getScopeKind())) {
                 sellableCategories.add(scope.getScopeCode());
             } else if (BuyerScopeKind.PRODUCT_TYPE.name().equals(scope.getScopeKind())) {
-                productTypes.add(scope.getScopeCode());
+                productTypeCodes.add(scope.getScopeCode());
             }
         }
+        List<ProductTypeItem> productTypes = loadProductTypes(productTypeCodes);
         BuyerAccountDO account = accountMapper.selectByBuyerId(buyer.getId());
         BuyerContactDO primary = contacts.isEmpty() ? null : contacts.getFirst();
         String parentBuyerCode = null;
@@ -209,6 +214,30 @@ public class BuyerAdminQueryService {
                 primary == null ? null : primary.getContactName(),
                 primary == null ? null : primary.getContactMobile(),
                 account == null || account.getBalance() == null ? 0L : account.getBalance());
+    }
+
+    /**
+     * 将分销商已保存的商品类型编码批量解析为详情回显项。
+     *
+     * <p>详情的 {@code id} 使用商品类型业务编码，而不是数据库内部主键，保证前端回填后仍可原样提交
+     * {@code productTypes[]} 保存请求；查询按范围行顺序返回且一次批量读取，避免详情扩展出 N+1 查询。
+     * 商品类型主数据由 {@code sc_product_type} 维护。设计见
+     * {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#62-列表与档案}。</p>
+     */
+    private List<ProductTypeItem> loadProductTypes(List<String> productTypeCodes) {
+        if (productTypeCodes.isEmpty()) {
+            return List.of();
+        }
+        List<String> distinctCodes = productTypeCodes.stream().distinct().toList();
+        Map<String, ProductTypeDO> typesByCode = new LinkedHashMap<>();
+        productTypeMapper.selectList(new LambdaQueryWrapper<ProductTypeDO>()
+                        .in(ProductTypeDO::getTypeCode, distinctCodes))
+                .forEach(type -> typesByCode.put(type.getTypeCode(), type));
+        return distinctCodes.stream()
+                .map(typesByCode::get)
+                .filter(type -> type != null)
+                .map(type -> new ProductTypeItem(type.getTypeCode(), type.getTypeName()))
+                .toList();
     }
 
     /**
@@ -569,10 +598,17 @@ public class BuyerAdminQueryService {
             @Schema(description = "对接方式：API、H5、MANUAL") List<String> integrationModes,
             @Schema(description = "合作模式") List<String> cooperationModes,
             @Schema(description = "可售品类") List<String> sellableCategories,
-            @Schema(description = "商品类型") List<String> productTypes,
+            @Schema(description = "商品类型，id为业务编码，name为类型名称") List<ProductTypeItem> productTypes,
             @Schema(description = "联系人列表") List<ContactLine> contacts,
             @Schema(description = "主联系人姓名") String primaryContactName,
             @Schema(description = "主联系人手机号") String primaryContactMobile,
             @Schema(description = "采购商账本余额，单位CNY分，只读") long accountBalanceCents) {
+    }
+
+    /** 分销商详情商品类型回显项；id 为可提交的商品类型业务编码。 */
+    @Schema(description = "分销商详情商品类型")
+    public record ProductTypeItem(
+            @Schema(description = "商品类型业务编码") String id,
+            @Schema(description = "商品类型名称") String name) {
     }
 }

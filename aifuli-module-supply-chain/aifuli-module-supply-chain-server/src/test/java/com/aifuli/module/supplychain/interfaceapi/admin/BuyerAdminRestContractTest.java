@@ -4,6 +4,7 @@ import com.aifuli.module.supplychain.interfaceapi.admin.BuyerAdminController.Buy
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerAdminQueryService.BuyerChildItem;
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerAdminQueryService.BuyerDetail;
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerAdminQueryService.BuyerListItem;
+import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerAdminQueryService.ProductTypeItem;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.swagger.v3.core.converter.ModelConverters;
 import io.swagger.v3.oas.annotations.Operation;
@@ -121,6 +122,18 @@ class BuyerAdminRestContractTest {
         assertThat(propertyNames).contains(
                 "legalPersonMobile", "bankAccount", "contacts", "primaryContactMobile");
         assertThat(propertyNames).doesNotContain("legalPersonMobileMasked", "bankAccountMasked");
+    }
+
+    @Test
+    void detailProductTypesExposeIdAndName() {
+        ObjectMapper mapper = new ObjectMapper();
+        Set<String> propertyNames = mapper.getSerializationConfig()
+                .introspect(mapper.constructType(ProductTypeItem.class))
+                .findProperties().stream()
+                .map(property -> property.getName())
+                .collect(Collectors.toSet());
+
+        assertThat(propertyNames).containsExactlyInAnyOrder("id", "name");
     }
 
     @Test
