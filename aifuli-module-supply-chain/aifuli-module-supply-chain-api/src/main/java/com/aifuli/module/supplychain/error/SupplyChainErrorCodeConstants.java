@@ -153,9 +153,29 @@ public interface SupplyChainErrorCodeConstants {
     ErrorCode SUPPLY_CHAIN_B_ORDER_NOT_FOUND =
             error(1_050_001_119, "供应商履约尝试不存在");
     ErrorCode ROUTING_RULE_WRITE_NOT_OPEN =
-            error(1_050_001_120, "本期路由规则只读，禁止新增、修改、删除或启停");
+            error(1_050_001_120, "路由规则写入口已开放，本错误码不再使用");
     ErrorCode ROUTING_RULE_NOT_FOUND =
             error(1_050_001_121, "路由规则不存在");
+    ErrorCode ROUTING_RULE_CODE_MISMATCH =
+            error(1_050_001_122, "规则编码与路径不一致");
+    ErrorCode ROUTING_RULE_SCOPE_NOT_OPEN =
+            error(1_050_001_123, "路由规则不支持按项目或商品类型配置");
+    ErrorCode ROUTING_RULE_SUPPLIER_ALL_NOT_OPEN =
+            error(1_050_001_124, "路由规则必须指定候选供应商，不支持全部供应商");
+    ErrorCode ROUTING_RULE_BUYER_REQUIRED =
+            error(1_050_001_125, "适用分销商必须指定恰好一个");
+    ErrorCode ROUTING_RULE_STRATEGY_NOT_OPEN =
+            error(1_050_001_126, "本期仅支持按候选顺序的稳定优先");
+    ErrorCode ROUTING_RULE_CANDIDATE_INVALID =
+            error(1_050_001_127, "固定模式必须一个主供应商，自动模式必须两个及以上互异有序候选");
+    ErrorCode ROUTING_RULE_MATCH_OVERLAP =
+            error(1_050_001_128, "已存在相同分销商、平台SKU与履约类型的路由规则");
+    ErrorCode ROUTING_RULE_LAST_CANNOT_REMOVE =
+            error(1_050_001_129, "当前生效版本至少保留一条路由规则");
+    ErrorCode ROUTING_RULE_VERSION_CONFLICT =
+            error(1_050_001_130, "路由规则版本已变更，请刷新后重试");
+    ErrorCode ROUTING_RULE_FULFILLMENT_MISMATCH =
+            error(1_050_001_131, "履约类型必须与平台SKU档案一致");
 
     /** 订单详情不可用只作为成功响应中的详情标记，不作为 CommonResult 失败码。 */
     String DETAIL_UNAVAILABLE = "DETAIL_UNAVAILABLE";
@@ -281,7 +301,17 @@ public interface SupplyChainErrorCodeConstants {
             entry(FULFILLMENT_SCORE_ITEMS_REQUIRED, RetryDirective.DO_NOT_RETRY),
             entry(SUPPLY_CHAIN_B_ORDER_NOT_FOUND, RetryDirective.DO_NOT_RETRY),
             entry(ROUTING_RULE_WRITE_NOT_OPEN, RetryDirective.DO_NOT_RETRY),
-            entry(ROUTING_RULE_NOT_FOUND, RetryDirective.DO_NOT_RETRY));
+            entry(ROUTING_RULE_NOT_FOUND, RetryDirective.DO_NOT_RETRY),
+            entry(ROUTING_RULE_CODE_MISMATCH, RetryDirective.DO_NOT_RETRY),
+            entry(ROUTING_RULE_SCOPE_NOT_OPEN, RetryDirective.DO_NOT_RETRY),
+            entry(ROUTING_RULE_SUPPLIER_ALL_NOT_OPEN, RetryDirective.DO_NOT_RETRY),
+            entry(ROUTING_RULE_BUYER_REQUIRED, RetryDirective.DO_NOT_RETRY),
+            entry(ROUTING_RULE_STRATEGY_NOT_OPEN, RetryDirective.DO_NOT_RETRY),
+            entry(ROUTING_RULE_CANDIDATE_INVALID, RetryDirective.DO_NOT_RETRY),
+            entry(ROUTING_RULE_MATCH_OVERLAP, RetryDirective.DO_NOT_RETRY),
+            entry(ROUTING_RULE_LAST_CANNOT_REMOVE, RetryDirective.DO_NOT_RETRY),
+            entry(ROUTING_RULE_VERSION_CONFLICT, RetryDirective.DO_NOT_RETRY),
+            entry(ROUTING_RULE_FULFILLMENT_MISMATCH, RetryDirective.DO_NOT_RETRY));
 
     static RetryDirective retryDirective(int errorCode) {
         return RETRY_DIRECTIVES.getOrDefault(errorCode, RetryDirective.DO_NOT_RETRY);
