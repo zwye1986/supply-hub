@@ -23,17 +23,17 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
  */
 public final class RoutingRuleSaveSupport {
 
-    /** 新候选默认库存检查模式，见设计 §4.2。 */
+    /** 供 CommandService 创建新候选；默认库存检查模式，见设计 §4.2。 */
     public static final String DEFAULT_INVENTORY_CHECK_MODE = "UNSUPPORTED";
-    /** 新候选默认余额检查模式，见设计 §4.2。 */
+    /** 供 CommandService 创建新候选；默认余额检查模式，见设计 §4.2。 */
     public static final String DEFAULT_BALANCE_CHECK_MODE = "UNSUPPORTED";
-    /** 新候选默认健康检查模式，见设计 §4.2。 */
+    /** 供 CommandService 创建新候选；默认健康检查模式，见设计 §4.2。 */
     public static final String DEFAULT_HEALTH_CHECK_MODE = "UNSUPPORTED";
-    /** 新候选默认库存检查最大年龄（秒），UNSUPPORTED 时必须为空。 */
+    /** 供 CommandService 创建新候选；默认库存检查最大年龄（秒），UNSUPPORTED 时必须为空。 */
     public static final Integer DEFAULT_INVENTORY_MAX_AGE_SECONDS = null;
-    /** 新候选默认余额检查最大年龄（秒），UNSUPPORTED 时必须为空。 */
+    /** 供 CommandService 创建新候选；默认余额检查最大年龄（秒），UNSUPPORTED 时必须为空。 */
     public static final Integer DEFAULT_BALANCE_MAX_AGE_SECONDS = null;
-    /** 新候选默认健康检查最大年龄（秒），UNSUPPORTED 时必须为空。 */
+    /** 供 CommandService 创建新候选；默认健康检查最大年龄（秒），UNSUPPORTED 时必须为空。 */
     public static final Integer DEFAULT_HEALTH_MAX_AGE_SECONDS = null;
 
     private static final int NAME_MAX_LENGTH = 128;

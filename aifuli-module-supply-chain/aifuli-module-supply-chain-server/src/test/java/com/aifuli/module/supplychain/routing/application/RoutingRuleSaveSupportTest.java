@@ -13,6 +13,7 @@ import java.util.List;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.ROUTING_RULE_BUYER_REQUIRED;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.ROUTING_RULE_CANDIDATE_INVALID;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.ROUTING_RULE_CODE_MISMATCH;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.ROUTING_RULE_FULFILLMENT_MISMATCH;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.ROUTING_RULE_SCOPE_NOT_OPEN;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.ROUTING_RULE_STRATEGY_NOT_OPEN;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.ROUTING_RULE_SUPPLIER_ALL_NOT_OPEN;
@@ -118,6 +119,75 @@ class RoutingRuleSaveSupportTest {
         assertThat(patch.ruleCode()).isNull();
     }
 
+    @Test
+    void projectModeSpecifiedRejected() {
+        assertThatThrownBy(() -> support.validateAndNormalize(
+                baseFixed().projectMode(RoutingRuleScopeMode.SPECIFIED).build(),
+                null, Operation.CREATE))
+                .isInstanceOf(ServiceException.class)
+                .extracting(ex -> ((ServiceException) ex).getCode())
+                .isEqualTo(ROUTING_RULE_SCOPE_NOT_OPEN.getCode());
+    }
+
+    @Test
+    void productTypeModeSpecifiedRejected() {
+        assertThatThrownBy(() -> support.validateAndNormalize(
+                baseFixed().productTypeMode(RoutingRuleScopeMode.SPECIFIED).build(),
+                null, Operation.CREATE))
+                .isInstanceOf(ServiceException.class)
+                .extracting(ex -> ((ServiceException) ex).getCode())
+                .isEqualTo(ROUTING_RULE_SCOPE_NOT_OPEN.getCode());
+    }
+
+    @Test
+    void productTypeCodesNonEmptyRejected() {
+        assertThatThrownBy(() -> support.validateAndNormalize(
+                baseFixed().productTypeCodes(List.of("PT_1")).build(), null, Operation.CREATE))
+                .isInstanceOf(ServiceException.class)
+                .extracting(ex -> ((ServiceException) ex).getCode())
+                .isEqualTo(ROUTING_RULE_SCOPE_NOT_OPEN.getCode());
+    }
+
+    @Test
+    void statusDisabledRejected() {
+        assertThatThrownBy(() -> support.validateAndNormalize(
+                baseFixed().status(RoutingRuleStatus.DISABLED).build(), null, Operation.CREATE))
+                .isInstanceOf(ServiceException.class)
+                .extracting(ex -> ((ServiceException) ex).getCode())
+                .isEqualTo(ROUTING_RULE_STRATEGY_NOT_OPEN.getCode());
+    }
+
+    @Test
+    void prioritiesFirstNotStableRejected() {
+        assertThatThrownBy(() -> support.validateAndNormalize(
+                baseFixed().priorities(List.of(
+                        new PriorityInput("p1", RoutingRuleStrategy.PRICE),
+                        new PriorityInput("p2", RoutingRuleStrategy.STABLE),
+                        new PriorityInput("p3", RoutingRuleStrategy.COMPOSITE))).build(),
+                null, Operation.CREATE))
+                .isInstanceOf(ServiceException.class)
+                .extracting(ex -> ((ServiceException) ex).getCode())
+                .isEqualTo(ROUTING_RULE_STRATEGY_NOT_OPEN.getCode());
+    }
+
+    @Test
+    void fixedMissingPrimarySupplierRejected() {
+        assertThatThrownBy(() -> support.validateAndNormalize(
+                baseFixed().primarySupplierCode(null).build(), null, Operation.CREATE))
+                .isInstanceOf(ServiceException.class)
+                .extracting(ex -> ((ServiceException) ex).getCode())
+                .isEqualTo(ROUTING_RULE_CANDIDATE_INVALID.getCode());
+    }
+
+    @Test
+    void illegalFulfillmentTypeRejected() {
+        assertThatThrownBy(() -> support.validateAndNormalize(
+                baseFixed().fulfillmentType("PHYSICAL_SHIP").build(), null, Operation.CREATE))
+                .isInstanceOf(ServiceException.class)
+                .extracting(ex -> ((ServiceException) ex).getCode())
+                .isEqualTo(ROUTING_RULE_FULFILLMENT_MISMATCH.getCode());
+    }
+
     private static SaveRequestBuilder baseFixed() {
         return new SaveRequestBuilder()
                 .name(" 话费固定规则 ")
@@ -200,6 +270,31 @@ class RoutingRuleSaveSupportTest {
 
         SaveRequestBuilder projectCodes(List<String> projectCodes) {
             this.projectCodes = projectCodes;
+            return this;
+        }
+
+        SaveRequestBuilder projectMode(RoutingRuleScopeMode projectMode) {
+            this.projectMode = projectMode;
+            return this;
+        }
+
+        SaveRequestBuilder productTypeCodes(List<String> productTypeCodes) {
+            this.productTypeCodes = productTypeCodes;
+            return this;
+        }
+
+        SaveRequestBuilder productTypeMode(RoutingRuleScopeMode productTypeMode) {
+            this.productTypeMode = productTypeMode;
+            return this;
+        }
+
+        SaveRequestBuilder status(RoutingRuleStatus status) {
+            this.status = status;
+            return this;
+        }
+
+        SaveRequestBuilder priorities(List<PriorityInput> priorities) {
+            this.priorities = priorities;
             return this;
         }
 
