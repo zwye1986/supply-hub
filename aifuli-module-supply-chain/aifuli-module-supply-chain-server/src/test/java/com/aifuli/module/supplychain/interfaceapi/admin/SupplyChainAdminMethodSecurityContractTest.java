@@ -6,8 +6,14 @@ import com.aifuli.framework.security.core.service.SecurityFrameworkService;
 import com.aifuli.framework.security.core.service.SecurityFrameworkServiceImpl;
 import com.aifuli.module.supplychain.border.order.application.OrderAdminQueryService;
 import com.aifuli.module.supplychain.border.order.application.SupplierOrderAdminQueryService;
+import com.aifuli.module.supplychain.interfaceapi.admin.vo.RoutingRuleSaveReqVO;
 import com.aifuli.module.supplychain.routing.application.RoutingRuleAdminCommandService;
 import com.aifuli.module.supplychain.routing.application.RoutingRuleAdminQueryService;
+import com.aifuli.module.supplychain.routing.application.RoutingRuleAdminQueryService.RoutingRuleView;
+import com.aifuli.module.supplychain.routing.application.RoutingRuleRouteMode;
+import com.aifuli.module.supplychain.routing.application.RoutingRuleSaveSupport.NormalizedRulePatch;
+import com.aifuli.module.supplychain.routing.application.RoutingRuleScopeMode;
+import com.aifuli.module.supplychain.routing.application.RoutingRuleStatus;
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerAdminCommandService;
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerAdminQueryService;
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerInvoiceService;
@@ -35,6 +41,7 @@ import org.springframework.security.config.annotation.method.configuration.Enabl
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.context.junit.jupiter.SpringJUnitConfig;
 
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -55,6 +62,7 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -272,10 +280,64 @@ class SupplyChainAdminMethodSecurityContractTest {
     }
 
     @Test
+    void adminCanWriteRoutingRules() {
+        grant(ADMIN);
+        assertThatCode(() -> routingRuleController.create(fixedCreateRequest()))
+                .doesNotThrowAnyException();
+        assertThatCode(() -> routingRuleController.update("RR_1", fixedCreateRequest()))
+                .doesNotThrowAnyException();
+        assertThatCode(() -> routingRuleController.delete("RR_1")).doesNotThrowAnyException();
+        RoutingRuleAdminController.ChangeStatusReqVO statusRequest =
+                new RoutingRuleAdminController.ChangeStatusReqVO();
+        statusRequest.setStatus("DISABLED");
+        assertThatCode(() -> routingRuleController.changeStatus("RR_1", statusRequest))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
     void wrongPermissionCannotReadRoutingRules() {
         grant(BUYER_QUERY);
         assertThatThrownBy(() -> routingRuleController.page(null, null, null, null, null, null,
                 null, null, null, 1, 20)).isInstanceOf(AccessDeniedException.class);
+    }
+
+    @Test
+    void wrongPermissionCannotWriteRoutingRules() {
+        grant(BUYER_QUERY);
+        assertThatThrownBy(() -> routingRuleController.create(fixedCreateRequest()))
+                .isInstanceOf(AccessDeniedException.class);
+        assertThatThrownBy(() -> routingRuleController.update("RR_1", fixedCreateRequest()))
+                .isInstanceOf(AccessDeniedException.class);
+        assertThatThrownBy(() -> routingRuleController.delete("RR_1"))
+                .isInstanceOf(AccessDeniedException.class);
+        RoutingRuleAdminController.ChangeStatusReqVO statusRequest =
+                new RoutingRuleAdminController.ChangeStatusReqVO();
+        statusRequest.setStatus("DISABLED");
+        assertThatThrownBy(() -> routingRuleController.changeStatus("RR_1", statusRequest))
+                .isInstanceOf(AccessDeniedException.class);
+    }
+
+    private static RoutingRuleSaveReqVO fixedCreateRequest() {
+        RoutingRuleSaveReqVO request = new RoutingRuleSaveReqVO();
+        request.setName("话费固定规则");
+        request.setDistributorCodes(List.of("BYR_1"));
+        request.setSkuCode("SKU_1");
+        request.setFulfillmentType("DIRECT_RECHARGE");
+        request.setRouteMode("FIXED");
+        request.setPrimarySupplierCode("SPL_A");
+        return request;
+    }
+
+    private static RoutingRuleView sampleRoutingRuleView() {
+        return new RoutingRuleView(
+                "RR_1", "话费固定规则", false,
+                RoutingRuleScopeMode.SPECIFIED, List.of("BYR_1"), List.of("分销商1"),
+                RoutingRuleScopeMode.ALL, List.of(), List.of(),
+                RoutingRuleScopeMode.ALL, List.of(), List.of(),
+                RoutingRuleRouteMode.FIXED, RoutingRuleScopeMode.SPECIFIED,
+                List.of("SPL_A"), List.of("供应商A"), "SPL_A", "供应商A",
+                "SKU_1", "SKU名称", "DIRECT_RECHARGE",
+                List.of(), null, RoutingRuleStatus.ENABLED, "1001", LocalDateTime.now());
     }
 
     private void querySuppliers() {
@@ -417,9 +479,22 @@ class SupplyChainAdminMethodSecurityContractTest {
         }
 
         @Bean
-        RoutingRuleAdminController routingRuleAdminController() {
+        RoutingRuleAdminCommandService routingRuleAdminCommandService() {
+            RoutingRuleAdminCommandService commandService = mock(RoutingRuleAdminCommandService.class);
+            RoutingRuleView view = sampleRoutingRuleView();
+            when(commandService.create(any(NormalizedRulePatch.class), any())).thenReturn(view);
+            when(commandService.update(anyString(), any(NormalizedRulePatch.class), any()))
+                    .thenReturn(view);
+            when(commandService.changeStatus(anyString(), any(RoutingRuleStatus.class), any()))
+                    .thenReturn(view);
+            return commandService;
+        }
+
+        @Bean
+        RoutingRuleAdminController routingRuleAdminController(
+                RoutingRuleAdminCommandService routingRuleAdminCommandService) {
             return new RoutingRuleAdminController(
-                    mock(RoutingRuleAdminCommandService.class),
+                    routingRuleAdminCommandService,
                     mock(RoutingRuleAdminQueryService.class));
         }
     }
