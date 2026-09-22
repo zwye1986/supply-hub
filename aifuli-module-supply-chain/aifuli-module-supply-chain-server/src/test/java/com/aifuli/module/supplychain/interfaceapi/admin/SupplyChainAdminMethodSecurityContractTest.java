@@ -6,6 +6,7 @@ import com.aifuli.framework.security.core.service.SecurityFrameworkService;
 import com.aifuli.framework.security.core.service.SecurityFrameworkServiceImpl;
 import com.aifuli.module.supplychain.border.order.application.OrderAdminQueryService;
 import com.aifuli.module.supplychain.border.order.application.SupplierOrderAdminQueryService;
+import com.aifuli.module.supplychain.routing.application.RoutingRuleAdminCommandService;
 import com.aifuli.module.supplychain.routing.application.RoutingRuleAdminQueryService;
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerAdminCommandService;
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerAdminQueryService;
@@ -417,7 +418,9 @@ class SupplyChainAdminMethodSecurityContractTest {
 
         @Bean
         RoutingRuleAdminController routingRuleAdminController() {
-            return new RoutingRuleAdminController(mock(RoutingRuleAdminQueryService.class));
+            return new RoutingRuleAdminController(
+                    mock(RoutingRuleAdminCommandService.class),
+                    mock(RoutingRuleAdminQueryService.class));
         }
     }
 }
