@@ -61,9 +61,9 @@ public final class GenericPricingAdminVos {
     @Data
     @Schema(description = "税务展示属性；仅用于结算展示，不参与价格计算")
     public static class TaxMetadataReqVO {
-        @Schema(description = "是否含税；仅用于结算展示", requiredMode = Schema.RequiredMode.REQUIRED)
+        @Schema(description = "是否含税；与 taxRateCode 组成税务组，任一缺失则该组整体降级为继承")
         private Boolean taxIncluded;
-        @Schema(description = "system动态字典supply_chain_tax_rate的启用值")
+        @Schema(description = "system动态字典supply_chain_tax_rate的启用值；与 taxIncluded 组成税务组，任一缺失则该组整体降级为继承")
         private String taxRateCode;
     }
 }

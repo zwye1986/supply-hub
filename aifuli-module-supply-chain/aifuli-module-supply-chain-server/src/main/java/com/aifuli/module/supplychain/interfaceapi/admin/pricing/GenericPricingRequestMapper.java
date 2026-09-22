@@ -20,7 +20,9 @@ import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericPricingCal
 import com.aifuli.module.supplychain.tradecore.catalog.pricing.PricingTaxGroupValidator;
 
 /**
- * 管理端通用定价请求到领域对象的转换，并在边界完成税务原子组校验。
+ * 管理端通用定价请求到领域对象的转换，并在边界完成税务组归一化：声明覆盖时税务组必须完整
+ * （taxIncluded 与 taxRateCode 同时有效），残缺则降级为整体继承并丢弃字段；
+ * 声明继承时忽略任何携带的税务字段。缺字段不得默认成不含税。
  * 设计见 {@code docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#6-管理端接口}。
  */
 public final class GenericPricingRequestMapper {
@@ -38,21 +40,21 @@ public final class GenericPricingRequestMapper {
     }
 
     public static ProjectOverrides toBuyerOverrides(BuyerProductBatchPricingReqVO request) {
+        TaxGroup tax = normalizeTaxGroup(request.isTaxInherited(), request.getTaxIncluded(), request.getTaxRateCode());
         return toBuyerOverrides(request.isDistributionInherited(), request.getDistributionRule(),
                 request.isSalesInherited(), request.getSalesRule(),
                 request.isServiceFeeInherited(), request.getServiceFeeRule(),
                 request.isHideInherited(), request.getDistributionHideThresholdPercent(),
-                request.getSalesHideThresholdPercent(), request.isTaxInherited(),
-                request.getTaxIncluded(), request.getTaxRateCode());
+                request.getSalesHideThresholdPercent(), tax.taxInherited(), tax.taxIncluded(), tax.taxRateCode());
     }
 
     public static ProjectOverrides toBuyerOverrides(BuyerProductCreatePricingReqVO request) {
+        TaxGroup tax = normalizeTaxGroup(request.isTaxInherited(), request.getTaxIncluded(), request.getTaxRateCode());
         return toBuyerOverrides(request.isDistributionInherited(), request.getDistributionRule(),
                 request.isSalesInherited(), request.getSalesRule(),
                 request.isServiceFeeInherited(), request.getServiceFeeRule(),
                 request.isHideInherited(), request.getDistributionHideThresholdPercent(),
-                request.getSalesHideThresholdPercent(), request.isTaxInherited(),
-                request.getTaxIncluded(), request.getTaxRateCode());
+                request.getSalesHideThresholdPercent(), tax.taxInherited(), tax.taxIncluded(), tax.taxRateCode());
     }
 
     private static ProjectOverrides toBuyerOverrides(boolean distributionInherited, FormulaRuleReqVO distributionRule,
@@ -61,8 +63,6 @@ public final class GenericPricingRequestMapper {
                                                      boolean hideInherited, java.math.BigDecimal distributionThreshold,
                                                      java.math.BigDecimal salesThreshold, boolean taxInherited,
                                                      Boolean taxIncluded, String taxRateCode) {
-        PricingTaxGroupValidator.requireProjectGroup(taxInherited,
-                taxIncluded != null || taxRateCode != null, taxIncluded, taxRateCode);
         return new ProjectOverrides(distributionInherited, toFormula(distributionRule, false),
                 salesInherited, toFormula(salesRule, false),
                 serviceFeeInherited, toServiceFee(serviceFeeRule, false),
@@ -72,15 +72,30 @@ public final class GenericPricingRequestMapper {
 
     public static ProjectOverrides toProjectOverrides(ProjectProductBatchPricingReqVO request) {
         TaxMetadataReqVO taxMetadata = request.getTaxMetadata();
-        PricingTaxGroupValidator.requireProjectGroup(request.isTaxInherited(), taxMetadata != null,
+        TaxGroup tax = normalizeTaxGroup(request.isTaxInherited(),
                 taxMetadata == null ? null : taxMetadata.getTaxIncluded(),
                 taxMetadata == null ? null : taxMetadata.getTaxRateCode());
         return new ProjectOverrides(request.isDistributionInherited(), toFormula(request.getDistributionRule(), false),
                 request.isSalesInherited(), toFormula(request.getSalesRule(), false),
                 request.isServiceFeeInherited(), toServiceFee(request.getServiceFeeRule(), false),
                 request.isHideInherited(), toHide(request.getHideRule()),
-                request.isTaxInherited(), taxMetadata == null ? null
-                : new TaxMetadata(taxMetadata.getTaxIncluded(), taxMetadata.getTaxRateCode(), null));
+                tax.taxInherited(), tax.taxInherited() ? null
+                : new TaxMetadata(tax.taxIncluded(), tax.taxRateCode(), null));
+    }
+
+    /**
+     * 归一化税务组：仅「声明覆盖且 taxIncluded 与 taxRateCode 同时有效」保留覆盖；
+     * 声明继承或覆盖组残缺时一律降级为整体继承并丢弃残缺字段，缺字段不得默认成不含税。
+     * 兼容规则见 {@code docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#4-税务展示属性}。
+     */
+    private static TaxGroup normalizeTaxGroup(boolean taxInherited, Boolean taxIncluded, String taxRateCode) {
+        boolean complete = taxIncluded != null && taxRateCode != null && !taxRateCode.isBlank();
+        return !taxInherited && complete ? new TaxGroup(false, taxIncluded, taxRateCode)
+                : new TaxGroup(true, null, null);
+    }
+
+    /** 归一化后的税务组；taxInherited=true 时两个字段必为 null。 */
+    private record TaxGroup(boolean taxInherited, Boolean taxIncluded, String taxRateCode) {
     }
 
     private static FormulaRule toFormula(FormulaRuleReqVO request, boolean required) {

@@ -355,7 +355,7 @@ public class ProjectAdminController {
         @Schema(description = "true时继承分销商利润隐藏阈值；false时必须提交 hideRule")
         private boolean hideInherited;
         @Valid private HideRuleReqVO hideRule;
-        @Schema(description = "true时继承分销商税务且不得携带 taxMetadata；false时必须同时提交 taxIncluded 与 taxRateCode")
+        @Schema(description = "true时继承分销商税务；false时须在 taxMetadata 中同时提交 taxIncluded 与 taxRateCode，税务组不完整则自动降级为继承")
         private boolean taxInherited;
         @Valid private TaxMetadataReqVO taxMetadata;
     }

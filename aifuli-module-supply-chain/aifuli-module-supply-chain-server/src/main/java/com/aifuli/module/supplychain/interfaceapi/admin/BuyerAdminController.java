@@ -556,11 +556,11 @@ public class BuyerAdminController {
         private java.math.BigDecimal distributionHideThresholdPercent;
         @Schema(description = "销售区利润隐藏阈值百分数，0到100，最多2位小数")
         private java.math.BigDecimal salesHideThresholdPercent;
-        @Schema(description = "true时继承商品默认税务且不得携带税务字段")
+        @Schema(description = "true时继承商品默认税务；false时须同时提交 taxIncluded 与 taxRateCode，税务组不完整则自动降级为继承")
         private boolean taxInherited;
-        @Schema(description = "是否含税；覆盖时须与 taxRateCode 同时提交")
+        @Schema(description = "是否含税；覆盖时须与 taxRateCode 同时提交，任一缺失则整体降级为继承")
         private Boolean taxIncluded;
-        @Schema(description = "system动态字典supply_chain_tax_rate的启用值")
+        @Schema(description = "system动态字典supply_chain_tax_rate的启用值；覆盖时须与 taxIncluded 同时提交，缺失则整体降级为继承")
         private String taxRateCode;
     }
 
@@ -606,11 +606,11 @@ public class BuyerAdminController {
         private BigDecimal distributionHideThresholdPercent;
         @Schema(description = "销售区利润隐藏阈值百分数，0到100，最多2位小数")
         private BigDecimal salesHideThresholdPercent;
-        @Schema(description = "true时继承商品默认税务且不得携带税务字段")
+        @Schema(description = "true时继承商品默认税务；false时须同时提交 taxIncluded 与 taxRateCode，税务组不完整则自动降级为继承")
         private boolean taxInherited;
-        @Schema(description = "是否含税；覆盖时须与 taxRateCode 同时提交")
+        @Schema(description = "是否含税；覆盖时须与 taxRateCode 同时提交，任一缺失则整体降级为继承")
         private Boolean taxIncluded;
-        @Schema(description = "system动态字典supply_chain_tax_rate的启用值")
+        @Schema(description = "system动态字典supply_chain_tax_rate的启用值；覆盖时须与 taxIncluded 同时提交，缺失则整体降级为继承")
         private String taxRateCode;
     }
 }
