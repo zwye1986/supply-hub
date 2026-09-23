@@ -81,7 +81,7 @@ class BuyerProductQueryServiceTest {
                 listingMapper,
                 mock(ProjectListingVersionMapper.class),
                 mock(BuyerProjectMapper.class),
-                mock(SettlementPriceResolver.class),
+                new SettlementPriceResolver(),
                 new ObjectMapper());
         when(buyerMapper.selectByBuyerCode("BYR_A")).thenReturn(BuyerDO.builder().id(9L).buyerCode("BYR_A").build());
     }
@@ -182,6 +182,63 @@ class BuyerProductQueryServiceTest {
         assertThat(item.taxIncluded()).isFalse();
         assertThat(item.taxRateCode()).isEqualTo("NON_TAXABLE");
         assertThat(item.taxRateDisplay()).isEqualTo("不征税");
+    }
+
+    /**
+     * 新增分销商品的行内 pricing 发布到通用定价版本后，列表必须读取该版本的分销价和覆盖规则，
+     * 不能继续只读历史 L1/L2 链而展示空价。
+     * 设计见 {@code docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#6-管理端接口}。
+     */
+    @Test
+    void listUsesCurrentGenericBuyerPricingForDistributionPriceAndRule() {
+        BuyerProductDO product = BuyerProductDO.builder()
+                .id(31L).buyerProductCode("BPD_1").buyerId(9L).platformSkuId(11L).build();
+        when(productMapper.selectPage(any(PageParam.class), any())).thenReturn(new PageResult<>(List.of(product), 1L));
+        when(skuMapper.selectById(11L)).thenReturn(PlatformSkuDO.builder()
+                .id(11L).skuCode("SKU_1").spuId(21L).marketPrice(59_900L).build());
+        when(spuMapper.selectById(21L)).thenReturn(PlatformSpuDO.builder().id(21L).build());
+        when(listingMapper.selectList(any())).thenReturn(List.of());
+        when(buyerPricingMapper.selectByBuyerProductId(31L)).thenReturn(BuyerSkuPricingDO.builder()
+                .id(71L).buyerProductId(31L).currentVersionId(72L).build());
+        when(buyerPricingVersionMapper.selectById(72L)).thenReturn(BuyerSkuPricingVersionDO.builder()
+                .id(72L).pricingId(71L).distributionPriceCents(62_900L)
+                .overrideJson("{\"distributionInherited\":false,\"distributionRule\":{"
+                        + "\"mode\":\"CUSTOM\",\"base\":\"SUGGESTED_SALE_PRICE\","
+                        + "\"percentage\":100,\"operator\":\"ADD\",\"operand\":30}}")
+                .build());
+
+        BuyerProductQueryService.BuyerProductListItem item =
+                service.page("BYR_A", List.of(), 1, 20).getList().getFirst();
+
+        assertThat(item.distPriceCents()).isEqualTo(62_900L);
+        assertThat(item.finalPriceCents()).isEqualTo(62_900L);
+        assertThat(item.priceSource()).isEqualTo("L2");
+        assertThat(item.pricingRule()).isEqualTo("自定义公式");
+    }
+
+    @Test
+    void inheritedGenericDistributionKeepsPlatformPriceSource() {
+        BuyerProductDO product = BuyerProductDO.builder()
+                .id(31L).buyerProductCode("BPD_1").buyerId(9L).platformSkuId(11L).build();
+        when(productMapper.selectPage(any(PageParam.class), any())).thenReturn(new PageResult<>(List.of(product), 1L));
+        when(skuMapper.selectById(11L)).thenReturn(PlatformSkuDO.builder()
+                .id(11L).skuCode("SKU_1").spuId(21L).marketPrice(59_900L).build());
+        when(spuMapper.selectById(21L)).thenReturn(PlatformSpuDO.builder().id(21L).build());
+        when(listingMapper.selectList(any())).thenReturn(List.of());
+        when(buyerPricingMapper.selectByBuyerProductId(31L)).thenReturn(BuyerSkuPricingDO.builder()
+                .id(71L).buyerProductId(31L).currentVersionId(72L).build());
+        when(buyerPricingVersionMapper.selectById(72L)).thenReturn(BuyerSkuPricingVersionDO.builder()
+                .id(72L).pricingId(71L).distributionPriceCents(59_900L)
+                .overrideJson("{\"distributionInherited\":true}")
+                .build());
+
+        BuyerProductQueryService.BuyerProductListItem item =
+                service.page("BYR_A", List.of(), 1, 20).getList().getFirst();
+
+        assertThat(item.distPriceCents()).isEqualTo(59_900L);
+        assertThat(item.finalPriceCents()).isEqualTo(59_900L);
+        assertThat(item.priceSource()).isEqualTo("L1");
+        assertThat(item.pricingRule()).isEqualTo("继承商品默认");
     }
 
     @Test

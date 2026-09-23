@@ -142,6 +142,12 @@ SPU、SKU 与定价整体回滚。
 正常返回 `pricingStatus=UNPRICED`，当前版本、五组配置、计算快照与发布信息均为空；SKU 不存在时返回
 `PLATFORM_SKU_NOT_FOUND`。查询只读取当前指针指向的不可变版本，不调用税率字典、不触发重算，也不生成报价凭证。
 
+分销商品列表 `GET /supply-chain/buyers/{buyerCode}/products` 的 `distPriceCents` 必须优先读取
+`sc_buyer_sku_pricing.current_version_id` 指向版本的 `distribution_price_cents`，`pricingRule` 必须按该版本
+`override_json` 的分销价继承标记与规则展示，`finalPriceCents` 的分销商层输入也必须使用同一价格；不得继续仅从
+历史 `sc_platform_settlement_price` / `sc_buyer_product_l2_override` 推导，否则行内 `pricing` 保存成功后列表会展示
+空价或错误规则。只有尚未生成通用定价版本的历史分销商品才回退旧 L1/L2 链，避免存量数据在迁移完成前失去展示。
+
 ## 7. 项目报价凭证与标准履约
 
 新增项目级标准商品报价 RPC，输入绑定 `sourceSystem + externalTenantId + projectCode + platformSkuCode +

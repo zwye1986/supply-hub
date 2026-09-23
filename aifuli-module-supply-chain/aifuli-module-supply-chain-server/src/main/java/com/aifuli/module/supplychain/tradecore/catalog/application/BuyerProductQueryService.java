@@ -36,7 +36,9 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuPric
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuPricingVersionMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSpuMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProjectListingVersionMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericBatchPricingService.ProjectOverrides;
 import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericPricingCalculator.PricingConfig;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericPricingCalculator.PriceMode;
 import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericPricingCalculator.TaxMetadata;
 import com.aifuli.module.supplychain.tradecore.profile.domain.L2AdjustMode;
 import com.aifuli.module.supplychain.tradecore.profile.domain.L3AdjustMode;
@@ -73,8 +75,10 @@ public class BuyerProductQueryService {
     private static final int DEFAULT_PAGE_NO = 1;
     private static final int DEFAULT_PAGE_SIZE = 20;
     private static final String PRICING_RULE_EQUAL_L1 = "等于L1";
+    private static final String PRICING_RULE_EQUAL_MARKET_PRICE = "等于市场价";
     private static final String PRICING_RULE_CUSTOM = "自定义公式";
     private static final String PRICING_RULE_INHERIT_L1 = "继承L1";
+    private static final String PRICING_RULE_INHERIT_PLATFORM = "继承商品默认";
 
     private final BuyerMapper buyerMapper;
     private final BuyerProductMapper productMapper;
@@ -203,11 +207,21 @@ public class BuyerProductQueryService {
         Long l1Cents = sku == null ? null : loadL1Cents(sku.getId());
         BuyerProductL2OverrideVersionDO overrideVersion = loadOverrideVersion(product.getId());
         Long overrideCents = overrideVersion == null ? null : overrideVersion.getResolvedUnitPriceCents();
-        Long distPriceCents = overrideCents != null ? overrideCents : l1Cents;
+        BuyerSkuPricingVersionDO buyerPricingVersion = loadBuyerPricingVersion(product.getId());
+        ProjectOverrides buyerPricingOverrides = loadBuyerPricingOverrides(buyerPricingVersion);
+        Long legacyDistPriceCents = overrideCents != null ? overrideCents : l1Cents;
+        Long distPriceCents = buyerPricingVersion == null
+                ? legacyDistPriceCents : buyerPricingVersion.getDistributionPriceCents();
         ProjectPriceView projectView = projectPriceView(product.getId());
         Long l3ForResolve = projectView.l3ForResolve();
-        ResolvedPrice resolved = resolveQuietly(l3ForResolve, overrideCents, l1Cents);
-        TaxMetadata tax = loadEffectiveTax(product.getId(), sku == null ? null : sku.getId());
+        boolean genericDistributionInherited = buyerPricingVersion != null
+                && (buyerPricingOverrides == null || buyerPricingOverrides.distributionInherited());
+        Long l2ForResolve = buyerPricingVersion == null ? overrideCents
+                : genericDistributionInherited ? null : distPriceCents;
+        Long l1ForResolve = buyerPricingVersion == null ? l1Cents
+                : genericDistributionInherited ? distPriceCents : null;
+        ResolvedPrice resolved = resolveQuietly(l3ForResolve, l2ForResolve, l1ForResolve);
+        TaxMetadata tax = loadEffectiveTax(buyerPricingVersion, sku == null ? null : sku.getId());
         return new BuyerProductListItem(
                 product.getBuyerProductCode(),
                 sku == null ? null : sku.getSkuCode(),
@@ -219,7 +233,7 @@ public class BuyerProductQueryService {
                 spu == null ? null : spu.getProductClassification(),
                 sku == null ? null : sku.getMarketPrice(),
                 l1Cents,
-                pricingRule(overrideVersion),
+                pricingRule(buyerPricingVersion, buyerPricingOverrides, overrideVersion),
                 tax == null ? null : tax.taxIncluded(),
                 tax == null ? null : tax.taxRateCode(),
                 tax == null ? null : tax.taxRateLabel(),
@@ -237,17 +251,15 @@ public class BuyerProductQueryService {
      * 税务仅用于展示，不在查询链路计算税额。
      * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#63-分销商品}。
      */
-    private TaxMetadata loadEffectiveTax(Long buyerProductId, Long platformSkuId) {
-        BuyerSkuPricingDO buyerPricing = buyerPricingMapper.selectByBuyerProductId(buyerProductId);
-        if (buyerPricing != null && buyerPricing.getCurrentVersionId() != null) {
-            BuyerSkuPricingVersionDO version = buyerPricingVersionMapper.selectById(buyerPricing.getCurrentVersionId());
-            if (version != null) {
-                if (version.getTaxMetadataJson() != null && !version.getTaxMetadataJson().isBlank()) {
-                    return fromJson(version.getTaxMetadataJson(), TaxMetadata.class);
-                }
-                if (version.getEffectiveConfigJson() != null && !version.getEffectiveConfigJson().isBlank()) {
-                    return fromJson(version.getEffectiveConfigJson(), PricingConfig.class).taxMetadata();
-                }
+    private TaxMetadata loadEffectiveTax(BuyerSkuPricingVersionDO buyerPricingVersion, Long platformSkuId) {
+        if (buyerPricingVersion != null) {
+            if (buyerPricingVersion.getTaxMetadataJson() != null
+                    && !buyerPricingVersion.getTaxMetadataJson().isBlank()) {
+                return fromJson(buyerPricingVersion.getTaxMetadataJson(), TaxMetadata.class);
+            }
+            if (buyerPricingVersion.getEffectiveConfigJson() != null
+                    && !buyerPricingVersion.getEffectiveConfigJson().isBlank()) {
+                return fromJson(buyerPricingVersion.getEffectiveConfigJson(), PricingConfig.class).taxMetadata();
             }
         }
         if (platformSkuId == null) {
@@ -285,7 +297,23 @@ public class BuyerProductQueryService {
         }
     }
 
-    private static String pricingRule(BuyerProductL2OverrideVersionDO overrideVersion) {
+    /**
+     * 通用定价版本是现行事实来源；只有历史行尚无通用版本时才解释旧 L2 覆盖。
+     * 设计见 {@code docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#6-管理端接口}。
+     */
+    private String pricingRule(BuyerSkuPricingVersionDO buyerPricingVersion,
+                               ProjectOverrides buyerPricingOverrides,
+                               BuyerProductL2OverrideVersionDO overrideVersion) {
+        if (buyerPricingVersion != null) {
+            if (buyerPricingOverrides == null || buyerPricingOverrides.distributionInherited()) {
+                return PRICING_RULE_INHERIT_PLATFORM;
+            }
+            if (buyerPricingOverrides.distributionRule() != null
+                    && buyerPricingOverrides.distributionRule().mode() == PriceMode.DIRECT_MARKET_PRICE) {
+                return PRICING_RULE_EQUAL_MARKET_PRICE;
+            }
+            return PRICING_RULE_CUSTOM;
+        }
         if (overrideVersion != null && L2AdjustMode.EQUAL_L1.name().equals(overrideVersion.getAdjustMode())) {
             return PRICING_RULE_EQUAL_L1;
         }
@@ -293,6 +321,21 @@ public class BuyerProductQueryService {
             return PRICING_RULE_CUSTOM;
         }
         return PRICING_RULE_INHERIT_L1;
+    }
+
+    private BuyerSkuPricingVersionDO loadBuyerPricingVersion(Long buyerProductId) {
+        BuyerSkuPricingDO identity = buyerPricingMapper.selectByBuyerProductId(buyerProductId);
+        if (identity == null || identity.getCurrentVersionId() == null) {
+            return null;
+        }
+        return buyerPricingVersionMapper.selectById(identity.getCurrentVersionId());
+    }
+
+    private ProjectOverrides loadBuyerPricingOverrides(BuyerSkuPricingVersionDO version) {
+        if (version == null || version.getOverrideJson() == null || version.getOverrideJson().isBlank()) {
+            return null;
+        }
+        return fromJson(version.getOverrideJson(), ProjectOverrides.class);
     }
 
     /**
@@ -380,11 +423,11 @@ public class BuyerProductQueryService {
             @Schema(description = "商品分类封闭枚举名") String productClassification,
             @Schema(description = "平台SKU市场划线价或吊牌价，单位CNY分") Long marketPriceCents,
             @Schema(description = "建议结算价，取当前L1，单位CNY分") Long suggestPriceCents,
-            @Schema(description = "定价规则文案：继承L1 / 等于L1 / 自定义公式") String pricingRule,
+            @Schema(description = "定价规则文案；通用定价为继承商品默认 / 等于市场价 / 自定义公式，历史链兼容继承L1 / 等于L1") String pricingRule,
             @Schema(description = "有效通用定价是否含税；仅用于展示") Boolean taxIncluded,
             @Schema(description = "有效通用定价税率字典编码；仅用于展示") String taxRateCode,
             @Schema(description = "有效通用定价税率展示文本；仅用于展示") String taxRateDisplay,
-            @Schema(description = "有效L2，单位CNY分；无手工覆盖时等于当前L1") Long distPriceCents,
+            @Schema(description = "当前分销商SKU通用定价的有效分销价，单位CNY分；历史行无通用版本时回退旧L2/L1") Long distPriceCents,
             @Schema(description = "恰有一个未移除项目listing时的当前版本单价，单位CNY分") Long projectPriceCents,
             @Schema(description = "按L3>L2>L1解析的有效B端结算价，单位CNY分") Long finalPriceCents,
             @Schema(description = "价格来源层级：L1 / L2 / L3") String priceSource,

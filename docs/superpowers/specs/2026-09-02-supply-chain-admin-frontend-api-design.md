@@ -454,7 +454,7 @@ Springdoc `components.schemas` 中冲突的通用简单类名。生成契约必�
 - `PATCH /supply-chain/buyers/{buyerCode}/products/{buyerProductCode}` 改价（写/清 L2 覆盖，body 含 `l2AdjustMode` 等）
 - `DELETE /supply-chain/buyers/{buyerCode}/products/{buyerProductCode}` 逻辑移除（不再出现在列表；已发布项目目录不回放删除，新项目不得再选）
 
-列表列：SPU/SKU、SPU 三码、`marketPriceCents`（平台 SKU 市场划线价/吊牌价）、`suggestPriceCents`（L1）、`pricingRule`（文案：继承L1 / 等于L1 / 自定义公式）、`taxIncluded`、`taxRateCode`、`taxRateDisplay`、`distPriceCents`（有效 L2；无手工覆盖时等于当前 L1）、`projectPriceCents`（若恰有一个项目 L3 则给出，否则空）、`finalPriceCents`（按 L3>L2>L1 对该行展示，项目价取「任意覆盖」时以 `projectPriceCovered` + `projectNames[]` 说明）、`priceSource`（`L1`/`L2`/`L3`）、`projectPriceCovered`。税务展示取分销商品当前通用定价版本的有效税务快照；历史关联缺少分销商版本时回退平台 SKU 当前默认定价版本。列表不计算、不返回不含税分销价或税额字段。
+列表列：SPU/SKU、SPU 三码、`marketPriceCents`（平台 SKU 市场划线价/吊牌价）、`suggestPriceCents`（历史 L1 兼容字段）、`pricingRule`、`taxIncluded`、`taxRateCode`、`taxRateDisplay`、`distPriceCents`、`projectPriceCents`、`finalPriceCents`、`priceSource`、`projectPriceCovered`。自通用定价启用后，`distPriceCents`、`pricingRule` 及 `finalPriceCents` 的分销商层输入优先取分销商 SKU 当前通用定价版本；仅当前通用版本缺失的历史行回退旧 L1/L2 链。`pricingRule` 对通用定价展示“继承商品默认 / 等于市场价 / 自定义公式”，旧链仍兼容“继承L1 / 等于L1 / 自定义公式”。项目覆盖与最终价的详细优先级、税务快照及历史回退规则见 `docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#6-管理端接口`。列表不计算、不返回不含税分销价或税额字段。
 
 `displayThresholdPercent` 可存（利润空间低于该百分比时 C 端隐藏的配置），**本轮不实现 C 端隐藏消费**，只落库。新增时省略则落空；改价时省略则不改该列。传入时必须是 0～100 的整数，否则 `L2_OVERRIDE_INVALID`。
 
