@@ -55,6 +55,7 @@
 | **d45** | **SPU+SKU 复合保存自动初始化平台默认定价** | `POST /supply-chain/products/spus` 与 `PUT /supply-chain/products/spus/{spuCode}` 在同一供应链事务内，为新增 SKU 或仍无当前平台定价版本的 `UNPRICED` SKU 发布第一版系统默认定价；已有人工定价版本绝不覆盖。系统默认规则固定为：分销价与销售价均直接等于市场价、服务费为零且隐藏自定义文案、分销区与销售区利润隐藏阈值均为 0、税务为不含税且 `NON_TAXABLE`。没有有效供货价时版本正常发布为 `DEPENDENCY_MISSING`；市场价低于供货价时以 0 阈值进入 `MARGIN_HIDDEN`，不得阻断商品主数据保存。已定价 SKU 的市场价或销售建议价变化继续复用原配置重算，禁止同一保存同时初始化和依赖重算而生成双版本。详细约束见 `docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#5-版本继承与可售状态`。 | 消除前端未额外执行平台定价保存导致新 SKU 长期 `UNPRICED`、分销商品关联被阻断的问题 |
 | **d46** | **商品聚合列表按显式参数排除已添加供应商品** | `GET /supply-chain/products/management-page` 同时服务商品列表和新增供应商品选品。`supplierCode` 在省略 `excludeAddedSupplierOffers` 或其为 `false` 时，仍只保留该供应商已有未退役 Offer 的 SPU；供应商不存在或没有未退役 Offer 时返回空页。排除已添加供应商品必须显式传 `excludeAddedSupplierOffers=true`，并同时传入 `supplierCode`。此时从候选和返回明细中去掉该供应商未退役 Offer 的平台 SKU，已退役 SKU 会再次出现；这次请求不再按「仅该供应商已供商品」收窄，也不按供货配置三码收窄。`buyerCode` 排除未移除分销商品的行为不变。`supplierCode` 空白返回 `SUPPLIER_CODE_REQUIRED`（1050001133）；供应商不存在返回 `SUPPLIER_NOT_FOUND`。`POST /supply-chain/suppliers/{supplierCode}/offers` 仍拒绝未退役重复，不把本次新增改成更新。 | 共用列表的供应商筛选保持原义，新增供应商品选品可跳过已添加 SKU |
 | **d47** | **商品列表只展示正常供应商及其商品** | 商品列表页供应商下拉 `GET /supply-chain/suppliers?view=simple` 只返回 `ACTIVE`（正常）供应商。`GET /supply-chain/products/management-page` 在普通商品列表及新增分销商品选品场景中，只保留至少关联一个 `ACTIVE` 供应商未退役 Offer 的 SKU；`suppliers[]` 也只展示 `ACTIVE` 供应商，暂停、黑名单、归档供应商的 Offer 不参与商品可见性、供应商筛选或最低有效供货价。为避免首个供应商无法关联任何商品，新增供应商品选品 `excludeAddedSupplierOffers=true` 不施加“必须已有正常供应商 Offer”的准入条件，但返回的 `suppliers[]` 仍只展示正常供应商。显式 `supplierCode` 指向非正常供应商时返回空页。 | 防止商品列表展示暂停/黑名单供应商及其独占商品，同时保留新增供应商品闭环 |
+| **d48** | **普通商品管理列表展示全部未归档 SKU** | 修订 d47 的普通列表准入：`GET /supply-chain/products/management-page` 未传 `supplierCode`、`buyerCode` 且未启用 `excludeAddedSupplierOffers` 时，返回符合 SKU 状态、兑换方式、市场价等行级条件的全部未归档 SKU，不要求其关联正常供应商未退役 Offer。无此类 Offer 时仍返回 SKU 主数据，`suppliers=[]`、`supplyPrice=null`、`supplyPriceExclusive=null`、`taxAmount=null`。供货价区间沿用既有 SPU 候选筛选口径：至少一个 SKU 的有效供货价命中区间时保留该 SPU，返回明细仍含符合行级条件的其他 SKU；无有效供货价的独立 SPU 不命中。供应商下拉与 `suppliers[]` 继续只显示 `ACTIVE` 供应商；传入 `buyerCode` 的新增分销商品选品、显式 `supplierCode` 筛选及 `excludeAddedSupplierOffers=true` 的新增供应商品选品保持 d46/d47 原有口径。SPU 分页候选不得再因无合作 Offer 被提前排除，响应明细也不得再次剔除。 | 商品管理列表与详情的未归档 SKU 数量一致，退役合作商品后仍可管理该 SKU |
 
 ---
 
@@ -648,7 +649,7 @@ PRD 8.4.1 的列表 Tab 支持从 `GET /supply-chain/product-types` 动态拉取
     * `status` (String): SPU 状态字典值（`"0"`草稿，`"10"`已上架，`"20"`已下架）
     * `unshelveMode` (String): 下架方式（已下架时回显）
     * `updatedAt` (LocalDateTime): SPU 最后更新时间
-    * `skus` (List<ProductManagementSkuItem>): 挂载的未归档多 SKU 聚合明细
+    * `skus` (List<ProductManagementSkuItem>): 挂载的未归档多 SKU 聚合明细；普通商品管理列表按 d48 包含尚无正常供应商未退役 Offer 的 SKU
   * `ProductManagementSkuItem`:
     * `skuCode` (String): 平台 SKU 业务编码
     * `skuName` (String): 规格名称
@@ -659,7 +660,7 @@ PRD 8.4.1 的列表 Tab 支持从 `GET /supply-chain/product-types` 动态拉取
     * `taxIncluded` (Boolean): 是否含税；仅记录展示，不参与价格计算
     * `taxRate` (BigDecimal): 税率（例如 0.0600 代表 6%）
     * `taxAmount` (Long): 税额（分）
-    * `suppliers` (List<SupplierSimpleItem>): 正常（`ACTIVE`）供应商列表（编码与名称，支撑多供应商换行展示）；非正常供应商不得回显
+    * `suppliers` (List<SupplierSimpleItem>): 正常（`ACTIVE`）供应商列表（编码与名称，支撑多供应商换行展示）；非正常供应商不得回显，无合作 Offer 时为空数组
     * `totalInventory` (Long): 总库存；本期投影 `sc_platform_sku.sku_inventory`，缺省 0。JSON 同时输出同值别名 `skuInventory`
     * `fulfillmentType` (String): 兑换方式编码与名称
     * `status` (String): SKU 状态字典值（`"0"`草稿，`"10"`已上架，`"20"`已下架；字典 `supply_chain_sku_status`）
@@ -939,3 +940,6 @@ system-server 通过追加变更集 `011-suggested-sale-price-operator-dictionar
 19. `OfferFulfillmentScoreServiceTest`、`ProductCenterContractTest`、`SupplierAdminRestContractTest` 与
     `SupplyChainAdminMethodSecurityContractTest` 必须覆盖 d43：商品履约评分 GET/PUT 权限与字段 Schema；
     供应商列表回显分数；改价不清分；两侧读写同一 Offer 身份列。集成测试见履约评分专文。
+20. `ProductManagementPageQueryTest` 必须覆盖 d48：普通列表在无正常供应商、仅部分 SKU 有未退役 Offer、
+    以及某 SKU 的唯一 Offer 已退役时，仍返回符合筛选条件的全部未归档 SKU；无合作 SKU 的供应商列表为空，
+    供货价及税额为空。带 `buyerCode` 的分销商选品和显式 `supplierCode` 筛选继续沿用 d47 准入。

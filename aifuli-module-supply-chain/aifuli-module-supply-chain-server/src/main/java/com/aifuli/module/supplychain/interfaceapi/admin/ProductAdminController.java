@@ -172,7 +172,8 @@ public class ProductAdminController {
     @Operation(summary = "管理端分页查询商品聚合列表",
             description = "支撑运营管理端商品列表，以及新增分销商品选品。"
                     + "keyword 包含匹配 SPU 名称、SPU 编码、副标题、SKU 名称、SKU 编码；只命中 SKU 时不返回未命中规格。"
-                    + "普通列表和新增分销商品选品只返回至少有一个正常供应商未退役 Offer 的 SKU，供应商列表也只展示正常供应商。"
+                    + "普通商品管理列表返回全部未归档 SKU，无正常供应商未退役 Offer 时供应商列表为空、供货价为空；"
+                    + "新增分销商品选品只返回至少有一个正常供应商未退役 Offer 的 SKU，供应商列表也只展示正常供应商。"
                     + "buyerCode 排除该分销商未移除的分销商品，已移除 SKU 会再次出现，且不按档案商品类型收窄。"
                     + "excludeAddedSupplierOffers=true 时排除该供应商未退役的供应商品，已退役 SKU 会再次出现；"
                     + "该新增供应商品场景允许尚无供应商的 SKU；省略该开关时 supplierCode 仍只保留正常供应商已供商品。"

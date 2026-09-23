@@ -92,8 +92,7 @@ class ProductManagementPageQueryTest {
         TableInfoHelper.initTableInfo(new MapperBuilderAssistant(new MybatisConfiguration(), ""), ProductCategoryDO.class);
         TableInfoHelper.initTableInfo(new MapperBuilderAssistant(new MybatisConfiguration(), ""), BuyerProductDO.class);
         when(databaseClock.now()).thenReturn(NOW);
-        // 大多数用例聚焦既有筛选/投影行为，默认把测试 SKU 视为已有正常供应商合作关系；
-        // d47 的非正常供应商边界由本类专用用例覆盖。
+        // 分销商选品与显式供应商筛选的用例沿用已有正常供应商合作关系；普通列表不依赖此集合。
         when(supplierMapper.selectActiveIds()).thenReturn(List.of(11L));
         when(offerMapper.selectLiveSkuIdsBySupplierIds(any()))
                 .thenReturn(List.of(2001L, 2002L, 2003L, 8888L));
@@ -743,10 +742,90 @@ class ProductManagementPageQueryTest {
     }
 
     @Test
-    void managementPageReturnsEmptyWhenNoActiveSupplierHasLiveOffer() {
+    void managementPageKeepsUnsuppliedSkusWhenNoSupplierIsActive() {
         when(supplierMapper.selectActiveIds()).thenReturn(List.of());
+        PlatformSpuDO spu = PlatformSpuDO.builder()
+                .id(1001L).spuCode("SPU_IQY").spuName("爱奇艺会员")
+                .status(CatalogEntityStatus.ACTIVE.getCode()).updatedAt(NOW).build();
+        PlatformSkuDO month = PlatformSkuDO.builder()
+                .id(2001L).spuId(1001L).skuCode("SKU_MONTH").skuName("月卡")
+                .status(CatalogEntityStatus.ACTIVE.getCode()).marketPrice(9800L).build();
+        PlatformSkuDO year = PlatformSkuDO.builder()
+                .id(2003L).spuId(1001L).skuCode("SKU_YEAR").skuName("年卡")
+                .status(CatalogEntityStatus.ACTIVE.getCode()).marketPrice(59900L).build();
+        when(spuMapper.selectPage(any(PageParam.class), any())).thenReturn(new PageResult<>(List.of(spu), 1L));
+        when(skuMapper.selectList(any())).thenReturn(List.of(month, year));
 
         PageResult<ProductManagementSpuItem> result = service.managementPage(managementQuery(null));
+
+        assertThat(result.getTotal()).isEqualTo(1L);
+        assertThat(result.getList()).singleElement().satisfies(item -> {
+            assertThat(item.skus()).extracting(ProductCatalogQueryService.ProductManagementSkuItem::skuCode)
+                    .containsExactly("SKU_MONTH", "SKU_YEAR");
+            assertThat(item.skus()).allSatisfy(sku -> {
+                assertThat(sku.suppliers()).isEmpty();
+                assertThat(sku.supplyPrice()).isNull();
+                assertThat(sku.supplyPriceExclusive()).isNull();
+                assertThat(sku.taxAmount()).isNull();
+            });
+        });
+        verify(offerMapper, never()).selectLiveSkuIdsBySupplierIds(any());
+    }
+
+    @Test
+    void managementPageKeepsSkuAfterItsOnlySupplierOfferWasRetired() {
+        PlatformSpuDO spu = PlatformSpuDO.builder()
+                .id(1001L).spuCode("SPU_IQY").spuName("爱奇艺会员")
+                .status(CatalogEntityStatus.ACTIVE.getCode()).updatedAt(NOW).build();
+        PlatformSkuDO month = PlatformSkuDO.builder()
+                .id(2001L).spuId(1001L).skuCode("SKU_MONTH").skuName("月卡")
+                .status(CatalogEntityStatus.ACTIVE.getCode()).build();
+        PlatformSkuDO year = PlatformSkuDO.builder()
+                .id(2003L).spuId(1001L).skuCode("SKU_YEAR").skuName("年卡")
+                .status(CatalogEntityStatus.ACTIVE.getCode()).build();
+        when(spuMapper.selectPage(any(PageParam.class), any())).thenReturn(new PageResult<>(List.of(spu), 1L));
+        when(skuMapper.selectList(any())).thenReturn(List.of(month, year));
+        // Offer 查询已排除 RETIRED，因此只会查到月卡的未退役合作商品。
+        when(offerMapper.selectList(any())).thenReturn(List.of(SupplierOfferDO.builder()
+                .id(3001L).platformSkuId(2001L).supplierId(11L)
+                .status(OfferStatus.PUBLISHED.getCode()).build()));
+        when(supplierMapper.selectBatchIds(any())).thenReturn(List.of(SupplierDO.builder()
+                .id(11L).supplierCode("SPL_A").supplierName("正常供应商")
+                .status(SupplierStatus.ACTIVE.getCode()).build()));
+
+        PageResult<ProductManagementSpuItem> result = service.managementPage(managementQuery(null));
+
+        assertThat(result.getList()).singleElement().satisfies(item -> {
+            assertThat(item.skus()).extracting(ProductCatalogQueryService.ProductManagementSkuItem::skuCode)
+                    .containsExactly("SKU_MONTH", "SKU_YEAR");
+            assertThat(item.skus().getFirst().suppliers()).hasSize(1);
+            assertThat(item.skus().get(1).suppliers()).isEmpty();
+            assertThat(item.skus().get(1).supplyPrice()).isNull();
+        });
+    }
+
+    @Test
+    void managementPageBuyerSelectionStillRequiresLiveOfferFromActiveSupplier() {
+        when(supplierMapper.selectActiveIds()).thenReturn(List.of());
+        when(buyerMapper.selectByBuyerCode("BYR_A"))
+                .thenReturn(BuyerDO.builder().id(51L).buyerCode("BYR_A").build());
+
+        PageResult<ProductManagementSpuItem> result = service.managementPage(new ProductManagementPageQuery(
+                null, null, null, null, null, null, null, null,
+                null, null, null, null, null, null, null, 1, 20, "BYR_A", null));
+
+        assertThat(result.getList()).isEmpty();
+        assertThat(result.getTotal()).isZero();
+        verify(spuMapper, never()).selectPage(any(PageParam.class), any());
+    }
+
+    @Test
+    void managementPageSupplyPriceRangeHasNoMatchesWithoutActiveSupplier() {
+        when(supplierMapper.selectActiveIds()).thenReturn(List.of());
+
+        PageResult<ProductManagementSpuItem> result = service.managementPage(new ProductManagementPageQuery(
+                null, null, null, null, null, null, null, null,
+                null, null, 100L, 500L, null, null, null, 1, 20, null, null));
 
         assertThat(result.getList()).isEmpty();
         assertThat(result.getTotal()).isZero();

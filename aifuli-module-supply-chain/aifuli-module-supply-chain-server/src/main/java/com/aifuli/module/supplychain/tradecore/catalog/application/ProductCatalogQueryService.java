@@ -453,13 +453,15 @@ public class ProductCatalogQueryService {
             excludedSkuIds.addAll(liveSupplierOfferSkuIds(query.supplierCode()));
         }
 
-        // 普通商品列表与新增分销商品选品，只允许至少有一个正常供应商未退役 Offer 的 SKU。
-        // 新增供应商品选品必须允许无供应商 SKU，否则无法建立首条合作关系。
-        // 设计见 docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线（d47）
+        // 普通商品管理列表展示全部未归档 SKU；分销商选品与显式供应商筛选继续要求正常供应商的未退役 Offer。
+        // 新增供应商品选品允许无供应商 SKU，以便建立首条合作关系。
+        // 设计见 docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线（d47、d48）
+        boolean requireLiveSupplierOffer = !excludeAddedSupplierOffers
+                && (hasText(query.buyerCode()) || hasText(query.supplierCode()));
         List<Long> activeSupplierIds = Optional.ofNullable(supplierMapper.selectActiveIds()).orElse(List.of());
-        Set<Long> activeSupplierLiveSkuIds = excludeAddedSupplierOffers
-                ? Set.of() : activeSupplierLiveSkuIds(activeSupplierIds);
-        if (!excludeAddedSupplierOffers) {
+        Set<Long> activeSupplierLiveSkuIds = requireLiveSupplierOffer
+                ? activeSupplierLiveSkuIds(activeSupplierIds) : Set.of();
+        if (requireLiveSupplierOffer) {
             if (activeSupplierLiveSkuIds.isEmpty()) {
                 return new PageResult<>(List.of(), 0L);
             }
@@ -491,6 +493,9 @@ public class ProductCatalogQueryService {
         // 设计见 docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线（d46）
         boolean supplierInclusion = hasText(query.supplierCode()) && !excludeAddedSupplierOffers;
         if (supplierInclusion || query.supplyPriceMin() != null || query.supplyPriceMax() != null) {
+            if (activeSupplierIds.isEmpty()) {
+                return new PageResult<>(List.of(), 0L);
+            }
             Long supplierId = null;
             if (supplierInclusion) {
                 SupplierDO supplier = supplierMapper.selectOne(SupplierDO::getSupplierCode, query.supplierCode().trim());
@@ -634,7 +639,7 @@ public class ProductCatalogQueryService {
             List<ProductManagementSkuItem> skuItems = new ArrayList<>(spuSkus.size());
 
             for (PlatformSkuDO sku : spuSkus) {
-                if (!excludeAddedSupplierOffers && (sku.getId() == null
+                if (requireLiveSupplierOffer && (sku.getId() == null
                         || !activeSupplierLiveSkuIds.contains(sku.getId()))) {
                     continue;
                 }
@@ -848,9 +853,9 @@ public class ProductCatalogQueryService {
     }
 
     /**
-     * 正常供应商未退役合作商品 SKU 集合。该集合同时约束分页候选 SPU 与返回 SKU 明细，
-     * 避免分页后过滤导致 total 和翻页结果不一致。
-     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线}（d47）。
+     * 正常供应商未退役合作商品 SKU 集合。仅分销商选品与显式供应商筛选用它同时约束分页候选 SPU
+     * 和返回 SKU 明细；普通商品管理列表不按合作关系剔除 SKU。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线}（d47、d48）。
      */
     private Set<Long> activeSupplierLiveSkuIds(List<Long> activeSupplierIds) {
         if (activeSupplierIds.isEmpty()) {
