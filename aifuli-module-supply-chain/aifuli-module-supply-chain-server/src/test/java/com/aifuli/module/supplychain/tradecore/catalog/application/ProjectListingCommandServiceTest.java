@@ -18,17 +18,22 @@ import com.aifuli.module.supplychain.tradecore.buyer.domain.ProjectListingStatus
 import com.aifuli.module.supplychain.tradecore.catalog.application.ProjectListingCommandService.ListingLine;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerProductL2OverrideDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerProductL2OverrideVersionDO;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerSkuPricingDO;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerSkuPricingVersionDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSettlementPriceDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSettlementPriceVersionDO;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuPricingVersionDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSpuDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProjectListingVersionDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerProductL2OverrideMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerProductL2OverrideVersionMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerSkuPricingMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerSkuPricingVersionMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceVersionMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuPricingVersionMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSpuMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProjectListingVersionMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProjectSkuPricingMapper;
@@ -40,6 +45,7 @@ import com.aifuli.module.supplychain.tradecore.profile.domain.L2AdjustMode;
 import com.aifuli.module.supplychain.tradecore.profile.domain.L3AdjustMode;
 import com.aifuli.module.supplychain.tradecore.profile.domain.ListingPriceSource;
 import com.aifuli.module.supplychain.tradecore.profile.domain.PriceSource;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -78,6 +84,8 @@ class ProjectListingCommandServiceTest {
     private final ProjectListingVersionMapper listingVersionMapper = mock(ProjectListingVersionMapper.class);
     private final ProjectSkuPricingMapper projectPricingMapper = mock(ProjectSkuPricingMapper.class);
     private final BuyerSkuPricingMapper buyerPricingMapper = mock(BuyerSkuPricingMapper.class);
+    private final BuyerSkuPricingVersionMapper buyerPricingVersionMapper = mock(BuyerSkuPricingVersionMapper.class);
+    private final PlatformSkuPricingVersionMapper platformPricingVersionMapper = mock(PlatformSkuPricingVersionMapper.class);
     private final PlatformSettlementPriceMapper l1Mapper = mock(PlatformSettlementPriceMapper.class);
     private final PlatformSettlementPriceVersionMapper l1VersionMapper =
             mock(PlatformSettlementPriceVersionMapper.class);
@@ -96,10 +104,13 @@ class ProjectListingCommandServiceTest {
     void setUp() {
         when(databaseClock.now()).thenReturn(LocalDateTime.of(2026, 9, 4, 11, 0));
         SettlementPriceResolver resolver = new SettlementPriceResolver();
+        ProjectListingPriceSource priceSource = new ProjectListingPriceSource(
+                buyerPricingMapper, buyerPricingVersionMapper, platformPricingVersionMapper,
+                l1Mapper, l1VersionMapper, overrideMapper, overrideVersionMapper, new ObjectMapper());
         service = new ProjectListingCommandService(
                 databaseClock, eventPublisher, projectMapper, buyerMapper, productMapper, skuMapper,
                 listingMapper, listingVersionMapper,
-                projectPricingMapper, l1Mapper, l1VersionMapper, overrideMapper, overrideVersionMapper,
+                projectPricingMapper, priceSource,
                 businessNoGenerator, resolver);
         buyerProducts = new BuyerProductCommandService(
                 databaseClock, eventPublisher, buyerMapper, productMapper, l1Mapper, l1VersionMapper,
@@ -175,6 +186,65 @@ class ProjectListingCommandServiceTest {
         assertThat(frozen.getL3AdjustMode()).isEqualTo(L3AdjustMode.FOLLOW_L2.name());
         assertThat(frozen.getCurrency()).isEqualTo(Money.CURRENCY_CNY);
         verify(listingVersionMapper, never()).updateById(any(ProjectListingVersionDO.class));
+    }
+
+    /** 新 SKU 无旧 L1 时仍按分销商通用版本冻结，避免列表有价但项目发布失败。 */
+    @Test
+    void defaultFollowL2UsesCurrentGenericBuyerPriceWithoutLegacyL1() {
+        stubLiveBuyerProduct();
+        stubGenericPricing(9_000L, 9_800L, false);
+
+        service.addProducts(PROJECT_CODE, List.of(follow("MOVIE_100")), 1L);
+
+        ArgumentCaptor<ProjectListingVersionDO> version = ArgumentCaptor.forClass(ProjectListingVersionDO.class);
+        verify(listingVersionMapper).insert(version.capture());
+        assertThat(version.getValue().getBuyerSettlementUnitPrice()).isEqualTo(9_800L);
+        assertThat(version.getValue().getSettlementPriceLevel()).isEqualTo(PriceSource.L2.name());
+        verify(l1Mapper, never()).selectById(any());
+    }
+
+    @Test
+    void inheritedGenericDistributionKeepsPlatformPriceSource() {
+        stubLiveBuyerProduct();
+        stubGenericPricing(9_000L, 9_000L, true);
+
+        service.addProducts(PROJECT_CODE, List.of(follow("MOVIE_100")), 1L);
+
+        ArgumentCaptor<ProjectListingVersionDO> version = ArgumentCaptor.forClass(ProjectListingVersionDO.class);
+        verify(listingVersionMapper).insert(version.capture());
+        assertThat(version.getValue().getSettlementPriceLevel()).isEqualTo(PriceSource.L1.name());
+    }
+
+    /** EQUAL_L1 历史枚举在通用链使用分销商版本引用的平台默认分销价。 */
+    @Test
+    void equalL1UsesReferencedGenericPlatformVersion() {
+        stubLiveBuyerProduct();
+        stubGenericPricing(9_000L, 9_800L, false);
+
+        service.addProducts(PROJECT_CODE,
+                List.of(new ListingLine("MOVIE_100", L3AdjustMode.EQUAL_L1, null, null)), 1L);
+
+        ArgumentCaptor<ProjectListingVersionDO> version = ArgumentCaptor.forClass(ProjectListingVersionDO.class);
+        verify(listingVersionMapper).insert(version.capture());
+        assertThat(version.getValue().getBuyerSettlementUnitPrice()).isEqualTo(9_000L);
+        assertThat(version.getValue().getSettlementPriceLevel()).isEqualTo(PriceSource.L3.name());
+    }
+
+    /** 通用版本存在但引用的平台版本缺失时不能偷偷回退旧 L1。 */
+    @Test
+    void brokenGenericReferenceDoesNotFallBackToLegacyL1() {
+        stubLiveBuyerProduct();
+        stubL1(L1_CENTS);
+        when(buyerPricingMapper.selectByBuyerProductId(77L)).thenReturn(BuyerSkuPricingDO.builder()
+                .buyerProductId(77L).currentVersionId(701L).build());
+        when(buyerPricingVersionMapper.selectById(701L)).thenReturn(BuyerSkuPricingVersionDO.builder()
+                .id(701L).platformPricingVersionId(702L).distributionPriceCents(9_800L).build());
+
+        assertThatThrownBy(() -> service.addProducts(PROJECT_CODE, List.of(follow("MOVIE_100")), 1L))
+                .isInstanceOf(ServiceException.class)
+                .extracting(ex -> ((ServiceException) ex).getCode())
+                .isEqualTo(PLATFORM_SETTLEMENT_PRICE_MISSING.getCode());
+        verify(l1Mapper, never()).selectById(any());
     }
 
     @Test
@@ -263,6 +333,16 @@ class ProjectListingCommandServiceTest {
                 .isInstanceOf(ServiceException.class)
                 .extracting(ex -> ((ServiceException) ex).getCode())
                 .isEqualTo(PLATFORM_SETTLEMENT_PRICE_MISSING.getCode());
+    }
+
+    private void stubGenericPricing(Long platformCents, Long buyerCents, boolean inherited) {
+        when(buyerPricingMapper.selectByBuyerProductId(77L)).thenReturn(BuyerSkuPricingDO.builder()
+                .buyerProductId(77L).currentVersionId(701L).build());
+        when(buyerPricingVersionMapper.selectById(701L)).thenReturn(BuyerSkuPricingVersionDO.builder()
+                .id(701L).platformPricingVersionId(702L).distributionPriceCents(buyerCents)
+                .overrideJson("{\"distributionInherited\":" + inherited + "}").build());
+        when(platformPricingVersionMapper.selectById(702L)).thenReturn(PlatformSkuPricingVersionDO.builder()
+                .id(702L).distributionPriceCents(platformCents).build());
     }
 
     /** L3 试算严格限定项目作用域，SKU 税务元数据不改变试算金额。 */

@@ -454,7 +454,9 @@ Springdoc `components.schemas` 中冲突的通用简单类名。生成契约必�
 - `PATCH /supply-chain/buyers/{buyerCode}/products/{buyerProductCode}` 改价（写/清 L2 覆盖，body 含 `l2AdjustMode` 等）
 - `DELETE /supply-chain/buyers/{buyerCode}/products/{buyerProductCode}` 逻辑移除（不再出现在列表；已发布项目目录不回放删除，新项目不得再选）
 
-列表列：SPU/SKU、SPU 三码、`marketPriceCents`（平台 SKU 市场划线价/吊牌价）、`suggestPriceCents`（历史 L1 兼容字段）、`pricingRule`、`taxIncluded`、`taxRateCode`、`taxRateDisplay`、`distPriceCents`、`projectPriceCents`、`finalPriceCents`、`priceSource`、`projectPriceCovered`。自通用定价启用后，`distPriceCents`、`pricingRule` 及 `finalPriceCents` 的分销商层输入优先取分销商 SKU 当前通用定价版本；仅当前通用版本缺失的历史行回退旧 L1/L2 链。`pricingRule` 对通用定价展示“继承商品默认 / 等于市场价 / 自定义公式”，旧链仍兼容“继承L1 / 等于L1 / 自定义公式”。项目覆盖与最终价的详细优先级、税务快照及历史回退规则见 `docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#6-管理端接口`。列表不计算、不返回不含税分销价或税额字段。
+列表列：SPU/SKU、SPU 三码、`marketPriceCents`（平台 SKU 市场划线价/吊牌价）、`suggestedSalePriceCents`（平台 SKU 销售建议价，取 `sc_platform_sku.suggested_sale_price`，0 为有效值）、`suggestPriceCents`（历史 L1 兼容字段，仍只取旧 L1）、`platformBasePriceCents`（项目旧调价模式的 B 端平台基价）、`pricingRule`、`taxIncluded`、`taxRateCode`、`taxRateDisplay`、`distPriceCents`、`projectPriceCents`、`finalPriceCents`、`priceSource`、`projectPriceCovered`。`platformBasePriceCents` 在当前分销商通用定价版本存在时取该版本引用的平台默认定价版本 `distribution_price_cents`，不得与另一个平台版本混读；没有通用版本的历史行取旧 L1。自通用定价启用后，`distPriceCents`、`pricingRule` 及 `finalPriceCents` 的分销商层输入优先取分销商 SKU 当前通用定价版本；仅当前通用版本缺失的历史行回退旧 L1/L2 链。通用版本存在但分销价或平台版本引用缺失时，列表当前分销价留空，无 L3 覆盖时最终价也留空，不回退旧价；旧 `suggestPriceCents` 仍可独立回显历史 L1。`pricingRule` 对通用定价展示“继承商品默认 / 等于市场价 / 自定义公式”，旧链仍兼容“继承L1 / 等于L1 / 自定义公式”。项目覆盖与最终价的详细优先级、税务快照及历史回退规则见 `docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#6-管理端接口`。列表不计算、不返回不含税分销价或税额字段。
+
+项目新增商品弹窗的“销售建议价”列展示 `suggestedSalePriceCents`；调价公式与“等于 L1”的 B 端基数展示 `platformBasePriceCents`，文案标为“平台默认分销价”，不得将 C 端销售建议价或市场价代入结算公式。旧 `suggestPriceCents` JSON 字段保留原义，避免存量调用方静默改价。
 
 `displayThresholdPercent` 可存（利润空间低于该百分比时 C 端隐藏的配置），**本轮不实现 C 端隐藏消费**，只落库。新增时省略则落空；改价时省略则不改该列。传入时必须是 0～100 的整数，否则 `L2_OVERRIDE_INVALID`。
 
@@ -492,7 +494,9 @@ Springdoc `components.schemas` 中冲突的通用简单类名。生成契约必�
 - `PATCH /supply-chain/projects/{projectCode}/products/{listingCode}` 改价（写/清 L3，发新 `ProjectListingVersion`）
 - `DELETE /supply-chain/projects/{projectCode}/products/{listingCode}` 逻辑移除（目录项不再可采购；历史订单仍读冻结版本）
 
-新增即对项目可采购（等价上架）。列表金额：`suggestPriceCents`、`distPriceCents`、`projectPriceCents`、`finalPriceCents`、`priceSource`、`projectPriceCovered`。页面「按项目价=销售建议价」对接时显式传 `l3AdjustMode=EQUAL_L1`。
+新增即对项目可采购（等价上架）。列表金额：`suggestPriceCents`（历史 L1 兼容）、`suggestedSalePriceCents`（C 端 SKU 建议价）、`platformBasePriceCents`（B 端项目调价基数）、`distPriceCents`（当前有效分销价）、`projectPriceCents`、`finalPriceCents`、`priceSource`、`projectPriceCovered`。保留 `l3AdjustMode=EQUAL_L1` 请求枚举，但页面文案改为“等于平台默认分销价”；`CUSTOM` 以同一 B 端基数计算。
+
+新增、改单条 L3 与旧批量 L3 试算/发布共用价格来源：存在分销商 SKU 当前通用定价版本时，`FOLLOW_L2` 冻结其 `distribution_price_cents`，按该版本的分销价继承标记保留 L1/L2 来源；`EQUAL_L1`/`CUSTOM` 的基数取该分销商版本引用的平台默认定价版本 `distribution_price_cents`。通用版本存在但所需金额为空或被引用的平台版本缺失时失败关闭，不回退旧价；只有分销商通用版本缺失的历史行才沿用旧 L1/L2。项目商品列表的当前分销价使用同一来源，已发布的项目冻结版本与历史订单不得回写。
 
 改 L3 或改分销商 L2 覆盖**不回放**已发布版本；当前指针切换在同一本地事务完成。在途单继续用冻结快照。
 

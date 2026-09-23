@@ -5,6 +5,7 @@ import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerAdminQuery
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerAdminQueryService.BuyerDetail;
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerAdminQueryService.BuyerListItem;
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerAdminQueryService.ProductTypeItem;
+import com.aifuli.module.supplychain.tradecore.catalog.application.BuyerProductQueryService.BuyerProductListItem;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.swagger.v3.core.converter.ModelConverters;
 import io.swagger.v3.oas.annotations.Operation;
@@ -94,6 +95,19 @@ class BuyerAdminRestContractTest {
 
         assertThat(propertyNames).contains(
                 "sellableCategories", "productTypes", "projectCount", "skuCount", "cooperationTime", "children");
+    }
+
+    /** 项目选品新增销售建议价与 B 端基价时，旧 L1 字段仍留在 JSON 契约中。 */
+    @Test
+    void productPageKeepsLegacyPriceAndExposesSeparateSaleAndPlatformBasePrices() {
+        ObjectMapper mapper = new ObjectMapper();
+        Set<String> propertyNames = mapper.getSerializationConfig()
+                .introspect(mapper.constructType(BuyerProductListItem.class))
+                .findProperties().stream().map(property -> property.getName())
+                .collect(Collectors.toSet());
+
+        assertThat(propertyNames).contains("suggestPriceCents", "suggestedSalePriceCents",
+                "platformBasePriceCents", "distPriceCents");
     }
 
     @Test

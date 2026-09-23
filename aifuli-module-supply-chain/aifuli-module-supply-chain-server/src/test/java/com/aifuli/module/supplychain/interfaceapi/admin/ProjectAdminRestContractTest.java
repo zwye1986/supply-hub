@@ -1,6 +1,7 @@
 package com.aifuli.module.supplychain.interfaceapi.admin;
 
 import com.aifuli.module.supplychain.tradecore.buyer.application.ProjectAdminQueryService.ProjectDetail;
+import com.aifuli.module.supplychain.tradecore.catalog.application.ProjectListingQueryService.ProjectListingListItem;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import io.swagger.v3.oas.annotations.Operation;
@@ -18,6 +19,7 @@ import java.time.LocalDate;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -77,6 +79,19 @@ class ProjectAdminRestContractTest {
         assertThat(json).doesNotContain("appKey", "appId");
         assertThat(json).contains("projectCode").contains("skuCount").contains("projectPriceSkuCount");
         assertThat(json).doesNotContain("invoice").doesNotContain("\"create\"").doesNotContain("\"page\"");
+    }
+
+    /** 项目商品列表将 SKU 销售建议价与 B 端项目调价基数分开回显。 */
+    @Test
+    void productPageHasDistinctSaleSuggestionAndPlatformBaseFields() {
+        ObjectMapper mapper = new ObjectMapper();
+        Set<String> propertyNames = mapper.getSerializationConfig()
+                .introspect(mapper.constructType(ProjectListingListItem.class))
+                .findProperties().stream().map(property -> property.getName())
+                .collect(Collectors.toSet());
+
+        assertThat(propertyNames).contains("suggestPriceCents", "suggestedSalePriceCents",
+                "platformBasePriceCents", "distPriceCents", "finalPriceCents");
     }
 
     private static boolean hasHttpMapping(Method method) {

@@ -208,10 +208,13 @@ public class BuyerProductQueryService {
         BuyerProductL2OverrideVersionDO overrideVersion = loadOverrideVersion(product.getId());
         Long overrideCents = overrideVersion == null ? null : overrideVersion.getResolvedUnitPriceCents();
         BuyerSkuPricingVersionDO buyerPricingVersion = loadBuyerPricingVersion(product.getId());
+        Long platformBasePriceCents = loadPlatformBasePriceCents(buyerPricingVersion, l1Cents);
         ProjectOverrides buyerPricingOverrides = loadBuyerPricingOverrides(buyerPricingVersion);
         Long legacyDistPriceCents = overrideCents != null ? overrideCents : l1Cents;
+        boolean genericPriceComplete = buyerPricingVersion != null
+                && platformBasePriceCents != null && buyerPricingVersion.getDistributionPriceCents() != null;
         Long distPriceCents = buyerPricingVersion == null
-                ? legacyDistPriceCents : buyerPricingVersion.getDistributionPriceCents();
+                ? legacyDistPriceCents : genericPriceComplete ? buyerPricingVersion.getDistributionPriceCents() : null;
         ProjectPriceView projectView = projectPriceView(product.getId());
         Long l3ForResolve = projectView.l3ForResolve();
         boolean genericDistributionInherited = buyerPricingVersion != null
@@ -233,6 +236,8 @@ public class BuyerProductQueryService {
                 spu == null ? null : spu.getProductClassification(),
                 sku == null ? null : sku.getMarketPrice(),
                 l1Cents,
+                sku == null ? null : sku.getSuggestedSalePrice(),
+                platformBasePriceCents,
                 pricingRule(buyerPricingVersion, buyerPricingOverrides, overrideVersion),
                 tax == null ? null : tax.taxIncluded(),
                 tax == null ? null : tax.taxRateCode(),
@@ -328,7 +333,29 @@ public class BuyerProductQueryService {
         if (identity == null || identity.getCurrentVersionId() == null) {
             return null;
         }
-        return buyerPricingVersionMapper.selectById(identity.getCurrentVersionId());
+        BuyerSkuPricingVersionDO version = buyerPricingVersionMapper.selectById(identity.getCurrentVersionId());
+        if (version == null) {
+            throw new IllegalStateException("buyer pricing current version is missing: "
+                    + identity.getCurrentVersionId());
+        }
+        return version;
+    }
+
+    /**
+     * 项目旧 L3 模式的 B 端平台基价必须与分销商通用版本引用的平台版本一致。
+     * 历史行仍回显旧 L1；通用版本引用缺失时保留空值，不用旧价掩盖错误。
+     * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#63-分销商品}。
+     */
+    private Long loadPlatformBasePriceCents(BuyerSkuPricingVersionDO buyerVersion, Long legacyL1Cents) {
+        if (buyerVersion == null) {
+            return legacyL1Cents;
+        }
+        if (buyerVersion.getPlatformPricingVersionId() == null) {
+            return null;
+        }
+        PlatformSkuPricingVersionDO platformVersion = platformPricingVersionMapper.selectById(
+                buyerVersion.getPlatformPricingVersionId());
+        return platformVersion == null ? null : platformVersion.getDistributionPriceCents();
     }
 
     private ProjectOverrides loadBuyerPricingOverrides(BuyerSkuPricingVersionDO version) {
@@ -423,6 +450,8 @@ public class BuyerProductQueryService {
             @Schema(description = "商品分类封闭枚举名") String productClassification,
             @Schema(description = "平台SKU市场划线价或吊牌价，单位CNY分") Long marketPriceCents,
             @Schema(description = "建议结算价，取当前L1，单位CNY分") Long suggestPriceCents,
+            @Schema(description = "平台SKU销售建议价，单位CNY分") Long suggestedSalePriceCents,
+            @Schema(description = "项目旧调价模式的B端平台基价，单位CNY分") Long platformBasePriceCents,
             @Schema(description = "定价规则文案；通用定价为继承商品默认 / 等于市场价 / 自定义公式，历史链兼容继承L1 / 等于L1") String pricingRule,
             @Schema(description = "有效通用定价是否含税；仅用于展示") Boolean taxIncluded,
             @Schema(description = "有效通用定价税率字典编码；仅用于展示") String taxRateCode,

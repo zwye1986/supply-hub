@@ -27,6 +27,7 @@ import com.aifuli.module.supplychain.tradecore.catalog.application.ProductCatalo
 import com.aifuli.module.supplychain.tradecore.catalog.application.ProjectListingCommandService;
 import com.aifuli.module.supplychain.tradecore.catalog.application.ProjectListingCommandService.ListingLine;
 import com.aifuli.module.supplychain.tradecore.catalog.application.ProjectListingQueryService;
+import com.aifuli.module.supplychain.tradecore.catalog.application.ProjectListingPriceSource;
 import com.aifuli.module.supplychain.tradecore.catalog.application.SettlementPriceResolver;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerProductL2OverrideDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerProductL2OverrideVersionDO;
@@ -200,9 +201,6 @@ class ProjectAdminIntegrationTest {
             assertThat(initialListingPage.getFirst().priceSource()).isEqualTo(PriceSource.L1.name());
             Long version1Id = version1.getId();
 
-            verifyGenericBatchPricing(context, buyerA, projectCode,
-                    buyerProductCodes.getFirst(), listingCode);
-
             products.patchL2(buyerA, buyerProductCodes.getFirst(), L2AdjustMode.CUSTOM,
                     L2_PERCENT, L2_AMOUNT_CENTS, null, 1L);
             ProjectListingVersionDO afterL2 = listingVersionMapper.selectById(version1Id);
@@ -227,6 +225,43 @@ class ProjectAdminIntegrationTest {
 
             verifyBatchPricingDatabaseSemantics(context, buyerA, buyerB, projectCode,
                     buyerProductCodes.getFirst(), listingCode);
+
+            // 历史 L1/L2 的事务与冻结测试完成后，再发布通用版本，验证当前版本优先且旧冻结价不回放。
+            Long frozenBeforeGeneric = listingVersionMapper.selectById(
+                    listingMapper.selectByCode(listingCode).getCurrentVersionId()).getBuyerSettlementUnitPrice();
+            verifyGenericBatchPricing(context, buyerA, projectCode,
+                    buyerProductCodes.getFirst(), listingCode);
+            var genericBuyerRow = context.getBean(BuyerProductQueryService.class)
+                    .page(buyerA, List.of(), 1, 20).getList().stream()
+                    .filter(row -> buyerProductCodes.getFirst().equals(row.buyerProductCode())).findFirst().orElseThrow();
+            assertThat(genericBuyerRow.suggestedSalePriceCents()).isEqualTo(10_000L);
+            assertThat(genericBuyerRow.platformBasePriceCents()).isEqualTo(10_000L);
+            assertThat(genericBuyerRow.distPriceCents()).isEqualTo(10_000L);
+            var genericProjectRow = listingQuery.page(projectCode, 1, 20).getList().getFirst();
+            assertThat(genericProjectRow.distPriceCents()).isEqualTo(10_000L);
+            assertThat(genericProjectRow.finalPriceCents()).isEqualTo(frozenBeforeGeneric);
+            listings.patchL3(projectCode, listingCode, L3AdjustMode.FOLLOW_L2, null, null, 1L);
+            assertThat(listingQuery.page(projectCode, 1, 20).getList().getFirst().finalPriceCents())
+                    .isEqualTo(10_000L);
+
+            // 模拟现场新 SKU：只有通用定价版本，没有旧 L1；新增项目仍须成功并展示真正的 SKU 建议价。
+            PlatformSkuDO genericSku = context.getBean(PlatformSkuMapper.class).selectByCode("MOVIE_100");
+            context.getBean(PlatformSettlementPriceMapper.class).deleteById(genericSku.getId());
+            String genericOnlyProject = projects.create(new CreateProjectCommand(
+                    "通用定价项目", buyerA, "WELFARE",
+                    LocalDate.of(2026, 9, 1), LocalDate.of(2026, 12, 31),
+                    null, "验证无旧L1", "ACTIVE", 1L));
+            String genericOnlyListing = listings.addProducts(genericOnlyProject,
+                    List.of(new ListingLine("MOVIE_100", L3AdjustMode.FOLLOW_L2, null, null)), 1L).getFirst();
+            assertThat(listingQuery.page(genericOnlyProject, 1, 20).getList().getFirst())
+                    .satisfies(row -> {
+                        assertThat(row.listingCode()).isEqualTo(genericOnlyListing);
+                        assertThat(row.suggestPriceCents()).isNull();
+                        assertThat(row.suggestedSalePriceCents()).isEqualTo(10_000L);
+                        assertThat(row.platformBasePriceCents()).isEqualTo(10_000L);
+                        assertThat(row.distPriceCents()).isEqualTo(10_000L);
+                        assertThat(row.finalPriceCents()).isEqualTo(10_000L);
+                    });
 
             assertThatThrownBy(() -> projects.update(new UpdateProjectCommand(
                     projectCode, "福利项目", buyerB, "WELFARE",
@@ -673,7 +708,7 @@ class ProjectAdminIntegrationTest {
             BuyerAdminCommandService.class, BuyerAdminQueryService.class,
             BuyerProductCommandService.class, BuyerProductQueryService.class,
             ProjectAdminCommandService.class, ProjectAdminQueryService.class,
-            ProjectListingCommandService.class, ProjectListingQueryService.class,
+            ProjectListingCommandService.class, ProjectListingQueryService.class, ProjectListingPriceSource.class,
             GenericBatchPricingService.class})
     static class TestConfiguration {
         @Bean

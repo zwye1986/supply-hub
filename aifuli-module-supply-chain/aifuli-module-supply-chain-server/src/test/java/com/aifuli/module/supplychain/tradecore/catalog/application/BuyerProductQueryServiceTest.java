@@ -14,6 +14,8 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerSkuPr
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerSkuPricingVersionDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuPricingDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuPricingVersionDO;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSettlementPriceDO;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSettlementPriceVersionDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSpuDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerProductL2OverrideMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerProductL2OverrideVersionMapper;
@@ -59,6 +61,8 @@ class BuyerProductQueryServiceTest {
     private final ProjectListingMapper listingMapper = mock(ProjectListingMapper.class);
     private final BuyerSkuPricingMapper buyerPricingMapper = mock(BuyerSkuPricingMapper.class);
     private final BuyerSkuPricingVersionMapper buyerPricingVersionMapper = mock(BuyerSkuPricingVersionMapper.class);
+    private final PlatformSettlementPriceMapper l1Mapper = mock(PlatformSettlementPriceMapper.class);
+    private final PlatformSettlementPriceVersionMapper l1VersionMapper = mock(PlatformSettlementPriceVersionMapper.class);
     private final PlatformSkuPricingMapper platformPricingMapper = mock(PlatformSkuPricingMapper.class);
     private final PlatformSkuPricingVersionMapper platformPricingVersionMapper = mock(PlatformSkuPricingVersionMapper.class);
     private BuyerProductQueryService service;
@@ -70,8 +74,8 @@ class BuyerProductQueryServiceTest {
         TableInfoHelper.initTableInfo(assistant, PlatformSpuDO.class);
         service = new BuyerProductQueryService(
                 buyerMapper, productMapper, skuMapper, spuMapper,
-                mock(PlatformSettlementPriceMapper.class),
-                mock(PlatformSettlementPriceVersionMapper.class),
+                l1Mapper,
+                l1VersionMapper,
                 mock(BuyerProductL2OverrideMapper.class),
                 mock(BuyerProductL2OverrideVersionMapper.class),
                 buyerPricingMapper,
@@ -165,7 +169,8 @@ class BuyerProductQueryServiceTest {
                 .id(31L).buyerProductCode("BPD_1").buyerId(9L).platformSkuId(11L).build();
         when(productMapper.selectPage(any(PageParam.class), any())).thenReturn(new PageResult<>(List.of(product), 1L));
         when(skuMapper.selectById(11L)).thenReturn(PlatformSkuDO.builder()
-                .id(11L).skuCode("SKU_1").spuId(21L).marketPrice(9600L).build());
+                .id(11L).skuCode("SKU_1").spuId(21L).marketPrice(9600L)
+                .suggestedSalePrice(0L).build());
         when(spuMapper.selectById(21L)).thenReturn(PlatformSpuDO.builder().id(21L).build());
         when(listingMapper.selectList(any())).thenReturn(List.of());
         when(buyerPricingMapper.selectByBuyerProductId(31L)).thenReturn(BuyerSkuPricingDO.builder()
@@ -179,6 +184,7 @@ class BuyerProductQueryServiceTest {
                 service.page("BYR_A", List.of(), 1, 20).getList().getFirst();
 
         assertThat(item.marketPriceCents()).isEqualTo(9600L);
+        assertThat(item.suggestedSalePriceCents()).isZero();
         assertThat(item.taxIncluded()).isFalse();
         assertThat(item.taxRateCode()).isEqualTo("NON_TAXABLE");
         assertThat(item.taxRateDisplay()).isEqualTo("不征税");
@@ -195,22 +201,28 @@ class BuyerProductQueryServiceTest {
                 .id(31L).buyerProductCode("BPD_1").buyerId(9L).platformSkuId(11L).build();
         when(productMapper.selectPage(any(PageParam.class), any())).thenReturn(new PageResult<>(List.of(product), 1L));
         when(skuMapper.selectById(11L)).thenReturn(PlatformSkuDO.builder()
-                .id(11L).skuCode("SKU_1").spuId(21L).marketPrice(59_900L).build());
+                .id(11L).skuCode("SKU_1").spuId(21L).marketPrice(59_900L)
+                .suggestedSalePrice(49_900L).build());
         when(spuMapper.selectById(21L)).thenReturn(PlatformSpuDO.builder().id(21L).build());
         when(listingMapper.selectList(any())).thenReturn(List.of());
         when(buyerPricingMapper.selectByBuyerProductId(31L)).thenReturn(BuyerSkuPricingDO.builder()
                 .id(71L).buyerProductId(31L).currentVersionId(72L).build());
         when(buyerPricingVersionMapper.selectById(72L)).thenReturn(BuyerSkuPricingVersionDO.builder()
-                .id(72L).pricingId(71L).distributionPriceCents(62_900L)
+                .id(72L).pricingId(71L).platformPricingVersionId(73L).distributionPriceCents(62_900L)
                 .overrideJson("{\"distributionInherited\":false,\"distributionRule\":{"
                         + "\"mode\":\"CUSTOM\",\"base\":\"SUGGESTED_SALE_PRICE\","
                         + "\"percentage\":100,\"operator\":\"ADD\",\"operand\":30}}")
                 .build());
+        when(platformPricingVersionMapper.selectById(73L)).thenReturn(PlatformSkuPricingVersionDO.builder()
+                .id(73L).distributionPriceCents(59_900L).build());
 
         BuyerProductQueryService.BuyerProductListItem item =
                 service.page("BYR_A", List.of(), 1, 20).getList().getFirst();
 
         assertThat(item.distPriceCents()).isEqualTo(62_900L);
+        assertThat(item.suggestedSalePriceCents()).isEqualTo(49_900L);
+        assertThat(item.platformBasePriceCents()).isEqualTo(59_900L);
+        assertThat(item.suggestPriceCents()).isNull();
         assertThat(item.finalPriceCents()).isEqualTo(62_900L);
         assertThat(item.priceSource()).isEqualTo("L2");
         assertThat(item.pricingRule()).isEqualTo("自定义公式");
@@ -228,9 +240,11 @@ class BuyerProductQueryServiceTest {
         when(buyerPricingMapper.selectByBuyerProductId(31L)).thenReturn(BuyerSkuPricingDO.builder()
                 .id(71L).buyerProductId(31L).currentVersionId(72L).build());
         when(buyerPricingVersionMapper.selectById(72L)).thenReturn(BuyerSkuPricingVersionDO.builder()
-                .id(72L).pricingId(71L).distributionPriceCents(59_900L)
+                .id(72L).pricingId(71L).platformPricingVersionId(73L).distributionPriceCents(59_900L)
                 .overrideJson("{\"distributionInherited\":true}")
                 .build());
+        when(platformPricingVersionMapper.selectById(73L)).thenReturn(PlatformSkuPricingVersionDO.builder()
+                .id(73L).distributionPriceCents(59_900L).build());
 
         BuyerProductQueryService.BuyerProductListItem item =
                 service.page("BYR_A", List.of(), 1, 20).getList().getFirst();
@@ -239,6 +253,34 @@ class BuyerProductQueryServiceTest {
         assertThat(item.finalPriceCents()).isEqualTo(59_900L);
         assertThat(item.priceSource()).isEqualTo("L1");
         assertThat(item.pricingRule()).isEqualTo("继承商品默认");
+    }
+
+    @Test
+    void brokenGenericPlatformReferenceDoesNotExposeLegacyPriceAsCurrent() {
+        BuyerProductDO product = BuyerProductDO.builder()
+                .id(31L).buyerProductCode("BPD_1").buyerId(9L).platformSkuId(11L).build();
+        when(productMapper.selectPage(any(PageParam.class), any())).thenReturn(new PageResult<>(List.of(product), 1L));
+        when(skuMapper.selectById(11L)).thenReturn(PlatformSkuDO.builder()
+                .id(11L).skuCode("SKU_1").spuId(21L).suggestedSalePrice(8_800L).build());
+        when(spuMapper.selectById(21L)).thenReturn(PlatformSpuDO.builder().id(21L).build());
+        when(listingMapper.selectList(any())).thenReturn(List.of());
+        when(l1Mapper.selectById(11L)).thenReturn(PlatformSettlementPriceDO.builder()
+                .platformSkuId(11L).currentVersionId(51L).build());
+        when(l1VersionMapper.selectById(51L)).thenReturn(PlatformSettlementPriceVersionDO.builder()
+                .id(51L).unitPriceCents(9_800L).build());
+        when(buyerPricingMapper.selectByBuyerProductId(31L)).thenReturn(BuyerSkuPricingDO.builder()
+                .id(71L).currentVersionId(72L).build());
+        when(buyerPricingVersionMapper.selectById(72L)).thenReturn(BuyerSkuPricingVersionDO.builder()
+                .id(72L).platformPricingVersionId(73L).distributionPriceCents(10_800L).build());
+
+        BuyerProductQueryService.BuyerProductListItem item =
+                service.page("BYR_A", List.of(), 1, 20).getList().getFirst();
+
+        assertThat(item.suggestPriceCents()).isEqualTo(9_800L);
+        assertThat(item.suggestedSalePriceCents()).isEqualTo(8_800L);
+        assertThat(item.platformBasePriceCents()).isNull();
+        assertThat(item.distPriceCents()).isNull();
+        assertThat(item.finalPriceCents()).isNull();
     }
 
     @Test

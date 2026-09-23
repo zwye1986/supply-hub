@@ -9,16 +9,9 @@ import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerProductMappe
 import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerProjectMapper;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.ProjectListingMapper;
 import com.aifuli.module.supplychain.tradecore.buyer.domain.ProjectListingStatus;
-import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerProductL2OverrideDO;
-import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerProductL2OverrideVersionDO;
-import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSettlementPriceDO;
-import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSettlementPriceVersionDO;
+import com.aifuli.module.supplychain.tradecore.catalog.application.ProjectListingPriceSource.PriceBasis;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProjectListingVersionDO;
-import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerProductL2OverrideMapper;
-import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerProductL2OverrideVersionMapper;
-import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceMapper;
-import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceVersionMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProjectListingVersionMapper;
 import com.aifuli.module.supplychain.tradecore.profile.domain.PriceSource;
@@ -51,10 +44,7 @@ public class ProjectListingQueryService {
     private final ProjectListingVersionMapper listingVersionMapper;
     private final BuyerProductMapper productMapper;
     private final PlatformSkuMapper skuMapper;
-    private final PlatformSettlementPriceMapper l1Mapper;
-    private final PlatformSettlementPriceVersionMapper l1VersionMapper;
-    private final BuyerProductL2OverrideMapper overrideMapper;
-    private final BuyerProductL2OverrideVersionMapper overrideVersionMapper;
+    private final ProjectListingPriceSource priceSource;
 
     /**
      * 分页未移除项目商品。按更新时间倒序。
@@ -85,9 +75,10 @@ public class ProjectListingQueryService {
                 ? null : productMapper.selectById(listing.getBuyerProductId());
         PlatformSkuDO sku = product == null || product.getPlatformSkuId() == null
                 ? null : skuMapper.selectById(product.getPlatformSkuId());
-        Long suggestPriceCents = sku == null ? null : loadL1Cents(sku.getId());
-        Long overrideCents = product == null ? null : loadOverrideCents(product.getId());
-        Long distPriceCents = overrideCents != null ? overrideCents : suggestPriceCents;
+        PriceBasis basis = product == null ? null : priceSource.resolve(product);
+        Long suggestPriceCents = sku == null ? null : priceSource.legacyPlatformPrice(sku.getId());
+        Long platformBasePriceCents = basis == null ? null : basis.platformBaseCents();
+        Long distPriceCents = basis == null ? null : basis.distributionCents();
         ProjectListingVersionDO frozen = listing.getCurrentVersionId() == null
                 ? null : listingVersionMapper.selectById(listing.getCurrentVersionId());
         Long finalPriceCents = frozen == null ? null : frozen.getBuyerSettlementUnitPrice();
@@ -97,29 +88,13 @@ public class ProjectListingQueryService {
                 sku == null ? null : sku.getSkuCode(),
                 sku == null ? null : sku.getSkuName(),
                 suggestPriceCents,
+                sku == null ? null : sku.getSuggestedSalePrice(),
+                platformBasePriceCents,
                 distPriceCents,
                 covered ? finalPriceCents : null,
                 finalPriceCents,
                 frozen == null ? null : frozen.getSettlementPriceLevel(),
                 covered);
-    }
-
-    private Long loadL1Cents(Long skuId) {
-        PlatformSettlementPriceDO identity = l1Mapper.selectById(skuId);
-        if (identity == null || identity.getCurrentVersionId() == null) {
-            return null;
-        }
-        PlatformSettlementPriceVersionDO version = l1VersionMapper.selectById(identity.getCurrentVersionId());
-        return version == null ? null : version.getUnitPriceCents();
-    }
-
-    private Long loadOverrideCents(Long buyerProductId) {
-        BuyerProductL2OverrideDO identity = overrideMapper.selectByBuyerProductId(buyerProductId);
-        if (identity == null || identity.getCurrentVersionId() == null) {
-            return null;
-        }
-        BuyerProductL2OverrideVersionDO version = overrideVersionMapper.selectById(identity.getCurrentVersionId());
-        return version == null ? null : version.getResolvedUnitPriceCents();
     }
 
     /**
@@ -131,7 +106,9 @@ public class ProjectListingQueryService {
             @Schema(description = "平台SKU编码") String platformSkuCode,
             @Schema(description = "SKU名称") String skuName,
             @Schema(description = "建议结算价，取当前L1，单位CNY分") Long suggestPriceCents,
-            @Schema(description = "当前有效L2，单位CNY分；无手工覆盖时等于当前L1") Long distPriceCents,
+            @Schema(description = "平台SKU销售建议价，单位CNY分") Long suggestedSalePriceCents,
+            @Schema(description = "项目旧调价模式的B端平台基价，单位CNY分") Long platformBasePriceCents,
+            @Schema(description = "当前有效分销价，优先通用版本，单位CNY分") Long distPriceCents,
             @Schema(description = "当前版本为L3时的冻结单价，单位CNY分") Long projectPriceCents,
             @Schema(description = "当前冻结版本单价，单位CNY分") Long finalPriceCents,
             @Schema(description = "冻结版本结算层级：L1 / L2 / L3") String priceSource,

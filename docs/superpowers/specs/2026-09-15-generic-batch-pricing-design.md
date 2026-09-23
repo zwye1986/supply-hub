@@ -148,6 +148,8 @@ SPU、SKU 与定价整体回滚。
 历史 `sc_platform_settlement_price` / `sc_buyer_product_l2_override` 推导，否则行内 `pricing` 保存成功后列表会展示
 空价或错误规则。只有尚未生成通用定价版本的历史分销商品才回退旧 L1/L2 链，避免存量数据在迁移完成前失去展示。
 
+项目目录旧 L3 接口与管理端读模型复用这条优先级：当前分销商通用版本存在时，项目继承价取该版本分销价，平台调价基数取其 `platform_pricing_version_id` 指向的平台默认分销价；只有分销商通用版本缺失时回退历史 L1/L2。版本存在而金额或引用缺失时失败关闭，禁止读取旧价遮盖无效版本。项目新发布冻结当前金额，既有项目版本及订单快照不回写。SKU 的 `suggested_sale_price` 是 C 端销售建议价，只用于展示或通用定价规则依赖，不能替代 B 端平台调价基数。
+
 ## 7. 项目报价凭证与标准履约
 
 新增项目级标准商品报价 RPC，输入绑定 `sourceSystem + externalTenantId + projectCode + platformSkuCode +
