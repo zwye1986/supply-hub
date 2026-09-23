@@ -64,10 +64,11 @@ class SupplyChainModuleArchitectureTest {
             .should().dependOnClassesThat().resideInAnyPackage("..dal..");
 
     /**
-     * 供货命中、标品SKU池供应商过滤、分销商品列表展示禁止依赖 ProductCategoryMapper：
-     * 三码写入期由 {@code ProductClassificationValidationService} 解析类目编码；命中路径仍按字符串全等，
-     * 不得回退去走类目树祖先链。
-     * 设计见 {@code docs/superpowers/specs/2026-09-07-供应链管理端表单字典与标品标签设计.md#7-测试门禁}、
+     * 供货命中、标品SKU池供应商过滤、分销商品列表展示禁止直接依赖 ProductCategoryMapper：
+     * 类目树数据所有权在 catalog。三码写入期由 {@code ProductClassificationValidationService} 解析类目编码；
+     * 供货命中的归属判断（配置码为 SPU 码祖先或相等，2026-09-23 起取代字符串全等）由 catalog 应用层
+     * {@code ProductCategoryCoverageService} 封装，supply 侧只能经它委托，不得自己回退去走类目树。
+     * 设计见 {@code docs/superpowers/specs/2026-09-07-供应链管理端表单字典与标品标签设计.md#7-测试门禁}（d3）、
      * {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线}（d34）。
      */
     static final ArchRule supply_matching_does_not_read_category_tree = noClasses()

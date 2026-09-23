@@ -6,6 +6,7 @@ import com.aifuli.framework.common.pojo.PageParam;
 import com.aifuli.framework.common.pojo.PageResult;
 import com.aifuli.module.supplychain.infrastructure.identity.BusinessNoGenerator;
 import com.aifuli.module.supplychain.infrastructure.identity.BusinessNoPrefixes;
+import com.aifuli.module.supplychain.tradecore.catalog.application.ProductCategoryCoverageService;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSettlementPriceDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSettlementPriceVersionDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuDO;
@@ -77,6 +78,11 @@ public class SupplierCooperativeProductService {
     private final PlatformSettlementPriceVersionMapper priceVersionMapper;
     private final BusinessNoGenerator businessNoGenerator;
     private final ApplicationEventPublisher eventPublisher;
+    /**
+     * 供货配置分类码与 SPU 分类码的归属判定（类目祖先链，归档不断链），树数据所有权仍在 catalog。
+     * 设计见 {@code docs/superpowers/specs/2026-09-07-供应链管理端表单字典与标品标签设计.md#1-已确认决策}（d3）。
+     */
+    private final ProductCategoryCoverageService categoryCoverageService;
 
     /**
      * 批量新增合作商品，状态直接 {@link OfferStatus#PUBLISHED}。供货上限为空时继承命中的供货配置；
@@ -95,10 +101,11 @@ public class SupplierCooperativeProductService {
             throw exception(SUPPLIER_NOT_FOUND);
         }
         List<SupplierSupplyScopeDO> scopes = scopeMapper.selectBySupplierId(supplier.getId());
+        ProductCategoryCoverageService.CoverageResolver coverage = categoryCoverageService.loadResolver();
         LocalDateTime now = databaseClock.now();
         List<String> offerNos = new ArrayList<>();
         for (DraftLine line : lines) {
-            offerNos.add(insertPublished(supplier, scopes, line, operatorId, now));
+            offerNos.add(insertPublished(supplier, scopes, line, operatorId, now, coverage));
         }
         return offerNos;
     }
@@ -151,7 +158,7 @@ public class SupplierCooperativeProductService {
         SupplierOfferDO offer = requireLiveOffer(supplierCode, offerNo);
         SupplierDO supplier = supplierMapper.selectByCode(supplierCode);
         List<SupplierSupplyScopeDO> scopes = scopeMapper.selectBySupplierId(supplier.getId());
-        ResolvedOffer resolved = resolveLine(scopes, line);
+        ResolvedOffer resolved = resolveLine(scopes, line, categoryCoverageService.loadResolver());
         Long existing = offerMapper.selectCount(new LambdaQueryWrapper<SupplierOfferDO>()
                 .eq(SupplierOfferDO::getSupplierId, supplier.getId())
                 .eq(SupplierOfferDO::getPlatformSkuId, resolved.sku().getId())
@@ -235,8 +242,9 @@ public class SupplierCooperativeProductService {
     }
 
     private String insertPublished(SupplierDO supplier, List<SupplierSupplyScopeDO> scopes, DraftLine line,
-                                   Long operatorId, LocalDateTime now) {
-        ResolvedOffer resolved = resolveLine(scopes, line);
+                                   Long operatorId, LocalDateTime now,
+                                   ProductCategoryCoverageService.CoverageResolver coverage) {
+        ResolvedOffer resolved = resolveLine(scopes, line, coverage);
         Long existing = offerMapper.selectCount(new LambdaQueryWrapper<SupplierOfferDO>()
                 .eq(SupplierOfferDO::getSupplierId, supplier.getId())
                 .eq(SupplierOfferDO::getPlatformSkuId, resolved.sku().getId())
@@ -271,7 +279,8 @@ public class SupplierCooperativeProductService {
         return offer.getOfferNo();
     }
 
-    private ResolvedOffer resolveLine(List<SupplierSupplyScopeDO> scopes, DraftLine line) {
+    private ResolvedOffer resolveLine(List<SupplierSupplyScopeDO> scopes, DraftLine line,
+                                      ProductCategoryCoverageService.CoverageResolver coverage) {
         PlatformSkuDO sku = skuMapper.selectByCode(line.platformSkuCode());
         if (sku == null || sku.getStatus() == null
                 || sku.getStatus() != CatalogEntityStatus.ACTIVE.getCode()) {
@@ -282,7 +291,7 @@ public class SupplierCooperativeProductService {
                 || spu.getStatus() != CatalogEntityStatus.ACTIVE.getCode()) {
             throw exception(SUPPLIER_OFFER_OUT_OF_SCOPE);
         }
-        SupplierSupplyScopeDO scope = matchScope(scopes, spu);
+        SupplierSupplyScopeDO scope = matchScope(scopes, spu, coverage);
         OfferPriceMode priceMode = OfferPriceMode.fromCode(line.priceMode());
         SupplyMode supplyMode = SupplyMode.fromCode(line.supplyMode());
         validatePrice(priceMode, line);
@@ -368,27 +377,40 @@ public class SupplierCooperativeProductService {
     }
 
     /**
-     * SPU 三码须全部非空且与某条供货配置三码整体相等才命中；0 条或多条命中都判失败。
-     * 设计见 {@code docs/superpowers/specs/2026-09-07-供应链管理端表单字典与标品标签设计.md#42-平台spu}。
+     * 归属命中（2026-09-23 修订，取代三码全等）：SPU 三码须全部非空；{@code sellableCategory}、
+     * {@code productType} 仍字符串全等；{@code productClassification} 由
+     * {@link ProductCategoryCoverageService.CoverageResolver#covers} 判定——两边都是类目码时，
+     * 配置码是 SPU 码祖先（或相等）即命中，枚举名仍只认全等。多条命中取类目层级最深（最具体）的一条；
+     * 树性质下同层不可能双命中，若因脏数据出现同层多命中仍判失败。0 条命中抛
+     * {@code SUPPLIER_OFFER_OUT_OF_SCOPE}。
+     * 设计见 {@code docs/superpowers/specs/2026-09-07-供应链管理端表单字典与标品标签设计.md#1-已确认决策}（d3）。
      */
-    private SupplierSupplyScopeDO matchScope(List<SupplierSupplyScopeDO> scopes, PlatformSpuDO spu) {
+    private SupplierSupplyScopeDO matchScope(List<SupplierSupplyScopeDO> scopes, PlatformSpuDO spu,
+                                             ProductCategoryCoverageService.CoverageResolver coverage) {
         if (spu.getSellableCategory() == null || spu.getProductType() == null
                 || spu.getProductClassification() == null) {
             throw exception(SUPPLIER_OFFER_OUT_OF_SCOPE);
         }
         SupplierSupplyScopeDO matched = null;
+        int matchedDepth = -1;
+        boolean tieAtDeepest = false;
         for (SupplierSupplyScopeDO scope : scopes) {
-            boolean sameTriple = spu.getSellableCategory().equals(scope.getSellableCategory())
-                    && spu.getProductType().equals(scope.getProductType())
-                    && spu.getProductClassification().equals(scope.getProductClassification());
-            if (sameTriple) {
-                if (matched != null) {
-                    throw exception(SUPPLIER_OFFER_OUT_OF_SCOPE);
-                }
+            if (!spu.getSellableCategory().equals(scope.getSellableCategory())
+                    || !spu.getProductType().equals(scope.getProductType())
+                    || !coverage.covers(scope.getProductClassification(), spu.getProductClassification())) {
+                continue;
+            }
+            int depth = coverage.depth(scope.getProductClassification());
+            if (depth > matchedDepth) {
                 matched = scope;
+                matchedDepth = depth;
+                tieAtDeepest = false;
+            } else if (depth == matchedDepth) {
+                // 树性质 + 三元组唯一下同层不可能双命中；出现即数据异常，保持失败语义
+                tieAtDeepest = true;
             }
         }
-        if (matched == null) {
+        if (matched == null || tieAtDeepest) {
             throw exception(SUPPLIER_OFFER_OUT_OF_SCOPE);
         }
         return matched;
