@@ -6,6 +6,7 @@ import com.aifuli.module.supplychain.tradecore.supply.domain.OfferStatus;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import org.apache.ibatis.annotations.Mapper;
 
+import java.util.Collection;
 import java.util.List;
 
 @Mapper
@@ -71,6 +72,25 @@ public interface SupplierOfferMapper extends BaseMapperX<SupplierOfferDO> {
                 .eq(SupplierOfferDO::getPlatformSkuId, platformSkuId)
                 .in(SupplierOfferDO::getStatus, liveStatusCodes())
                 .orderByAsc(SupplierOfferDO::getId));
+    }
+
+    /**
+     * 正常供应商名下全部未退役合作商品 SKU，用于在 SPU 分页前收窄商品候选集。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线}（d47）。
+     */
+    default List<Long> selectLiveSkuIdsBySupplierIds(Collection<Long> supplierIds) {
+        if (supplierIds == null || supplierIds.isEmpty()) {
+            return List.of();
+        }
+        return selectList(new LambdaQueryWrapper<SupplierOfferDO>()
+                .select(SupplierOfferDO::getPlatformSkuId)
+                .in(SupplierOfferDO::getSupplierId, supplierIds)
+                .in(SupplierOfferDO::getStatus, liveStatusCodes()))
+                .stream()
+                .map(SupplierOfferDO::getPlatformSkuId)
+                .filter(java.util.Objects::nonNull)
+                .distinct()
+                .toList();
     }
 
     private static List<Short> liveStatusCodes() {

@@ -93,7 +93,8 @@ public class SupplierAdminController {
     @PreAuthorize(SUPPLIER_QUERY_EXPRESSION)
     @Operation(summary = "分页查询供应商",
             description = "筛选用多值 status/sellableCategories/supplyModes 与 updatedFrom/To。"
-                    + "view=simple 返回 {supplierCode,supplierName}[]，不强制分页。身份用 supplierCode，金额单位 CNY 分。")
+                    + "view=simple 只返回正常（ACTIVE）的 {supplierCode,supplierName}[]，不强制分页。"
+                    + "身份用 supplierCode，金额单位 CNY 分。")
     public CommonResult<?> page(
             @Parameter(description = "供应商标准名称，模糊") @RequestParam(required = false) String supplierName,
             @Parameter(description = "供应商永久业务编码") @RequestParam(required = false) String supplierCode,

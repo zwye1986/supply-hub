@@ -258,6 +258,8 @@ SPU / 供货范围写入的 `productClassification` 不走 `ClosedEnums`：类�
 
 金额与展示字段：`suggestPriceCents`（L1 结算口径）、`marketPriceCents`（兼容既有 JSON 字段名；C 端建议价，实际取 `sc_platform_sku.suggested_sale_price`，若无则空）、`supplyPriceCents`（当前最低有效供货价，口径与通用定价最低供货价相同：供应商启用、Offer 已发布；当前版本有效则用版本单价，否则回退身份列，多条取最低；没有有效报价则为空，0 是有效价格，见 `docs/superpowers/specs/2026-09-22-effective-supply-price-identity-fallback-design.md`）、`categoryName`（SPU 主类目名称，归档或缺失则为空）。`categoryName` 只用于弹窗「分类」列展示，不参与筛选，不按类目祖先链过滤。`marketPriceCents` 不得取履约面值 `face_value` 或市场划线价 `market_price`；销售价来源以 09-12 范围对齐 §5 为准。点餐/电影 L1 可为 0。
 
+商品管理聚合列表及新增分销商品选品只返回至少关联一个正常（`ACTIVE`）供应商未退役 Offer 的 SKU；暂停、黑名单、归档供应商及其独占商品不进入结果。新增供应商品选品 `excludeAddedSupplierOffers=true` 是例外，允许尚无任何供应商的 SKU 进入，以保留首个供应商关联闭环。所有场景的供应商展示与最低有效供货价均忽略非正常供应商。
+
 ## 5. 供应商
 
 在现有 `SupplierAdminController` 上扩展筛选与字段，不改资源名。
@@ -266,7 +268,7 @@ SPU / 供货范围写入的 `productClassification` 不走 `ClosedEnums`：类�
 
 筛选：`supplierName`、`supplierCode`、`sellableCategories`（多，枚举名）、`supplyModes`（多）、`status`（多，枚举名）、`updatedFrom`、`updatedTo`、`pageNo`、`pageSize`。
 
-名称下拉：同一集合加 `view=simple`，返回 `{ supplierCode, supplierName }[]`（可不分页）。
+名称下拉：同一集合加 `view=simple`，只返回状态为 `ACTIVE`（正常）的 `{ supplierCode, supplierName }[]`（可不分页）。暂停、黑名单、归档供应商不得作为商品列表筛选项。
 
 列表行：`id`、`supplierCode`、`supplierName`、`status`、聚合自供货配置的 `sellableCategories[]` / `productTypes[]` / `productClassifications[]` / `supplyModes[]`（均为枚举名）、`skuCount`（未退役 Offer 数）、`onboardedAt`、`updatedAt`、主联系人 `contactName`/`contactMobile`（原值回显）。
 

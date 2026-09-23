@@ -112,15 +112,16 @@ public class SupplierProfileQueryService {
     }
 
     /**
-     * 名称下拉：只回编码与名称，不强制分页。
-     * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#51-列表}。
+     * 名称下拉：只回正常供应商编码与名称，不强制分页。
+     * 商品列表筛选不得让暂停、黑名单或归档供应商重新进入候选。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线}（d47）。
      */
     public List<SimpleSupplierItem> listSimple(String supplierName, String supplierCode) {
         log.info("简易供应商列表 supplierName={} supplierCode={}", supplierName, supplierCode);
         List<SupplierDO> suppliers = supplierMapper.selectList(new LambdaQueryWrapper<SupplierDO>()
                 .like(hasText(supplierName), SupplierDO::getSupplierName, supplierName)
                 .eq(hasText(supplierCode), SupplierDO::getSupplierCode, supplierCode)
-                .ne(SupplierDO::getStatus, SupplierStatus.ARCHIVED.getCode())
+                .eq(SupplierDO::getStatus, SupplierStatus.ACTIVE.getCode())
                 .orderByDesc(SupplierDO::getUpdatedAt));
         List<SimpleSupplierItem> items = new ArrayList<>();
         for (SupplierDO supplier : suppliers) {

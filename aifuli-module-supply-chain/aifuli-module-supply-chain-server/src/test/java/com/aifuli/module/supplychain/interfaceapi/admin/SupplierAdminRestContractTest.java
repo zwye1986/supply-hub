@@ -27,6 +27,19 @@ import static org.assertj.core.api.Assertions.assertThat;
 class SupplierAdminRestContractTest {
 
     @Test
+    void simpleSupplierProjectionDocumentsActiveOnly() {
+        Method page = Arrays.stream(SupplierAdminController.class.getDeclaredMethods())
+                .filter(method -> method.getName().equals("page"))
+                .findFirst()
+                .orElseThrow();
+
+        assertThat(page.getAnnotation(Operation.class).description())
+                .contains("view=simple")
+                .contains("ACTIVE")
+                .contains("只返回正常");
+    }
+
+    @Test
     void saveReqSerializesCentsAndEnumNames() throws Exception {
         ObjectMapper mapper = new ObjectMapper().registerModule(new JavaTimeModule());
         SupplierAdminController.SupplierSaveReqVO vo = new SupplierAdminController.SupplierSaveReqVO();

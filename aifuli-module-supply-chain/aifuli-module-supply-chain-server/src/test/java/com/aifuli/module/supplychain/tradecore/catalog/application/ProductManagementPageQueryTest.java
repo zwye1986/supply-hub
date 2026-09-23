@@ -41,6 +41,7 @@ import org.mockito.ArgumentCaptor;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.List;
 
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BUYER_PROFILE_NOT_FOUND;
@@ -91,6 +92,17 @@ class ProductManagementPageQueryTest {
         TableInfoHelper.initTableInfo(new MapperBuilderAssistant(new MybatisConfiguration(), ""), ProductCategoryDO.class);
         TableInfoHelper.initTableInfo(new MapperBuilderAssistant(new MybatisConfiguration(), ""), BuyerProductDO.class);
         when(databaseClock.now()).thenReturn(NOW);
+        // 大多数用例聚焦既有筛选/投影行为，默认把测试 SKU 视为已有正常供应商合作关系；
+        // d47 的非正常供应商边界由本类专用用例覆盖。
+        when(supplierMapper.selectActiveIds()).thenReturn(List.of(11L));
+        when(offerMapper.selectLiveSkuIdsBySupplierIds(any()))
+                .thenReturn(List.of(2001L, 2002L, 2003L, 8888L));
+        when(skuMapper.selectBatchIds(any(Collection.class))).thenAnswer(invocation -> {
+            Collection<Long> ids = invocation.getArgument(0);
+            return ids.stream()
+                    .map(id -> PlatformSkuDO.builder().id(id).spuId(1001L).build())
+                    .toList();
+        });
     }
 
     @Test
@@ -679,7 +691,8 @@ class ProductManagementPageQueryTest {
     @Test
     void managementPageSupplierCodeWithoutExcludeFlagStillKeepsOnlySuppliedSpus() {
         when(supplierMapper.selectOne(org.mockito.ArgumentMatchers.<SFunction<SupplierDO, ?>>any(), eq("SPL_A"))).thenReturn(
-                SupplierDO.builder().id(11L).supplierCode("SPL_A").build());
+                SupplierDO.builder().id(11L).supplierCode("SPL_A")
+                        .status(SupplierStatus.ACTIVE.getCode()).build());
         when(offerMapper.selectList(any())).thenReturn(List.of());
 
         PageResult<ProductManagementSpuItem> result = service.managementPage(new ProductManagementPageQuery(
@@ -717,13 +730,42 @@ class ProductManagementPageQueryTest {
                 SupplierDO.builder().id(11L).supplierCode("SUP_A").supplierName("有效供应商")
                         .status(SupplierStatus.ACTIVE.getCode()).build(),
                 SupplierDO.builder().id(12L).supplierCode("SUP_B").supplierName("过期供应商")
-                        .status(SupplierStatus.ACTIVE.getCode()).build()));
+                        .status(SupplierStatus.SUSPENDED.getCode()).build()));
 
         PageResult<ProductManagementSpuItem> result = service.managementPage(new ProductManagementPageQuery(
                 null, null, null, null, null, null, null, null,
                 null, null, null, null, null, null, null, 1, 20, null, null));
 
         assertThat(result.getList().getFirst().skus().getFirst().supplyPrice()).isEqualTo(1800L);
+        assertThat(result.getList().getFirst().skus().getFirst().suppliers())
+                .extracting(ProductCatalogQueryService.SupplierSimpleInfo::supplierCode)
+                .containsExactly("SUP_A");
+    }
+
+    @Test
+    void managementPageReturnsEmptyWhenNoActiveSupplierHasLiveOffer() {
+        when(supplierMapper.selectActiveIds()).thenReturn(List.of());
+
+        PageResult<ProductManagementSpuItem> result = service.managementPage(managementQuery(null));
+
+        assertThat(result.getList()).isEmpty();
+        assertThat(result.getTotal()).isZero();
+        verify(spuMapper, never()).selectPage(any(PageParam.class), any());
+    }
+
+    @Test
+    void managementPageRejectsExplicitNonActiveSupplierFilter() {
+        when(supplierMapper.selectOne(org.mockito.ArgumentMatchers.<SFunction<SupplierDO, ?>>any(), eq("SPL_STOP")))
+                .thenReturn(SupplierDO.builder().id(12L).supplierCode("SPL_STOP")
+                        .status(SupplierStatus.SUSPENDED.getCode()).build());
+
+        PageResult<ProductManagementSpuItem> result = service.managementPage(new ProductManagementPageQuery(
+                null, null, null, null, null, null, null, null,
+                null, null, null, null, "SPL_STOP", null, null, 1, 20, null, null));
+
+        assertThat(result.getList()).isEmpty();
+        assertThat(result.getTotal()).isZero();
+        verify(spuMapper, never()).selectPage(any(PageParam.class), any());
     }
 
     @Test
@@ -776,6 +818,11 @@ class ProductManagementPageQueryTest {
                 null, null, 15_000L, 25_000L, null, null, null, 1, 20, null, null));
 
         assertThat(result.getList().getFirst().skus().getFirst().supplyPrice()).isEqualTo(20_000L);
+        ArgumentCaptor<LambdaQueryWrapper<SupplierOfferDO>> offerQuery =
+                ArgumentCaptor.forClass((Class) LambdaQueryWrapper.class);
+        verify(offerMapper, times(2)).selectList(offerQuery.capture());
+        assertThat(offerQuery.getAllValues().getFirst().getSqlSegment()).contains("supplier_id");
+        assertThat(offerQuery.getAllValues().getFirst().getParamNameValuePairs().values()).contains(11L);
     }
 
     private static ProductCategoryDO category(Long id, Long parentId) {

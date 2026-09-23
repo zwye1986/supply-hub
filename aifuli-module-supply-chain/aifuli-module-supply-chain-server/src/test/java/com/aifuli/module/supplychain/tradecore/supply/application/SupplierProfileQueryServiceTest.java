@@ -23,9 +23,14 @@ import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierSettleme
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierSupplyScopeMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierSupplyScopeModeMapper;
 import com.aifuli.module.supplychain.tradecore.supply.domain.SupplierStatus;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.MybatisConfiguration;
+import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
+import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentMatchers;
+import org.mockito.ArgumentCaptor;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -57,6 +62,7 @@ class SupplierProfileQueryServiceTest {
 
     @BeforeEach
     void setUp() {
+        TableInfoHelper.initTableInfo(new MapperBuilderAssistant(new MybatisConfiguration(), ""), SupplierDO.class);
         when(categoryQueryService.resolveCategoryIdsByCodes(anyCollection())).thenReturn(Map.of());
         service = new SupplierProfileQueryService(
                 supplierMapper, contactMapper, mock(SupplierDeliveryRegionMapper.class),
@@ -218,6 +224,12 @@ class SupplierProfileQueryServiceTest {
         assertThat(items).containsExactly(
                 new SimpleSupplierItem("SPL_A", "甲供应商"),
                 new SimpleSupplierItem("SPL_B", "乙供应商"));
+
+        ArgumentCaptor<LambdaQueryWrapper<SupplierDO>> wrapperCaptor = ArgumentCaptor.forClass(LambdaQueryWrapper.class);
+        verify(supplierMapper).selectList(wrapperCaptor.capture());
+        assertThat(wrapperCaptor.getValue().getSqlSegment()).contains("status");
+        assertThat(wrapperCaptor.getValue().getParamNameValuePairs().values())
+                .contains(SupplierStatus.ACTIVE.getCode());
     }
 
     private void stubListItem(SupplierDO supplier, Long scopeId, String supplyMode) {

@@ -172,9 +172,10 @@ public class ProductAdminController {
     @Operation(summary = "管理端分页查询商品聚合列表",
             description = "支撑运营管理端商品列表，以及新增分销商品选品。"
                     + "keyword 包含匹配 SPU 名称、SPU 编码、副标题、SKU 名称、SKU 编码；只命中 SKU 时不返回未命中规格。"
+                    + "普通列表和新增分销商品选品只返回至少有一个正常供应商未退役 Offer 的 SKU，供应商列表也只展示正常供应商。"
                     + "buyerCode 排除该分销商未移除的分销商品，已移除 SKU 会再次出现，且不按档案商品类型收窄。"
                     + "excludeAddedSupplierOffers=true 时排除该供应商未退役的供应商品，已退役 SKU 会再次出现；"
-                    + "省略该开关时 supplierCode 仍只保留该供应商已供商品。"
+                    + "该新增供应商品场景允许尚无供应商的 SKU；省略该开关时 supplierCode 仍只保留正常供应商已供商品。"
                     + "supplyPrice 为当前最低有效供货价：有效报价版本优先，否则回退合作商品身份列，单位 CNY 分。")
     public CommonResult<PageResult<ProductCatalogQueryService.ProductManagementSpuItem>> managementPage(
             @Parameter(description = "业务 Tab 标识", example = "VIRTUAL_CARD") @RequestParam(required = false) String tabCode,
@@ -198,7 +199,7 @@ public class ProductAdminController {
             @Parameter(description = "供货价最小金额，单位CNY分", example = "800") @RequestParam(required = false) Long supplyPriceMin,
             @Parameter(description = "供货价最大金额，单位CNY分", example = "4000") @RequestParam(required = false) Long supplyPriceMax,
             @Parameter(description = "供应商编码。省略 excludeAddedSupplierOffers 或为 false 时，"
-                    + "只保留该供应商已有未退役供应商品的 SPU", example = "SUP_01ABC")
+                    + "只保留该正常供应商已有未退役供应商品的 SPU；供应商状态非正常时返回空页", example = "SUP_01ABC")
             @RequestParam(required = false) String supplierCode,
             @Parameter(description = "是否排除该供应商已添加且未退役的供应商品。省略或 false 不排除，"
                     + "supplierCode 仍表示只看该供应商已供商品。"

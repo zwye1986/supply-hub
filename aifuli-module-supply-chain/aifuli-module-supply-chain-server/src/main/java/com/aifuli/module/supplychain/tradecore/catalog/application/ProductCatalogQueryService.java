@@ -30,6 +30,7 @@ import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferVersionMapper;
 import com.aifuli.module.supplychain.tradecore.supply.domain.OfferStatus;
+import com.aifuli.module.supplychain.tradecore.supply.domain.SupplierStatus;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.annotation.JsonFormat;
 import com.fasterxml.jackson.annotation.JsonProperty;
@@ -50,6 +51,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -451,6 +453,27 @@ public class ProductCatalogQueryService {
             excludedSkuIds.addAll(liveSupplierOfferSkuIds(query.supplierCode()));
         }
 
+        // 普通商品列表与新增分销商品选品，只允许至少有一个正常供应商未退役 Offer 的 SKU。
+        // 新增供应商品选品必须允许无供应商 SKU，否则无法建立首条合作关系。
+        // 设计见 docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线（d47）
+        List<Long> activeSupplierIds = Optional.ofNullable(supplierMapper.selectActiveIds()).orElse(List.of());
+        Set<Long> activeSupplierLiveSkuIds = excludeAddedSupplierOffers
+                ? Set.of() : activeSupplierLiveSkuIds(activeSupplierIds);
+        if (!excludeAddedSupplierOffers) {
+            if (activeSupplierLiveSkuIds.isEmpty()) {
+                return new PageResult<>(List.of(), 0L);
+            }
+            List<PlatformSkuDO> suppliedSkus = skuMapper.selectBatchIds(activeSupplierLiveSkuIds);
+            Set<Long> suppliedSpuIds = suppliedSkus.stream()
+                    .map(PlatformSkuDO::getSpuId)
+                    .filter(Objects::nonNull)
+                    .collect(Collectors.toSet());
+            candidateSpuIds = intersect(candidateSpuIds, suppliedSpuIds);
+            if (candidateSpuIds.isEmpty()) {
+                return new PageResult<>(List.of(), 0L);
+            }
+        }
+
         // 1. SKU 商品状态 / 兑换方式 / 市场价区间预过滤。
         // 设计见 docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#419-管理端商品列表聚合查询get-supply-chainproductsmanagement-page
         if (query.status() != null || fulfillmentType != null
@@ -471,14 +494,16 @@ public class ProductCatalogQueryService {
             Long supplierId = null;
             if (supplierInclusion) {
                 SupplierDO supplier = supplierMapper.selectOne(SupplierDO::getSupplierCode, query.supplierCode().trim());
-                if (supplier == null) {
+                if (supplier == null || supplier.getStatus() == null
+                        || supplier.getStatus() != SupplierStatus.ACTIVE.getCode()) {
                     return new PageResult<>(List.of(), 0L);
                 }
                 supplierId = supplier.getId();
             }
             LambdaQueryWrapper<SupplierOfferDO> offerWrapper = new LambdaQueryWrapper<SupplierOfferDO>()
                     .ne(SupplierOfferDO::getStatus, (short) 90)
-                    .eq(supplierId != null, SupplierOfferDO::getSupplierId, supplierId);
+                    .eq(supplierId != null, SupplierOfferDO::getSupplierId, supplierId)
+                    .in(supplierId == null, SupplierOfferDO::getSupplierId, activeSupplierIds);
             List<SupplierOfferDO> liveOffers = offerMapper.selectList(offerWrapper);
             if (liveOffers.isEmpty()) {
                 return new PageResult<>(List.of(), 0L);
@@ -575,18 +600,28 @@ public class ProductCatalogQueryService {
             List<SupplierOfferDO> offers = offerMapper.selectList(new LambdaQueryWrapper<SupplierOfferDO>()
                     .in(SupplierOfferDO::getPlatformSkuId, skuIds)
                     .ne(SupplierOfferDO::getStatus, (short) 90));
-            skuOfferMap = offers.stream().collect(Collectors.groupingBy(SupplierOfferDO::getPlatformSkuId));
-
-            List<Long> versionIds = offers.stream().map(SupplierOfferDO::getCurrentVersionId).filter(Objects::nonNull).distinct().toList();
-            if (!versionIds.isEmpty()) {
-                versionMap = offerVersionMapper.selectBatchIds(versionIds).stream()
-                        .collect(Collectors.toMap(SupplierOfferVersionDO::getId, v -> v, (a, b) -> a));
-            }
-
             List<Long> supplierIds = offers.stream().map(SupplierOfferDO::getSupplierId).filter(Objects::nonNull).distinct().toList();
             if (!supplierIds.isEmpty()) {
                 supplierMap = supplierMapper.selectBatchIds(supplierIds).stream()
+                        .filter(supplier -> supplier.getStatus() != null
+                                && supplier.getStatus() == SupplierStatus.ACTIVE.getCode())
                         .collect(Collectors.toMap(SupplierDO::getId, s -> s, (a, b) -> a));
+            }
+
+            Map<Long, SupplierDO> activeSupplierMap = supplierMap;
+            List<SupplierOfferDO> activeSupplierOffers = offers.stream()
+                    .filter(offer -> offer.getSupplierId() != null
+                            && activeSupplierMap.containsKey(offer.getSupplierId()))
+                    .toList();
+            skuOfferMap = activeSupplierOffers.stream()
+                    .collect(Collectors.groupingBy(SupplierOfferDO::getPlatformSkuId));
+
+            List<Long> versionIds = activeSupplierOffers.stream()
+                    .map(SupplierOfferDO::getCurrentVersionId)
+                    .filter(Objects::nonNull).distinct().toList();
+            if (!versionIds.isEmpty()) {
+                versionMap = offerVersionMapper.selectBatchIds(versionIds).stream()
+                        .collect(Collectors.toMap(SupplierOfferVersionDO::getId, v -> v, (a, b) -> a));
             }
         }
 
@@ -599,6 +634,10 @@ public class ProductCatalogQueryService {
             List<ProductManagementSkuItem> skuItems = new ArrayList<>(spuSkus.size());
 
             for (PlatformSkuDO sku : spuSkus) {
+                if (!excludeAddedSupplierOffers && (sku.getId() == null
+                        || !activeSupplierLiveSkuIds.contains(sku.getId()))) {
+                    continue;
+                }
                 if (sku.getId() != null && excludedSkuIds.contains(sku.getId())) {
                     continue;
                 }
@@ -809,6 +848,19 @@ public class ProductCatalogQueryService {
     }
 
     /**
+     * 正常供应商未退役合作商品 SKU 集合。该集合同时约束分页候选 SPU 与返回 SKU 明细，
+     * 避免分页后过滤导致 total 和翻页结果不一致。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线}（d47）。
+     */
+    private Set<Long> activeSupplierLiveSkuIds(List<Long> activeSupplierIds) {
+        if (activeSupplierIds.isEmpty()) {
+            return Set.of();
+        }
+        List<Long> skuIds = offerMapper.selectLiveSkuIdsBySupplierIds(activeSupplierIds);
+        return skuIds == null ? Set.of() : new HashSet<>(skuIds);
+    }
+
+    /**
      * 供货价区间与列表展示使用同一最低有效供货价。没有有效报价的 SKU 不落入区间。
      * 设计见 {@code docs/superpowers/specs/2026-09-22-effective-supply-price-identity-fallback-design.md}。
      */
@@ -909,7 +961,7 @@ public class ProductCatalogQueryService {
             @Schema(description = "税率，如0.0600表示6%；仅记录展示，不参与价格计算；标准商品结算以分销商/项目通用定价为准") BigDecimal taxRate,
             @Schema(description = "税率展示文本，如6%、不含税、含税（税率未配置）") String taxRateDisplay,
             @Schema(description = "税额，单位CNY分") Long taxAmount,
-            @Schema(description = "供应商列表") List<SupplierSimpleInfo> suppliers,
+            @Schema(description = "正常状态供应商列表") List<SupplierSimpleInfo> suppliers,
             @Schema(description = "总库存；本期取值SKU库存数量，管理端创建或编辑商品时设置") Long totalInventory,
             @Schema(description = "履约方式封闭枚举名") String fulfillmentType,
             @Schema(description = "履约方式中文展示名称") String fulfillmentTypeDisplay,

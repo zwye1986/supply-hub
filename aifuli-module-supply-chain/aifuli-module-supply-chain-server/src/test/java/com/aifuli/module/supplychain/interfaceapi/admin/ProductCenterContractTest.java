@@ -569,7 +569,12 @@ class ProductCenterContractTest {
                 .contains("未移除", "已移除")
                 .contains("不按档案商品类型过滤");
         assertThat(managementPage.getAnnotation(Operation.class).description())
-                .contains("最低有效供货价");
+                .contains("最低有效供货价")
+                .contains("正常供应商")
+                .contains("允许尚无供应商");
+        assertThat(descriptions.get("supplierCode"))
+                .contains("正常供应商")
+                .contains("状态非正常时返回空页");
         assertThat(descriptions.get("excludeAddedSupplierOffers"))
                 .contains("未退役", "已退役")
                 .contains("SUPPLIER_CODE_REQUIRED");
