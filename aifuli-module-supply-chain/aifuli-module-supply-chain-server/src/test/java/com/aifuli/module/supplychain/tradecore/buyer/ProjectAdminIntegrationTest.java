@@ -274,6 +274,11 @@ class ProjectAdminIntegrationTest {
             listings.retire(genericOnlyProject, genericOnlyListing, 1L);
             assertThat(buyerProductQuery.page(buyerA, List.of(), genericOnlyProject, 1, 1).getTotal())
                     .isEqualTo(genericCandidateCount);
+            var retiredProjectRow = projectQueries.page(new ProjectAdminQueryService.ProjectPageQuery(
+                    null, genericOnlyProject, List.of(), null, List.of(), null, null, 1, 20))
+                    .getList().getFirst();
+            assertThat(retiredProjectRow.skuCount()).isZero();
+            assertThat(retiredProjectRow.projectPriceSkuCount()).isZero();
 
             assertThatThrownBy(() -> projects.update(new UpdateProjectCommand(
                     projectCode, "福利项目", buyerB, "WELFARE",
@@ -366,6 +371,13 @@ class ProjectAdminIntegrationTest {
         assertThat(inlineRow.projectPriceCovered()).isTrue();
         assertThat(context.getBean(ProjectAdminQueryService.class).get(inlineProjectCode).projectPriceSkuCount())
                 .isEqualTo(1);
+        var projectPage = context.getBean(ProjectAdminQueryService.class).page(
+                new ProjectAdminQueryService.ProjectPageQuery(
+                        null, null, List.of(), null, List.of(), null, null, 1, 50));
+        var inlineProjectRow = projectPage.getList().stream()
+                .filter(row -> inlineProjectCode.equals(row.projectCode())).findFirst().orElseThrow();
+        assertThat(inlineProjectRow.skuCount()).isEqualTo(1);
+        assertThat(inlineProjectRow.projectPriceSkuCount()).isEqualTo(1);
 
         ProjectListingDO listing = context.getBean(ProjectListingMapper.class).selectByCode(listingCode);
         var projectPricingMapper = context.getBean(

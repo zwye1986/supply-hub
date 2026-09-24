@@ -152,7 +152,8 @@ public class ProjectAdminController {
     @PreAuthorize(PROJECT_QUERY_EXPRESSION)
     @Operation(summary = "分页查询项目",
             description = "筛选用 projectName/projectCode/status[]/buyerCode/projectType[]/periodFrom/periodTo。"
-                    + "view=simple 返回 {projectCode,projectName}[]。不要走 GET /buyers/{code}/projects。")
+                    + "分页行含只读 skuCount/projectPriceSkuCount；view=simple 返回 {projectCode,projectName}[]。"
+                    + "不要走 GET /buyers/{code}/projects。")
     public CommonResult<?> page(
             @Parameter(description = "采购项目名称，模糊") @RequestParam(required = false) String projectName,
             @Parameter(description = "采购项目全局永久编码") @RequestParam(required = false) String projectCode,

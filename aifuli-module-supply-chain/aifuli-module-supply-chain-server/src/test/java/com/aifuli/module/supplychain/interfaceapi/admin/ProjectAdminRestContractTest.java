@@ -1,6 +1,7 @@
 package com.aifuli.module.supplychain.interfaceapi.admin;
 
 import com.aifuli.module.supplychain.tradecore.buyer.application.ProjectAdminQueryService.ProjectDetail;
+import com.aifuli.module.supplychain.tradecore.buyer.application.ProjectAdminQueryService.ProjectListItem;
 import com.aifuli.module.supplychain.interfaceapi.admin.ProjectAdminController.ProjectProductsPageData;
 import com.aifuli.module.supplychain.interfaceapi.admin.ProjectAdminController.ProjectProductsPageResponse;
 import com.aifuli.module.supplychain.tradecore.catalog.application.ProjectListingQueryService.ProjectListingListItem;
@@ -94,6 +95,16 @@ class ProjectAdminRestContractTest {
         assertThat(json).doesNotContain("appKey", "appId");
         assertThat(json).contains("projectCode").contains("skuCount").contains("projectPriceSkuCount");
         assertThat(json).doesNotContain("invoice").doesNotContain("\"create\"").doesNotContain("\"page\"");
+    }
+
+    @Test
+    void projectPageRowsExposeSkuAndPricingCoverageCounts() {
+        ObjectMapper mapper = new ObjectMapper();
+        Set<String> propertyNames = mapper.getSerializationConfig()
+                .introspect(mapper.constructType(ProjectListItem.class))
+                .findProperties().stream().map(property -> property.getName())
+                .collect(Collectors.toSet());
+        assertThat(propertyNames).contains("skuCount", "projectPriceSkuCount");
     }
 
     /** 项目商品列表将 SKU 销售建议价与 B 端项目调价基数分开回显。 */

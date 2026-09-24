@@ -478,6 +478,8 @@ Springdoc `components.schemas` 中冲突的通用简单类名。生成契约必�
 
 `GET /supply-chain/projects?view=simple`：名称/编号下拉。
 
+普通分页列表每行返回只读 `skuCount` 和 `projectPriceSkuCount`，与项目详情采用同一统计口径：只统计该项目 `status=AVAILABLE` 的项目商品；项目定价覆盖按当前通用定价版本显式覆盖分销价或旧冻结版本 L3 取并集，同一 SKU 只计一次。列表仅对本页项目批量读取商品、定价身份及当前版本，不逐卡调用详情，也不把缺失字段显示成真实的零。
+
 `GET /supply-chain/projects/{projectCode}`、`POST /supply-chain/projects`、`PUT /supply-chain/projects/{projectCode}`：`projectName`、`buyerCode`、`projectType`、`startDate`、`endDate`、`settlementPartyType`（仅 `DISTRIBUTOR`）、`description`（≤500）。创建允许 `DRAFT` 或 `ACTIVE`（`POST` body 可带 `status`）；整档更新 body 可选带 `status`，未传时保持原状态，传入时按第 4.2 节状态机执行迁移，目标状态与当前状态相同时按幂等保存处理。`skuCount`、`projectPriceSkuCount` 只读统计。
 
 `catalogMode` 默认 `MANAGED`，本批页面不展示。`appId`/`appKey` 本批不返回（避免密钥进入管理端列表）。
