@@ -324,6 +324,8 @@ class SupplyChainAdminMethodSecurityContractTest {
         RoutingRuleSaveReqVO request = new RoutingRuleSaveReqVO();
         request.setName("话费固定规则");
         request.setDistributorCodes(List.of("BYR_1"));
+        request.setProjectCodes(List.of("PRJ_1"));
+        request.setProductTypeCodes(List.of("TELCO"));
         request.setRouteMode("FIXED");
         request.setPrimarySupplierCode("SPL_A");
         request.setSupplierMode("SPECIFIED");
@@ -350,8 +352,8 @@ class SupplyChainAdminMethodSecurityContractTest {
         return new RoutingRuleView(
                 "RR_1", "话费固定规则", false,
                 RoutingRuleScopeMode.SPECIFIED, List.of("BYR_1"), List.of("分销商1"),
-                RoutingRuleScopeMode.ALL, List.of(), List.of(),
-                RoutingRuleScopeMode.ALL, List.of(), List.of(),
+                RoutingRuleScopeMode.SPECIFIED, List.of("PRJ_1"), List.of("项目1"),
+                RoutingRuleScopeMode.SPECIFIED, List.of("TELCO"), List.of("话费"),
                 RoutingRuleRouteMode.FIXED, RoutingRuleScopeMode.SPECIFIED,
                 List.of("SPL_A"), List.of("供应商A"), "SPL_A", "供应商A",
                 List.of(

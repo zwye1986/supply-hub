@@ -1,5 +1,6 @@
 package com.aifuli.module.supplychain.routing.application;
 
+import com.aifuli.module.supplychain.api.order.dto.SupplyChainOrderStatus;
 import com.aifuli.module.supplychain.infrastructure.configuration.SupplyChainDataSourceConfiguration;
 import com.aifuli.module.supplychain.infrastructure.identity.BusinessNoGenerator;
 import com.aifuli.module.supplychain.infrastructure.identity.UlidGenerator;
@@ -13,7 +14,9 @@ import com.aifuli.module.supplychain.testsupport.ProductCenterTestConfiguration;
 import com.aifuli.module.supplychain.testsupport.RoutingPolicyPresetFixture;
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerCommandService;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerDO;
+import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerProjectDO;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerMapper;
+import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerProjectMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.application.ProductCatalogCommandService;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
@@ -23,6 +26,7 @@ import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.InventorySo
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierConnectorDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierConnectorVersionDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierDO;
+import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierDeliveryRegionDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierOfferDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierOfferVersionDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.CredentialSlotMapper;
@@ -30,8 +34,10 @@ import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.InventorySourceM
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierConnectorMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierConnectorVersionMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierMapper;
+import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierDeliveryRegionMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferVersionMapper;
+import com.aifuli.module.supplychain.tradecore.supply.application.SupplierDailyQuotaAdminService;
 import com.aifuli.module.supplychain.tradecore.supply.domain.ConnectorVersionStatus;
 import com.aifuli.module.supplychain.tradecore.supply.domain.InventorySourceStatus;
 import com.aifuli.module.supplychain.tradecore.supply.domain.OfferStatus;
@@ -69,6 +75,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  */
 class SupplierRoutingApplicationServiceIntegrationTest {
 
+    private static final String PROJECT_CODE = "ROUTE_PROJECT";
+    private static final String PRODUCT_TYPE_CODE = "EQUITY_PRODUCT";
+
     static final MySQLContainer<?> MYSQL = new MySQLContainer<>("mysql:8.4")
             .withDatabaseName("supply_chain")
             .withUsername("supply_chain")
@@ -100,8 +109,11 @@ class SupplierRoutingApplicationServiceIntegrationTest {
             SupplierRoutingApplicationService routing =
                     context.getBean(SupplierRoutingApplicationService.class);
             BuyerMapper buyerMapper = context.getBean(BuyerMapper.class);
+            BuyerProjectMapper projectMapper = context.getBean(BuyerProjectMapper.class);
             PlatformSkuMapper skuMapper = context.getBean(PlatformSkuMapper.class);
             SupplierMapper supplierMapper = context.getBean(SupplierMapper.class);
+            SupplierDeliveryRegionMapper regionMapper = context.getBean(SupplierDeliveryRegionMapper.class);
+            SupplierDailyQuotaAdminService quotaAdmin = context.getBean(SupplierDailyQuotaAdminService.class);
             CredentialSlotMapper credentialMapper = context.getBean(CredentialSlotMapper.class);
             SupplierConnectorMapper connectorMapper = context.getBean(SupplierConnectorMapper.class);
             SupplierConnectorVersionMapper connectorVersionMapper =
@@ -115,6 +127,12 @@ class SupplierRoutingApplicationServiceIntegrationTest {
             LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC).withNano(0);
             createBuyerAndSku(buyerService, catalogService, now);
             BuyerDO buyer = buyerMapper.selectByBuyerCode("WUSHENG");
+            BuyerProjectDO project = BuyerProjectDO.builder()
+                    .projectCode(PROJECT_CODE).projectName("路由测试项目").buyerId(buyer.getId())
+                    .catalogMode("MANAGED").settlementPartyType("DISTRIBUTOR")
+                    .status((short) 10).version(0L).createdBy(1L).createdAt(now)
+                    .updatedBy(1L).updatedAt(now).build();
+            projectMapper.insert(project);
             PlatformSkuDO sku = skuMapper.selectByCode("ROUTE_TELCO_100");
             OfferFixture qnm = createOfferFixture("QINAMENG", "奇那梦", 900L, 90, 80, sku, now,
                     supplierMapper, credentialMapper, connectorMapper, connectorVersionMapper,
@@ -144,7 +162,7 @@ class SupplierRoutingApplicationServiceIntegrationTest {
             assertThat(published.configDigestHex()).hasSize(64);
             assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_outbox_event "
                     + "WHERE event_type = 'ROUTING_POLICY_PUBLISHED'", Long.class)).isEqualTo(1L);
-            // PRD 四级范围模型：规则行 + 分销商范围行 + 两条候选行落库
+            // PRD 五级范围模型：规则行 + 分销商范围行 + 两条候选行落库
             assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_std_routing_rule "
                     + "WHERE rule_code = 'WS_TELCO' AND route_mode = 'AUTO'", Long.class)).isEqualTo(1L);
             assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_std_routing_rule_scope "
@@ -153,7 +171,7 @@ class SupplierRoutingApplicationServiceIntegrationTest {
             assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_std_routing_candidate",
                     Long.class)).isEqualTo(2L);
 
-            RoutingInput input = new RoutingInput(buyer.getId(), null, sku.getId(),
+            RoutingInput input = new RoutingInput(buyer.getId(), project.getId(), sku.getId(),
                     "DIRECT_RECHARGE", 1L, now, Map.of());
             SupplierRoutingApplicationService.RoutingSnapshot first = routing.route(input);
             assertThat(first.policyVersionId()).isEqualTo(draft.policyVersionId());
@@ -184,7 +202,7 @@ class SupplierRoutingApplicationServiceIntegrationTest {
             RoutingInput.Fact qnmHealthError = new RoutingInput.Fact(
                     RoutingInput.FactStatus.ERROR, null,
                     now.minusSeconds(10), now.plusSeconds(50));
-            RoutingInput degraded = new RoutingInput(buyer.getId(), null, sku.getId(),
+            RoutingInput degraded = new RoutingInput(buyer.getId(), project.getId(), sku.getId(),
                     "DIRECT_RECHARGE", 1L, now,
                     Map.of("QINAMENG", new RoutingInput.CandidateFacts(null, null, qnmHealthError)));
             SupplierRoutingApplicationService.RoutingSnapshot fallback = routing.route(degraded);
@@ -193,6 +211,44 @@ class SupplierRoutingApplicationServiceIntegrationTest {
                     .containsExactly("HEALTH_ERROR");
             assertThat(fallback.decision().orderedCandidates().get(1).supplierSettlementUnitPrice())
                     .isEqualTo(zeta.price());
+
+            // 自然日累计配额与 Offer 单笔 maxQuantity 独立：占满后改选后备，失败/取消释放。
+            SupplierDO qnmSupplier = supplierMapper.selectByCode("QINAMENG");
+            assertThat(quotaAdmin.put("QINAMENG", sku.getSkuCode(), 1L, 1L).dailyLimit())
+                    .isEqualTo(1L);
+            assertThat(quotaAdmin.get("QINAMENG", sku.getSkuCode()).dailyLimit()).isEqualTo(1L);
+            insertQuotaOrder(jdbc, buyer, sku, qnmSupplier, now);
+            SupplierRoutingApplicationService.RoutingSnapshot fullQuota = routing.route(input);
+            assertThat(fullQuota.decision().selectedCandidate().supplierCode()).isEqualTo("ZETA");
+            assertThat(fullQuota.decision().orderedCandidates().getFirst().rejectionReasons())
+                    .contains(SupplierRoutingApplicationService.REJECT_DAILY_QUOTA_EXCEEDED);
+            jdbc.update("UPDATE sc_supply_chain_order SET order_status = ? WHERE order_no = ?",
+                    SupplyChainOrderStatus.FAILED.getCode(), "QUOTA_ORDER_1");
+            assertThat(routing.route(input).decision().selectedCandidate().supplierCode()).isEqualTo("QINAMENG");
+            jdbc.update("UPDATE sc_supply_chain_order SET order_status = ? WHERE order_no = ?",
+                    SupplyChainOrderStatus.CANCELLED.getCode(), "QUOTA_ORDER_1");
+            assertThat(routing.route(input).decision().selectedCandidate().supplierCode()).isEqualTo("QINAMENG");
+            jdbc.update("UPDATE sc_supply_chain_order SET order_status = ?, created_at = ? WHERE order_no = ?",
+                    SupplyChainOrderStatus.PROCESSING.getCode(), now.minusDays(1), "QUOTA_ORDER_1");
+            assertThat(routing.route(input).decision().selectedCandidate().supplierCode()).isEqualTo("QINAMENG");
+            quotaAdmin.delete("QINAMENG", sku.getSkuCode(), 1L);
+            assertThat(quotaAdmin.get("QINAMENG", sku.getSkuCode()).dailyLimit()).isNull();
+
+            // 有收货地区才检查：全国供应商可用，指定北京的后备供应商不覆盖上海。
+            qnmSupplier.setDeliveryRegionType("NATIONWIDE");
+            assertThat(supplierMapper.updateById(qnmSupplier)).isEqualTo(1);
+            SupplierDO zetaSupplier = supplierMapper.selectByCode("ZETA");
+            zetaSupplier.setDeliveryRegionType("DESIGNATED");
+            assertThat(supplierMapper.updateById(zetaSupplier)).isEqualTo(1);
+            regionMapper.insert(SupplierDeliveryRegionDO.builder()
+                    .supplierId(zetaSupplier.getId()).adcode("110000")
+                    .createdAt(now).build());
+            RoutingInput shanghai = new RoutingInput(buyer.getId(), project.getId(), sku.getId(),
+                    "DIRECT_RECHARGE", 1L, now, Map.of(), "310101");
+            SupplierRoutingApplicationService.RoutingSnapshot regionFiltered = routing.route(shanghai);
+            assertThat(regionFiltered.decision().selectedCandidate().supplierCode()).isEqualTo("QINAMENG");
+            assertThat(regionFiltered.decision().orderedCandidates().get(1).rejectionReasons())
+                    .contains(SupplierRoutingApplicationService.REJECT_DELIVERY_REGION_UNCOVERED);
 
             Long replacementVersionId = replaceCurrentOfferVersion(
                     qnm.offerId(), qnm.connectorVersionId(), qnm.inventorySourceId(),
@@ -221,7 +277,7 @@ class SupplierRoutingApplicationServiceIntegrationTest {
             publication.publish(new RoutingPolicyPublicationService.PublishCommand(
                     scheduled.policyVersionId(), 0L, "按业务时间连续生效",
                     1L, "trace-scheduled", null, null));
-            RoutingInput futureInput = new RoutingInput(buyer.getId(), null, sku.getId(),
+            RoutingInput futureInput = new RoutingInput(buyer.getId(), project.getId(), sku.getId(),
                     "DIRECT_RECHARGE", 1L, now.plusDays(1).plusMinutes(1), Map.of());
             assertThat(routing.route(futureInput).policyVersionId())
                     .isEqualTo(scheduled.policyVersionId());
@@ -251,6 +307,26 @@ class SupplierRoutingApplicationServiceIntegrationTest {
                 "ROUTE_TELCO_100", "ROUTE_TELCO", "路由话费直充 100 元",
                 "DIRECT_RECHARGE", 10_000L, "CNY", 1L));
         catalog.changeSkuStatus("ROUTE_TELCO_100", CatalogEntityStatus.ACTIVE, 1L);
+    }
+
+    private static void insertQuotaOrder(JdbcTemplate jdbc, BuyerDO buyer, PlatformSkuDO sku,
+                                         SupplierDO supplier, LocalDateTime acceptedAt) {
+        jdbc.update("""
+                INSERT INTO sc_supply_chain_order
+                    (order_no, order_type, buyer_id, buyer_code_snapshot, buyer_name_snapshot,
+                     buyer_user_id, buyer_order_no, acceptance_receipt_id,
+                     display_supplier_id, display_supplier_code, display_supplier_name,
+                     buyer_settlement_amount, currency, platform_sku_id,
+                     sku_code_snapshot, sku_name_snapshot, quantity,
+                     order_status, aftersale_status, business_stage, detail_type, detail_version,
+                     request_fingerprint, version, created_at, updated_at)
+                VALUES (?, 'CARD', ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                        100, 'CNY', ?, ?, ?, 1, 10, 0, 'ACCEPTED', 'FULFILLMENT', 0,
+                        ?, 0, ?, ?)
+                """, "QUOTA_ORDER_1", buyer.getId(), buyer.getBuyerCode(), buyer.getBuyerName(),
+                "quota-user", "quota-buyer-order", 999_001L,
+                supplier.getId(), supplier.getSupplierCode(), supplier.getSupplierName(),
+                sku.getId(), sku.getSkuCode(), sku.getSkuName(), new byte[32], acceptedAt, acceptedAt);
     }
 
     private static OfferFixture createOfferFixture(
@@ -351,15 +427,15 @@ class SupplierRoutingApplicationServiceIntegrationTest {
     }
 
     /**
-     * PRD 四级范围规则：分销商指定 WUSHENG，项目/商品类型 ALL，AUTO+SPECIFIED 双候选；
+     * PRD 四维组合规则：分销商、项目、商品类型及供应商候选均指定，AUTO+SPECIFIED 双候选；
      * 稳定优先策略（QINAMENG 评分 90 &gt; ZETA 60，价格更高仍被选中）。
      */
     private static List<RoutingPolicyPublicationService.RuleDraft> validRules() {
         return List.of(new RoutingPolicyPublicationService.RuleDraft(
                 "WS_TELCO", "吾盛话费路由", "AUTO", null,
                 "SPECIFIED", List.of("WUSHENG"),
-                "ALL", List.of(),
-                "ALL", List.of(),
+                "SPECIFIED", List.of(PROJECT_CODE),
+                "SPECIFIED", List.of(PRODUCT_TYPE_CODE),
                 "SPECIFIED", List.of("QINAMENG", "ZETA"),
                 null, "STABLE", "PRICE", "COMPOSITE",
                 10, (short) 10, false,
@@ -395,8 +471,8 @@ class SupplierRoutingApplicationServiceIntegrationTest {
                 new RoutingPolicyPublicationService.RuleDraft(
                         "EMPTY", "空候选", "AUTO", null,
                         "SPECIFIED", List.of("WUSHENG"),
-                        "ALL", List.of(),
-                        "ALL", List.of(),
+                        "SPECIFIED", List.of(PROJECT_CODE),
+                        "SPECIFIED", List.of(PRODUCT_TYPE_CODE),
                         "SPECIFIED", List.of(),
                         null, "STABLE", "PRICE", "COMPOSITE",
                         10, (short) 10, false, List.of());
@@ -434,7 +510,8 @@ class SupplierRoutingApplicationServiceIntegrationTest {
     @Import({SupplyChainDataSourceConfiguration.class, UlidGenerator.class, BusinessNoGenerator.class,
             OutboxEventRepository.class, BuyerCommandService.class, ProductCatalogCommandService.class,
             ProductCenterTestConfiguration.class,
-            RoutingPolicyPublicationService.class, SupplierRoutingApplicationService.class})
+            RoutingPolicyPublicationService.class, SupplierRoutingApplicationService.class,
+            SupplierDailyQuotaAdminService.class})
     static class TestConfiguration {
         @Bean
         ObjectMapper objectMapper() {

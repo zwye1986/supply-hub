@@ -17,7 +17,9 @@ import com.aifuli.module.supplychain.routing.domain.RoutingInput;
 import com.aifuli.module.supplychain.testsupport.ProductCenterTestConfiguration;
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerCommandService;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerDO;
+import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerProjectDO;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerMapper;
+import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerProjectMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.application.ProductCatalogCommandService;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
@@ -80,6 +82,8 @@ class RoutingRuleAdminWriteIntegrationTest {
     private static final String POLICY_CODE = "STANDARD_PRODUCT_PRIMARY";
     private static final String POLICY_NAME = "标准商品供给路由";
     private static final String BUYER_CODE = "WUSHENG_WRITE";
+    private static final String PROJECT_CODE = "WRITE_PROJECT";
+    private static final String PRODUCT_TYPE_CODE = "EQUITY_PRODUCT";
     private static final String SKU_200 = "ROUTE_WRITE_200";
     private static final String SUPPLIER_A = "QINAMENG_WRITE";
     private static final String SUPPLIER_B = "ZETA_WRITE";
@@ -118,6 +122,7 @@ class RoutingRuleAdminWriteIntegrationTest {
                     context.getBean(SupplierRoutingPolicyVersionMapper.class);
             SupplyChainDatabaseClockAdapter clock = new SupplyChainDatabaseClockAdapter(context);
             BuyerMapper buyerMapper = context.getBean(BuyerMapper.class);
+            BuyerProjectMapper projectMapper = context.getBean(BuyerProjectMapper.class);
             PlatformSkuMapper skuMapper = context.getBean(PlatformSkuMapper.class);
             SupplierMapper supplierMapper = context.getBean(SupplierMapper.class);
             CredentialSlotMapper credentialMapper = context.getBean(CredentialSlotMapper.class);
@@ -132,6 +137,12 @@ class RoutingRuleAdminWriteIntegrationTest {
             LocalDateTime seedNow = clock.now().withNano(0);
             seedBuyerAndSku(buyerService, catalogService, seedNow);
             BuyerDO buyer = buyerMapper.selectByBuyerCode(BUYER_CODE);
+            BuyerProjectDO project = BuyerProjectDO.builder()
+                    .projectCode(PROJECT_CODE).projectName("写测路由项目").buyerId(buyer.getId())
+                    .catalogMode("MANAGED").settlementPartyType("DISTRIBUTOR")
+                    .status((short) 10).version(0L).createdBy(1L).createdAt(seedNow)
+                    .updatedBy(1L).updatedAt(seedNow).build();
+            projectMapper.insert(project);
             PlatformSkuDO sku200 = skuMapper.selectByCode(SKU_200);
             // 双候选同价（500 分）且无评分：三策略打平，候选优先级裁决。
             createOfferFixture(SUPPLIER_A, "奇那梦写测", 500L, sku200, seedNow,
@@ -162,7 +173,7 @@ class RoutingRuleAdminWriteIntegrationTest {
             RoutingRuleView before = queryService.get(RULE_2);
             assertThat(before.supplierCodes()).containsExactly(SUPPLIER_A, SUPPLIER_B);
 
-            RoutingInput routeInput = new RoutingInput(buyer.getId(), null, sku200.getId(),
+            RoutingInput routeInput = new RoutingInput(buyer.getId(), project.getId(), sku200.getId(),
                     "DIRECT_RECHARGE", 1L, clock.now(), Map.of());
             SupplierRoutingApplicationService.RoutingSnapshot beforeRoute = routing.route(routeInput);
             assertThat(beforeRoute.decision().selectedCandidate().supplierCode()).isEqualTo(SUPPLIER_A);
@@ -173,8 +184,8 @@ class RoutingRuleAdminWriteIntegrationTest {
             NormalizedRulePatch swapPatch = new NormalizedRulePatch(
                     RULE_2, "写测规则二", RoutingRuleRouteMode.AUTO, RoutingRuleStatus.ENABLED,
                     RoutingRuleScopeMode.SPECIFIED, List.of(BUYER_CODE),
-                    RoutingRuleScopeMode.ALL, List.of(),
-                    RoutingRuleScopeMode.ALL, List.of(),
+                    RoutingRuleScopeMode.SPECIFIED, List.of(PROJECT_CODE),
+                    RoutingRuleScopeMode.SPECIFIED, List.of(PRODUCT_TYPE_CODE),
                     RoutingRuleScopeMode.SPECIFIED, List.of(SUPPLIER_B, SUPPLIER_A),
                     null,
                     List.of(RoutingRuleStrategy.STABLE, RoutingRuleStrategy.PRICE,
@@ -199,7 +210,7 @@ class RoutingRuleAdminWriteIntegrationTest {
             assertThat(effective.getFirst().getValidFrom()).isEqualTo(closed.getValidTo());
 
             SupplierRoutingApplicationService.RoutingSnapshot afterRoute = routing.route(
-                    new RoutingInput(buyer.getId(), null, sku200.getId(), "DIRECT_RECHARGE",
+                    new RoutingInput(buyer.getId(), project.getId(), sku200.getId(), "DIRECT_RECHARGE",
                             1L, afterUpdateAt, Map.of()));
             assertThat(afterRoute.policyVersionId()).isEqualTo(effective.getFirst().getId());
             assertThat(afterRoute.decision().selected()).isTrue();
@@ -230,23 +241,23 @@ class RoutingRuleAdminWriteIntegrationTest {
             String ruleCode, String ruleName) {
         return new RoutingPolicyPublicationService.RuleDraft(
                 ruleCode, ruleName, "AUTO", null,
-                "ALL", List.of(),
-                "ALL", List.of(),
-                "ALL", List.of(),
+                "SPECIFIED", List.of(BUYER_CODE),
+                "SPECIFIED", List.of(PROJECT_CODE),
+                "SPECIFIED", List.of(PRODUCT_TYPE_CODE),
                 "SPECIFIED", List.of(SUPPLIER_A, SUPPLIER_B),
                 null, "STABLE", "PRICE", "COMPOSITE",
                 5, (short) 20, false,
                 List.of(candidate(SUPPLIER_A, 0), candidate(SUPPLIER_B, 1)));
     }
 
-    /** 启用规则：分销商指定，项目/商品类型 ALL，AUTO+SPECIFIED 双候选。 */
+    /** 启用规则：四维组合，AUTO+SPECIFIED 双候选。 */
     private static RoutingPolicyPublicationService.RuleDraft enabledRule(
             String ruleCode, String ruleName) {
         return new RoutingPolicyPublicationService.RuleDraft(
                 ruleCode, ruleName, "AUTO", null,
                 "SPECIFIED", List.of(BUYER_CODE),
-                "ALL", List.of(),
-                "ALL", List.of(),
+                "SPECIFIED", List.of(PROJECT_CODE),
+                "SPECIFIED", List.of(PRODUCT_TYPE_CODE),
                 "SPECIFIED", List.of(SUPPLIER_A, SUPPLIER_B),
                 null, "STABLE", "PRICE", "COMPOSITE",
                 10, (short) 10, false,

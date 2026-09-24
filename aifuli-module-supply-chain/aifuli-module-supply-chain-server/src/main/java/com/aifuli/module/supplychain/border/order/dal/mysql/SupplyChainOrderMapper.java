@@ -50,6 +50,20 @@ public interface SupplyChainOrderMapper extends BaseMapperX<SupplyChainOrderDO> 
             @Param("cancelledStatus") short cancelledStatus,
             @Param("fullyRefundedStatus") short fullyRefundedStatus);
 
+    /**
+     * 统计供应商+SKU 当日仍占用供货配额的数量。仅失败、取消释放；成功后退款仍已消耗供货。
+     * 调用方须在写订单的同一事务中先锁平台 SKU，避免并发路由越过配额。
+     * 设计见 {@code docs/superpowers/specs/2026-09-24-standard-order-routing-execution-design.md#4-每日累计配额与并发}。
+     */
+    Long sumReservedSupplierSkuQuantity(
+            @Param("orderType") String orderType,
+            @Param("supplierId") Long supplierId,
+            @Param("platformSkuId") Long platformSkuId,
+            @Param("startInclusive") LocalDateTime startInclusive,
+            @Param("endExclusive") LocalDateTime endExclusive,
+            @Param("failedStatus") short failedStatus,
+            @Param("cancelledStatus") short cancelledStatus);
+
     /** 按供应链采购单号查询总订单，用于 DETAIL 入口只读加载。 */
     default SupplyChainOrderDO selectByOrderNo(String orderNo) {
         return selectOne(new LambdaQueryWrapper<SupplyChainOrderDO>()

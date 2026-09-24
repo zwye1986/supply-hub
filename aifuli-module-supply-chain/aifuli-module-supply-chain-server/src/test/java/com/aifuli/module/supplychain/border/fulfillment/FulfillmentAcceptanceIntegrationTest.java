@@ -56,6 +56,7 @@ import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.InventorySo
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierConnectorDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierConnectorVersionDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierDO;
+import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierSkuDailyQuotaDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierOfferDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierOfferVersionDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.CredentialSlotMapper;
@@ -63,6 +64,7 @@ import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.InventorySourceM
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierConnectorMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierConnectorVersionMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierMapper;
+import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierSkuDailyQuotaMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferVersionMapper;
 import com.aifuli.module.supplychain.tradecore.supply.domain.ConnectorVersionStatus;
@@ -70,8 +72,8 @@ import com.aifuli.module.supplychain.tradecore.supply.domain.InventorySourceStat
 import com.aifuli.module.supplychain.tradecore.supply.domain.OfferStatus;
 import com.aifuli.module.supplychain.tradecore.supply.domain.SupplierStatus;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.builder.SpringApplicationBuilder;
@@ -116,15 +118,15 @@ class FulfillmentAcceptanceIntegrationTest {
     private static final String EXTERNAL_JDBC_URL = System.getProperty("supply-chain.test.jdbc-url");
     private static final String KEY_BASE64 = Base64.getEncoder().encodeToString(new byte[32]);
 
-    @BeforeAll
-    static void startContainer() {
+    @BeforeEach
+    void startContainer() {
         if (EXTERNAL_JDBC_URL == null) {
             MYSQL.start();
         }
     }
 
-    @AfterAll
-    static void stopContainer() {
+    @AfterEach
+    void stopContainer() {
         if (EXTERNAL_JDBC_URL == null && MYSQL.isRunning()) {
             MYSQL.stop();
         }
@@ -383,6 +385,39 @@ class FulfillmentAcceptanceIntegrationTest {
         }
     }
 
+    @Test
+    void supplierSkuDailyQuotaSerializesConcurrentAcceptanceAndReleasesFailedOrder() throws Exception {
+        try (ConfigurableApplicationContext context = applicationContext()) {
+            Fixture fixture = seed(context);
+            PlatformSkuDO sku = context.getBean(PlatformSkuMapper.class).selectByCode("TELCO_100");
+            SupplierSkuDailyQuotaMapper quotaMapper = context.getBean(SupplierSkuDailyQuotaMapper.class);
+            LocalDateTime now = context.getBean(com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock.class)
+                    .now();
+            quotaMapper.insert(SupplierSkuDailyQuotaDO.builder()
+                    .supplierId(fixture.supplier().getId()).platformSkuId(sku.getId())
+                    .dailyLimit(1L).version(0L).createdBy(1L).createdAt(now)
+                    .updatedBy(1L).updatedAt(now).build());
+
+            BuyerFulfillmentCommandFacade facade = context.getBean(BuyerFulfillmentCommandFacade.class);
+            List<FulfillmentAcceptanceReceiptRespDTO> concurrent = concurrentlyIndexed(8,
+                    index -> facade.acceptFulfillment(request("C-QUOTA-RACE-" + index, 1L)));
+            assertThat(concurrent).filteredOn(response ->
+                    response.getReceiptStatus() == FulfillmentReceiptStatus.ACCEPTED).hasSize(1);
+            assertThat(concurrent).filteredOn(response ->
+                    response.getReceiptStatus() == FulfillmentReceiptStatus.REJECTED_RETRYABLE)
+                    .hasSize(7).allSatisfy(response -> assertThat(response.getRejectionCode())
+                            .isEqualTo(AcceptanceRejectionCode.NO_ROUTABLE_SUPPLIER.name()));
+
+            JdbcTemplate jdbc = new JdbcTemplate(context.getBean("supplyChainDataSource", DataSource.class));
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_supply_chain_order", Long.class))
+                    .isEqualTo(1L);
+            jdbc.update("UPDATE sc_supply_chain_order SET order_status=?",
+                    SupplyChainOrderStatus.FAILED.getCode());
+            assertThat(facade.acceptFulfillment(request("C-QUOTA-AFTER-FAIL", 1L)).getReceiptStatus())
+                    .isEqualTo(FulfillmentReceiptStatus.ACCEPTED);
+        }
+    }
+
     private Fixture seed(ConfigurableApplicationContext context) {
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC).withNano(0);
         BuyerCommandService buyers = context.getBean(BuyerCommandService.class);
@@ -430,7 +465,7 @@ class FulfillmentAcceptanceIntegrationTest {
         RoutingPolicyPresetFixture.deactivatePresetPolicy(new JdbcTemplate(
                 context.getBean("supplyChainDataSource", DataSource.class)));
         RoutingPolicyPublicationService routing = context.getBean(RoutingPolicyPublicationService.class);
-        // PRD 四级范围模型：分销商指定 WUSHENG，FIXED 固定主供应商 QINAMENG。
+        // PRD 分销商+商品类型层级：两个项目共用 FIXED 主供应商 QINAMENG。
         RoutingPolicyPublicationService.DraftResult draft = routing.createDraft(
                 new RoutingPolicyPublicationService.CreateDraftCommand(
                         "CARD_PRIMARY", "卡券与直充主路由", "M1 受理路由",
@@ -439,8 +474,8 @@ class FulfillmentAcceptanceIntegrationTest {
                                 "WS_TELCO", "吾盛话费路由", "FIXED", "QINAMENG",
                                 "SPECIFIED", List.of("WUSHENG"),
                                 "ALL", List.of(),
+                                "SPECIFIED", List.of("EQUITY_PRODUCT"),
                                 "ALL", List.of(),
-                                "SPECIFIED", List.of(),
                                 null, "STABLE", "PRICE", "COMPOSITE",
                                 10, (short) 10, false, List.of())), 1L, 40, 30, 30));
         routing.publish(new RoutingPolicyPublicationService.PublishCommand(

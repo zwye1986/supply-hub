@@ -342,6 +342,8 @@ public class RoutingPolicyPublicationService {
                 || !ruleCodes.add(rule.ruleCode())) {
             throw new IllegalArgumentException("Routing rule is incomplete or duplicated: " + rule.ruleCode());
         }
+        RoutingRuleScopeTier.require(rule.distributorMode(), rule.projectMode(),
+                rule.productTypeMode(), rule.supplierMode());
         if (isBlank(rule.strategy1()) || isBlank(rule.strategy2()) || isBlank(rule.strategy3())
                 || !isValidStrategyPermutation(rule.strategy1(), rule.strategy2(), rule.strategy3())) {
             throw new IllegalArgumentException("Routing rule strategies must be a permutation: " + rule.ruleCode());

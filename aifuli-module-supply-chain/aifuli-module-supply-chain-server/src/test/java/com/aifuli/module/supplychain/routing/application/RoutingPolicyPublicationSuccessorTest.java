@@ -102,7 +102,7 @@ class RoutingPolicyPublicationSuccessorTest {
             LocalDateTime effectiveAt = clock.now();
             assertThat(effectiveAt).isAfter(firstVersion.getValidFrom());
 
-            // 后继规则集：范围互不相同（一条全部分销商、一条指定分销商），避免启用集同范围冲突
+            // 后继规则集：全局默认 + 分销商商品类型层级，避免启用集同范围冲突。
             List<RoutingPolicyPublicationService.RuleDraft> successorRules = List.of(
                     autoRule("RR_SUCC_1", "后继规则一"),
                     specifiedDistributorRule("RR_SUCC_2", "后继规则二", "WUSHENG_SUCC"));
@@ -163,14 +163,14 @@ class RoutingPolicyPublicationSuccessorTest {
         return RoutingPolicyPublicationSuccessorOwnershipTest.autoAllSuppliersRule(ruleCode, ruleName);
     }
 
-    /** AUTO + 指定分销商范围规则：验证 SPECIFIED 范围明细行落库。 */
+    /** AUTO + 分销商商品类型层级：验证 SPECIFIED 范围明细行落库。 */
     private static RoutingPolicyPublicationService.RuleDraft specifiedDistributorRule(
             String ruleCode, String ruleName, String buyerCode) {
         return new RoutingPolicyPublicationService.RuleDraft(
                 ruleCode, ruleName, "AUTO", null,
                 "SPECIFIED", List.of(buyerCode),
                 "ALL", List.of(),
-                "ALL", List.of(),
+                "SPECIFIED", List.of("EQUITY_PRODUCT"),
                 "ALL", List.of(),
                 null,
                 "STABLE", "PRICE", "COMPOSITE",

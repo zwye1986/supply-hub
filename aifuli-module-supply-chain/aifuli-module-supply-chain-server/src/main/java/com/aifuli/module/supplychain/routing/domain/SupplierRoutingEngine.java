@@ -27,6 +27,8 @@ public final class SupplierRoutingEngine {
             throw new IllegalArgumentException("Routing input and candidates are required");
         }
         Objects.requireNonNull(sortConfig, "sortConfig");
+        // TODO: PRD 明确 N₁/N₂ 的值和配置来源后加入逐轮截断；设计见
+        // docs/superpowers/specs/2026-09-24-standard-order-routing-execution-design.md#6-三策略排序。
         List<RoutingCandidate> ordered = new ArrayList<>(candidates);
         ordered.sort(comparator(sortConfig, ordered));
         String reasonCode = "SELECTED_BY_STRATEGY_" + sortConfig.first() + "_"

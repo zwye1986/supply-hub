@@ -75,6 +75,7 @@ public final class RoutingRuleSaveSupport {
         List<String> distributorCodes = normalizeScopeCodes(distributorMode, request.distributorCodes(), "适用分销商");
         List<String> projectCodes = normalizeScopeCodes(projectMode, request.projectCodes(), "适用项目");
         List<String> productTypeCodes = normalizeScopeCodes(productTypeMode, request.productTypeCodes(), "适用商品类型");
+        RoutingRuleScopeTier.require(distributorMode, projectMode, productTypeMode, supplierMode);
         List<RoutingRuleStrategy> strategies = validatePriorities(request.priorities());
         WeightInput weights = validateWeights(request.weights(), strategies);
 

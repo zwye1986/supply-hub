@@ -49,6 +49,7 @@ class RoutingRuleSaveSupportTest {
         SaveRequest request = request()
                 .distributorMode(null).distributorCodes(List.of())
                 .projectMode(null).projectCodes(List.of("P001"))
+                .supplierMode(RoutingRuleScopeMode.ALL).supplierCodes(List.of())
                 .build();
         NormalizedRulePatch patch = support.validateAndNormalize(request, null, Operation.CREATE);
         assertThat(patch.distributorMode()).isEqualTo(RoutingRuleScopeMode.ALL);
@@ -85,6 +86,18 @@ class RoutingRuleSaveSupportTest {
         assertThatThrownBy(() -> support.validateAndNormalize(request, null, Operation.CREATE))
                 .isInstanceOf(ServiceException.class)
                 .hasMessageContaining("相同适用范围");
+    }
+
+    @Test
+    void rejectsScopeCombinationOutsidePrdTiers() {
+        SaveRequest distributorOnly = request()
+                .projectMode(RoutingRuleScopeMode.ALL).projectCodes(List.of())
+                .productTypeMode(RoutingRuleScopeMode.ALL).productTypeCodes(List.of())
+                .supplierMode(RoutingRuleScopeMode.ALL).supplierCodes(List.of())
+                .build();
+        assertThatThrownBy(() -> support.validateAndNormalize(distributorOnly, null, Operation.CREATE))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("五级匹配层级");
     }
 
     @Test

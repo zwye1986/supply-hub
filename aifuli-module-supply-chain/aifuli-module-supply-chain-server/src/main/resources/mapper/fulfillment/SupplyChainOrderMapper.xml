@@ -39,4 +39,19 @@
           AND created_at &lt; #{endExclusive}
         </if>
     </select>
+
+    <!--
+      供货配额按初始路由选中的供应商与平台SKU计数；失败、取消自动释放，成功后的退款仍计数。
+      设计见 docs/superpowers/specs/2026-09-24-standard-order-routing-execution-design.md#4-每日累计配额与并发。
+    -->
+    <select id="sumReservedSupplierSkuQuantity" resultType="java.lang.Long">
+        SELECT COALESCE(SUM(quantity), 0)
+        FROM sc_supply_chain_order
+        WHERE order_type = #{orderType}
+          AND display_supplier_id = #{supplierId}
+          AND platform_sku_id = #{platformSkuId}
+          AND created_at &gt;= #{startInclusive}
+          AND created_at &lt; #{endExclusive}
+          AND order_status NOT IN (#{failedStatus}, #{cancelledStatus})
+    </select>
 </mapper>

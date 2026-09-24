@@ -77,15 +77,17 @@ class SupplyChainDatabaseLocalTimeMigrationIntegrationTest {
         updateRemaining(dataSource);
 
         // 022 不增表；023 新增开票 2 表；028 新增商品类型 1 表；035 新增通用定价 7 表；
-        // 044 路由 PRD 模型新增 3 表并删除旧强类型规则 2 表（净 +1）。合计相对 021 多 11 张业务表。
-        assertThat(businessTableCount(jdbc)).isEqualTo(businessTableCountBefore + 11);
-        assertThat(changeSetCount(jdbc)).isEqualTo(46L);
+        // 044 路由 PRD 模型新增 3 表并删除旧强类型规则 2 表（净 +1）；045 新增每日配额 1 表。
+        // 合计相对 021 多 12 张业务表。
+        assertThat(businessTableCount(jdbc)).isEqualTo(businessTableCountBefore + 12);
+        assertThat(changeSetCount(jdbc)).isEqualTo(47L);
         assertThat(jdbc.queryForObject("""
                 SELECT COUNT(*) FROM DATABASECHANGELOG WHERE ID = '022-database-local-time'
                 """, Long.class)).isEqualTo(1L);
         assertThat(brandCreatedAt(jdbc)).isEqualTo(SHANGHAI_WALL_TIME);
         // 022 迁移后 250 列 + 023 开票表 4 列 + 028 商品类型表 2 列 + 035 定价表 15 列
-        // + 044 路由规则/范围/候选三表 5 列 - 044 删除旧强类型规则两表 4 列 = 272
+        // + 044 路由规则/范围/候选三表 5 列 - 044 删除旧强类型规则两表 4 列
+        // + 045 每日配额 2 列 = 274
         assertThat(jdbc.queryForObject("""
                 SELECT COUNT(*)
                 FROM information_schema.COLUMNS
@@ -94,11 +96,11 @@ class SupplyChainDatabaseLocalTimeMigrationIntegrationTest {
                   AND DATA_TYPE = 'datetime'
                   AND DATETIME_PRECISION = 3
                   AND COLUMN_COMMENT LIKE '%Asia/Shanghai%'
-                """, Long.class)).isEqualTo(272L);
+                """, Long.class)).isEqualTo(274L);
 
         updateRemaining(dataSource);
 
-        assertThat(changeSetCount(jdbc)).isEqualTo(46L);
+        assertThat(changeSetCount(jdbc)).isEqualTo(47L);
         assertThat(brandCreatedAt(jdbc)).isEqualTo(SHANGHAI_WALL_TIME);
     }
 

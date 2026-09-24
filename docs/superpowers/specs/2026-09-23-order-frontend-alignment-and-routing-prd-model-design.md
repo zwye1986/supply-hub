@@ -272,6 +272,8 @@ ALTER TABLE sc_supplier_routing_policy
 
 ### 5.3 规则匹配语义（运行时）
 
+**2026-09-24 修订：本节的特异性得分算法已由 `2026-09-24-standard-order-routing-execution-design.md#3-规则匹配` 的五级逐级匹配替代；停用规则跳过继续匹配。** 以下保留初版设计记录。
+
 路由输入扩展：`RoutingInput` 增加 `projectId`（受理链路已落库 projectId，可直接传入）与「商品类型判定键」（§4.6，CARD 经 SKU→SPU 解析、O2O 经场景码）。
 
 匹配算法（在 `SupplierRoutingApplicationService`，结果仍委托纯引擎）：
@@ -282,6 +284,8 @@ ALTER TABLE sc_supplier_routing_policy
 4. 多条命中时按「特异性得分」（SPECIFIED 维度个数多者优先）→ `rule_priority` 小者 → `rule_code` 字典序，取唯一；特异性并列且 `rule_priority` 并列时记 `decision_status=30` 规则冲突拒绝（同范围唯一性校验本应阻止，此处为兜底）。
 
 ### 5.4 候选解析与三策略排序（引擎）
+
+**2026-09-24 修订：候选累计供货配额与配送区域适用边界见 `2026-09-24-standard-order-routing-execution-design.md#4-每日累计配额与并发`、`#5-配送区域`；排序截断仍沿用本节三级确定性比较。**
 
 候选集构造：FIXED 模式 = 主供应商单候选；AUTO 模式 = `supplier_mode=ALL` 时取该 SKU 全部有效 offer 供应商，`SPECIFIED` 时取范围内供应商。每候选沿用现有 offer 解析（PUBLISHED offer + 有效版本 + 连接器 + 库存源），淘汰原因码不变（`SUPPLIER_NOT_ACTIVE`/`NO_EFFECTIVE_OFFER`/`AMBIGUOUS_EFFECTIVE_OFFER`/事实检查原因）。
 
