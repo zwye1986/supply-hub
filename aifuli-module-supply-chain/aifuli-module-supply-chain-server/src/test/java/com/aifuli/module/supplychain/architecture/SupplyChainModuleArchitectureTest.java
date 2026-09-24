@@ -1,6 +1,8 @@
 package com.aifuli.module.supplychain.architecture;
 
 import com.aifuli.module.supplychain.border.instore.dal.mysql.InstoreChannelUserBindingMapper;
+import com.tngtech.archunit.base.DescribedPredicate;
+import com.tngtech.archunit.core.domain.JavaClass;
 import com.tngtech.archunit.core.domain.JavaClasses;
 import com.tngtech.archunit.core.domain.JavaMethod;
 import com.tngtech.archunit.core.importer.ClassFileImporter;
@@ -33,8 +35,11 @@ class SupplyChainModuleArchitectureTest {
             .resideInAnyPackage("..persistence..", "org.springframework..", "org.apache.ibatis..");
 
     /**
-     * Offer 身份上的人工评分是路由预备输入，引擎本期不读分、不依赖评分服务。
-     * 设计见 {@code docs/superpowers/specs/2026-09-21-offer-fulfillment-score-design.md#7-与路由的边界}。
+     * Offer 身份上的人工评分是路由预备输入，引擎不依赖评分服务。
+     * PRD 三策略模型（STABLE/COMPOSITE）经 {@code RoutingCandidate} 不可变快照注入评分，
+     * 该快照类为唯一豁免；其余 routing.domain 类仍不得持有评分字段。
+     * 设计见 {@code docs/superpowers/specs/2026-09-21-offer-fulfillment-score-design.md#7-与路由的边界} 与
+     * {@code docs/superpowers/specs/2026-09-23-order-frontend-alignment-and-routing-prd-model-design.md#54-候选解析与三策略排序}。
      */
     static final ArchRule routing_domain_does_not_depend_on_fulfillment_score_service = noClasses()
             .that().resideInAPackage("..routing.domain..")
@@ -42,7 +47,11 @@ class SupplyChainModuleArchitectureTest {
             .haveSimpleName("OfferFulfillmentScoreService");
 
     static final ArchRule routing_domain_has_no_fulfillment_score_fields = noFields()
-            .that().areDeclaredInClassesThat().resideInAPackage("..routing.domain..")
+            .that().areDeclaredInClassesThat(
+                    // PRD 三策略模型：RoutingCandidate 快照为评分字段唯一豁免。
+                    JavaClass.Predicates.resideInAPackage("..routing.domain..")
+                            .and(DescribedPredicate.describe("is not RoutingCandidate snapshot",
+                                    clazz -> !"RoutingCandidate".equals(clazz.getSimpleName()))))
             .should().haveNameMatching("(?i).*(stability|timeliness).*score.*");
 
     /**

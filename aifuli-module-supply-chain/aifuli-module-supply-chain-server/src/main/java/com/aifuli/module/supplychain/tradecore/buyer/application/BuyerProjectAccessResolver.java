@@ -48,7 +48,8 @@ public class BuyerProjectAccessResolver {
                     projectId, buyerId);
             throw exception(BUYER_AUTH_INVALID);
         }
-        return new ProjectSnapshot(project.getId(), project.getProjectCode(), project.getBuyerId());
+        return new ProjectSnapshot(project.getId(), project.getProjectCode(),
+                project.getProjectName(), project.getBuyerId());
     }
 
     /**
@@ -67,7 +68,8 @@ public class BuyerProjectAccessResolver {
                     projectCode, buyerId);
             throw exception(PROJECT_NOT_FOUND);
         }
-        return new ProjectSnapshot(project.getId(), project.getProjectCode(), project.getBuyerId());
+        return new ProjectSnapshot(project.getId(), project.getProjectCode(),
+                project.getProjectName(), project.getBuyerId());
     }
 
     private static boolean isActiveAndMatchesBuyer(BuyerProjectDO project, Long buyerId) {
@@ -77,7 +79,7 @@ public class BuyerProjectAccessResolver {
                 && Objects.equals(project.getBuyerId(), buyerId);
     }
 
-    /** 项目只读快照；仅暴露入口编排所需的最小字段。 */
-    public record ProjectSnapshot(Long projectId, String projectCode, Long buyerId) {
+    /** 项目只读快照；仅暴露入口编排所需的最小字段（projectName 供受理链路写订单快照）。 */
+    public record ProjectSnapshot(Long projectId, String projectCode, String projectName, Long buyerId) {
     }
 }

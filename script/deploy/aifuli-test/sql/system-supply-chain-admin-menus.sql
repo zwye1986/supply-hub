@@ -270,3 +270,106 @@ WHERE NOT EXISTS (
     SELECT 1 FROM system_menu existing WHERE BINARY existing.application_code = BINARY @sc_app
       AND BINARY existing.permission = BINARY actions.permission AND existing.deleted = b'0'
 );
+
+-- ===== 订单导出与订单智能路由（2026-09-23 订单前端契约对齐与路由规则 PRD 模型重构）=====
+-- 设计：docs/superpowers/specs/2026-09-23-order-frontend-alignment-and-routing-prd-model-design.md#6-菜单与权限
+
+-- 订单管理页动作按钮：订单导出。
+INSERT INTO system_menu
+    (application_code, name, permission, type, sort, parent_id, path, icon, component, component_name,
+     status, visible, keep_alive, always_show, creator, create_time, updater, update_time, deleted)
+SELECT @sc_app, '订单导出', 'supply-chain:order:export', 3, 1, @sc_order_page_id, '', '', '', NULL,
+       0, b'1', b'1', b'1', @sc_creator, NOW(), @sc_creator, NOW(), b'0'
+WHERE NOT EXISTS (
+    SELECT 1 FROM system_menu existing WHERE BINARY existing.application_code = BINARY @sc_app
+      AND BINARY existing.permission = BINARY 'supply-chain:order:export' AND existing.deleted = b'0'
+);
+
+UPDATE system_menu
+SET name = '订单导出', type = 3, sort = 1, parent_id = @sc_order_page_id,
+    path = '', icon = '', component = '', component_name = NULL, status = 0,
+    visible = b'1', keep_alive = b'1', always_show = b'1',
+    updater = @sc_creator, update_time = NOW()
+WHERE BINARY application_code = BINARY @sc_app
+  AND BINARY permission = BINARY 'supply-chain:order:export' AND deleted = b'0';
+
+-- 订单智能路由中间目录。
+INSERT INTO system_menu
+    (application_code, name, permission, type, sort, parent_id, path, icon, component, component_name,
+     status, visible, keep_alive, always_show, creator, create_time, updater, update_time, deleted)
+SELECT @sc_app, '订单智能路由', '', 1, 5, @sc_root_id, 'routing', 'ep:guide', NULL,
+       'SupplyChainRouting', 0, b'1', b'1', b'1', @sc_creator, NOW(), @sc_creator, NOW(), b'0'
+WHERE NOT EXISTS (
+    SELECT 1 FROM system_menu
+    WHERE BINARY application_code = BINARY @sc_app
+      AND BINARY parent_id = BINARY @sc_root_id AND BINARY path = BINARY 'routing' AND deleted = b'0'
+);
+
+SET @sc_routing_dir_id = (
+    SELECT MIN(id) FROM system_menu
+    WHERE BINARY application_code = BINARY @sc_app
+      AND BINARY parent_id = BINARY @sc_root_id AND BINARY path = BINARY 'routing' AND deleted = b'0'
+);
+
+UPDATE system_menu
+SET name = '订单智能路由', permission = '', type = 1, sort = 5, parent_id = @sc_root_id,
+    path = 'routing', icon = 'ep:guide', component = NULL, component_name = 'SupplyChainRouting',
+    status = 0, visible = b'1', keep_alive = b'1', always_show = b'1',
+    updater = @sc_creator, update_time = NOW()
+WHERE id = @sc_routing_dir_id;
+
+-- 路由规则页面。
+INSERT INTO system_menu
+    (application_code, name, permission, type, sort, parent_id, path, icon, component, component_name,
+     status, visible, keep_alive, always_show, creator, create_time, updater, update_time, deleted)
+SELECT @sc_app, '路由规则', 'supply-chain:routing-rule:query', 2, 1, @sc_routing_dir_id, 'rule',
+       'ep:set-up', 'supplier/routing/rule/index', 'SupplyChainRoutingRule',
+       0, b'1', b'1', b'1', @sc_creator, NOW(), @sc_creator, NOW(), b'0'
+WHERE NOT EXISTS (
+    SELECT 1 FROM system_menu
+    WHERE BINARY application_code = BINARY @sc_app
+      AND BINARY permission = BINARY 'supply-chain:routing-rule:query' AND deleted = b'0'
+);
+
+SET @sc_routing_rule_page_id = (
+    SELECT MIN(id) FROM system_menu
+    WHERE BINARY application_code = BINARY @sc_app
+      AND BINARY permission = BINARY 'supply-chain:routing-rule:query' AND deleted = b'0'
+);
+
+UPDATE system_menu
+SET name = '路由规则', type = 2, sort = 1, parent_id = @sc_routing_dir_id, path = 'rule',
+    icon = 'ep:set-up', component = 'supplier/routing/rule/index', component_name = 'SupplyChainRoutingRule',
+    status = 0, visible = b'1', keep_alive = b'1', always_show = b'1',
+    updater = @sc_creator, update_time = NOW()
+WHERE id = @sc_routing_rule_page_id;
+
+-- 路由规则动作按钮。查询权限由 PAGE 行承载。
+INSERT INTO system_menu
+    (application_code, name, permission, type, sort, parent_id, path, icon, component, component_name,
+     status, visible, keep_alive, always_show, creator, create_time, updater, update_time, deleted)
+SELECT @sc_app, actions.name, actions.permission, 3, actions.sort, actions.parent_id, '', '', '', NULL,
+       0, b'1', b'1', b'1', @sc_creator, NOW(), @sc_creator, NOW(), b'0'
+FROM (
+    SELECT '规则新增' name, 'supply-chain:routing-rule:create' permission, 1 sort, @sc_routing_rule_page_id parent_id
+    UNION ALL SELECT '规则修改', 'supply-chain:routing-rule:update', 2, @sc_routing_rule_page_id
+    UNION ALL SELECT '规则删除', 'supply-chain:routing-rule:delete', 3, @sc_routing_rule_page_id
+    UNION ALL SELECT '规则启停', 'supply-chain:routing-rule:update-status', 4, @sc_routing_rule_page_id
+) actions
+WHERE NOT EXISTS (
+    SELECT 1 FROM system_menu existing WHERE BINARY existing.application_code = BINARY @sc_app
+      AND BINARY existing.permission = BINARY actions.permission AND existing.deleted = b'0'
+);
+
+UPDATE system_menu menu
+JOIN (
+    SELECT '规则新增' name, 'supply-chain:routing-rule:create' permission, 1 sort, @sc_routing_rule_page_id parent_id
+    UNION ALL SELECT '规则修改', 'supply-chain:routing-rule:update', 2, @sc_routing_rule_page_id
+    UNION ALL SELECT '规则删除', 'supply-chain:routing-rule:delete', 3, @sc_routing_rule_page_id
+    UNION ALL SELECT '规则启停', 'supply-chain:routing-rule:update-status', 4, @sc_routing_rule_page_id
+) actions ON BINARY actions.permission = BINARY menu.permission
+SET menu.name = actions.name, menu.type = 3, menu.sort = actions.sort,
+    menu.parent_id = actions.parent_id, menu.path = '', menu.icon = '', menu.component = '',
+    menu.component_name = NULL, menu.status = 0, menu.visible = b'1', menu.keep_alive = b'1',
+    menu.always_show = b'1', menu.updater = @sc_creator, menu.update_time = NOW()
+WHERE BINARY menu.application_code = BINARY @sc_app AND menu.deleted = b'0';

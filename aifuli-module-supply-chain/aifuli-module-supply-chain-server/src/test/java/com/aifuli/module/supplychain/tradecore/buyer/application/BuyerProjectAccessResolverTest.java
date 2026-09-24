@@ -48,7 +48,7 @@ class BuyerProjectAccessResolverTest {
 
         ProjectSnapshot snapshot = resolver.requireActive(PROJECT_ID, BUYER_ID);
 
-        assertThat(snapshot).isEqualTo(new ProjectSnapshot(PROJECT_ID, PROJECT_CODE, BUYER_ID));
+        assertThat(snapshot).isEqualTo(new ProjectSnapshot(PROJECT_ID, PROJECT_CODE, "测试采购项目", BUYER_ID));
     }
 
     @Test
@@ -58,7 +58,7 @@ class BuyerProjectAccessResolverTest {
 
         ProjectSnapshot snapshot = resolver.requireActiveByCode(PROJECT_CODE, BUYER_ID);
 
-        assertThat(snapshot).isEqualTo(new ProjectSnapshot(PROJECT_ID, PROJECT_CODE, BUYER_ID));
+        assertThat(snapshot).isEqualTo(new ProjectSnapshot(PROJECT_ID, PROJECT_CODE, "测试采购项目", BUYER_ID));
     }
 
     @Test

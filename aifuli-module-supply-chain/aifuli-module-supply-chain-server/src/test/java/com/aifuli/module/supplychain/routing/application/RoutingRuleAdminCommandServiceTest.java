@@ -7,21 +7,22 @@ import com.aifuli.module.supplychain.routing.application.RoutingPolicyPublicatio
 import com.aifuli.module.supplychain.routing.application.RoutingPolicyPublicationService.SuccessorPublishResult;
 import com.aifuli.module.supplychain.routing.application.RoutingRuleAdminQueryService.RoutingRuleView;
 import com.aifuli.module.supplychain.routing.application.RoutingRuleSaveSupport.NormalizedRulePatch;
-import com.aifuli.module.supplychain.routing.dal.dataobject.StandardProductRoutingCandidateDO;
-import com.aifuli.module.supplychain.routing.dal.dataobject.StandardProductRoutingRuleDO;
+import com.aifuli.module.supplychain.routing.application.RoutingRuleSaveSupport.WeightInput;
+import com.aifuli.module.supplychain.routing.dal.dataobject.StdRoutingCandidateDO;
+import com.aifuli.module.supplychain.routing.dal.dataobject.StdRoutingRuleDO;
 import com.aifuli.module.supplychain.routing.dal.dataobject.SupplierRoutingPolicyDO;
 import com.aifuli.module.supplychain.routing.dal.dataobject.SupplierRoutingPolicyVersionDO;
-import com.aifuli.module.supplychain.routing.dal.mysql.StandardProductRoutingCandidateMapper;
-import com.aifuli.module.supplychain.routing.dal.mysql.StandardProductRoutingRuleMapper;
+import com.aifuli.module.supplychain.routing.dal.mysql.StdRoutingCandidateMapper;
+import com.aifuli.module.supplychain.routing.dal.mysql.StdRoutingRuleMapper;
+import com.aifuli.module.supplychain.routing.dal.mysql.StdRoutingRuleScopeMapper;
 import com.aifuli.module.supplychain.routing.dal.mysql.SupplierRoutingPolicyMapper;
 import com.aifuli.module.supplychain.routing.dal.mysql.SupplierRoutingPolicyVersionMapper;
 import com.aifuli.module.supplychain.routing.domain.RoutingType;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerDO;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerMapper;
+import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerProjectMapper;
 import com.aifuli.module.supplychain.tradecore.buyer.domain.BuyerStatus;
-import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuDO;
-import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
-import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProductTypeMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierMapper;
 import com.aifuli.module.supplychain.tradecore.supply.domain.SupplierStatus;
@@ -32,10 +33,12 @@ import org.mockito.ArgumentCaptor;
 import java.time.LocalDateTime;
 import java.util.List;
 
-import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.ROUTING_RULE_LAST_CANNOT_REMOVE;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.ROUTING_RULE_NOT_FOUND;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.ROUTING_RULE_PROTECTED;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -45,24 +48,27 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
- * 路由规则页补丁发布命令服务单测。
- * 设计见 {@code docs/superpowers/specs/2026-09-21-routing-rule-admin-write-design.md#5-保存事务}、
- * {@code docs/superpowers/specs/2026-09-21-routing-rule-admin-write-design.md#10-测试门禁}。
+ * 路由规则页补丁发布命令服务单测（PRD 四级范围模型）：
+ * 引导首发、保留既有规则、候选顺序交换、真实启停与受保护规则约束。
+ * 设计见 {@code docs/superpowers/specs/2026-09-23-order-frontend-alignment-and-routing-prd-model-design.md#55-保存校验}。
  */
 class RoutingRuleAdminCommandServiceTest {
 
-    private static final LocalDateTime NOW = LocalDateTime.of(2026, 9, 22, 10, 30, 0);
+    private static final LocalDateTime NOW = LocalDateTime.of(2026, 9, 23, 10, 30, 0);
     private static final Long OPERATOR_ID = 1016L;
+    /** 与 NOW 的 BASIC_ISO_DATE 对应的新规则编码。 */
+    private static final String NEW_RULE_CODE = "RR20260923001";
 
     private final SupplyChainDatabaseClock clock = mock(SupplyChainDatabaseClock.class);
     private final SupplierRoutingPolicyMapper policyMapper = mock(SupplierRoutingPolicyMapper.class);
     private final SupplierRoutingPolicyVersionMapper versionMapper =
             mock(SupplierRoutingPolicyVersionMapper.class);
-    private final StandardProductRoutingRuleMapper ruleMapper = mock(StandardProductRoutingRuleMapper.class);
-    private final StandardProductRoutingCandidateMapper candidateMapper =
-            mock(StandardProductRoutingCandidateMapper.class);
+    private final StdRoutingRuleMapper ruleMapper = mock(StdRoutingRuleMapper.class);
+    private final StdRoutingRuleScopeMapper scopeMapper = mock(StdRoutingRuleScopeMapper.class);
+    private final StdRoutingCandidateMapper candidateMapper = mock(StdRoutingCandidateMapper.class);
     private final BuyerMapper buyerMapper = mock(BuyerMapper.class);
-    private final PlatformSkuMapper skuMapper = mock(PlatformSkuMapper.class);
+    private final BuyerProjectMapper projectMapper = mock(BuyerProjectMapper.class);
+    private final ProductTypeMapper productTypeMapper = mock(ProductTypeMapper.class);
     private final SupplierMapper supplierMapper = mock(SupplierMapper.class);
     private final RoutingPolicyPublicationService publicationService =
             mock(RoutingPolicyPublicationService.class);
@@ -73,25 +79,27 @@ class RoutingRuleAdminCommandServiceTest {
     @BeforeEach
     void setUp() {
         service = new RoutingRuleAdminCommandService(
-                clock, policyMapper, versionMapper, ruleMapper, candidateMapper,
-                buyerMapper, skuMapper, supplierMapper, publicationService, queryService);
+                clock, policyMapper, versionMapper, ruleMapper, scopeMapper, candidateMapper,
+                buyerMapper, projectMapper, productTypeMapper, supplierMapper,
+                publicationService, queryService);
         when(clock.now()).thenReturn(NOW);
         when(publicationService.publishSuccessorStandardProductRules(any()))
                 .thenReturn(new SuccessorPublishResult(
                         RoutingRuleAdminCommandService.BOOTSTRAP_POLICY_CODE, 99L, 1));
+        when(scopeMapper.selectByRuleIds(anyCollection())).thenReturn(List.of());
+        when(candidateMapper.selectByRuleIds(anyCollection())).thenReturn(List.of());
     }
 
     @Test
     void createFirstRuleBootstrapsWithNullCloseVersion() {
         when(policyMapper.selectActiveByType(RoutingType.STANDARD_PRODUCT.code())).thenReturn(List.of());
         when(policyMapper.selectByCode(RoutingRuleAdminCommandService.BOOTSTRAP_POLICY_CODE)).thenReturn(null);
-        stubBuyerSkuSuppliersForCreate("BYR_1", "SKU_1", List.of("SPL_A"));
-        RoutingRuleView view = sampleView("RR20260922001");
-        when(queryService.get("RR20260922001")).thenReturn(view);
+        when(queryService.get(NEW_RULE_CODE)).thenReturn(sampleView(NEW_RULE_CODE));
 
-        RoutingRuleView result = service.create(fixedPatch("BYR_1", "SKU_1", "SPL_A"), OPERATOR_ID);
+        RoutingRuleView result = service.create(
+                patch("引导规则", null, null, List.of()), OPERATOR_ID);
 
-        assertThat(result.ruleCode()).isEqualTo("RR20260922001");
+        assertThat(result.ruleCode()).isEqualTo(NEW_RULE_CODE);
         ArgumentCaptor<SuccessorPublishCommand> captor = ArgumentCaptor.forClass(SuccessorPublishCommand.class);
         verify(publicationService).publishSuccessorStandardProductRules(captor.capture());
         SuccessorPublishCommand command = captor.getValue();
@@ -100,16 +108,20 @@ class RoutingRuleAdminCommandServiceTest {
         assertThat(command.closeVersionId()).isNull();
         assertThat(command.closeExpectedVersion()).isZero();
         assertThat(command.effectiveAt()).isEqualTo(NOW);
+        assertThat(command.stabilityWeight()).isEqualTo(40);
+        assertThat(command.priceWeight()).isEqualTo(30);
+        assertThat(command.timelinessWeight()).isEqualTo(30);
         assertThat(command.rules()).hasSize(1);
         RuleDraft rule = command.rules().getFirst();
-        assertThat(rule.ruleCode()).isEqualTo("RR20260922001");
-        assertThat(rule.buyerCode()).isEqualTo("BYR_1");
-        assertThat(rule.platformSkuCode()).isEqualTo("SKU_1");
-        assertThat(rule.candidates()).hasSize(1);
-        assertThat(rule.candidates().getFirst().supplierCode()).isEqualTo("SPL_A");
-        assertThat(rule.candidates().getFirst().candidatePriority()).isZero();
-        assertThat(rule.candidates().getFirst().inventoryCheckMode())
-                .isEqualTo(RoutingRuleSaveSupport.DEFAULT_INVENTORY_CHECK_MODE);
+        assertThat(rule.ruleCode()).isEqualTo(NEW_RULE_CODE);
+        assertThat(rule.routeMode()).isEqualTo("AUTO");
+        assertThat(rule.distributorMode()).isEqualTo("ALL");
+        assertThat(rule.supplierMode()).isEqualTo("ALL");
+        assertThat(rule.candidates()).isEmpty();
+        assertThat(rule.strategy1()).isEqualTo("STABLE");
+        assertThat(rule.strategy2()).isEqualTo("PRICE");
+        assertThat(rule.strategy3()).isEqualTo("COMPOSITE");
+        assertThat(rule.status()).isEqualTo((short) 10);
     }
 
     @Test
@@ -122,10 +134,10 @@ class RoutingRuleAdminCommandServiceTest {
                         .policyName(existingName)
                         .routingType(RoutingType.STANDARD_PRODUCT.code())
                         .status((short) 0).activeFlag(null).version(0L).build());
-        stubBuyerSkuSuppliersForCreate("BYR_1", "SKU_1", List.of("SPL_A"));
-        when(queryService.get("RR20260922001")).thenReturn(sampleView("RR20260922001"));
+        when(buyerMapper.selectByBuyerCode("BYR_1")).thenReturn(buyer(1L, "BYR_1"));
+        when(queryService.get(NEW_RULE_CODE)).thenReturn(sampleView(NEW_RULE_CODE));
 
-        service.create(fixedPatch("BYR_1", "SKU_1", "SPL_A"), OPERATOR_ID);
+        service.create(patch("引导规则", "BYR_1", null, List.of()), OPERATOR_ID);
 
         ArgumentCaptor<SuccessorPublishCommand> captor = ArgumentCaptor.forClass(SuccessorPublishCommand.class);
         verify(publicationService).publishSuccessorStandardProductRules(captor.capture());
@@ -137,17 +149,21 @@ class RoutingRuleAdminCommandServiceTest {
     }
 
     @Test
-    void createSecondKeepsExistingRule() {
+    void createSecondKeepsExistingRuleAndRetainsCandidateCheckModes() {
         stubActivePolicyAndVersion();
-        stubExistingRule("RR_EXIST", 1L, 1L, 5L, List.of(candidate(21L, 1L, 11L, 0, "OPTIONAL", 30)));
-        when(buyerMapper.selectById(1L)).thenReturn(buyer(1L, "BYR_1"));
-        when(skuMapper.selectById(5L)).thenReturn(sku(5L, "SKU_1", "DIRECT_RECHARGE"));
+        // 既有 AUTO+SPECIFIED 规则：两个候选，健康检查 OPTIONAL/60
+        stubExistingAutoRule("RR_EXIST", List.of(
+                candidate(21L, 1L, 11L, 0, "UNSUPPORTED", null, "OPTIONAL", 60),
+                candidate(22L, 1L, 12L, 10, "UNSUPPORTED", null, "UNSUPPORTED", null)));
         when(supplierMapper.selectById(11L)).thenReturn(supplier(11L, "SPL_A"));
-        stubBuyerSkuSuppliersForCreate("BYR_2", "SKU_2", List.of("SPL_B"));
+        when(supplierMapper.selectById(12L)).thenReturn(supplier(12L, "SPL_B"));
         when(supplierMapper.selectByCode("SPL_A")).thenReturn(supplier(11L, "SPL_A"));
-        when(queryService.get("RR20260922001")).thenReturn(sampleView("RR20260922001"));
+        when(supplierMapper.selectByCode("SPL_B")).thenReturn(supplier(12L, "SPL_B"));
+        // 新规则分销商范围与既有规则不同（既有 BYR_1，新增 BYR_2）
+        when(buyerMapper.selectByBuyerCode("BYR_2")).thenReturn(buyer(2L, "BYR_2"));
+        when(queryService.get(NEW_RULE_CODE)).thenReturn(sampleView(NEW_RULE_CODE));
 
-        service.create(fixedPatch("BYR_2", "SKU_2", "SPL_B"), OPERATOR_ID);
+        service.create(patch("第二条规则", "BYR_2", null, List.of()), OPERATOR_ID);
 
         ArgumentCaptor<SuccessorPublishCommand> captor = ArgumentCaptor.forClass(SuccessorPublishCommand.class);
         verify(publicationService).publishSuccessorStandardProductRules(captor.capture());
@@ -156,62 +172,66 @@ class RoutingRuleAdminCommandServiceTest {
         assertThat(command.closeExpectedVersion()).isEqualTo(3L);
         assertThat(command.policyCode()).isEqualTo("CARD_PRIMARY");
         assertThat(command.rules()).extracting(RuleDraft::ruleCode)
-                .containsExactly("RR_EXIST", "RR20260922001");
-        assertThat(command.rules().getFirst().candidates().getFirst().healthCheckMode())
-                .isEqualTo("OPTIONAL");
-        assertThat(command.rules().getFirst().candidates().getFirst().healthMaxAgeSeconds()).isEqualTo(30);
+                .containsExactly("RR_EXIST", NEW_RULE_CODE);
+        RuleDraft existing = command.rules().getFirst();
+        assertThat(existing.supplierCodes()).containsExactly("SPL_A", "SPL_B");
+        assertThat(existing.candidates().getFirst().healthCheckMode()).isEqualTo("OPTIONAL");
+        assertThat(existing.candidates().getFirst().healthMaxAgeSeconds()).isEqualTo(60);
+        assertThat(existing.candidates().get(1).candidatePriority()).isEqualTo(1);
+        // 新规则：AUTO+全部供应商，无候选行
+        assertThat(command.rules().get(1).candidates()).isEmpty();
     }
 
     @Test
     void updateSwapsCandidateOrderKeepingRuleCode() {
         stubActivePolicyAndVersion();
-        stubExistingRule("RR_AUTO", 1L, 1L, 5L, List.of(
-                candidate(21L, 1L, 11L, 0, "REQUIRED", 10),
-                candidate(22L, 1L, 12L, 10, "UNSUPPORTED", null)));
-        when(buyerMapper.selectById(1L)).thenReturn(buyer(1L, "BYR_1"));
-        when(skuMapper.selectById(5L)).thenReturn(sku(5L, "SKU_1", "DIRECT_RECHARGE"));
+        stubExistingAutoRule("RR_AUTO", List.of(
+                candidate(21L, 1L, 11L, 0, "REQUIRED", 10, "UNSUPPORTED", null),
+                candidate(22L, 1L, 12L, 10, "UNSUPPORTED", null, "UNSUPPORTED", null)));
         when(supplierMapper.selectById(11L)).thenReturn(supplier(11L, "SPL_A"));
         when(supplierMapper.selectById(12L)).thenReturn(supplier(12L, "SPL_B"));
-        when(buyerMapper.selectByBuyerCode("BYR_1")).thenReturn(buyer(1L, "BYR_1"));
-        when(skuMapper.selectByCode("SKU_1")).thenReturn(sku(5L, "SKU_1", "DIRECT_RECHARGE"));
         when(supplierMapper.selectByCode("SPL_A")).thenReturn(supplier(11L, "SPL_A"));
         when(supplierMapper.selectByCode("SPL_B")).thenReturn(supplier(12L, "SPL_B"));
+        when(buyerMapper.selectByBuyerCode("BYR_1")).thenReturn(buyer(1L, "BYR_1"));
         when(queryService.get("RR_AUTO")).thenReturn(sampleView("RR_AUTO"));
 
-        NormalizedRulePatch patch = new NormalizedRulePatch(
-                "双候选自动", "BYR_1", "SKU_1", "DIRECT_RECHARGE",
-                RoutingRuleRouteMode.AUTO, List.of("SPL_B", "SPL_A"), "RR_AUTO");
-        service.update("RR_AUTO", patch, OPERATOR_ID);
+        service.update("RR_AUTO", patch("双候选自动", "BYR_1", null, List.of("SPL_B", "SPL_A")), OPERATOR_ID);
 
         ArgumentCaptor<SuccessorPublishCommand> captor = ArgumentCaptor.forClass(SuccessorPublishCommand.class);
         verify(publicationService).publishSuccessorStandardProductRules(captor.capture());
         RuleDraft rule = captor.getValue().rules().getFirst();
         assertThat(rule.ruleCode()).isEqualTo("RR_AUTO");
-        assertThat(rule.rulePriority()).isZero();
         assertThat(rule.candidates()).extracting(c -> c.supplierCode())
                 .containsExactly("SPL_B", "SPL_A");
         assertThat(rule.candidates()).extracting(c -> c.candidatePriority())
                 .containsExactly(0, 1);
+        // 检查模式按供应商编码从旧行合并：SPL_B 原 UNSUPPORTED，SPL_A 原 REQUIRED
         assertThat(rule.candidates().getFirst().inventoryCheckMode()).isEqualTo("UNSUPPORTED");
         assertThat(rule.candidates().get(1).inventoryCheckMode()).isEqualTo("REQUIRED");
         assertThat(rule.candidates().get(1).inventoryMaxAgeSeconds()).isEqualTo(10);
     }
 
     @Test
-    void deleteNonLastPublishesRemaining() {
+    void updateProtectedRuleRejectsScopeChange() {
         stubActivePolicyAndVersion();
         when(ruleMapper.selectByPolicyVersionId(10L)).thenReturn(List.of(
-                rule(1L, "RR_KEEP", "保留", 1L, 5L),
-                rule(2L, "RR_DROP", "删除", 2L, 6L)));
-        when(candidateMapper.selectByRuleId(1L)).thenReturn(List.of(
-                candidate(21L, 1L, 11L, 0, "UNSUPPORTED", null)));
-        when(candidateMapper.selectByRuleId(2L)).thenReturn(List.of(
-                candidate(22L, 2L, 12L, 0, "UNSUPPORTED", null)));
-        when(supplierMapper.selectById(11L)).thenReturn(supplier(11L, "SPL_A"));
-        when(supplierMapper.selectById(12L)).thenReturn(supplier(12L, "SPL_B"));
-        when(buyerMapper.selectById(1L)).thenReturn(buyer(1L, "BYR_1"));
-        when(skuMapper.selectById(5L)).thenReturn(sku(5L, "SKU_1", "DIRECT_RECHARGE"));
-        when(supplierMapper.selectByCode("SPL_A")).thenReturn(supplier(11L, "SPL_A"));
+                rule(1L, "RR_GLOBAL", "全局默认", "ALL", true)));
+        when(queryService.get("RR_GLOBAL")).thenReturn(sampleView("RR_GLOBAL"));
+
+        assertThatThrownBy(() -> service.update("RR_GLOBAL",
+                patch("全局默认改名", "BYR_1", null, List.of()), OPERATOR_ID))
+                .isInstanceOf(ServiceException.class)
+                .extracting(ex -> ((ServiceException) ex).getCode())
+                .isEqualTo(ROUTING_RULE_PROTECTED.getCode());
+        verifyNoInteractions(publicationService);
+    }
+
+    @Test
+    void deletePublishesRemaining() {
+        stubActivePolicyAndVersion();
+        when(ruleMapper.selectByPolicyVersionId(10L)).thenReturn(List.of(
+                rule(1L, "RR_KEEP", "保留", "ALL", false),
+                rule(2L, "RR_DROP", "删除", "ALL", false)));
 
         service.delete("RR_DROP", OPERATOR_ID);
 
@@ -224,48 +244,44 @@ class RoutingRuleAdminCommandServiceTest {
     @Test
     void deleteLastRejected() {
         stubActivePolicyAndVersion();
-        stubExistingRule("RR_ONLY", 1L, 1L, 5L, List.of(
-                candidate(21L, 1L, 11L, 0, "UNSUPPORTED", null)));
-        when(supplierMapper.selectById(11L)).thenReturn(supplier(11L, "SPL_A"));
+        when(ruleMapper.selectByPolicyVersionId(10L)).thenReturn(List.of(
+                rule(1L, "RR_ONLY", "唯一规则", "ALL", false)));
 
         assertThatThrownBy(() -> service.delete("RR_ONLY", OPERATOR_ID))
                 .isInstanceOf(ServiceException.class)
                 .extracting(ex -> ((ServiceException) ex).getCode())
-                .isEqualTo(ROUTING_RULE_LAST_CANNOT_REMOVE.getCode());
+                .isEqualTo(ROUTING_RULE_NOT_FOUND.getCode());
         verifyNoInteractions(publicationService);
     }
 
     @Test
-    void changeStatusEnabledDoesNotPublish() {
-        RoutingRuleView view = sampleView("RR_EXIST");
-        when(queryService.get("RR_EXIST")).thenReturn(view);
+    void deleteProtectedRejected() {
+        stubActivePolicyAndVersion();
+        when(ruleMapper.selectByPolicyVersionId(10L)).thenReturn(List.of(
+                rule(1L, "RR_KEEP", "保留", "ALL", false),
+                rule(2L, "RR_GLOBAL", "全局默认", "ALL", true)));
 
-        RoutingRuleView result = service.changeStatus("RR_EXIST", RoutingRuleStatus.ENABLED, OPERATOR_ID);
-
-        assertThat(result).isSameAs(view);
-        verifyNoInteractions(publicationService, policyMapper);
+        assertThatThrownBy(() -> service.delete("RR_GLOBAL", OPERATOR_ID))
+                .isInstanceOf(ServiceException.class)
+                .extracting(ex -> ((ServiceException) ex).getCode())
+                .isEqualTo(ROUTING_RULE_PROTECTED.getCode());
+        verifyNoInteractions(publicationService);
     }
 
     @Test
-    void changeStatusDisabledUsesDeletePath() {
+    void changeStatusPublishesRealStatus() {
         stubActivePolicyAndVersion();
         when(ruleMapper.selectByPolicyVersionId(10L)).thenReturn(List.of(
-                rule(1L, "RR_KEEP", "保留", 1L, 5L),
-                rule(2L, "RR_DROP", "删除", 2L, 6L)));
-        when(candidateMapper.selectByRuleId(1L)).thenReturn(List.of(
-                candidate(21L, 1L, 11L, 0, "UNSUPPORTED", null)));
-        when(candidateMapper.selectByRuleId(2L)).thenReturn(List.of(
-                candidate(22L, 2L, 12L, 0, "UNSUPPORTED", null)));
-        when(supplierMapper.selectById(11L)).thenReturn(supplier(11L, "SPL_A"));
-        when(supplierMapper.selectById(12L)).thenReturn(supplier(12L, "SPL_B"));
-        when(buyerMapper.selectById(1L)).thenReturn(buyer(1L, "BYR_1"));
-        when(skuMapper.selectById(5L)).thenReturn(sku(5L, "SKU_1", "DIRECT_RECHARGE"));
-        when(supplierMapper.selectByCode("SPL_A")).thenReturn(supplier(11L, "SPL_A"));
+                rule(1L, "RR_EXIST", "既有规则", "ALL", false)));
+        when(queryService.get("RR_EXIST")).thenReturn(sampleView("RR_EXIST"));
 
-        RoutingRuleView result = service.changeStatus("RR_DROP", RoutingRuleStatus.DISABLED, OPERATOR_ID);
+        RoutingRuleView result = service.changeStatus("RR_EXIST", RoutingRuleStatus.DISABLED, OPERATOR_ID);
 
-        assertThat(result).isNull();
-        verify(publicationService).publishSuccessorStandardProductRules(any());
+        assertThat(result.ruleCode()).isEqualTo("RR_EXIST");
+        ArgumentCaptor<SuccessorPublishCommand> captor = ArgumentCaptor.forClass(SuccessorPublishCommand.class);
+        verify(publicationService).publishSuccessorStandardProductRules(captor.capture());
+        // DISABLED → status 20：真实启停，不再等同删除
+        assertThat(captor.getValue().rules().getFirst().status()).isEqualTo((short) 20);
     }
 
     private void stubActivePolicyAndVersion() {
@@ -273,49 +289,57 @@ class RoutingRuleAdminCommandServiceTest {
                 .thenReturn(List.of(SupplierRoutingPolicyDO.builder().id(9L)
                         .policyCode("CARD_PRIMARY").policyName("卡密主策略")
                         .routingType(RoutingType.STANDARD_PRODUCT.code())
-                        .status((short) 10).activeFlag((short) 1).version(1L).build()));
+                        .status((short) 10).activeFlag((short) 1).version(1L)
+                        .stabilityWeight(40).priceWeight(30).timelinessWeight(30).build()));
         when(versionMapper.selectEffective(eq(9L), eq(NOW)))
                 .thenReturn(List.of(SupplierRoutingPolicyVersionDO.builder().id(10L).policyId(9L)
                         .versionNo(1).status((short) 10).version(3L)
                         .validFrom(NOW.minusDays(1)).build()));
     }
 
-    private void stubExistingRule(String ruleCode, long ruleId, long buyerId, long skuId,
-                                  List<StandardProductRoutingCandidateDO> candidates) {
+    private void stubExistingAutoRule(String ruleCode, List<StdRoutingCandidateDO> candidates) {
         when(ruleMapper.selectByPolicyVersionId(10L)).thenReturn(List.of(
-                rule(ruleId, ruleCode, "已有规则", buyerId, skuId)));
-        when(candidateMapper.selectByRuleId(ruleId)).thenReturn(candidates);
+                rule(1L, ruleCode, "已有规则", "SPECIFIED", false)));
+        when(candidateMapper.selectByRuleIds(anyCollection())).thenReturn(candidates);
     }
 
-    private void stubBuyerSkuSuppliersForCreate(String buyerCode, String skuCode, List<String> supplierCodes) {
-        when(buyerMapper.selectByBuyerCode(buyerCode)).thenReturn(buyer(buyerCode.hashCode() & 0xffff, buyerCode));
-        when(skuMapper.selectByCode(skuCode)).thenReturn(sku(skuCode.hashCode() & 0xffff, skuCode, "DIRECT_RECHARGE"));
-        for (String supplierCode : supplierCodes) {
-            when(supplierMapper.selectByCode(supplierCode))
-                    .thenReturn(supplier(supplierCode.hashCode() & 0xffff, supplierCode));
-        }
-    }
-
-    private static NormalizedRulePatch fixedPatch(String buyerCode, String skuCode, String supplierCode) {
+    /**
+     * 构造 AUTO 规则补丁：distributorCodes 非空即 SPECIFIED；
+     * supplierCodes 为空 → 供应商范围 ALL，非空 → SPECIFIED 有序候选。
+     */
+    private static NormalizedRulePatch patch(String name, String distributorCode,
+                                             String primarySupplierCode, List<String> supplierCodes) {
         return new NormalizedRulePatch(
-                "固定规则", buyerCode, skuCode, "DIRECT_RECHARGE",
-                RoutingRuleRouteMode.FIXED, List.of(supplierCode), null);
+                null, name, RoutingRuleRouteMode.AUTO, RoutingRuleStatus.ENABLED,
+                distributorCode == null ? RoutingRuleScopeMode.ALL : RoutingRuleScopeMode.SPECIFIED,
+                distributorCode == null ? List.of() : List.of(distributorCode),
+                RoutingRuleScopeMode.ALL, List.of(),
+                RoutingRuleScopeMode.ALL, List.of(),
+                supplierCodes.isEmpty() ? RoutingRuleScopeMode.ALL : RoutingRuleScopeMode.SPECIFIED,
+                supplierCodes,
+                primarySupplierCode,
+                List.of(RoutingRuleStrategy.STABLE, RoutingRuleStrategy.PRICE,
+                        RoutingRuleStrategy.COMPOSITE),
+                new WeightInput(40, 30, 30), null);
     }
 
-    private static StandardProductRoutingRuleDO rule(long id, String code, String name,
-                                                     long buyerId, long skuId) {
-        return StandardProductRoutingRuleDO.builder().id(id).policyVersionId(10L)
-                .ruleCode(code).ruleName(name).buyerId(buyerId).platformSkuId(skuId)
-                .fulfillmentType("DIRECT_RECHARGE").rulePriority(10).version(0L).build();
+    private static StdRoutingRuleDO rule(long id, String code, String name, String distributorMode,
+                                         boolean protectedRule) {
+        return StdRoutingRuleDO.builder().id(id).policyVersionId(10L)
+                .ruleCode(code).ruleName(name).routeMode("AUTO")
+                .distributorMode(distributorMode).projectMode("ALL")
+                .productTypeMode("ALL").supplierMode("SPECIFIED")
+                .strategyPriority1("STABLE").strategyPriority2("PRICE").strategyPriority3("COMPOSITE")
+                .rulePriority(100).status((short) 10).protectedRule(protectedRule).version(0L)
+                .updatedBy(OPERATOR_ID).createdAt(NOW).updatedAt(NOW).build();
     }
 
-    private static StandardProductRoutingCandidateDO candidate(
+    private static StdRoutingCandidateDO candidate(
             long id, long ruleId, long supplierId, int priority,
-            String healthMode, Integer healthMaxAge) {
-        return StandardProductRoutingCandidateDO.builder().id(id).ruleId(ruleId)
+            String inventoryMode, Integer inventoryMaxAge, String healthMode, Integer healthMaxAge) {
+        return StdRoutingCandidateDO.builder().id(id).ruleId(ruleId)
                 .supplierId(supplierId).candidatePriority(priority)
-                .inventoryCheckMode(priority == 0 && healthMode.equals("REQUIRED") ? "REQUIRED" : "UNSUPPORTED")
-                .inventoryMaxAgeSeconds(priority == 0 && healthMode.equals("REQUIRED") ? 10 : null)
+                .inventoryCheckMode(inventoryMode).inventoryMaxAgeSeconds(inventoryMaxAge)
                 .balanceCheckMode("UNSUPPORTED").balanceMaxAgeSeconds(null)
                 .healthCheckMode(healthMode).healthMaxAgeSeconds(healthMaxAge).build();
     }
@@ -323,12 +347,6 @@ class RoutingRuleAdminCommandServiceTest {
     private static BuyerDO buyer(long id, String code) {
         return BuyerDO.builder().id(id).buyerCode(code).buyerName(code)
                 .status(BuyerStatus.ACTIVE.getCode()).build();
-    }
-
-    private static PlatformSkuDO sku(long id, String code, String fulfillmentType) {
-        return PlatformSkuDO.builder().id(id).skuCode(code).skuName(code)
-                .fulfillmentType(fulfillmentType)
-                .status(CatalogEntityStatus.ACTIVE.getCode()).build();
     }
 
     private static SupplierDO supplier(long id, String code) {
@@ -341,9 +359,9 @@ class RoutingRuleAdminCommandServiceTest {
         return new RoutingRuleView(
                 ruleCode, "规则", false, RoutingRuleScopeMode.SPECIFIED,
                 List.of("BYR_1"), List.of("甲"), RoutingRuleScopeMode.ALL, List.of(), List.of(),
-                RoutingRuleScopeMode.ALL, List.of(), List.of(), RoutingRuleRouteMode.FIXED,
+                RoutingRuleScopeMode.ALL, List.of(), List.of(), RoutingRuleRouteMode.AUTO,
                 RoutingRuleScopeMode.SPECIFIED, List.of("SPL_A"), List.of("甲供应商"),
-                "SPL_A", "甲供应商", "SKU_1", "话费", "DIRECT_RECHARGE",
+                null, null,
                 List.of(), new RoutingRuleAdminQueryService.WeightView(40, 30, 30),
                 RoutingRuleStatus.ENABLED, "1016", NOW);
     }

@@ -48,12 +48,16 @@ import java.util.List;
 
 import static com.aifuli.framework.common.pojo.CommonResult.success;
 import static com.aifuli.framework.security.core.util.SecurityFrameworkUtils.getLoginUserId;
-import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.ADMIN_EXPRESSION;
+import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.ROUTING_RULE_CREATE_EXPRESSION;
+import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.ROUTING_RULE_DELETE_EXPRESSION;
+import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.ROUTING_RULE_QUERY_EXPRESSION;
+import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.ROUTING_RULE_UPDATE_EXPRESSION;
+import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.ROUTING_RULE_UPDATE_STATUS_EXPRESSION;
 
 /**
- * 管理端路由规则：GET 投影当前生效版本；写入口经补丁发布落库。
- * <p>设计见 {@code docs/superpowers/specs/2026-09-21-routing-rule-admin-write-design.md#3-rest}；
- * GET 字段映射见 {@code docs/superpowers/specs/2026-09-21-routing-rule-admin-readonly-design.md#3-rest}。
+ * 管理端路由规则（PRD 四级范围模型）：GET 投影当前生效版本；写入口经补丁发布落库；
+ * ENABLED/DISABLED 为规则真实状态；受保护 GLOBAL_DEFAULT 不可删除。
+ * <p>设计见 {@code docs/superpowers/specs/2026-09-23-order-frontend-alignment-and-routing-prd-model-design.md#56-rest-契约}。</p>
  */
 @Slf4j
 @Tag(name = "管理后台 - 供应链路由规则")
@@ -61,7 +65,6 @@ import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminP
 @RequestMapping("/supply-chain/routing-rules")
 @Validated
 @RequiredArgsConstructor
-@PreAuthorize(ADMIN_EXPRESSION)
 public class RoutingRuleAdminController {
 
     private final RoutingRuleAdminCommandService commandService;
@@ -70,22 +73,23 @@ public class RoutingRuleAdminController {
     private final RoutingRuleSaveSupport saveSupport = new RoutingRuleSaveSupport();
 
     @GetMapping
+    @PreAuthorize(ROUTING_RULE_QUERY_EXPRESSION)
     @Operation(summary = "分页查询当前生效的标准商品路由规则",
-            description = "只读启用中 STANDARD_PRODUCT 策略的当前生效已发布版本。"
-                    + "项目/商品类型固定 ALL；价格/综合优先级与权重仅为占位。"
-                    + "写操作见 docs/superpowers/specs/2026-09-21-routing-rule-admin-write-design.md。")
+            description = "只读启用中 STANDARD_PRODUCT 策略的当前生效已发布版本；"
+                    + "分销商/项目/商品类型/供应商四级范围与状态、更新人均真实过滤。"
+                    + "设计见 docs/superpowers/specs/2026-09-23-order-frontend-alignment-and-routing-prd-model-design.md。")
     public CommonResult<PageResult<RoutingRuleView>> page(
             @Parameter(description = "规则中文名称，包含匹配")
             @Size(max = 128) @RequestParam(required = false) String name,
             @Parameter(description = "分销商业务编码；ALL 规则始终命中")
             @RequestParam(required = false) List<String> distributorCodes,
-            @Parameter(description = "项目业务编码；本期接受但不过滤")
+            @Parameter(description = "项目业务编码；ALL 规则始终命中")
             @RequestParam(required = false) List<String> projectCodes,
-            @Parameter(description = "商品类型编码；本期接受但不过滤")
+            @Parameter(description = "商品类型编码；ALL 规则始终命中")
             @RequestParam(required = false) List<String> productTypeCodes,
-            @Parameter(description = "候选供应商业务编码，求交")
+            @Parameter(description = "候选供应商业务编码，求交；ALL 规则始终命中")
             @RequestParam(required = false) List<String> supplierCodes,
-            @Parameter(description = "启停展示值 ENABLED/DISABLED")
+            @Parameter(description = "启停状态 ENABLED/DISABLED")
             @RequestParam(required = false) String status,
             @Parameter(description = "更新人，匹配 updated_by 十进制字符串")
             @RequestParam(required = false) List<String> updaters,
@@ -99,10 +103,10 @@ public class RoutingRuleAdminController {
             @Min(1) @RequestParam(required = false) Integer pageNo,
             @Parameter(description = "每页条数，最大100")
             @Min(1) @Max(100) @RequestParam(required = false) Integer pageSize) {
-        log.info("路由规则分页入口 userId={} name={} distributorCodes={} supplierCodes={} status={} "
-                        + "updaters={} updateFrom={} updateTo={} pageNo={} pageSize={}",
-                getLoginUserId(), name, distributorCodes, supplierCodes, status, updaters,
-                updateFrom, updateTo, pageNo, pageSize);
+        log.info("路由规则分页入口 userId={} name={} distributorCodes={} projectCodes={} productTypeCodes={} "
+                        + "supplierCodes={} status={} updaters={} updateFrom={} updateTo={} pageNo={} pageSize={}",
+                getLoginUserId(), name, distributorCodes, projectCodes, productTypeCodes, supplierCodes,
+                status, updaters, updateFrom, updateTo, pageNo, pageSize);
         RoutingRulePageQuery query = new RoutingRulePageQuery(name, distributorCodes, projectCodes,
                 productTypeCodes, supplierCodes, ClosedEnums.parse(RoutingRuleStatus.class, status),
                 updaters, updateFrom, updateTo, pageNo, pageSize);
@@ -110,6 +114,7 @@ public class RoutingRuleAdminController {
     }
 
     @GetMapping("/{ruleCode}")
+    @PreAuthorize(ROUTING_RULE_QUERY_EXPRESSION)
     @Operation(summary = "查询当前生效版本内的一条标准商品路由规则")
     public CommonResult<RoutingRuleView> get(
             @Parameter(description = "策略版本内稳定规则编码")
@@ -119,40 +124,47 @@ public class RoutingRuleAdminController {
     }
 
     @PostMapping
+    @PreAuthorize(ROUTING_RULE_CREATE_EXPRESSION)
     @Operation(summary = "新增路由规则并立即补丁发布",
             description = "忽略 body.ruleCode；克隆当前生效版本打补丁后发布。"
-                    + "见 docs/superpowers/specs/2026-09-21-routing-rule-admin-write-design.md#32-新增。")
+                    + "启用集内规则名称与四级适用范围唯一；受保护规则仅可存在一条系统预置。"
+                    + "见 docs/superpowers/specs/2026-09-23-order-frontend-alignment-and-routing-prd-model-design.md#55。")
     public CommonResult<RoutingRuleView> create(@Valid @RequestBody RoutingRuleSaveReqVO request) {
         Long userId = getLoginUserId();
-        log.info("路由规则新增入口 userId={} routeMode={} buyerCode={} skuCode={} supplierCodes={}",
+        log.info("路由规则新增入口 userId={} routeMode={} distributorCodes={} projectCodes={} "
+                        + "productTypeCodes={} supplierCodes={}",
                 userId, request.getRouteMode(), firstOrNull(request.getDistributorCodes()),
-                request.getSkuCode(), request.getSupplierCodes());
+                firstOrNull(request.getProjectCodes()), firstOrNull(request.getProductTypeCodes()),
+                firstOrNull(request.getSupplierCodes()));
         NormalizedRulePatch patch = saveSupport.validateAndNormalize(
                 toSaveRequest(request), null, RoutingRuleSaveSupport.Operation.CREATE);
         return success(commandService.create(patch, userId));
     }
 
     @PutMapping("/{ruleCode}")
+    @PreAuthorize(ROUTING_RULE_UPDATE_EXPRESSION)
     @Operation(summary = "整资源替换路由规则并立即补丁发布",
             description = "路径 ruleCode 写入新版本；body.ruleCode 若传须与路径一致。"
-                    + "见 docs/superpowers/specs/2026-09-21-routing-rule-admin-write-design.md#33-整资源替换。")
+                    + "受保护 GLOBAL_DEFAULT 规则的范围与路由模式不可修改。")
     public CommonResult<RoutingRuleView> update(
             @Parameter(description = "策略版本内稳定规则编码")
             @Size(max = 64) @PathVariable String ruleCode,
             @Valid @RequestBody RoutingRuleSaveReqVO request) {
         Long userId = getLoginUserId();
-        log.info("路由规则更新入口 userId={} ruleCode={} routeMode={} buyerCode={} skuCode={} supplierCodes={}",
+        log.info("路由规则更新入口 userId={} ruleCode={} routeMode={} distributorCodes={} projectCodes={} "
+                        + "productTypeCodes={} supplierCodes={}",
                 userId, ruleCode, request.getRouteMode(), firstOrNull(request.getDistributorCodes()),
-                request.getSkuCode(), request.getSupplierCodes());
+                firstOrNull(request.getProjectCodes()), firstOrNull(request.getProductTypeCodes()),
+                firstOrNull(request.getSupplierCodes()));
         NormalizedRulePatch patch = saveSupport.validateAndNormalize(
                 toSaveRequest(request), ruleCode, RoutingRuleSaveSupport.Operation.UPDATE);
         return success(commandService.update(ruleCode, patch, userId));
     }
 
     @DeleteMapping("/{ruleCode}")
+    @PreAuthorize(ROUTING_RULE_DELETE_EXPRESSION)
     @Operation(summary = "删除路由规则并立即补丁发布",
-            description = "从下一版本移除该规则；最后一条拒绝。"
-                    + "见 docs/superpowers/specs/2026-09-21-routing-rule-admin-write-design.md#34-删除。")
+            description = "从下一版本移除该规则；受保护 GLOBAL_DEFAULT 拒绝删除。")
     public CommonResult<Boolean> delete(
             @Parameter(description = "策略版本内稳定规则编码")
             @Size(max = 64) @PathVariable String ruleCode) {
@@ -163,9 +175,10 @@ public class RoutingRuleAdminController {
     }
 
     @PutMapping("/{ruleCode}/status")
-    @Operation(summary = "启停路由规则（前端兼容）",
-            description = "DISABLED 等同删除并发布；ENABLED 为空操作仅返回当前投影。"
-                    + "见 docs/superpowers/specs/2026-09-21-routing-rule-admin-write-design.md#35-启停前端兼容。")
+    @PreAuthorize(ROUTING_RULE_UPDATE_STATUS_EXPRESSION)
+    @Operation(summary = "启停路由规则（真实状态）",
+            description = "ENABLED/DISABLED 为规则真实启停状态（不再等同删除）；"
+                    + "停用后该规则不参与匹配，无规则命中时回落全局默认规则。")
     public CommonResult<RoutingRuleView> changeStatus(
             @Parameter(description = "策略版本内稳定规则编码")
             @Size(max = 64) @PathVariable String ruleCode,
@@ -179,22 +192,21 @@ public class RoutingRuleAdminController {
     private static SaveRequest toSaveRequest(RoutingRuleSaveReqVO request) {
         return new SaveRequest(
                 request.getName(),
-                request.getDistributorCodes(),
-                request.getSkuCode(),
-                request.getFulfillmentType(),
-                ClosedEnums.parse(RoutingRuleRouteMode.class, request.getRouteMode()),
-                request.getPrimarySupplierCode(),
-                request.getSupplierCodes(),
-                ClosedEnums.parse(RoutingRuleScopeMode.class, request.getSupplierMode()),
-                ClosedEnums.parse(RoutingRuleScopeMode.class, request.getDistributorMode()),
-                ClosedEnums.parse(RoutingRuleStatus.class, request.getStatus()),
                 request.getRuleCode(),
-                request.getProjectCodes(),
+                ClosedEnums.parse(RoutingRuleRouteMode.class, request.getRouteMode()),
+                ClosedEnums.parse(RoutingRuleStatus.class, request.getStatus()),
+                ClosedEnums.parse(RoutingRuleScopeMode.class, request.getDistributorMode()),
+                request.getDistributorCodes(),
                 ClosedEnums.parse(RoutingRuleScopeMode.class, request.getProjectMode()),
-                request.getProductTypeCodes(),
+                request.getProjectCodes(),
                 ClosedEnums.parse(RoutingRuleScopeMode.class, request.getProductTypeMode()),
+                request.getProductTypeCodes(),
+                ClosedEnums.parse(RoutingRuleScopeMode.class, request.getSupplierMode()),
+                request.getSupplierCodes(),
+                request.getPrimarySupplierCode(),
                 toPriorities(request.getPriorities()),
-                toWeights(request.getWeights()));
+                toWeights(request.getWeights()),
+                request.getMaxSupplyPriceCents());
     }
 
     private static List<PriorityInput> toPriorities(List<RoutingRuleSaveReqVO.PriorityItemReqVO> items) {
@@ -229,14 +241,14 @@ public class RoutingRuleAdminController {
 
     /**
      * 启停请求体。设计见
-     * {@code docs/superpowers/specs/2026-09-21-routing-rule-admin-write-design.md#35-启停前端兼容}。
+     * {@code docs/superpowers/specs/2026-09-23-order-frontend-alignment-and-routing-prd-model-design.md#56}。
      */
     @Data
     @Schema(description = "路由规则启停请求")
     public static class ChangeStatusReqVO {
 
         @NotBlank(message = "启停状态不能为空")
-        @Schema(description = "目标启停展示值 ENABLED/DISABLED",
+        @Schema(description = "目标启停状态 ENABLED/DISABLED",
                 requiredMode = Schema.RequiredMode.REQUIRED,
                 allowableValues = {"ENABLED", "DISABLED"}, example = "DISABLED")
         private String status;

@@ -80,6 +80,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
 import com.aifuli.module.supplychain.testsupport.ProductCenterTestConfiguration;
+import com.aifuli.module.supplychain.testsupport.RoutingPolicyPresetFixture;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.testcontainers.containers.MySQLContainer;
 
@@ -425,17 +426,23 @@ class FulfillmentAcceptanceIntegrationTest {
 
         PlatformSkuDO sku = context.getBean(PlatformSkuMapper.class).selectByCode("TELCO_100");
         SupplierDO supplier = createQnmOffer(context, sku, now);
+        // 044 预置引导策略占用同类型唯一 active 位；受理链路种子发布自有 CARD_PRIMARY 策略，先停用预置。
+        RoutingPolicyPresetFixture.deactivatePresetPolicy(new JdbcTemplate(
+                context.getBean("supplyChainDataSource", DataSource.class)));
         RoutingPolicyPublicationService routing = context.getBean(RoutingPolicyPublicationService.class);
+        // PRD 四级范围模型：分销商指定 WUSHENG，FIXED 固定主供应商 QINAMENG。
         RoutingPolicyPublicationService.DraftResult draft = routing.createDraft(
                 new RoutingPolicyPublicationService.CreateDraftCommand(
                         "CARD_PRIMARY", "卡券与直充主路由", "M1 受理路由",
                         now.minusHours(1), now.plusDays(1), List.of(
                         new RoutingPolicyPublicationService.RuleDraft(
-                                "WS_TELCO", "吾盛话费路由", "WUSHENG", "TELCO_100",
-                                FulfillmentType.DIRECT_RECHARGE.code(), 10, List.of(
-                                new RoutingPolicyPublicationService.CandidateDraft(
-                                        "QINAMENG", 10, "UNSUPPORTED", null,
-                                        "UNSUPPORTED", null, "UNSUPPORTED", null)))), 1L));
+                                "WS_TELCO", "吾盛话费路由", "FIXED", "QINAMENG",
+                                "SPECIFIED", List.of("WUSHENG"),
+                                "ALL", List.of(),
+                                "ALL", List.of(),
+                                "SPECIFIED", List.of(),
+                                null, "STABLE", "PRICE", "COMPOSITE",
+                                10, (short) 10, false, List.of())), 1L, 40, 30, 30));
         routing.publish(new RoutingPolicyPublicationService.PublishCommand(
                 draft.policyVersionId(), 0L, "M1 受理主路由", 1L,
                 "trace-routing", null, null));

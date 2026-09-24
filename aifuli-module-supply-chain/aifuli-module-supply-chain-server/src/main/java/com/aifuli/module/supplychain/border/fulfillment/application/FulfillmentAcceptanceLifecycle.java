@@ -284,6 +284,8 @@ public class FulfillmentAcceptanceLifecycle {
                 .buyerNameSnapshot(command.buyerName()).buyerUserId(command.buyerUserId())
                 .fulfillmentAccountValue(command.fulfillmentAccountValue())
                 .buyerOrderNo(command.buyerOrderNo()).acceptanceReceiptId(receiptId)
+                .projectCodeSnapshot(command.projectCode())
+                .projectNameSnapshot(command.projectName())
                 .displaySupplierId(selected.supplierId()).displaySupplierCode(selected.supplierCode())
                 .displaySupplierName(selected.supplierName()).buyerSettlementAmount(buyerAmount)
                 .salesUnitPriceCents(frozenQuote.salesUnitPriceCents())
@@ -466,7 +468,7 @@ public class FulfillmentAcceptanceLifecycle {
     private SupplierRoutingApplicationService.RoutingSnapshot route(
             PreparedAcceptance command, PlatformSkuDO sku, LocalDateTime now) {
         try {
-            return routingService.route(new RoutingInput(command.buyerId(), sku.getId(),
+            return routingService.route(new RoutingInput(command.buyerId(), command.projectId(), sku.getId(),
                     sku.getFulfillmentType(), command.quantity(), now, Map.of()));
         } catch (IllegalArgumentException | IllegalStateException exception) {
             throw rejection(command.receiptIdHint(), null, AcceptanceReceiptStatus.REJECTED_RETRYABLE,
@@ -705,6 +707,8 @@ public class FulfillmentAcceptanceLifecycle {
 
     public static final class PreparedAcceptance {
         private final Long projectId;
+        private final String projectCode;
+        private final String projectName;
         private final Long buyerId;
         private final String buyerCode;
         private final String buyerName;
@@ -729,7 +733,8 @@ public class FulfillmentAcceptanceLifecycle {
         private final String traceId;
         private long receiptIdHint;
 
-        public PreparedAcceptance(Long projectId, Long buyerId, String buyerCode, String buyerName,
+        public PreparedAcceptance(Long projectId, String projectCode, String projectName,
+                                  Long buyerId, String buyerCode, String buyerName,
                                   String buyerOrderNo, String buyerUserId, String fulfillmentAccountValue,
                                   String buyerSkuCode,
                                   int listingVersionNo, long quantity, String pricingQuoteToken,
@@ -739,6 +744,8 @@ public class FulfillmentAcceptanceLifecycle {
                                   byte[] invariantFingerprint, byte[] requestFingerprint,
                                   byte[] buyerOrderDigest, Long previousReceiptVersion, String traceId) {
             this.projectId = projectId;
+            this.projectCode = projectCode;
+            this.projectName = projectName;
             this.buyerId = buyerId;
             this.buyerCode = buyerCode;
             this.buyerName = buyerName;
@@ -764,6 +771,8 @@ public class FulfillmentAcceptanceLifecycle {
         }
 
         public Long projectId() { return projectId; }
+        public String projectCode() { return projectCode; }
+        public String projectName() { return projectName; }
         public Long buyerId() { return buyerId; }
         public String buyerCode() { return buyerCode; }
         public String buyerName() { return buyerName; }

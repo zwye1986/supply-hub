@@ -4,12 +4,14 @@ import com.aifuli.module.supplychain.infrastructure.outbox.OutboxEventRepository
 import com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock;
 import com.aifuli.module.supplychain.routing.dal.dataobject.SupplierRoutingPolicyDO;
 import com.aifuli.module.supplychain.routing.dal.dataobject.SupplierRoutingPolicyVersionDO;
-import com.aifuli.module.supplychain.routing.dal.mysql.StandardProductRoutingCandidateMapper;
-import com.aifuli.module.supplychain.routing.dal.mysql.StandardProductRoutingRuleMapper;
+import com.aifuli.module.supplychain.routing.dal.mysql.StdRoutingCandidateMapper;
+import com.aifuli.module.supplychain.routing.dal.mysql.StdRoutingRuleMapper;
+import com.aifuli.module.supplychain.routing.dal.mysql.StdRoutingRuleScopeMapper;
 import com.aifuli.module.supplychain.routing.dal.mysql.SupplierRoutingPolicyMapper;
 import com.aifuli.module.supplychain.routing.dal.mysql.SupplierRoutingPolicyVersionMapper;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerMapper;
-import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
+import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerProjectMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProductTypeMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -24,13 +26,15 @@ import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 /**
- * 后继发布：关闭版本必须归属 command.policyCode 对应策略。
- * 设计见 {@code docs/superpowers/specs/2026-09-21-routing-rule-admin-write-design.md#5-保存事务}。
+ * 后继发布：关闭版本必须归属 command.policyCode 对应策略（PRD 四级范围模型）。
+ * 设计见 {@code docs/superpowers/specs/2026-09-23-order-frontend-alignment-and-routing-prd-model-design.md#55-保存校验}。
  */
 class RoutingPolicyPublicationSuccessorOwnershipTest {
 
-    private static final LocalDateTime NOW = LocalDateTime.of(2026, 9, 22, 10, 50);
+    private static final LocalDateTime NOW = LocalDateTime.of(2026, 9, 23, 10, 50);
     private static final LocalDateTime VALID_FROM = NOW.minusHours(1);
+    private static final String POLICY_CODE = "STANDARD_PRODUCT_PRIMARY";
+    private static final String POLICY_NAME = "标准商品供给路由";
 
     private final SupplyChainDatabaseClock databaseClock = mock(SupplyChainDatabaseClock.class);
     private final SupplierRoutingPolicyMapper policyMapper = mock(SupplierRoutingPolicyMapper.class);
@@ -42,9 +46,11 @@ class RoutingPolicyPublicationSuccessorOwnershipTest {
     void setUp() {
         service = new RoutingPolicyPublicationService(
                 databaseClock, policyMapper, versionMapper,
-                mock(StandardProductRoutingRuleMapper.class),
-                mock(StandardProductRoutingCandidateMapper.class),
-                mock(BuyerMapper.class), mock(PlatformSkuMapper.class), mock(SupplierMapper.class),
+                mock(StdRoutingRuleMapper.class),
+                mock(StdRoutingRuleScopeMapper.class),
+                mock(StdRoutingCandidateMapper.class),
+                mock(BuyerMapper.class), mock(BuyerProjectMapper.class),
+                mock(ProductTypeMapper.class), mock(SupplierMapper.class),
                 mock(OutboxEventRepository.class));
         when(databaseClock.now()).thenReturn(NOW);
     }
@@ -55,25 +61,17 @@ class RoutingPolicyPublicationSuccessorOwnershipTest {
                 .id(100L).policyId(9L).versionNo(1).validFrom(VALID_FROM)
                 .status((short) 10).version(1L).build();
         when(versionMapper.selectByIdForUpdate(100L)).thenReturn(closing);
-        when(policyMapper.selectByCodeForUpdate("STANDARD_PRODUCT_PRIMARY"))
+        when(policyMapper.selectByCodeForUpdate(POLICY_CODE))
                 .thenReturn(SupplierRoutingPolicyDO.builder()
-                        .id(1L).policyCode("STANDARD_PRODUCT_PRIMARY")
-                        .policyName("标准商品供给路由").status((short) 10).version(0L).build());
+                        .id(1L).policyCode(POLICY_CODE)
+                        .policyName(POLICY_NAME).status((short) 10).version(0L).build());
 
-        assertThatThrownBy(() -> service.publishSuccessorStandardProductRules(
-                new RoutingPolicyPublicationService.SuccessorPublishCommand(
-                        "STANDARD_PRODUCT_PRIMARY", "标准商品供给路由", 1L, "trace-own",
-                        List.of(new RoutingPolicyPublicationService.RuleDraft(
-                                "RR_1", "规则", "BYR", "SKU", "DIRECT_RECHARGE", 0,
-                                List.of(new RoutingPolicyPublicationService.CandidateDraft(
-                                        "SPL", 0, "UNSUPPORTED", null,
-                                        "UNSUPPORTED", null, "UNSUPPORTED", null)))),
-                        100L, 1L, NOW)))
+        assertThatThrownBy(() -> service.publishSuccessorStandardProductRules(command()))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("does not belong to policy code STANDARD_PRODUCT_PRIMARY");
+                .hasMessageContaining("does not belong to policy code " + POLICY_CODE);
 
         verify(versionMapper).selectByIdForUpdate(100L);
-        verify(policyMapper).selectByCodeForUpdate("STANDARD_PRODUCT_PRIMARY");
+        verify(policyMapper).selectByCodeForUpdate(POLICY_CODE);
         verifyNoMoreInteractions(versionMapper);
     }
 
@@ -83,22 +81,36 @@ class RoutingPolicyPublicationSuccessorOwnershipTest {
                 .id(100L).policyId(9L).versionNo(1).validFrom(VALID_FROM)
                 .status((short) 10).version(1L).build();
         when(versionMapper.selectByIdForUpdate(100L)).thenReturn(closing);
-        when(policyMapper.selectByCodeForUpdate("STANDARD_PRODUCT_PRIMARY")).thenReturn(null);
+        when(policyMapper.selectByCodeForUpdate(POLICY_CODE)).thenReturn(null);
 
-        assertThatThrownBy(() -> service.publishSuccessorStandardProductRules(
-                new RoutingPolicyPublicationService.SuccessorPublishCommand(
-                        "STANDARD_PRODUCT_PRIMARY", "标准商品供给路由", 1L, "trace-missing",
-                        List.of(new RoutingPolicyPublicationService.RuleDraft(
-                                "RR_1", "规则", "BYR", "SKU", "DIRECT_RECHARGE", 0,
-                                List.of(new RoutingPolicyPublicationService.CandidateDraft(
-                                        "SPL", 0, "UNSUPPORTED", null,
-                                        "UNSUPPORTED", null, "UNSUPPORTED", null)))),
-                        100L, 1L, NOW)))
+        assertThatThrownBy(() -> service.publishSuccessorStandardProductRules(command()))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("does not belong to policy code STANDARD_PRODUCT_PRIMARY");
+                .hasMessageContaining("does not belong to policy code " + POLICY_CODE);
 
         verify(versionMapper).selectByIdForUpdate(100L);
-        verify(policyMapper).selectByCodeForUpdate("STANDARD_PRODUCT_PRIMARY");
+        verify(policyMapper).selectByCodeForUpdate(POLICY_CODE);
         verifyNoMoreInteractions(versionMapper);
+    }
+
+    private static RoutingPolicyPublicationService.SuccessorPublishCommand command() {
+        return new RoutingPolicyPublicationService.SuccessorPublishCommand(
+                POLICY_CODE, POLICY_NAME, 1L, "trace-own",
+                List.of(autoAllSuppliersRule("RR_1", "规则")),
+                100L, 1L, NOW,
+                40, 30, 30);
+    }
+
+    /** AUTO + 全部供应商的合法规则草稿（候选动态解析，无候选行）。 */
+    static RoutingPolicyPublicationService.RuleDraft autoAllSuppliersRule(String ruleCode, String ruleName) {
+        return new RoutingPolicyPublicationService.RuleDraft(
+                ruleCode, ruleName, "AUTO", null,
+                "ALL", List.of(),
+                "ALL", List.of(),
+                "ALL", List.of(),
+                "ALL", List.of(),
+                null,
+                "STABLE", "PRICE", "COMPOSITE",
+                100, (short) 10, false,
+                List.of());
     }
 }

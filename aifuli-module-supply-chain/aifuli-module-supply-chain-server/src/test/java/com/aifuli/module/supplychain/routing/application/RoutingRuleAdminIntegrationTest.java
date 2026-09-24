@@ -1,15 +1,18 @@
 package com.aifuli.module.supplychain.routing.application;
 
 import com.aifuli.module.supplychain.infrastructure.configuration.SupplyChainDataSourceConfiguration;
-import com.aifuli.module.supplychain.routing.dal.dataobject.StandardProductRoutingCandidateDO;
-import com.aifuli.module.supplychain.routing.dal.dataobject.StandardProductRoutingRuleDO;
+import com.aifuli.module.supplychain.routing.dal.dataobject.StdRoutingCandidateDO;
+import com.aifuli.module.supplychain.routing.dal.dataobject.StdRoutingRuleDO;
+import com.aifuli.module.supplychain.routing.dal.dataobject.StdRoutingRuleScopeDO;
 import com.aifuli.module.supplychain.routing.dal.dataobject.SupplierRoutingPolicyDO;
 import com.aifuli.module.supplychain.routing.dal.dataobject.SupplierRoutingPolicyVersionDO;
-import com.aifuli.module.supplychain.routing.dal.mysql.StandardProductRoutingCandidateMapper;
-import com.aifuli.module.supplychain.routing.dal.mysql.StandardProductRoutingRuleMapper;
+import com.aifuli.module.supplychain.routing.dal.mysql.StdRoutingCandidateMapper;
+import com.aifuli.module.supplychain.routing.dal.mysql.StdRoutingRuleMapper;
+import com.aifuli.module.supplychain.routing.dal.mysql.StdRoutingRuleScopeMapper;
 import com.aifuli.module.supplychain.routing.dal.mysql.SupplierRoutingPolicyMapper;
 import com.aifuli.module.supplychain.routing.dal.mysql.SupplierRoutingPolicyVersionMapper;
 import com.aifuli.module.supplychain.routing.domain.RoutingType;
+import com.aifuli.module.supplychain.testsupport.RoutingPolicyPresetFixture;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerDO;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierDO;
@@ -23,7 +26,10 @@ import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.testcontainers.containers.MySQLContainer;
+
+import javax.sql.DataSource;
 
 import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
@@ -33,8 +39,8 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * 真实 MySQL/Liquibase 验证当前生效标准路由规则只读投影。
- * 设计见 {@code docs/superpowers/specs/2026-09-21-routing-rule-admin-readonly-design.md#8-测试门禁}。
+ * 真实 MySQL/Liquibase 验证当前生效标准路由规则只读投影（PRD 四级范围模型）。
+ * 设计见 {@code docs/superpowers/specs/2026-09-23-order-frontend-alignment-and-routing-prd-model-design.md#7-测试计划}。
  */
 class RoutingRuleAdminIntegrationTest {
 
@@ -73,10 +79,14 @@ class RoutingRuleAdminIntegrationTest {
             supplierMapper.insert(first);
             supplierMapper.insert(second);
 
+            // 044 预置引导策略占用同类型唯一 active 位，先停用再插入测试自有活动策略。
+            RoutingPolicyPresetFixture.deactivatePresetPolicy(new JdbcTemplate(
+                    context.getBean("supplyChainDataSource", DataSource.class)));
             SupplierRoutingPolicyDO policy = SupplierRoutingPolicyDO.builder()
-                    .policyCode("CARD_ADMIN_VIEW").policyName("管理端只读投影")
+                    .policyCode("STANDARD_PRODUCT_VIEW").policyName("管理端只读投影")
                     .routingType(RoutingType.STANDARD_PRODUCT.code())
                     .status((short) 10).activeFlag((short) 1).version(0L)
+                    .stabilityWeight(40).priceWeight(30).timelinessWeight(30)
                     .createdBy(1L).createdAt(now).updatedBy(1L).updatedAt(now).build();
             context.getBean(SupplierRoutingPolicyMapper.class).insert(policy);
             SupplierRoutingPolicyVersionDO version = SupplierRoutingPolicyVersionDO.builder()
@@ -86,14 +96,21 @@ class RoutingRuleAdminIntegrationTest {
                     .publishedBy(1L).publishedAt(now).version(0L)
                     .createdBy(1L).createdAt(now).updatedBy(1L).updatedAt(now).build();
             context.getBean(SupplierRoutingPolicyVersionMapper.class).insert(version);
-            StandardProductRoutingRuleDO rule = StandardProductRoutingRuleDO.builder()
+            StdRoutingRuleDO rule = StdRoutingRuleDO.builder()
                     .policyVersionId(version.getId()).ruleCode("RR_ADMIN_1")
-                    .ruleName("管理端双候选").buyerId(buyer.getId())
-                    .fulfillmentType("DIRECT_RECHARGE").rulePriority(10).version(0L)
+                    .ruleName("管理端双候选").routeMode("AUTO")
+                    .distributorMode("SPECIFIED").projectMode("ALL")
+                    .productTypeMode("ALL").supplierMode("SPECIFIED")
+                    .strategyPriority1("STABLE").strategyPriority2("PRICE").strategyPriority3("COMPOSITE")
+                    .rulePriority(100).status((short) 10).protectedRule(false).version(0L)
                     .createdBy(1L).createdAt(now).updatedBy(1L).updatedAt(now).build();
-            context.getBean(StandardProductRoutingRuleMapper.class).insert(rule);
-            StandardProductRoutingCandidateMapper candidateMapper =
-                    context.getBean(StandardProductRoutingCandidateMapper.class);
+            context.getBean(StdRoutingRuleMapper.class).insert(rule);
+            StdRoutingRuleScopeMapper scopeMapper = context.getBean(StdRoutingRuleScopeMapper.class);
+            scopeMapper.insert(StdRoutingRuleScopeDO.builder()
+                    .ruleId(rule.getId()).scopeKind("DISTRIBUTOR").scopeCode("BYR_ROUTE")
+                    .createdAt(now).build());
+            StdRoutingCandidateMapper candidateMapper =
+                    context.getBean(StdRoutingCandidateMapper.class);
             candidateMapper.insert(candidate(rule.getId(), first.getId(), 0, now));
             candidateMapper.insert(candidate(rule.getId(), second.getId(), 10, now));
 
@@ -103,10 +120,13 @@ class RoutingRuleAdminIntegrationTest {
             assertThat(page.getList()).hasSize(1);
             assertThat(page.getList().getFirst().ruleCode()).isEqualTo("RR_ADMIN_1");
             assertThat(page.getList().getFirst().routeMode()).isEqualTo(RoutingRuleRouteMode.AUTO);
-            assertThat(page.getList().getFirst().supplierCodes()).containsExactly("SPL_ROUTE_A", "SPL_ROUTE_B");
+            assertThat(page.getList().getFirst().supplierCodes())
+                    .containsExactly("SPL_ROUTE_A", "SPL_ROUTE_B");
             assertThat(page.getList().getFirst().distributorCodes()).containsExactly("BYR_ROUTE");
             assertThat(page.getList().getFirst().priorities().getFirst().strategy())
                     .isEqualTo(RoutingRuleStrategy.STABLE);
+            assertThat(page.getList().getFirst().weights())
+                    .isEqualTo(new RoutingRuleAdminQueryService.WeightView(40, 30, 30));
             var detail = service.get("RR_ADMIN_1");
             assertThat(detail.name()).isEqualTo("管理端双候选");
             assertThat(detail.supplierNames()).containsExactly("甲路由供应商", "乙路由供应商");
@@ -119,9 +139,9 @@ class RoutingRuleAdminIntegrationTest {
                 .createdBy(1L).createdAt(now).updatedBy(1L).updatedAt(now).build();
     }
 
-    private static StandardProductRoutingCandidateDO candidate(Long ruleId, Long supplierId,
-                                                               int priority, LocalDateTime now) {
-        return StandardProductRoutingCandidateDO.builder().ruleId(ruleId).supplierId(supplierId)
+    private static StdRoutingCandidateDO candidate(Long ruleId, Long supplierId,
+                                                   int priority, LocalDateTime now) {
+        return StdRoutingCandidateDO.builder().ruleId(ruleId).supplierId(supplierId)
                 .candidatePriority(priority).inventoryCheckMode("UNSUPPORTED")
                 .balanceCheckMode("UNSUPPORTED").healthCheckMode("OPTIONAL").healthMaxAgeSeconds(60)
                 .version(0L).createdBy(1L).createdAt(now).updatedBy(1L).updatedAt(now).build();

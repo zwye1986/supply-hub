@@ -56,6 +56,13 @@ public final class SupplyChainAdminPermissions {
     public static final String PRODUCT_TYPE_UPDATE_STATUS = "supply-chain:product-type:update-status";
 
     public static final String ORDER_QUERY = "supply-chain:order:query";
+    public static final String ORDER_EXPORT = "supply-chain:order:export";
+
+    public static final String ROUTING_RULE_QUERY = "supply-chain:routing-rule:query";
+    public static final String ROUTING_RULE_CREATE = "supply-chain:routing-rule:create";
+    public static final String ROUTING_RULE_UPDATE = "supply-chain:routing-rule:update";
+    public static final String ROUTING_RULE_DELETE = "supply-chain:routing-rule:delete";
+    public static final String ROUTING_RULE_UPDATE_STATUS = "supply-chain:routing-rule:update-status";
 
     public static final String ADMIN_EXPRESSION = "@ss.hasPermission('" + ADMIN + "')";
     public static final String SUPPLIER_QUERY_EXPRESSION =
@@ -133,6 +140,19 @@ public final class SupplyChainAdminPermissions {
             "@ss.hasAnyPermissions('" + ADMIN + "', '" + PRODUCT_TYPE_UPDATE_STATUS + "')";
     public static final String ORDER_QUERY_EXPRESSION =
             "@ss.hasAnyPermissions('" + ADMIN + "', '" + ORDER_QUERY + "')";
+    public static final String ORDER_EXPORT_EXPRESSION =
+            "@ss.hasAnyPermissions('" + ADMIN + "', '" + ORDER_EXPORT + "')";
+
+    public static final String ROUTING_RULE_QUERY_EXPRESSION =
+            "@ss.hasAnyPermissions('" + ADMIN + "', '" + ROUTING_RULE_QUERY + "')";
+    public static final String ROUTING_RULE_CREATE_EXPRESSION =
+            "@ss.hasAnyPermissions('" + ADMIN + "', '" + ROUTING_RULE_CREATE + "')";
+    public static final String ROUTING_RULE_UPDATE_EXPRESSION =
+            "@ss.hasAnyPermissions('" + ADMIN + "', '" + ROUTING_RULE_UPDATE + "')";
+    public static final String ROUTING_RULE_DELETE_EXPRESSION =
+            "@ss.hasAnyPermissions('" + ADMIN + "', '" + ROUTING_RULE_DELETE + "')";
+    public static final String ROUTING_RULE_UPDATE_STATUS_EXPRESSION =
+            "@ss.hasAnyPermissions('" + ADMIN + "', '" + ROUTING_RULE_UPDATE_STATUS + "')";
 
     public static final String READ_OPTIONS_EXPRESSION =
             "@ss.hasAnyPermissions('" + ADMIN + "', '" + SUPPLIER_QUERY + "', '"

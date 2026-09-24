@@ -78,7 +78,7 @@ public class BuyerFulfillmentCommandFacade {
         TargetSchemaSnapshot targetSchema = lifecycle.resolveTargetSchema(buyer.id(), request.getBuyerSkuCode());
         String requestId = businessNoGenerator.next(BusinessNoPrefixes.REQ);
         FulfillmentAcceptanceLifecycle.PreparedAcceptance prepared = prepare(
-                request, normalizedBuyerUserId, buyer, project.projectId(), targetSchema, requestId);
+                request, normalizedBuyerUserId, buyer, project, targetSchema, requestId);
         FulfillmentAcceptanceLifecycle.ClaimResult claim;
         try {
             claim = lifecycle.claim(prepared);
@@ -108,7 +108,7 @@ public class BuyerFulfillmentCommandFacade {
 
     private FulfillmentAcceptanceLifecycle.PreparedAcceptance prepare(
             AcceptFulfillmentReqDTO request, String normalizedBuyerUserId, BuyerResolver.BuyerSnapshot buyer,
-            Long projectId, TargetSchemaSnapshot targetSchema, String traceId) {
+            ProjectSnapshot project, TargetSchemaSnapshot targetSchema, String traceId) {
         FulfillmentTargetDTO target = request.getTarget();
         Map<String, String> normalizedTargetValues = new TreeMap<>(target.getValues());
         boolean mobileTarget = FulfillmentTargetFields.ACCOUNT_TYPE_MOBILE.equals(
@@ -145,7 +145,8 @@ public class BuyerFulfillmentCommandFacade {
                 + normalizedBuyerUserId).getBytes(StandardCharsets.UTF_8));
         String fulfillmentAccountValue = FulfillmentTargetFields.mobileAccountValue(normalizedTargetValues);
         return new FulfillmentAcceptanceLifecycle.PreparedAcceptance(
-                projectId, buyer.id(), buyer.buyerCode(), buyer.buyerName(), request.getBuyerOrderNo(),
+                project.projectId(), project.projectCode(), project.projectName(),
+                buyer.id(), buyer.buyerCode(), buyer.buyerName(), request.getBuyerOrderNo(),
                 normalizedBuyerUserId, fulfillmentAccountValue, request.getBuyerSkuCode(),
                 Math.toIntExact(request.getListingVersion()), request.getQuantity(),
                 request.getPricingQuoteToken(),
