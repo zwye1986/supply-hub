@@ -140,9 +140,13 @@ public class RoutingRuleAdminQueryService {
             }
         }
         Map<Long, SupplierDO> suppliers = new HashMap<>();
-        for (SupplierDO supplier : supplierMapper.selectBatchIds(supplierIds)) {
-            if (supplier != null && supplier.getId() != null) {
-                suppliers.put(supplier.getId(), supplier);
+        // AUTO + ALL（含 GLOBAL_DEFAULT）不持久化候选；空集合不应交给 selectBatchIds 生成 IN ()。
+        // 设计见 docs/superpowers/specs/2026-09-23-order-frontend-alignment-and-routing-prd-model-design.md#56-rest-契约。
+        if (!supplierIds.isEmpty()) {
+            for (SupplierDO supplier : supplierMapper.selectBatchIds(supplierIds)) {
+                if (supplier != null && supplier.getId() != null) {
+                    suppliers.put(supplier.getId(), supplier);
+                }
             }
         }
 

@@ -68,6 +68,14 @@ class RoutingRuleAdminIntegrationTest {
     @Test
     void pageAndGetReadPublishedStandardRule() {
         try (ConfigurableApplicationContext context = applicationContext()) {
+            RoutingRuleAdminQueryService service = context.getBean(RoutingRuleAdminQueryService.class);
+            var presetPage = service.page(new RoutingRuleAdminQueryService.RoutingRulePageQuery(
+                    null, List.of(), List.of(), List.of(), List.of(), null, List.of(), null, null, 1, 20));
+            assertThat(presetPage.getList()).extracting(RoutingRuleAdminQueryService.RoutingRuleView::ruleCode)
+                    .containsExactly("GLOBAL_DEFAULT");
+            assertThat(presetPage.getList().getFirst().supplierCodes()).isEmpty();
+            assertThat(service.get("GLOBAL_DEFAULT").supplierNames()).isEmpty();
+
             LocalDateTime now = LocalDateTime.now().withNano(0);
             BuyerDO buyer = BuyerDO.builder().buyerCode("BYR_ROUTE").buyerName("路由分销商")
                     .shortName("路由").buyerType("SAAS_MALL").status((short) 10).version(0L)
@@ -114,7 +122,6 @@ class RoutingRuleAdminIntegrationTest {
             candidateMapper.insert(candidate(rule.getId(), first.getId(), 0, now));
             candidateMapper.insert(candidate(rule.getId(), second.getId(), 10, now));
 
-            RoutingRuleAdminQueryService service = context.getBean(RoutingRuleAdminQueryService.class);
             var page = service.page(new RoutingRuleAdminQueryService.RoutingRulePageQuery(
                     null, List.of(), List.of(), List.of(), List.of(), null, List.of(), null, null, 1, 20));
             assertThat(page.getList()).hasSize(1);

@@ -148,6 +148,29 @@ class RoutingRuleAdminQueryServiceTest {
     }
 
     @Test
+    void pageAndGetKeepAutoAllRuleWithoutPersistedSuppliers() {
+        stubEffectiveVersion();
+        StdRoutingRuleDO defaultRule = rule(1L, "GLOBAL_DEFAULT", "全局默认规则", NOW,
+                "AUTO", "ALL", "ALL", "ALL", null, "STABLE", "PRICE", "COMPOSITE");
+        defaultRule.setSupplierMode("ALL");
+        defaultRule.setProtectedRule(true);
+        when(ruleMapper.selectByPolicyVersionId(10L)).thenReturn(List.of(defaultRule));
+        when(scopeMapper.selectByRuleIds(anyCollection())).thenReturn(List.of());
+        when(candidateMapper.selectByRuleIds(anyCollection())).thenReturn(List.of());
+
+        var page = service.page(query());
+        var detail = service.get("GLOBAL_DEFAULT");
+
+        assertThat(page.getTotal()).isEqualTo(1L);
+        assertThat(page.getList()).containsExactly(detail);
+        assertThat(detail.supplierMode()).isEqualTo(RoutingRuleScopeMode.ALL);
+        assertThat(detail.supplierCodes()).isEmpty();
+        assertThat(detail.supplierNames()).isEmpty();
+        assertThat(detail.primarySupplierCode()).isNull();
+        verifyNoInteractions(supplierMapper);
+    }
+
+    @Test
     void rejectsReversedUpdateTimeRange() {
         RoutingRuleAdminQueryService.RoutingRulePageQuery query =
                 new RoutingRuleAdminQueryService.RoutingRulePageQuery(

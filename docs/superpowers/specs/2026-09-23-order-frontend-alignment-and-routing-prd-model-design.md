@@ -320,6 +320,8 @@ ALTER TABLE sc_supplier_routing_policy
 
 响应 `RoutingRuleView` 对齐前端 `RouteRuleVO`：`ruleCode/name/protectedRule`、四级 `*Mode/*Codes/*Names`、`routeMode`、`primarySupplierCode/Name`、`priorities[{id,strategy}]`（3 项有序）、`weights{stability,price,timeliness}`、`status(ENABLED/DISABLED)`、`updater`（用户名，经 system 用户服务解析——管理端已有先例）、`updateTime`。分页参数 `distributorCodes/projectCodes/productTypeCodes/supplierCodes/status/updaters/updateFrom/updateTo` 全部生效。
 
+只读投影批量补供应商档案时，先汇总当前版本全部规则的候选供应商 ID 与 FIXED 主供应商 ID。`AUTO + supplierMode=ALL`（包括预置 `GLOBAL_DEFAULT`）的候选在订单运行时按 SKU 动态解析，规则表中可以没有候选行；若汇总 ID 为空，直接使用空供应商映射，不调用批量查询，规则仍正常返回 `supplierMode=ALL`、空 `supplierCodes/supplierNames`。此边界同时适用于分页与详情，不能通过给默认规则补固定候选来规避空集合。
+
 写路径沿用补丁发布：保存 → 克隆当前生效版本 → 应用补丁（规则 + 范围 + 候选 + 策略 + 权重）→ 重算 `config_digest` → 发布新版本。`changeStatus` 变为真实启停（不再 DISABLED=删除）。
 
 ### 5.7 受影响调用方
@@ -357,6 +359,8 @@ ALTER TABLE sc_supplier_routing_policy
 | `ArchitectureTest` | §5.8 回归 |
 
 联调步骤与前端 mock 切换清单（`USE_ORDER_MOCK=false`、`USE_ROUTING_MOCK=false`、URL 改 order-views、金额分转元展示、前端路由商品类型字典对齐）写入 `docs/集成测试.md`。
+
+只读投影回归增加：`RoutingRuleAdminQueryServiceTest` 验证仅有 `AUTO + ALL` 且无主供应商、无候选时分页和详情不查询供应商档案并返回空供应商列表；`RoutingRuleAdminIntegrationTest` 在真实 MySQL/Liquibase 预置的 `GLOBAL_DEFAULT` 上验证同一请求不会生成 `IN ()`，有候选规则的既有测试继续验证批量补档案。
 
 ## 8. 实施顺序
 
