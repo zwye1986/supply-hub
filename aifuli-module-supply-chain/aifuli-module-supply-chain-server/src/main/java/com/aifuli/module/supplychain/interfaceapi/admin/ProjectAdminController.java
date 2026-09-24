@@ -28,7 +28,9 @@ import com.aifuli.module.supplychain.tradecore.profile.domain.L3AdjustMode;
 import com.aifuli.module.supplychain.tradecore.profile.domain.ProjectType;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
@@ -75,6 +77,67 @@ import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminP
 public class ProjectAdminController {
 
     private static final String VIEW_SIMPLE = "simple";
+
+    /** 项目商品分页的全字段文档示例；设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#72-项目商品}。 */
+    private static final String PROJECT_PRODUCTS_OVERRIDE_EXAMPLE = """
+            {
+              "code": 0,
+              "msg": "",
+              "data": {
+                "total": 1,
+                "list": [{
+                  "listingCode": "PLT_01M1ZEGA2965H3D93AV7HKNHEN",
+                  "platformSkuCode": "SKU_01M1ZEGA2965H3D93AV7HKNHEN",
+                  "skuName": "月卡",
+                  "suggestPriceCents": 10000,
+                  "suggestedSalePriceCents": 12000,
+                  "platformBasePriceCents": 9000,
+                  "distPriceCents": 9500,
+                  "projectPriceCents": 9800,
+                  "finalPriceCents": 9800,
+                  "priceSource": "L3",
+                  "projectPriceCovered": true,
+                  "projectPricingConfig": {
+                    "distributionInherited": false,
+                    "distributionRule": {
+                      "mode": "CUSTOM",
+                      "base": "MARKET_PRICE",
+                      "percentage": 85,
+                      "operator": "SUBTRACT",
+                      "operand": 1.50
+                    },
+                    "salesInherited": false,
+                    "salesRule": {
+                      "mode": "CUSTOM",
+                      "base": "SUGGESTED_SALE_PRICE",
+                      "percentage": 100,
+                      "operator": "ADD",
+                      "operand": 0
+                    },
+                    "serviceFeeInherited": false,
+                    "serviceFeeRule": {
+                      "percentage": 2,
+                      "operator": "ADD",
+                      "operand": 1.00,
+                      "hideCopy": false,
+                      "copy": "服务费"
+                    },
+                    "hideInherited": false,
+                    "hideRule": {
+                      "distributionThresholdPercent": 12.50,
+                      "salesThresholdPercent": 10
+                    },
+                    "taxInherited": false,
+                    "taxMetadata": {
+                      "taxIncluded": true,
+                      "taxRateCode": "SIX_PERCENT",
+                      "taxRateLabel": "6%"
+                    }
+                  }
+                }]
+              }
+            }
+            """;
 
     private final ProjectAdminCommandService commandService;
     private final ProjectAdminQueryService queryService;
@@ -149,12 +212,36 @@ public class ProjectAdminController {
     @GetMapping("/{projectCode}/products")
     @PreAuthorize(PROJECT_QUERY_EXPRESSION)
     @Operation(summary = "分页查询项目商品",
-            description = "只返回未移除行。finalPriceCents 为冻结版本单价；distPriceCents 为当前有效 L2。金额单位 CNY 分。")
+            description = "只返回未移除行。projectPricingConfig 为当前项目综合定价版本保存的五组覆盖配置；"
+                    + "finalPriceCents 为旧冻结版本单价，distPriceCents 为当前有效 L2。金额单位 CNY 分。",
+            responses = @ApiResponse(responseCode = "200", description = "项目商品分页响应",
+                    content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = ProjectProductsPageResponse.class,
+                                    example = PROJECT_PRODUCTS_OVERRIDE_EXAMPLE))))
     public CommonResult<PageResult<ProjectListingListItem>> pageProducts(
-            @PathVariable String projectCode,
+            @Parameter(description = "采购项目全局永久编码") @PathVariable String projectCode,
             @Parameter(description = "页码，从 1 开始") @RequestParam(required = false) Integer pageNo,
             @Parameter(description = "每页条数") @RequestParam(required = false) Integer pageSize) {
         return success(listingQueryService.page(projectCode, pageNo, pageSize));
+    }
+
+    /**
+     * 项目商品分页的 OpenAPI 专用响应模型，仅用于展开通用返回与分页泛型中的实际字段。
+     * 运行时仍由 {@link #pageProducts} 返回原有 CommonResult/PageResult JSON。
+     * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#72-项目商品}。
+     */
+    @Schema(name = "ProjectProductsPageResponse", description = "项目商品分页响应")
+    public record ProjectProductsPageResponse(
+            @Schema(description = "业务结果码，0表示成功", example = "0") Integer code,
+            @Schema(description = "业务结果提示，成功时为空字符串") String msg,
+            @Schema(description = "当前项目的未移除商品分页数据") ProjectProductsPageData data) {
+    }
+
+    /** 项目商品分页数据；设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#72-项目商品}。 */
+    @Schema(name = "ProjectProductsPageData", description = "项目商品分页数据")
+    public record ProjectProductsPageData(
+            @Schema(description = "当前项目未移除商品总数", example = "1") Long total,
+            @Schema(description = "当前页项目商品，按项目商品更新时间倒序") List<ProjectListingListItem> list) {
     }
 
     @PostMapping("/{projectCode}/products")

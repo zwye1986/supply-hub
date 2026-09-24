@@ -496,6 +496,12 @@ Springdoc `components.schemas` 中冲突的通用简单类名。生成契约必�
 
 新增即对项目可采购（等价上架）。列表金额：`suggestPriceCents`（历史 L1 兼容）、`suggestedSalePriceCents`（C 端 SKU 建议价）、`platformBasePriceCents`（B 端项目调价基数）、`distPriceCents`（当前有效分销价）、`projectPriceCents`、`finalPriceCents`、`priceSource`、`projectPriceCovered`。保留 `l3AdjustMode=EQUAL_L1` 请求枚举，但页面文案改为“等于平台默认分销价”；`CUSTOM` 以同一 B 端基数计算。
 
+项目商品分页行追加 `projectPricingConfig`：返回该 listing 的 `sc_project_sku_pricing.current_version_id` 所指向版本的 `override_json`，映射为与 `ProjectOverrides` 同字段、同值的强类型响应对象。对象保留分销价、销售价、服务费、利润隐藏、税务五组各自的 `*Inherited` 开关和覆盖规则；税务返回服务端归一化并保存后的元数据。已有综合定价版本且全部继承时返回五组 `*Inherited=true` 的对象；没有当前综合定价版本的历史行返回 `null`，不得以旧 `ProjectListingVersion` 猜测通用规则。只读取当前指针，不按最大版本号选取，也不以 `effective_config_json` 中的继承结果冒充项目覆盖配置；当前指针悬空、版本不属于该定价身份或 JSON 损坏时应报错，不静默降级。先限定项目并分页 listing，再批量读取本页定价身份与当前版本，避免逐行增加查询。此字段只增补查询响应，原有冻结价字段及订单快照语义不变；读取不触发重算、版本发布或外部字典调用。
+
+该 GET 的 OpenAPI/Swagger 响应须提供具体的 `code`、`msg`、`data.total`、`data.list[]` 模型，列表每个字段均有业务说明；`projectPricingConfig` 的实际 Java 响应字段直接使用带注解的强类型模型，不依赖 `@Schema(implementation=...)` 将领域记录伪装为另一种类型。Swagger 必须展开五组继承标记、覆盖规则以及公式、服务费、利润隐藏和税务的子字段，说明 `true` 继承直接上游、`false` 使用该组覆盖。继承组的规则通常为 `null`，但分销价、销售价、服务费和利润隐藏组若提交时同时带有规则，保存记录可能保留该规则；响应须原样回显，而价格计算会忽略该组规则。税务组经请求归一化后，继承时元数据为 `null`。公式说明 `(基数 × percentage / 100) operator operand`、基数和运算符枚举、加减的元与乘除系数单位；服务费说明以商品小计为基数；利润隐藏说明百分数与阈值范围；税务说明是否含税、字典编码与保存时解析的名称。文档专用外层响应模型只描述现有 JSON 契约，不改变接口签名或保存逻辑；契约测试校验实际字段类型、生成的 schema 与序列化 JSON 一致，避免 Knife4j 将泛型分页响应或嵌套配置展示为无具体字段的对象。
+
+`200` 响应须提供可直接查看的完整 JSON 示例，包含响应包装、分页、列表行所有字段和五个非空规则对象的全部子字段；继承形态通过五组字段说明和联调场景解释。示例中的金额单位为分，公式运算值单位遵循各规则说明；旧冻结价字段与新项目综合定价覆盖配置应明确区分。测试环境 Knife4j 4.5.0 对 OpenAPI `content.examples` 中已解析为 JSON 对象的 `value` 不渲染“响应示例”，故该接口将完整示例放在响应 `schema.example`，不用多个 `content.examples`；对象引用字段不标注会生成 `type: null` 的 `nullable=true`，避免 Knife4j 将 `projectPricingConfig` 及规则对象显示成 `null` 类型。以上仅修正文档生成，运行时配置为 `null` 的 JSON 语义不变。契约测试解析示例 JSON，对照实际响应模型的序列化字段集合逐层校验，并断言引用字段不会生成 `type: null`，防止示例遗漏字段或再次空白。
+
 新增、改单条 L3 与旧批量 L3 试算/发布共用价格来源：存在分销商 SKU 当前通用定价版本时，`FOLLOW_L2` 冻结其 `distribution_price_cents`，按该版本的分销价继承标记保留 L1/L2 来源；`EQUAL_L1`/`CUSTOM` 的基数取该分销商版本引用的平台默认定价版本 `distribution_price_cents`。通用版本存在但所需金额为空或被引用的平台版本缺失时失败关闭，不回退旧价；只有分销商通用版本缺失的历史行才沿用旧 L1/L2。项目商品列表的当前分销价使用同一来源，已发布的项目冻结版本与历史订单不得回写。
 
 改 L3 或改分销商 L2 覆盖**不回放**已发布版本；当前指针切换在同一本地事务完成。在途单继续用冻结快照。

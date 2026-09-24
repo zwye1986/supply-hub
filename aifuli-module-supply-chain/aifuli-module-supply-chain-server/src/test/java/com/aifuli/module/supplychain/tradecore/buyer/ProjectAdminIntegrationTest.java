@@ -55,6 +55,7 @@ import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferMap
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferVersionMapper;
 import com.aifuli.module.supplychain.tradecore.supply.domain.OfferStatus;
 import com.aifuli.module.supplychain.tradecore.supply.domain.SupplierStatus;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.aifuli.module.supplychain.tradecore.ledger.application.AccountLedgerWriter;
 import com.aifuli.module.supplychain.tradecore.profile.domain.L2AdjustMode;
@@ -335,6 +336,11 @@ class ProjectAdminIntegrationTest {
         var inheritedVersion = projectVersionMapper.selectById(inheritedIdentity.getCurrentVersionId());
         assertThat(inheritedVersion.getBuyerPricingVersionId()).isEqualTo(buyerVersion.getId());
         assertThat(inheritedVersion.getSalesPriceCents()).isEqualTo(10_000L);
+        ObjectMapper responseMapper = context.getBean(ObjectMapper.class);
+        JsonNode inheritedConfig = responseMapper.valueToTree(context.getBean(ProjectListingQueryService.class)
+                .page(projectCode, 1, 20).getList().getFirst().projectPricingConfig());
+        assertThat(inheritedConfig)
+                .isEqualTo(responseMapper.valueToTree(GenericBatchPricingService.ProjectOverrides.allInherited()));
 
         Long currentBeforeRejectedBatch = buyerIdentity.getCurrentVersionId();
         assertThatThrownBy(() -> pricing.saveBuyer(buyerA,
@@ -347,12 +353,15 @@ class ProjectAdminIntegrationTest {
 
         FormulaRule projectSales = new FormulaRule(PriceMode.CUSTOM, PriceBase.MARKET_PRICE,
                 new BigDecimal("120"), FixedOperator.ADD, BigDecimal.ZERO);
-        pricing.saveProject(projectCode, List.of(listingCode),
-                new GenericBatchPricingService.ProjectOverrides(true, null, false, projectSales,
-                        true, null, true, null, true, null), 2L);
+        var savedOverrides = new GenericBatchPricingService.ProjectOverrides(true, null, false, projectSales,
+                true, null, true, null, true, null);
+        pricing.saveProject(projectCode, List.of(listingCode), savedOverrides, 2L);
         var overriddenIdentity = projectPricingMapper.selectByListingId(listing.getId());
         assertThat(projectVersionMapper.selectById(overriddenIdentity.getCurrentVersionId()).getSalesPriceCents())
                 .isEqualTo(12_000L);
+        JsonNode savedConfig = responseMapper.valueToTree(context.getBean(ProjectListingQueryService.class)
+                .page(projectCode, 1, 20).getList().getFirst().projectPricingConfig());
+        assertThat(savedConfig).isEqualTo(responseMapper.valueToTree(savedOverrides));
 
         publishSupplyPrice(context, offer, 9_500L, 2);
         pricing.recalculatePlatformSku(new PricingDependencyChangedEvent(sku.getId()));
@@ -363,6 +372,9 @@ class ProjectAdminIntegrationTest {
         pricing.recalculatePlatformSku(new PricingDependencyChangedEvent(sku.getId()));
         assertThat(projectPricingMapper.selectByListingId(listing.getId()).getPricingStatus())
                 .isEqualTo(PricingStatus.READY.name());
+        JsonNode recalculatedConfig = responseMapper.valueToTree(context.getBean(ProjectListingQueryService.class)
+                .page(projectCode, 1, 20).getList().getFirst().projectPricingConfig());
+        assertThat(recalculatedConfig).isEqualTo(responseMapper.valueToTree(savedOverrides));
     }
 
     private static FormulaRule directMarket() {
