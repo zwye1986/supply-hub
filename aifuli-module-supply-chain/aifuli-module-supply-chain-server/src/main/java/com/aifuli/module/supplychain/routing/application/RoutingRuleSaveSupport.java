@@ -8,43 +8,49 @@ import java.util.Objects;
 import java.util.Set;
 
 import static com.aifuli.framework.common.exception.util.ServiceExceptionUtil.exception;
-import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.ROUTING_RULE_BUYER_REQUIRED;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.ENUM_NOT_OPEN;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.ROUTING_RULE_CANDIDATE_INVALID;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.ROUTING_RULE_CODE_MISMATCH;
-import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.ROUTING_RULE_FULFILLMENT_MISMATCH;
-import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.ROUTING_RULE_SCOPE_NOT_OPEN;
-import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.ROUTING_RULE_STRATEGY_NOT_OPEN;
-import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.ROUTING_RULE_SUPPLIER_ALL_NOT_OPEN;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.ROUTING_RULE_SCOPE_DUPLICATED;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.ROUTING_RULE_WEIGHTS_INVALID;
 
 /**
- * 路由规则页保存请求的无库校验与归一化。
- * <p>不依赖 {@code interfaceapi} VO；CommandService 将 HTTP 体映射为 {@link SaveRequest} 后再调用。
- * 设计见 {@code docs/superpowers/specs/2026-09-21-routing-rule-admin-write-design.md#4-请求体与页面字段}。
+ * 路由规则页保存请求的无库校验与归一化（PRD 四级范围模型）。
+ *
+ * <p>不依赖 {@code interfaceapi} VO 与数据库；编码存在性、同范围唯一性、名称唯一等
+ * 需要查库的校验由 CommandService 执行。设计见
+ * {@code docs/superpowers/specs/2026-09-23-order-frontend-alignment-and-routing-prd-model-design.md#55-保存校验}。</p>
  */
 public final class RoutingRuleSaveSupport {
 
-    /** 供 CommandService 创建新候选；默认库存检查模式，见设计 §4.2。 */
+    /** 供 CommandService 创建新候选；默认动态检查模式（全 UNSUPPORTED），见设计 §5.5。 */
     public static final String DEFAULT_INVENTORY_CHECK_MODE = "UNSUPPORTED";
-    /** 供 CommandService 创建新候选；默认余额检查模式，见设计 §4.2。 */
+    /** 供 CommandService 创建新候选；默认余额检查模式。 */
     public static final String DEFAULT_BALANCE_CHECK_MODE = "UNSUPPORTED";
-    /** 供 CommandService 创建新候选；默认健康检查模式，见设计 §4.2。 */
+    /** 供 CommandService 创建新候选；默认健康检查模式。 */
     public static final String DEFAULT_HEALTH_CHECK_MODE = "UNSUPPORTED";
-    /** 供 CommandService 创建新候选；默认库存检查最大年龄（秒），UNSUPPORTED 时必须为空。 */
+    /** UNSUPPORTED 模式下最大年龄恒为空。 */
     public static final Integer DEFAULT_INVENTORY_MAX_AGE_SECONDS = null;
-    /** 供 CommandService 创建新候选；默认余额检查最大年龄（秒），UNSUPPORTED 时必须为空。 */
+    /** UNSUPPORTED 模式下最大年龄恒为空。 */
     public static final Integer DEFAULT_BALANCE_MAX_AGE_SECONDS = null;
-    /** 供 CommandService 创建新候选；默认健康检查最大年龄（秒），UNSUPPORTED 时必须为空。 */
+    /** UNSUPPORTED 模式下最大年龄恒为空。 */
     public static final Integer DEFAULT_HEALTH_MAX_AGE_SECONDS = null;
 
+    /** 全局综合权重默认值（稳定40/价格30/时效30），与策略表 DDL 默认一致。 */
+    public static final int DEFAULT_WEIGHT_STABILITY = 40;
+    /** 全局综合权重默认值。 */
+    public static final int DEFAULT_WEIGHT_PRICE = 30;
+    /** 全局综合权重默认值。 */
+    public static final int DEFAULT_WEIGHT_TIMELINESS = 30;
+
+    /** 全局权重三权和恒定值。 */
+    public static final int WEIGHT_SUM = 100;
+
     private static final int NAME_MAX_LENGTH = 128;
-    private static final Set<String> FULFILLMENT_TYPES = Set.of(
-            "DIRECT_RECHARGE", "VOUCHER_CODE", "CARD_CODE_SECRET", "VOUCHER_URL", "ACCOUNT_BOUND_BENEFIT");
-    private static final int EXPECTED_WEIGHT_STABILITY = 40;
-    private static final int EXPECTED_WEIGHT_PRICE = 30;
-    private static final int EXPECTED_WEIGHT_TIMELINESS = 30;
+    private static final int PRIORITY_SIZE = 3;
 
     /**
-     * 校验并归一化保存请求。
+     * 校验并归一化保存请求（纯结构校验，不查库）。
      *
      * @param request      应用层输入（非 interfaceapi VO）
      * @param pathRuleCode UPDATE 时路径上的规则编码；CREATE 时忽略
@@ -56,38 +62,40 @@ public final class RoutingRuleSaveSupport {
         Objects.requireNonNull(operation, "operation");
 
         String name = requireName(request.name());
-        String buyerCode = requireSingleBuyer(request.distributorCodes());
-        rejectScopeNotOpen(request.projectCodes(), request.projectMode());
-        rejectScopeNotOpen(request.productTypeCodes(), request.productTypeMode());
-        if (request.supplierMode() == RoutingRuleScopeMode.ALL) {
-            throw exception(ROUTING_RULE_SUPPLIER_ALL_NOT_OPEN);
-        }
-        if (request.distributorMode() == RoutingRuleScopeMode.ALL) {
-            throw exception(ROUTING_RULE_BUYER_REQUIRED);
-        }
-        if (request.distributorMode() != null && request.distributorMode() != RoutingRuleScopeMode.SPECIFIED) {
-            throw exception(ROUTING_RULE_BUYER_REQUIRED);
-        }
-        validatePriorities(request.priorities());
-        validateWeights(request.weights());
-        if (request.status() == RoutingRuleStatus.DISABLED) {
-            throw exception(ROUTING_RULE_STRATEGY_NOT_OPEN);
-        }
-
         RoutingRuleRouteMode routeMode = requireRouteMode(request.routeMode());
-        String skuCode = requireNonBlank(request.skuCode(), "平台SKU编码不能为空");
-        String fulfillmentType = requireFulfillmentType(request.fulfillmentType());
-        List<String> orderedSuppliers = normalizeCandidates(routeMode, request.primarySupplierCode(),
+        RoutingRuleStatus status = requireStatus(request.status());
+        RoutingRuleScopeMode distributorMode = normalizeScopeMode(request.distributorMode(),
+                request.distributorCodes(), "适用分销商范围");
+        RoutingRuleScopeMode projectMode = normalizeScopeMode(request.projectMode(),
+                request.projectCodes(), "适用项目范围");
+        RoutingRuleScopeMode productTypeMode = normalizeScopeMode(request.productTypeMode(),
+                request.productTypeCodes(), "适用商品类型范围");
+        RoutingRuleScopeMode supplierMode = normalizeScopeMode(request.supplierMode(),
+                request.supplierCodes(), "适用供应商范围");
+        List<String> distributorCodes = normalizeScopeCodes(distributorMode, request.distributorCodes(), "适用分销商");
+        List<String> projectCodes = normalizeScopeCodes(projectMode, request.projectCodes(), "适用项目");
+        List<String> productTypeCodes = normalizeScopeCodes(productTypeMode, request.productTypeCodes(), "适用商品类型");
+        List<RoutingRuleStrategy> strategies = validatePriorities(request.priorities());
+        WeightInput weights = validateWeights(request.weights(), strategies);
+
+        String primarySupplierCode = blankToNull(request.primarySupplierCode());
+        List<String> orderedSuppliers = normalizeCandidates(routeMode, supplierMode, primarySupplierCode,
                 request.supplierCodes());
+        // FIXED 模式下前端约定 supplierCodes=[primary]；归一化为单一候选。
+        if (routeMode == RoutingRuleRouteMode.FIXED) {
+            orderedSuppliers = List.of(primarySupplierCode);
+        }
         String ruleCode = resolveRuleCode(operation, pathRuleCode, request.ruleCode());
 
-        return new NormalizedRulePatch(
-                name, buyerCode, skuCode, fulfillmentType, routeMode, List.copyOf(orderedSuppliers), ruleCode);
+        return new NormalizedRulePatch(ruleCode, name, routeMode, status,
+                distributorMode, distributorCodes, projectMode, projectCodes,
+                productTypeMode, productTypeCodes, supplierMode, orderedSuppliers,
+                primarySupplierCode, strategies, weights,
+                request.maxSupplyPriceCents());
     }
 
     private static String requireName(String raw) {
         if (raw == null || raw.isBlank()) {
-            // 无专用错误码；Controller @NotBlank 也会拦截。设计见 §4.1 name。
             throw new IllegalArgumentException("规则名称不能为空");
         }
         String trimmed = raw.trim();
@@ -97,55 +105,6 @@ public final class RoutingRuleSaveSupport {
         return trimmed;
     }
 
-    private static String requireSingleBuyer(List<String> distributorCodes) {
-        List<String> codes = trimNonBlank(distributorCodes);
-        if (codes.size() != 1) {
-            throw exception(ROUTING_RULE_BUYER_REQUIRED);
-        }
-        return codes.getFirst();
-    }
-
-    private static void rejectScopeNotOpen(List<String> codes, RoutingRuleScopeMode mode) {
-        if (mode == RoutingRuleScopeMode.SPECIFIED) {
-            throw exception(ROUTING_RULE_SCOPE_NOT_OPEN);
-        }
-        List<String> nonBlank = trimNonBlank(codes);
-        if (!nonBlank.isEmpty()) {
-            throw exception(ROUTING_RULE_SCOPE_NOT_OPEN);
-        }
-    }
-
-    private static void validatePriorities(List<PriorityInput> priorities) {
-        if (priorities == null) {
-            return;
-        }
-        if (priorities.size() != 3
-                || priorities.getFirst() == null
-                || priorities.getFirst().strategy() != RoutingRuleStrategy.STABLE) {
-            throw exception(ROUTING_RULE_STRATEGY_NOT_OPEN);
-        }
-        EnumSet<RoutingRuleStrategy> seen = EnumSet.noneOf(RoutingRuleStrategy.class);
-        for (PriorityInput item : priorities) {
-            if (item == null || item.strategy() == null || !seen.add(item.strategy())) {
-                throw exception(ROUTING_RULE_STRATEGY_NOT_OPEN);
-            }
-        }
-        if (!seen.equals(EnumSet.allOf(RoutingRuleStrategy.class))) {
-            throw exception(ROUTING_RULE_STRATEGY_NOT_OPEN);
-        }
-    }
-
-    private static void validateWeights(WeightInput weights) {
-        if (weights == null) {
-            return;
-        }
-        if (!Objects.equals(weights.stability(), EXPECTED_WEIGHT_STABILITY)
-                || !Objects.equals(weights.price(), EXPECTED_WEIGHT_PRICE)
-                || !Objects.equals(weights.timeliness(), EXPECTED_WEIGHT_TIMELINESS)) {
-            throw exception(ROUTING_RULE_STRATEGY_NOT_OPEN);
-        }
-    }
-
     private static RoutingRuleRouteMode requireRouteMode(RoutingRuleRouteMode routeMode) {
         if (routeMode == null) {
             throw new IllegalArgumentException("路由模式不能为空");
@@ -153,35 +112,108 @@ public final class RoutingRuleSaveSupport {
         return routeMode;
     }
 
-    private static String requireFulfillmentType(String fulfillmentType) {
-        String trimmed = blankToNull(fulfillmentType);
-        if (trimmed == null || !FULFILLMENT_TYPES.contains(trimmed)) {
-            throw exception(ROUTING_RULE_FULFILLMENT_MISMATCH);
+    private static RoutingRuleStatus requireStatus(RoutingRuleStatus status) {
+        if (status == null) {
+            throw exception(ENUM_NOT_OPEN);
         }
-        return trimmed;
+        return status;
     }
 
+    /** 范围模式缺省时按编码列表推导：空=ALL，非空=SPECIFIED（对齐前端提交约定）。 */
+    private static RoutingRuleScopeMode normalizeScopeMode(RoutingRuleScopeMode mode, List<String> rawCodes,
+                                                           String label) {
+        if (mode != null) {
+            return mode;
+        }
+        return trimNonBlank(rawCodes).isEmpty() ? RoutingRuleScopeMode.ALL : RoutingRuleScopeMode.SPECIFIED;
+    }
+
+    /** SPECIFIED 时编码必填、去空白、去重；ALL 时必须为空。 */
+    private static List<String> normalizeScopeCodes(RoutingRuleScopeMode mode, List<String> rawCodes, String label) {
+        List<String> codes = trimNonBlank(rawCodes);
+        if (mode == RoutingRuleScopeMode.SPECIFIED) {
+            if (codes.isEmpty()) {
+                throw new IllegalArgumentException(label + "指定范围不能为空");
+            }
+            requireDistinct(codes, label);
+            return codes;
+        }
+        if (!codes.isEmpty()) {
+            throw new IllegalArgumentException(label + "为全部时不能携带编码列表");
+        }
+        return List.of();
+    }
+
+    private static List<RoutingRuleStrategy> validatePriorities(List<PriorityInput> priorities) {
+        if (priorities == null || priorities.size() != PRIORITY_SIZE) {
+            throw exception(ROUTING_RULE_CANDIDATE_INVALID);
+        }
+        List<RoutingRuleStrategy> strategies = new ArrayList<>(PRIORITY_SIZE);
+        Set<RoutingRuleStrategy> seen = EnumSet.noneOf(RoutingRuleStrategy.class);
+        for (PriorityInput item : priorities) {
+            if (item == null || item.strategy() == null || !seen.add(item.strategy())) {
+                throw exception(ROUTING_RULE_CANDIDATE_INVALID);
+            }
+            strategies.add(item.strategy());
+        }
+        if (!seen.equals(EnumSet.allOf(RoutingRuleStrategy.class))) {
+            throw exception(ROUTING_RULE_CANDIDATE_INVALID);
+        }
+        return List.copyOf(strategies);
+    }
+
+    /** 含 COMPOSITE 时权重必填且和=100；否则缺省 40/30/30，显式提供也校验和=100。 */
+    private static WeightInput validateWeights(WeightInput weights, List<RoutingRuleStrategy> strategies) {
+        boolean composite = strategies.contains(RoutingRuleStrategy.COMPOSITE);
+        if (weights == null || (weights.stability() == null && weights.price() == null
+                && weights.timeliness() == null)) {
+            if (composite) {
+                throw exception(ROUTING_RULE_WEIGHTS_INVALID);
+            }
+            return new WeightInput(DEFAULT_WEIGHT_STABILITY, DEFAULT_WEIGHT_PRICE, DEFAULT_WEIGHT_TIMELINESS);
+        }
+        if (weights.stability() == null || weights.price() == null || weights.timeliness() == null
+                || weights.stability() < 0 || weights.price() < 0 || weights.timeliness() < 0
+                || weights.stability() + weights.price() + weights.timeliness() != WEIGHT_SUM) {
+            throw exception(ROUTING_RULE_WEIGHTS_INVALID);
+        }
+        return new WeightInput(weights.stability(), weights.price(), weights.timeliness());
+    }
+
+    /** AUTO+SPECIFIED 至少2个互异候选（失败降级）；FIXED 必须有主供应商。 */
     private static List<String> normalizeCandidates(RoutingRuleRouteMode routeMode,
+                                                    RoutingRuleScopeMode supplierMode,
                                                     String primarySupplierCode,
                                                     List<String> supplierCodes) {
         if (routeMode == RoutingRuleRouteMode.FIXED) {
-            String primary = blankToNull(primarySupplierCode);
-            if (primary == null) {
+            if (primarySupplierCode == null) {
                 throw exception(ROUTING_RULE_CANDIDATE_INVALID);
             }
-            return List.of(primary);
+            return List.of(primarySupplierCode);
+        }
+        if (supplierMode != RoutingRuleScopeMode.SPECIFIED) {
+            // AUTO+ALL：候选动态解析，不接受候选列表。
+            List<String> nonBlank = trimNonBlank(supplierCodes);
+            if (!nonBlank.isEmpty()) {
+                throw exception(ROUTING_RULE_CANDIDATE_INVALID);
+            }
+            return List.of();
         }
         List<String> ordered = trimNonBlank(supplierCodes);
-        Set<String> distinct = new HashSet<>();
-        for (String code : ordered) {
-            if (!distinct.add(code)) {
-                throw exception(ROUTING_RULE_CANDIDATE_INVALID);
-            }
-        }
         if (ordered.size() < 2) {
             throw exception(ROUTING_RULE_CANDIDATE_INVALID);
         }
+        requireDistinct(ordered, "候选供应商");
         return ordered;
+    }
+
+    private static void requireDistinct(List<String> codes, String label) {
+        Set<String> distinct = new HashSet<>();
+        for (String code : codes) {
+            if (!distinct.add(code)) {
+                throw exception(ROUTING_RULE_SCOPE_DUPLICATED);
+            }
+        }
     }
 
     private static String resolveRuleCode(Operation operation, String pathRuleCode, String bodyRuleCode) {
@@ -197,14 +229,6 @@ public final class RoutingRuleSaveSupport {
             throw exception(ROUTING_RULE_CODE_MISMATCH);
         }
         return path;
-    }
-
-    private static String requireNonBlank(String value, String message) {
-        String trimmed = blankToNull(value);
-        if (trimmed == null) {
-            throw new IllegalArgumentException(message);
-        }
-        return trimmed;
     }
 
     private static List<String> trimNonBlank(List<String> values) {
@@ -238,22 +262,21 @@ public final class RoutingRuleSaveSupport {
      */
     public record SaveRequest(
             String name,
-            List<String> distributorCodes,
-            String skuCode,
-            String fulfillmentType,
-            RoutingRuleRouteMode routeMode,
-            String primarySupplierCode,
-            List<String> supplierCodes,
-            RoutingRuleScopeMode supplierMode,
-            RoutingRuleScopeMode distributorMode,
-            RoutingRuleStatus status,
             String ruleCode,
-            List<String> projectCodes,
+            RoutingRuleRouteMode routeMode,
+            RoutingRuleStatus status,
+            RoutingRuleScopeMode distributorMode,
+            List<String> distributorCodes,
             RoutingRuleScopeMode projectMode,
-            List<String> productTypeCodes,
+            List<String> projectCodes,
             RoutingRuleScopeMode productTypeMode,
+            List<String> productTypeCodes,
+            RoutingRuleScopeMode supplierMode,
+            List<String> supplierCodes,
+            String primarySupplierCode,
             List<PriorityInput> priorities,
-            WeightInput weights) {
+            WeightInput weights,
+            Long maxSupplyPriceCents) {
     }
 
     public record PriorityInput(String id, RoutingRuleStrategy strategy) {
@@ -263,15 +286,40 @@ public final class RoutingRuleSaveSupport {
     }
 
     /**
-     * 校验通过后的规则补丁字段，供 CommandService 拼装草稿与发布。
+     * 校验通过后的规则补丁字段（PRD 四级范围模型），供 CommandService 拼装草稿与发布。
      */
     public record NormalizedRulePatch(
+            String ruleCode,
             String name,
-            String buyerCode,
-            String skuCode,
-            String fulfillmentType,
             RoutingRuleRouteMode routeMode,
+            RoutingRuleStatus status,
+            RoutingRuleScopeMode distributorMode,
+            List<String> distributorCodes,
+            RoutingRuleScopeMode projectMode,
+            List<String> projectCodes,
+            RoutingRuleScopeMode productTypeMode,
+            List<String> productTypeCodes,
+            RoutingRuleScopeMode supplierMode,
             List<String> orderedSupplierCodes,
-            String ruleCode) {
+            String primarySupplierCode,
+            List<RoutingRuleStrategy> strategies,
+            WeightInput weights,
+            Long maxSupplyPriceCents) {
+
+        public NormalizedRulePatch {
+            distributorCodes = List.copyOf(distributorCodes == null ? List.of() : distributorCodes);
+            projectCodes = List.copyOf(projectCodes == null ? List.of() : projectCodes);
+            productTypeCodes = List.copyOf(productTypeCodes == null ? List.of() : productTypeCodes);
+            orderedSupplierCodes = List.copyOf(orderedSupplierCodes == null ? List.of() : orderedSupplierCodes);
+            strategies = List.copyOf(strategies == null ? List.of() : strategies);
+        }
+
+        /** 四级范围规范化键：同范围唯一性校验用（mode+有序codes）。 */
+        public String scopeKey() {
+            return distributorMode + ":" + String.join(",", distributorCodes)
+                    + "|" + projectMode + ":" + String.join(",", projectCodes)
+                    + "|" + productTypeMode + ":" + String.join(",", productTypeCodes)
+                    + "|" + supplierMode + ":" + String.join(",", orderedSupplierCodes);
+        }
     }
 }

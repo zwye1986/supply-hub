@@ -9,10 +9,16 @@ import lombok.Data;
 
 import java.time.LocalDateTime;
 
-@TableName("sc_standard_product_routing_candidate")
+/**
+ * 标准商品路由候选（PRD 模型）：AUTO+SPECIFIED 规则下保序的候选供应商与 offer 级动态检查策略。
+ *
+ * <p>candidate_priority 在 PRD 模型下降级为同分裁决键；同时表达前端候选列表顺序。
+ * 设计见 {@code docs/superpowers/specs/2026-09-23-order-frontend-alignment-and-routing-prd-model-design.md#52-新表-ddl}。</p>
+ */
+@TableName("sc_std_routing_candidate")
 @Data
 @Builder
-public class StandardProductRoutingCandidateDO {
+public class StdRoutingCandidateDO {
     @TableId(type = IdType.AUTO)
     private Long id;
     private Long ruleId;

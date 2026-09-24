@@ -10,310 +10,313 @@ import org.junit.jupiter.api.Test;
 
 import java.util.List;
 
-import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.ROUTING_RULE_BUYER_REQUIRED;
-import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.ROUTING_RULE_CANDIDATE_INVALID;
-import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.ROUTING_RULE_CODE_MISMATCH;
-import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.ROUTING_RULE_FULFILLMENT_MISMATCH;
-import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.ROUTING_RULE_SCOPE_NOT_OPEN;
-import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.ROUTING_RULE_STRATEGY_NOT_OPEN;
-import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.ROUTING_RULE_SUPPLIER_ALL_NOT_OPEN;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * 路由规则保存请求校验与归一化：无库、仅拒绝与候选顺序。
- * 设计见 {@code docs/superpowers/specs/2026-09-21-routing-rule-admin-write-design.md#4-请求体与页面字段}。
+ * {@link RoutingRuleSaveSupport} 纯校验单测：四级范围、三优先级、权重和、
+ * AUTO/FIXED 候选约束与 UPDATE 编码一致性。无库、无 Spring。
+ *
+ * <p>设计见
+ * {@code docs/superpowers/specs/2026-09-23-order-frontend-alignment-and-routing-prd-model-design.md#55-保存校验}。</p>
  */
 class RoutingRuleSaveSupportTest {
 
     private final RoutingRuleSaveSupport support = new RoutingRuleSaveSupport();
 
     @Test
-    void happyFixedSingleBuyer() {
-        NormalizedRulePatch patch = support.validateAndNormalize(
-                baseFixed().build(), null, Operation.CREATE);
+    void normalizesValidAutoRuleWithSpecifiedScopes() {
+        NormalizedRulePatch patch = support.validateAndNormalize(request().build(), null, Operation.CREATE);
 
-        assertThat(patch.name()).isEqualTo("话费固定规则");
-        assertThat(patch.buyerCode()).isEqualTo("BYR_1");
-        assertThat(patch.skuCode()).isEqualTo("SKU_1");
-        assertThat(patch.fulfillmentType()).isEqualTo("DIRECT_RECHARGE");
-        assertThat(patch.routeMode()).isEqualTo(RoutingRuleRouteMode.FIXED);
-        assertThat(patch.orderedSupplierCodes()).containsExactly("SPL_A");
-        assertThat(patch.ruleCode()).isNull();
-    }
-
-    @Test
-    void zeroBuyerRejected() {
-        assertThatThrownBy(() -> support.validateAndNormalize(
-                baseFixed().distributorCodes(List.of()).build(), null, Operation.CREATE))
-                .isInstanceOf(ServiceException.class)
-                .extracting(ex -> ((ServiceException) ex).getCode())
-                .isEqualTo(ROUTING_RULE_BUYER_REQUIRED.getCode());
-    }
-
-    @Test
-    void twoBuyersRejected() {
-        assertThatThrownBy(() -> support.validateAndNormalize(
-                baseFixed().distributorCodes(List.of("BYR_1", "BYR_2")).build(),
-                null, Operation.CREATE))
-                .isInstanceOf(ServiceException.class)
-                .extracting(ex -> ((ServiceException) ex).getCode())
-                .isEqualTo(ROUTING_RULE_BUYER_REQUIRED.getCode());
-    }
-
-    @Test
-    void projectCodesNonEmptyRejected() {
-        assertThatThrownBy(() -> support.validateAndNormalize(
-                baseFixed().projectCodes(List.of("PRJ_1")).build(), null, Operation.CREATE))
-                .isInstanceOf(ServiceException.class)
-                .extracting(ex -> ((ServiceException) ex).getCode())
-                .isEqualTo(ROUTING_RULE_SCOPE_NOT_OPEN.getCode());
-    }
-
-    @Test
-    void supplierModeAllRejected() {
-        assertThatThrownBy(() -> support.validateAndNormalize(
-                baseFixed().supplierMode(RoutingRuleScopeMode.ALL).build(),
-                null, Operation.CREATE))
-                .isInstanceOf(ServiceException.class)
-                .extracting(ex -> ((ServiceException) ex).getCode())
-                .isEqualTo(ROUTING_RULE_SUPPLIER_ALL_NOT_OPEN.getCode());
-    }
-
-    @Test
-    void autoWithOneSupplierRejected() {
-        assertThatThrownBy(() -> support.validateAndNormalize(
-                baseAuto().supplierCodes(List.of("SPL_A")).build(), null, Operation.CREATE))
-                .isInstanceOf(ServiceException.class)
-                .extracting(ex -> ((ServiceException) ex).getCode())
-                .isEqualTo(ROUTING_RULE_CANDIDATE_INVALID.getCode());
-    }
-
-    @Test
-    void weightsNotFortyThirtyThirtyRejected() {
-        assertThatThrownBy(() -> support.validateAndNormalize(
-                baseFixed().weights(new WeightInput(50, 30, 20)).build(),
-                null, Operation.CREATE))
-                .isInstanceOf(ServiceException.class)
-                .extracting(ex -> ((ServiceException) ex).getCode())
-                .isEqualTo(ROUTING_RULE_STRATEGY_NOT_OPEN.getCode());
-    }
-
-    @Test
-    void updatePathBodyRuleCodeMismatchRejected() {
-        assertThatThrownBy(() -> support.validateAndNormalize(
-                baseFixed().ruleCode("RR_BODY").build(), "RR_PATH", Operation.UPDATE))
-                .isInstanceOf(ServiceException.class)
-                .extracting(ex -> ((ServiceException) ex).getCode())
-                .isEqualTo(ROUTING_RULE_CODE_MISMATCH.getCode());
-    }
-
-    @Test
-    void happyAutoTwoSuppliersPreservesOrder() {
-        NormalizedRulePatch patch = support.validateAndNormalize(
-                baseAuto().supplierCodes(List.of("SPL_B", "SPL_A")).build(),
-                null, Operation.CREATE);
-
+        assertThat(patch.name()).isEqualTo("测试规则");
         assertThat(patch.routeMode()).isEqualTo(RoutingRuleRouteMode.AUTO);
-        assertThat(patch.orderedSupplierCodes()).containsExactly("SPL_B", "SPL_A");
+        assertThat(patch.status()).isEqualTo(RoutingRuleStatus.ENABLED);
+        assertThat(patch.distributorMode()).isEqualTo(RoutingRuleScopeMode.SPECIFIED);
+        assertThat(patch.distributorCodes()).containsExactly("B001");
+        assertThat(patch.projectCodes()).containsExactly("P001", "P002");
+        assertThat(patch.productTypeCodes()).containsExactly("MOVIE");
+        assertThat(patch.orderedSupplierCodes()).containsExactly("S001", "S002");
+        assertThat(patch.strategies()).containsExactly(
+                RoutingRuleStrategy.STABLE, RoutingRuleStrategy.PRICE, RoutingRuleStrategy.COMPOSITE);
+        assertThat(patch.weights()).isEqualTo(new WeightInput(40, 30, 30));
+        assertThat(patch.maxSupplyPriceCents()).isEqualTo(9_900L);
         assertThat(patch.ruleCode()).isNull();
     }
 
     @Test
-    void projectModeSpecifiedRejected() {
-        assertThatThrownBy(() -> support.validateAndNormalize(
-                baseFixed().projectMode(RoutingRuleScopeMode.SPECIFIED).build(),
-                null, Operation.CREATE))
-                .isInstanceOf(ServiceException.class)
-                .extracting(ex -> ((ServiceException) ex).getCode())
-                .isEqualTo(ROUTING_RULE_SCOPE_NOT_OPEN.getCode());
+    void scopeModeDefaultsByCodeListPresence() {
+        // 未传 mode：编码列表空 → ALL，非空 → SPECIFIED（对齐前端提交约定）
+        SaveRequest request = request()
+                .distributorMode(null).distributorCodes(List.of())
+                .projectMode(null).projectCodes(List.of("P001"))
+                .build();
+        NormalizedRulePatch patch = support.validateAndNormalize(request, null, Operation.CREATE);
+        assertThat(patch.distributorMode()).isEqualTo(RoutingRuleScopeMode.ALL);
+        assertThat(patch.distributorCodes()).isEmpty();
+        assertThat(patch.projectMode()).isEqualTo(RoutingRuleScopeMode.SPECIFIED);
     }
 
     @Test
-    void productTypeModeSpecifiedRejected() {
-        assertThatThrownBy(() -> support.validateAndNormalize(
-                baseFixed().productTypeMode(RoutingRuleScopeMode.SPECIFIED).build(),
-                null, Operation.CREATE))
-                .isInstanceOf(ServiceException.class)
-                .extracting(ex -> ((ServiceException) ex).getCode())
-                .isEqualTo(ROUTING_RULE_SCOPE_NOT_OPEN.getCode());
+    void rejectsBlankOrNullScopeCodesInSpecifiedMode() {
+        SaveRequest request = request()
+                .distributorMode(RoutingRuleScopeMode.SPECIFIED).distributorCodes(List.of("  ", ""))
+                .build();
+        assertThatThrownBy(() -> support.validateAndNormalize(request, null, Operation.CREATE))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("适用分销商指定范围不能为空");
     }
 
     @Test
-    void productTypeCodesNonEmptyRejected() {
-        assertThatThrownBy(() -> support.validateAndNormalize(
-                baseFixed().productTypeCodes(List.of("PT_1")).build(), null, Operation.CREATE))
-                .isInstanceOf(ServiceException.class)
-                .extracting(ex -> ((ServiceException) ex).getCode())
-                .isEqualTo(ROUTING_RULE_SCOPE_NOT_OPEN.getCode());
+    void rejectsCodesAttachedToAllScope() {
+        SaveRequest request = request()
+                .projectMode(RoutingRuleScopeMode.ALL).projectCodes(List.of("P001"))
+                .build();
+        assertThatThrownBy(() -> support.validateAndNormalize(request, null, Operation.CREATE))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("为全部时不能携带编码列表");
     }
 
     @Test
-    void statusDisabledRejected() {
-        assertThatThrownBy(() -> support.validateAndNormalize(
-                baseFixed().status(RoutingRuleStatus.DISABLED).build(), null, Operation.CREATE))
+    void rejectsDuplicatedScopeCodes() {
+        SaveRequest request = request()
+                .productTypeMode(RoutingRuleScopeMode.SPECIFIED)
+                .productTypeCodes(List.of("MOVIE", "MOVIE"))
+                .build();
+        assertThatThrownBy(() -> support.validateAndNormalize(request, null, Operation.CREATE))
                 .isInstanceOf(ServiceException.class)
-                .extracting(ex -> ((ServiceException) ex).getCode())
-                .isEqualTo(ROUTING_RULE_STRATEGY_NOT_OPEN.getCode());
+                .hasMessageContaining("相同适用范围");
     }
 
     @Test
-    void prioritiesFirstNotStableRejected() {
-        assertThatThrownBy(() -> support.validateAndNormalize(
-                baseFixed().priorities(List.of(
-                        new PriorityInput("p1", RoutingRuleStrategy.PRICE),
-                        new PriorityInput("p2", RoutingRuleStrategy.STABLE),
-                        new PriorityInput("p3", RoutingRuleStrategy.COMPOSITE))).build(),
-                null, Operation.CREATE))
-                .isInstanceOf(ServiceException.class)
-                .extracting(ex -> ((ServiceException) ex).getCode())
-                .isEqualTo(ROUTING_RULE_STRATEGY_NOT_OPEN.getCode());
+    void rejectsPrioritiesNotCoveringAllStrategies() {
+        SaveRequest request = request()
+                .priorities(List.of(
+                        new PriorityInput("1", RoutingRuleStrategy.STABLE),
+                        new PriorityInput("2", RoutingRuleStrategy.PRICE),
+                        new PriorityInput("3", RoutingRuleStrategy.PRICE)))
+                .build();
+        assertThatThrownBy(() -> support.validateAndNormalize(request, null, Operation.CREATE))
+                .isInstanceOf(Exception.class);
     }
 
     @Test
-    void fixedMissingPrimarySupplierRejected() {
-        assertThatThrownBy(() -> support.validateAndNormalize(
-                baseFixed().primarySupplierCode(null).build(), null, Operation.CREATE))
-                .isInstanceOf(ServiceException.class)
-                .extracting(ex -> ((ServiceException) ex).getCode())
-                .isEqualTo(ROUTING_RULE_CANDIDATE_INVALID.getCode());
+    void rejectsWeightsNotSummingTo100() {
+        SaveRequest request = request().weights(new WeightInput(40, 40, 30)).build();
+        assertThatThrownBy(() -> support.validateAndNormalize(request, null, Operation.CREATE))
+                .isInstanceOf(Exception.class);
     }
 
     @Test
-    void illegalFulfillmentTypeRejected() {
-        assertThatThrownBy(() -> support.validateAndNormalize(
-                baseFixed().fulfillmentType("PHYSICAL_SHIP").build(), null, Operation.CREATE))
-                .isInstanceOf(ServiceException.class)
-                .extracting(ex -> ((ServiceException) ex).getCode())
-                .isEqualTo(ROUTING_RULE_FULFILLMENT_MISMATCH.getCode());
+    void requiresWeightsWhenCompositePresent() {
+        SaveRequest request = request().weights(null).build();
+        assertThatThrownBy(() -> support.validateAndNormalize(request, null, Operation.CREATE))
+                .isInstanceOf(Exception.class);
     }
 
-    private static SaveRequestBuilder baseFixed() {
-        return new SaveRequestBuilder()
-                .name(" 话费固定规则 ")
-                .distributorCodes(List.of("BYR_1"))
-                .skuCode("SKU_1")
-                .fulfillmentType("DIRECT_RECHARGE")
+    @Test
+    void weightsOptionalWhenCompositeAbsent() {
+        SaveRequest request = request()
+                .weights(null)
+                .priorities(List.of(
+                        new PriorityInput("1", RoutingRuleStrategy.PRICE),
+                        new PriorityInput("2", RoutingRuleStrategy.STABLE),
+                        new PriorityInput("3", null)))
+                .build();
+        // 第三位缺失策略也不允许：三优先级必须覆盖全部策略
+        assertThatThrownBy(() -> support.validateAndNormalize(request, null, Operation.CREATE))
+                .isInstanceOf(Exception.class);
+    }
+
+    @Test
+    void fixedRuleRequiresPrimarySupplier() {
+        SaveRequest request = request()
                 .routeMode(RoutingRuleRouteMode.FIXED)
-                .primarySupplierCode("SPL_A");
+                .primarySupplierCode(null)
+                .build();
+        assertThatThrownBy(() -> support.validateAndNormalize(request, null, Operation.CREATE))
+                .isInstanceOf(Exception.class);
     }
 
-    private static SaveRequestBuilder baseAuto() {
-        return new SaveRequestBuilder()
-                .name("话费自动规则")
-                .distributorCodes(List.of("BYR_1"))
-                .skuCode("SKU_1")
-                .fulfillmentType("DIRECT_RECHARGE")
-                .routeMode(RoutingRuleRouteMode.AUTO)
-                .supplierCodes(List.of("SPL_A", "SPL_B"));
+    @Test
+    void fixedRuleNormalizesToSinglePrimaryCandidate() {
+        SaveRequest request = request()
+                .routeMode(RoutingRuleRouteMode.FIXED)
+                .primarySupplierCode("S009")
+                .supplierMode(RoutingRuleScopeMode.SPECIFIED)
+                .supplierCodes(List.of("S001", "S002"))
+                .build();
+        NormalizedRulePatch patch = support.validateAndNormalize(request, null, Operation.CREATE);
+        assertThat(patch.orderedSupplierCodes()).containsExactly("S009");
+        assertThat(patch.primarySupplierCode()).isEqualTo("S009");
     }
 
-    /** 测试用可变构造，避免每个用例手写超长 record 字面量。 */
-    private static final class SaveRequestBuilder {
-        private String name;
-        private List<String> distributorCodes;
-        private String skuCode;
-        private String fulfillmentType;
-        private RoutingRuleRouteMode routeMode;
-        private String primarySupplierCode;
-        private List<String> supplierCodes;
-        private RoutingRuleScopeMode supplierMode;
-        private RoutingRuleScopeMode distributorMode;
-        private RoutingRuleStatus status;
+    @Test
+    void autoWithAllSuppliersRejectsCandidateList() {
+        SaveRequest request = request()
+                .supplierMode(RoutingRuleScopeMode.ALL)
+                .supplierCodes(List.of("S001"))
+                .build();
+        assertThatThrownBy(() -> support.validateAndNormalize(request, null, Operation.CREATE))
+                .isInstanceOf(Exception.class);
+    }
+
+    @Test
+    void autoWithSpecifiedSuppliersRequiresAtLeastTwoDistinct() {
+        SaveRequest single = request()
+                .supplierMode(RoutingRuleScopeMode.SPECIFIED).supplierCodes(List.of("S001"))
+                .build();
+        assertThatThrownBy(() -> support.validateAndNormalize(single, null, Operation.CREATE))
+                .isInstanceOf(Exception.class);
+
+        SaveRequest duplicated = request()
+                .supplierMode(RoutingRuleScopeMode.SPECIFIED).supplierCodes(List.of("S001", "S001"))
+                .build();
+        assertThatThrownBy(() -> support.validateAndNormalize(duplicated, null, Operation.CREATE))
+                .isInstanceOf(Exception.class);
+    }
+
+    @Test
+    void updateRejectsPathBodyCodeMismatch() {
+        SaveRequest request = request().ruleCode("RR20260923001").build();
+        assertThatThrownBy(() -> support.validateAndNormalize(request, "RR20260923002", Operation.UPDATE))
+                .isInstanceOf(Exception.class);
+    }
+
+    @Test
+    void updateAcceptsMatchingBodyCode() {
+        SaveRequest request = request().ruleCode("RR20260923001").build();
+        NormalizedRulePatch patch = support.validateAndNormalize(request, "RR20260923001", Operation.UPDATE);
+        assertThat(patch.ruleCode()).isEqualTo("RR20260923001");
+    }
+
+    @Test
+    void rejectsBlankNameAndOverlongName() {
+        assertThatThrownBy(() -> support.validateAndNormalize(
+                request().name("  ").build(), null, Operation.CREATE))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("规则名称不能为空");
+        assertThatThrownBy(() -> support.validateAndNormalize(
+                request().name("长".repeat(129)).build(), null, Operation.CREATE))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("规则名称长度不能超过128");
+    }
+
+    @Test
+    void scopeKeyIgnoresNameButCoversAllFourLevels() {
+        NormalizedRulePatch one = support.validateAndNormalize(request().build(), null, Operation.CREATE);
+        NormalizedRulePatch sameScopeDifferentName = support.validateAndNormalize(
+                request().name("另一名称").build(), null, Operation.CREATE);
+        NormalizedRulePatch differentSupplierOrder = support.validateAndNormalize(
+                request().supplierCodes(List.of("S002", "S001")).build(), null, Operation.CREATE);
+        assertThat(one.scopeKey()).isEqualTo(sameScopeDifferentName.scopeKey());
+        // 候选顺序参与范围键：顺序不同视为不同配置
+        assertThat(one.scopeKey()).isNotEqualTo(differentSupplierOrder.scopeKey());
+    }
+
+    /** 测试用可变请求构造器，build() 产出应用层 {@link SaveRequest} record；默认值即一条合法 AUTO 规则。 */
+    private static TestRequest request() {
+        return new TestRequest();
+    }
+
+    private static final class TestRequest {
+
+        private String name = "测试规则";
         private String ruleCode;
-        private List<String> projectCodes;
-        private RoutingRuleScopeMode projectMode;
-        private List<String> productTypeCodes;
-        private RoutingRuleScopeMode productTypeMode;
-        private List<PriorityInput> priorities;
-        private WeightInput weights;
+        private RoutingRuleRouteMode routeMode = RoutingRuleRouteMode.AUTO;
+        private RoutingRuleStatus status = RoutingRuleStatus.ENABLED;
+        private RoutingRuleScopeMode distributorMode = RoutingRuleScopeMode.SPECIFIED;
+        private List<String> distributorCodes = List.of("B001");
+        private RoutingRuleScopeMode projectMode = RoutingRuleScopeMode.SPECIFIED;
+        private List<String> projectCodes = List.of("P001", "P002");
+        private RoutingRuleScopeMode productTypeMode = RoutingRuleScopeMode.SPECIFIED;
+        private List<String> productTypeCodes = List.of("MOVIE");
+        private RoutingRuleScopeMode supplierMode = RoutingRuleScopeMode.SPECIFIED;
+        private List<String> supplierCodes = List.of("S001", "S002");
+        private String primarySupplierCode;
+        private List<PriorityInput> priorities = List.of(
+                new PriorityInput("1", RoutingRuleStrategy.STABLE),
+                new PriorityInput("2", RoutingRuleStrategy.PRICE),
+                new PriorityInput("3", RoutingRuleStrategy.COMPOSITE));
+        private WeightInput weights = new WeightInput(40, 30, 30);
+        private Long maxSupplyPriceCents = 9_900L;
 
-        SaveRequestBuilder name(String name) {
-            this.name = name;
+        TestRequest name(String value) {
+            this.name = value;
             return this;
         }
 
-        SaveRequestBuilder distributorCodes(List<String> distributorCodes) {
-            this.distributorCodes = distributorCodes;
+        TestRequest ruleCode(String value) {
+            this.ruleCode = value;
             return this;
         }
 
-        SaveRequestBuilder skuCode(String skuCode) {
-            this.skuCode = skuCode;
+        TestRequest routeMode(RoutingRuleRouteMode value) {
+            this.routeMode = value;
             return this;
         }
 
-        SaveRequestBuilder fulfillmentType(String fulfillmentType) {
-            this.fulfillmentType = fulfillmentType;
+        TestRequest distributorMode(RoutingRuleScopeMode value) {
+            this.distributorMode = value;
             return this;
         }
 
-        SaveRequestBuilder routeMode(RoutingRuleRouteMode routeMode) {
-            this.routeMode = routeMode;
+        TestRequest distributorCodes(List<String> value) {
+            this.distributorCodes = value;
             return this;
         }
 
-        SaveRequestBuilder primarySupplierCode(String primarySupplierCode) {
-            this.primarySupplierCode = primarySupplierCode;
+        TestRequest projectMode(RoutingRuleScopeMode value) {
+            this.projectMode = value;
             return this;
         }
 
-        SaveRequestBuilder supplierCodes(List<String> supplierCodes) {
-            this.supplierCodes = supplierCodes;
+        TestRequest projectCodes(List<String> value) {
+            this.projectCodes = value;
             return this;
         }
 
-        SaveRequestBuilder supplierMode(RoutingRuleScopeMode supplierMode) {
-            this.supplierMode = supplierMode;
+        TestRequest productTypeMode(RoutingRuleScopeMode value) {
+            this.productTypeMode = value;
             return this;
         }
 
-        SaveRequestBuilder projectCodes(List<String> projectCodes) {
-            this.projectCodes = projectCodes;
+        TestRequest productTypeCodes(List<String> value) {
+            this.productTypeCodes = value;
             return this;
         }
 
-        SaveRequestBuilder projectMode(RoutingRuleScopeMode projectMode) {
-            this.projectMode = projectMode;
+        TestRequest supplierMode(RoutingRuleScopeMode value) {
+            this.supplierMode = value;
             return this;
         }
 
-        SaveRequestBuilder productTypeCodes(List<String> productTypeCodes) {
-            this.productTypeCodes = productTypeCodes;
+        TestRequest supplierCodes(List<String> value) {
+            this.supplierCodes = value;
             return this;
         }
 
-        SaveRequestBuilder productTypeMode(RoutingRuleScopeMode productTypeMode) {
-            this.productTypeMode = productTypeMode;
+        TestRequest primarySupplierCode(String value) {
+            this.primarySupplierCode = value;
             return this;
         }
 
-        SaveRequestBuilder status(RoutingRuleStatus status) {
-            this.status = status;
+        TestRequest priorities(List<PriorityInput> value) {
+            this.priorities = value;
             return this;
         }
 
-        SaveRequestBuilder priorities(List<PriorityInput> priorities) {
-            this.priorities = priorities;
-            return this;
-        }
-
-        SaveRequestBuilder ruleCode(String ruleCode) {
-            this.ruleCode = ruleCode;
-            return this;
-        }
-
-        SaveRequestBuilder weights(WeightInput weights) {
-            this.weights = weights;
+        TestRequest weights(WeightInput value) {
+            this.weights = value;
             return this;
         }
 
         SaveRequest build() {
-            return new SaveRequest(
-                    name, distributorCodes, skuCode, fulfillmentType, routeMode,
-                    primarySupplierCode, supplierCodes, supplierMode, distributorMode, status,
-                    ruleCode, projectCodes, projectMode, productTypeCodes, productTypeMode,
-                    priorities, weights);
+            return new SaveRequest(name, ruleCode, routeMode, status,
+                    distributorMode, distributorCodes,
+                    projectMode, projectCodes,
+                    productTypeMode, productTypeCodes,
+                    supplierMode, supplierCodes,
+                    primarySupplierCode, priorities, weights, maxSupplyPriceCents);
         }
     }
 }

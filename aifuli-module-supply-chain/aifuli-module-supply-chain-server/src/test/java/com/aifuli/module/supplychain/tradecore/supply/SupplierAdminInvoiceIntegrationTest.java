@@ -4,6 +4,7 @@ import com.aifuli.module.supplychain.infrastructure.configuration.SupplyChainDat
 import com.aifuli.module.supplychain.infrastructure.identity.BusinessNoGenerator;
 import com.aifuli.module.supplychain.infrastructure.identity.UlidGenerator;
 import com.aifuli.module.supplychain.infrastructure.security.AesGcmEnvelopeCrypto;
+import com.aifuli.module.supplychain.tradecore.catalog.application.CategoryQueryService;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierInvoiceService;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierInvoiceService.SaveInvoiceCommand;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierInvoiceService.SupplierInvoiceView;
@@ -217,7 +218,8 @@ class SupplierAdminInvoiceIntegrationTest {
     @Configuration(proxyBeanMethods = false)
     @Import({SupplyChainDataSourceConfiguration.class, UlidGenerator.class, BusinessNoGenerator.class,
             AesGcmEnvelopeCrypto.class, SupplierProfileCommandService.class,
-            SupplierProfileQueryService.class, SupplierInvoiceService.class})
+            SupplierProfileQueryService.class, SupplierInvoiceService.class,
+            CategoryQueryService.class})
     static class TestConfiguration {
     }
 }

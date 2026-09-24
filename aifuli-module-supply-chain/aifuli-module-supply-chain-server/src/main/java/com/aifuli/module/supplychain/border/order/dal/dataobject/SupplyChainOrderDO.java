@@ -30,6 +30,10 @@ public class SupplyChainOrderDO {
     /** 履约目标手机号；仅直充与账户绑定权益写入，卡密类为空 */
     private String fulfillmentAccountValue;
     private String buyerOrderNo;
+    /** 受理时项目业务编码快照；CARD场景可空（044 变更集新增列，订单视图回显所属项目） */
+    private String projectCodeSnapshot;
+    /** 受理时项目名称快照；CARD场景可空（044 变更集新增列，订单视图回显所属项目） */
+    private String projectNameSnapshot;
     private Long acceptanceReceiptId;
     private Long displaySupplierId;
     private String displaySupplierCode;

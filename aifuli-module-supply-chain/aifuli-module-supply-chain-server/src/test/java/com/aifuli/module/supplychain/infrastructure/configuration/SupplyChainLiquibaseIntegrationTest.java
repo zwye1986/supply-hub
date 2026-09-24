@@ -69,8 +69,10 @@ class SupplyChainLiquibaseIntegrationTest {
                         "sc_project_sku_pricing", "sc_project_sku_pricing_version",
                         "sc_standard_pricing_quote",
                         "sc_supplier_settlement_account", "sc_supplier_settlement_ledger",
-                        "sc_supplier_invoice", "sc_buyer_invoice", "sc_product_type")
-                .doesNotContain("sc_inventory_asset", "sc_supply_reservation");
+                        "sc_supplier_invoice", "sc_buyer_invoice", "sc_product_type",
+                        "sc_std_routing_rule", "sc_std_routing_rule_scope", "sc_std_routing_candidate")
+                .doesNotContain("sc_inventory_asset", "sc_supply_reservation",
+                        "sc_standard_product_routing_rule", "sc_standard_product_routing_candidate");
         assertThat(firstStartup.columnNames())
                 .contains("sc_instore_channel_user_binding.source_system",
                         "sc_instore_channel_user_binding.external_tenant_id",
@@ -110,6 +112,15 @@ class SupplyChainLiquibaseIntegrationTest {
                         "sc_platform_sku.sku_inventory",
                         "sc_supplier_offer.stability_score",
                         "sc_supplier_offer.timeliness_score",
+                        "sc_supplier_routing_policy.stability_weight",
+                        "sc_supplier_routing_policy.price_weight",
+                        "sc_supplier_routing_policy.timeliness_weight",
+                        "sc_supply_chain_order.project_code_snapshot",
+                        "sc_supply_chain_order.project_name_snapshot",
+                        "sc_std_routing_rule.rule_code",
+                        "sc_std_routing_rule.route_mode",
+                        "sc_std_routing_rule_scope.scope_kind",
+                        "sc_std_routing_candidate.candidate_priority",
                         "sc_platform_sku.main_image_url",
                         "sc_platform_sku.detail_image_urls",
                         "sc_platform_sku.description",
@@ -139,7 +150,7 @@ class SupplyChainLiquibaseIntegrationTest {
                 "expire_at:DATETIME:-:3:NO");
         assertThat(firstStartup.projectAuthNoncePrimaryKeyColumns())
                 .containsExactly("app_id", "nonce");
-        assertThat(firstStartup.changeSetCount()).isEqualTo(45L);
+        assertThat(firstStartup.changeSetCount()).isEqualTo(46L);
         assertThat(firstStartup.uniqueIndexes())
                 .contains("sc_instore_payment_flow.uk_sc_instore_flow_order",
                         "sc_instore_channel_user_binding.uk_sc_instore_user_binding_project",
@@ -149,7 +160,10 @@ class SupplyChainLiquibaseIntegrationTest {
                         "sc_platform_sku_pricing_version.uk_sc_platform_sku_pricing_version",
                         "sc_buyer_sku_pricing.uk_sc_buyer_sku_pricing_product",
                         "sc_project_sku_pricing.uk_sc_project_sku_pricing_listing",
-                        "sc_standard_pricing_quote.uk_sc_standard_quote_token");
+                        "sc_standard_pricing_quote.uk_sc_standard_quote_token",
+                        "sc_std_routing_rule.uk_sc_std_rule_code",
+                        "sc_std_routing_rule_scope.uk_sc_std_rule_scope",
+                        "sc_std_routing_candidate.uk_sc_std_candidate_supplier");
         assertThat(firstStartup.indexes())
                 .contains("sc_buyer.idx_sc_buyer_parent_created",
                         "sc_product_category.idx_sc_category_product_type",
@@ -192,14 +206,14 @@ class SupplyChainLiquibaseIntegrationTest {
                         FROM information_schema.COLUMNS
                         WHERE TABLE_SCHEMA = DATABASE()
                           AND TABLE_NAME LIKE 'sc\\_%'
-                        """)).isEqualTo(112L);
+                        """)).isEqualTo(113L);
                 assertThat(queryLong(connection, """
                         SELECT COUNT(*)
                         FROM information_schema.COLUMNS
                         WHERE TABLE_SCHEMA = DATABASE()
                           AND TABLE_NAME LIKE 'sc\\_%'
                           AND DATA_TYPE = 'datetime'
-                        """)).isEqualTo(271L);
+                        """)).isEqualTo(272L);
                 assertThat(queryLong(connection, """
                         SELECT COUNT(*)
                         FROM information_schema.COLUMNS

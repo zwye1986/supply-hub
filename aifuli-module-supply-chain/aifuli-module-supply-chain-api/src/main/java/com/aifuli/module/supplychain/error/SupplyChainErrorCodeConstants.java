@@ -176,6 +176,16 @@ public interface SupplyChainErrorCodeConstants {
             error(1_050_001_130, "路由规则版本已变更，请刷新后重试");
     ErrorCode ROUTING_RULE_FULFILLMENT_MISMATCH =
             error(1_050_001_131, "履约类型必须与平台SKU档案一致");
+    ErrorCode ROUTING_RULE_NAME_DUPLICATED =
+            error(1_050_001_134, "启用集内已存在同名路由规则");
+    ErrorCode ROUTING_RULE_SCOPE_DUPLICATED =
+            error(1_050_001_135, "已存在相同适用范围的路由规则，请调整适用范围或停用原规则");
+    ErrorCode ROUTING_RULE_PROTECTED =
+            error(1_050_001_136, "系统预置的全局默认规则不可删除，范围与路由模式不可修改");
+    ErrorCode ROUTING_RULE_WEIGHTS_INVALID =
+            error(1_050_001_137, "综合排序权重之和必须等于100");
+    ErrorCode ORDER_EXPORT_EXCEED_LIMIT =
+            error(1_050_001_138, "导出结果超过上限，请缩小筛选范围后重试");
     ErrorCode PLATFORM_DEFAULT_PRICING_MISSING =
             error(1_050_001_132, "标准商品尚未配置默认定价，无法保存分销价");
     ErrorCode SUPPLIER_CODE_REQUIRED =
@@ -295,6 +305,7 @@ public interface SupplyChainErrorCodeConstants {
             entry(PRODUCT_CURRENCY_INVALID, RetryDirective.DO_NOT_RETRY),
             entry(SUPPLY_CHAIN_ORDER_NOT_FOUND, RetryDirective.DO_NOT_RETRY),
             entry(ORDER_QUERY_TIME_RANGE_INVALID, RetryDirective.DO_NOT_RETRY),
+            entry(ORDER_EXPORT_EXCEED_LIMIT, RetryDirective.DO_NOT_RETRY),
             entry(BRAND_LEGACY_API_DEPRECATED, RetryDirective.DO_NOT_RETRY),
             entry(CATEGORY_PRODUCT_TYPE_REQUIRED, RetryDirective.DO_NOT_RETRY),
             entry(PRODUCT_FULFILLMENT_TYPE_IMMUTABLE, RetryDirective.DO_NOT_RETRY),
@@ -316,6 +327,10 @@ public interface SupplyChainErrorCodeConstants {
             entry(ROUTING_RULE_LAST_CANNOT_REMOVE, RetryDirective.DO_NOT_RETRY),
             entry(ROUTING_RULE_VERSION_CONFLICT, RetryDirective.DO_NOT_RETRY),
             entry(ROUTING_RULE_FULFILLMENT_MISMATCH, RetryDirective.DO_NOT_RETRY),
+            entry(ROUTING_RULE_NAME_DUPLICATED, RetryDirective.DO_NOT_RETRY),
+            entry(ROUTING_RULE_SCOPE_DUPLICATED, RetryDirective.DO_NOT_RETRY),
+            entry(ROUTING_RULE_PROTECTED, RetryDirective.DO_NOT_RETRY),
+            entry(ROUTING_RULE_WEIGHTS_INVALID, RetryDirective.DO_NOT_RETRY),
             entry(PLATFORM_DEFAULT_PRICING_MISSING, RetryDirective.DO_NOT_RETRY),
             entry(SUPPLIER_CODE_REQUIRED, RetryDirective.DO_NOT_RETRY));
 

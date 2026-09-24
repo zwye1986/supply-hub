@@ -46,6 +46,11 @@ import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminP
 import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.PRODUCT_TYPE_DELETE_EXPRESSION;
 import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.PRODUCT_TYPE_UPDATE_STATUS_EXPRESSION;
 import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.ORDER_QUERY_EXPRESSION;
+import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.ROUTING_RULE_CREATE_EXPRESSION;
+import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.ROUTING_RULE_DELETE_EXPRESSION;
+import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.ROUTING_RULE_QUERY_EXPRESSION;
+import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.ROUTING_RULE_UPDATE_EXPRESSION;
+import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.ROUTING_RULE_UPDATE_STATUS_EXPRESSION;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -180,8 +185,20 @@ class SupplyChainAdminPermissionContractTest {
                 .isEqualTo(ADMIN_EXPRESSION);
         assertThat(M1MasterDataAdminController.class.getAnnotation(PreAuthorize.class).value())
                 .isEqualTo(ADMIN_EXPRESSION);
-        assertThat(RoutingRuleAdminController.class.getAnnotation(PreAuthorize.class).value())
-                .isEqualTo(ADMIN_EXPRESSION);
+    }
+
+    /**
+     * 路由规则控制器按设计改为方法级细权限（PRD 四级范围模型，设计 §6）。
+     */
+    @Test
+    void routingRuleMethodsUseTheirDeclaredActions() {
+        assertMethodPermissions(RoutingRuleAdminController.class, Map.of(
+                "page", ROUTING_RULE_QUERY_EXPRESSION,
+                "get", ROUTING_RULE_QUERY_EXPRESSION,
+                "create", ROUTING_RULE_CREATE_EXPRESSION,
+                "update", ROUTING_RULE_UPDATE_EXPRESSION,
+                "delete", ROUTING_RULE_DELETE_EXPRESSION,
+                "changeStatus", ROUTING_RULE_UPDATE_STATUS_EXPRESSION));
     }
 
     private static void assertMethodPermissions(Class<?> controller, Map<String, String> expected) {

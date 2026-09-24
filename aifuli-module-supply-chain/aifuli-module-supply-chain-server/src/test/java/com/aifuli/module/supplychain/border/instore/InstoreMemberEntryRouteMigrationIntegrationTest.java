@@ -109,7 +109,7 @@ class InstoreMemberEntryRouteMigrationIntegrationTest {
 
         long changeSetCount = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM DATABASECHANGELOG", Long.class);
-        assertThat(changeSetCount).isEqualTo(45L);
+        assertThat(changeSetCount).isEqualTo(46L);
         updateRemaining(dataSource);
         assertThat(jdbc.queryForObject(
                 "SELECT COUNT(*) FROM DATABASECHANGELOG", Long.class)).isEqualTo(changeSetCount);

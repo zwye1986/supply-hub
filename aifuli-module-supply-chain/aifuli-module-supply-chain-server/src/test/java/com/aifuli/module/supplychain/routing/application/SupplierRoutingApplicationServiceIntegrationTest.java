@@ -6,7 +6,11 @@ import com.aifuli.module.supplychain.infrastructure.identity.UlidGenerator;
 import com.aifuli.module.supplychain.infrastructure.outbox.OutboxEventRepository;
 import com.aifuli.module.supplychain.routing.domain.RoutingCandidate;
 import com.aifuli.module.supplychain.routing.domain.RoutingInput;
+import com.aifuli.module.supplychain.routing.domain.RoutingSortConfig;
+import com.aifuli.module.supplychain.routing.domain.RoutingStrategy;
 import com.aifuli.module.supplychain.routing.domain.SupplierRoutingEngine;
+import com.aifuli.module.supplychain.testsupport.ProductCenterTestConfiguration;
+import com.aifuli.module.supplychain.testsupport.RoutingPolicyPresetFixture;
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerCommandService;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerDO;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerMapper;
@@ -42,7 +46,6 @@ import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
-import com.aifuli.module.supplychain.testsupport.ProductCenterTestConfiguration;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.testcontainers.containers.MySQLContainer;
 
@@ -58,6 +61,12 @@ import java.util.Random;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+/**
+ * 真实 MySQL 验证 PRD 四级范围模型的策略发布与确定性路由：
+ * 稳定优先策略选中高价高评分供应商、健康事实降级到后备、offer 版本替换后快照切换、
+ * 版本区间重叠拒绝与按业务时间连续生效。
+ * 设计见 {@code docs/superpowers/specs/2026-09-23-order-frontend-alignment-and-routing-prd-model-design.md#54 与 #55}。
+ */
 class SupplierRoutingApplicationServiceIntegrationTest {
 
     static final MySQLContainer<?> MYSQL = new MySQLContainer<>("mysql:8.4")
@@ -107,19 +116,23 @@ class SupplierRoutingApplicationServiceIntegrationTest {
             createBuyerAndSku(buyerService, catalogService, now);
             BuyerDO buyer = buyerMapper.selectByBuyerCode("WUSHENG");
             PlatformSkuDO sku = skuMapper.selectByCode("ROUTE_TELCO_100");
-            OfferFixture qnm = createOfferFixture("QINAMENG", "奇那梦", 900L, sku, now,
+            OfferFixture qnm = createOfferFixture("QINAMENG", "奇那梦", 900L, 90, 80, sku, now,
                     supplierMapper, credentialMapper, connectorMapper, connectorVersionMapper,
                     inventoryMapper, offerMapper, offerVersionMapper);
-            OfferFixture zeta = createOfferFixture("ZETA", "后备供应商", 100L, sku, now,
+            OfferFixture zeta = createOfferFixture("ZETA", "后备供应商", 100L, 60, 50, sku, now,
                     supplierMapper, credentialMapper, connectorMapper, connectorVersionMapper,
                     inventoryMapper, offerMapper, offerVersionMapper);
 
             assertThatThrownBy(() -> publication.createDraft(duplicateRuleDraft(now)))
                     .isInstanceOf(IllegalArgumentException.class)
-                    .hasMessageContaining("Overlapping exact routing rule");
+                    .hasMessageContaining("Overlapping routing rule scope");
             assertThatThrownBy(() -> publication.createDraft(emptyCandidateDraft(now)))
                     .isInstanceOf(IllegalArgumentException.class)
-                    .hasMessageContaining("no candidates");
+                    .hasMessageContaining("at least 2 suppliers");
+
+            // 044 预置引导策略占用同类型唯一 active 位；本测验证低层 createDraft+publish
+            // 的策略引导语义（首版 versionNo=1），先停用预置再发布自有 CARD_PRIMARY 策略。
+            RoutingPolicyPresetFixture.deactivatePresetPolicy(jdbc);
 
             RoutingPolicyPublicationService.DraftResult draft =
                     publication.createDraft(validDraft(now));
@@ -131,11 +144,16 @@ class SupplierRoutingApplicationServiceIntegrationTest {
             assertThat(published.configDigestHex()).hasSize(64);
             assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_outbox_event "
                     + "WHERE event_type = 'ROUTING_POLICY_PUBLISHED'", Long.class)).isEqualTo(1L);
-            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_standard_product_routing_rule "
-                    + "WHERE buyer_id IS NULL OR platform_sku_id IS NULL OR fulfillment_type IS NULL",
-                    Long.class)).isZero();
+            // PRD 四级范围模型：规则行 + 分销商范围行 + 两条候选行落库
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_std_routing_rule "
+                    + "WHERE rule_code = 'WS_TELCO' AND route_mode = 'AUTO'", Long.class)).isEqualTo(1L);
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_std_routing_rule_scope "
+                    + "WHERE scope_kind = 'DISTRIBUTOR' AND scope_code = 'WUSHENG'", Long.class))
+                    .isEqualTo(1L);
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_std_routing_candidate",
+                    Long.class)).isEqualTo(2L);
 
-            RoutingInput input = new RoutingInput(buyer.getId(), sku.getId(),
+            RoutingInput input = new RoutingInput(buyer.getId(), null, sku.getId(),
                     "DIRECT_RECHARGE", 1L, now, Map.of());
             SupplierRoutingApplicationService.RoutingSnapshot first = routing.route(input);
             assertThat(first.policyVersionId()).isEqualTo(draft.policyVersionId());
@@ -153,17 +171,20 @@ class SupplierRoutingApplicationServiceIntegrationTest {
 
             List<RoutingCandidate> shuffled = new ArrayList<>(first.decision().orderedCandidates());
             SupplierRoutingEngine engine = new SupplierRoutingEngine();
+            RoutingSortConfig sortConfig = new RoutingSortConfig(
+                    RoutingStrategy.STABLE, RoutingStrategy.PRICE, RoutingStrategy.COMPOSITE, 40, 30, 30);
             Random random = new Random(20260812L);
             for (int attempt = 0; attempt < 100; attempt++) {
                 Collections.shuffle(shuffled, random);
-                assertThat(engine.decide(input, shuffled).selectedCandidate().supplierCode())
+                assertThat(engine.decide(input, shuffled, sortConfig)
+                        .selectedCandidate().supplierCode())
                         .isEqualTo("QINAMENG");
             }
 
             RoutingInput.Fact qnmHealthError = new RoutingInput.Fact(
                     RoutingInput.FactStatus.ERROR, null,
                     now.minusSeconds(10), now.plusSeconds(50));
-            RoutingInput degraded = new RoutingInput(buyer.getId(), sku.getId(),
+            RoutingInput degraded = new RoutingInput(buyer.getId(), null, sku.getId(),
                     "DIRECT_RECHARGE", 1L, now,
                     Map.of("QINAMENG", new RoutingInput.CandidateFacts(null, null, qnmHealthError)));
             SupplierRoutingApplicationService.RoutingSnapshot fallback = routing.route(degraded);
@@ -185,7 +206,7 @@ class SupplierRoutingApplicationServiceIntegrationTest {
             RoutingPolicyPublicationService.DraftResult overlap = publication.createDraft(
                     new RoutingPolicyPublicationService.CreateDraftCommand(
                             "CARD_PRIMARY", "卡券与直充主路由", "重叠版本",
-                            now.minusMinutes(30), now.plusDays(2), validRules(), 1L));
+                            now.minusMinutes(30), now.plusDays(2), validRules(), 1L, 40, 30, 30));
             assertThatThrownBy(() -> publication.publish(
                     new RoutingPolicyPublicationService.PublishCommand(
                             overlap.policyVersionId(), 0L, "非法重叠版本",
@@ -196,11 +217,11 @@ class SupplierRoutingApplicationServiceIntegrationTest {
             RoutingPolicyPublicationService.DraftResult scheduled = publication.createDraft(
                     new RoutingPolicyPublicationService.CreateDraftCommand(
                             "CARD_PRIMARY", "卡券与直充主路由", "下一生效版本",
-                            now.plusDays(1), now.plusDays(2), validRules(), 1L));
+                            now.plusDays(1), now.plusDays(2), validRules(), 1L, 40, 30, 30));
             publication.publish(new RoutingPolicyPublicationService.PublishCommand(
                     scheduled.policyVersionId(), 0L, "按业务时间连续生效",
                     1L, "trace-scheduled", null, null));
-            RoutingInput futureInput = new RoutingInput(buyer.getId(), sku.getId(),
+            RoutingInput futureInput = new RoutingInput(buyer.getId(), null, sku.getId(),
                     "DIRECT_RECHARGE", 1L, now.plusDays(1).plusMinutes(1), Map.of());
             assertThat(routing.route(futureInput).policyVersionId())
                     .isEqualTo(scheduled.policyVersionId());
@@ -233,7 +254,8 @@ class SupplierRoutingApplicationServiceIntegrationTest {
     }
 
     private static OfferFixture createOfferFixture(
-            String supplierCode, String supplierName, long price, PlatformSkuDO sku, LocalDateTime now,
+            String supplierCode, String supplierName, long price,
+            int stabilityScore, int timelinessScore, PlatformSkuDO sku, LocalDateTime now,
             SupplierMapper supplierMapper, CredentialSlotMapper credentialMapper,
             SupplierConnectorMapper connectorMapper, SupplierConnectorVersionMapper connectorVersionMapper,
             InventorySourceMapper inventoryMapper, SupplierOfferMapper offerMapper,
@@ -279,6 +301,7 @@ class SupplierRoutingApplicationServiceIntegrationTest {
         SupplierOfferDO offer = SupplierOfferDO.builder()
                 .offerNo("OFR_FIX_" + supplierCode).offerCode("TELCO_100")
                 .supplierId(supplier.getId()).platformSkuId(sku.getId())
+                .stabilityScore(stabilityScore).timelinessScore(timelinessScore)
                 .status(OfferStatus.PUBLISHED.getCode()).version(0L)
                 .createdBy(1L).createdAt(now).updatedBy(1L).updatedAt(now).build();
         offerMapper.insert(offer);
@@ -324,19 +347,30 @@ class SupplierRoutingApplicationServiceIntegrationTest {
     private static RoutingPolicyPublicationService.CreateDraftCommand validDraft(LocalDateTime now) {
         return new RoutingPolicyPublicationService.CreateDraftCommand(
                 "CARD_PRIMARY", "卡券与直充主路由", "一期首版",
-                now.minusHours(1), now.plusDays(1), validRules(), 1L);
+                now.minusHours(1), now.plusDays(1), validRules(), 1L, 40, 30, 30);
     }
 
+    /**
+     * PRD 四级范围规则：分销商指定 WUSHENG，项目/商品类型 ALL，AUTO+SPECIFIED 双候选；
+     * 稳定优先策略（QINAMENG 评分 90 &gt; ZETA 60，价格更高仍被选中）。
+     */
     private static List<RoutingPolicyPublicationService.RuleDraft> validRules() {
         return List.of(new RoutingPolicyPublicationService.RuleDraft(
-                "WS_TELCO", "吾盛话费路由", "WUSHENG", "ROUTE_TELCO_100",
-                "DIRECT_RECHARGE", 10,
-                List.of(optionalHealthCandidate("ZETA"), optionalHealthCandidate("QINAMENG"))));
+                "WS_TELCO", "吾盛话费路由", "AUTO", null,
+                "SPECIFIED", List.of("WUSHENG"),
+                "ALL", List.of(),
+                "ALL", List.of(),
+                "SPECIFIED", List.of("QINAMENG", "ZETA"),
+                null, "STABLE", "PRICE", "COMPOSITE",
+                10, (short) 10, false,
+                List.of(optionalHealthCandidate("QINAMENG", 0),
+                        optionalHealthCandidate("ZETA", 1))));
     }
 
-    private static RoutingPolicyPublicationService.CandidateDraft optionalHealthCandidate(String supplierCode) {
+    private static RoutingPolicyPublicationService.CandidateDraft optionalHealthCandidate(
+            String supplierCode, int candidatePriority) {
         return new RoutingPolicyPublicationService.CandidateDraft(
-                supplierCode, 10, "UNSUPPORTED", null,
+                supplierCode, candidatePriority, "UNSUPPORTED", null,
                 "UNSUPPORTED", null, "OPTIONAL", 60);
     }
 
@@ -344,21 +378,31 @@ class SupplierRoutingApplicationServiceIntegrationTest {
         RoutingPolicyPublicationService.RuleDraft rule = validRules().getFirst();
         RoutingPolicyPublicationService.RuleDraft duplicate =
                 new RoutingPolicyPublicationService.RuleDraft(
-                        "WS_TELCO_DUP", "重复精确规则", rule.buyerCode(), rule.platformSkuCode(),
-                        rule.fulfillmentType(), 20, rule.candidates());
+                        "WS_TELCO_DUP", "重复范围规则", "AUTO", null,
+                        rule.distributorMode(), rule.distributorCodes(),
+                        rule.projectMode(), rule.projectCodes(),
+                        rule.productTypeMode(), rule.productTypeCodes(),
+                        rule.supplierMode(), rule.supplierCodes(),
+                        null, "STABLE", "PRICE", "COMPOSITE",
+                        20, (short) 10, false, rule.candidates());
         return new RoutingPolicyPublicationService.CreateDraftCommand(
                 "INVALID_DUP", "非法重复路由", "重复规则",
-                now.minusHours(1), now.plusDays(1), List.of(rule, duplicate), 1L);
+                now.minusHours(1), now.plusDays(1), List.of(rule, duplicate), 1L, 40, 30, 30);
     }
 
     private static RoutingPolicyPublicationService.CreateDraftCommand emptyCandidateDraft(LocalDateTime now) {
         RoutingPolicyPublicationService.RuleDraft empty =
                 new RoutingPolicyPublicationService.RuleDraft(
-                        "EMPTY", "空候选", "WUSHENG", "ROUTE_TELCO_100",
-                        "DIRECT_RECHARGE", 10, List.of());
+                        "EMPTY", "空候选", "AUTO", null,
+                        "SPECIFIED", List.of("WUSHENG"),
+                        "ALL", List.of(),
+                        "ALL", List.of(),
+                        "SPECIFIED", List.of(),
+                        null, "STABLE", "PRICE", "COMPOSITE",
+                        10, (short) 10, false, List.of());
         return new RoutingPolicyPublicationService.CreateDraftCommand(
                 "INVALID_EMPTY", "非法空候选路由", "空候选",
-                now.minusHours(1), now.plusDays(1), List.of(empty), 1L);
+                now.minusHours(1), now.plusDays(1), List.of(empty), 1L, 40, 30, 30);
     }
 
     private ConfigurableApplicationContext applicationContext() {
