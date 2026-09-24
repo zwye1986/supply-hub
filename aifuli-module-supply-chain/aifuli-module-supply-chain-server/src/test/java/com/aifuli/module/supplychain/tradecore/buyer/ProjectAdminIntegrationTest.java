@@ -195,6 +195,9 @@ class ProjectAdminIntegrationTest {
             assertThat(version1.getSettlementPriceLevel()).isEqualTo(PriceSource.L1.name());
             assertThat(version1.getPriceSource()).isEqualTo(ListingPriceSource.INHERITED.name());
             assertThat(version1.getVersionNo()).isEqualTo(1);
+            BuyerProductQueryService buyerProductQuery = context.getBean(BuyerProductQueryService.class);
+            assertThat(buyerProductQuery.page(buyerA, List.of(), 1, 20).getTotal()).isEqualTo(1L);
+            assertThat(buyerProductQuery.page(buyerA, List.of(), projectCode, 1, 1).getTotal()).isZero();
             var initialListingPage = listingQuery.page(projectCode, 1, 20).getList();
             assertThat(initialListingPage).hasSize(1);
             assertThat(initialListingPage.getFirst().distPriceCents()).isEqualTo(L1_CENTS);
@@ -252,8 +255,13 @@ class ProjectAdminIntegrationTest {
                     "通用定价项目", buyerA, "WELFARE",
                     LocalDate.of(2026, 9, 1), LocalDate.of(2026, 12, 31),
                     null, "验证无旧L1", "ACTIVE", 1L));
+            long genericCandidateCount = buyerProductQuery.page(buyerA, List.of(), genericOnlyProject, 1, 1)
+                    .getTotal();
+            assertThat(genericCandidateCount).isPositive();
             String genericOnlyListing = listings.addProducts(genericOnlyProject,
                     List.of(new ListingLine("MOVIE_100", L3AdjustMode.FOLLOW_L2, null, null)), 1L).getFirst();
+            assertThat(buyerProductQuery.page(buyerA, List.of(), genericOnlyProject, 1, 1).getTotal())
+                    .isEqualTo(genericCandidateCount - 1);
             assertThat(listingQuery.page(genericOnlyProject, 1, 20).getList().getFirst())
                     .satisfies(row -> {
                         assertThat(row.listingCode()).isEqualTo(genericOnlyListing);
@@ -263,6 +271,9 @@ class ProjectAdminIntegrationTest {
                         assertThat(row.distPriceCents()).isEqualTo(10_000L);
                         assertThat(row.finalPriceCents()).isEqualTo(10_000L);
                     });
+            listings.retire(genericOnlyProject, genericOnlyListing, 1L);
+            assertThat(buyerProductQuery.page(buyerA, List.of(), genericOnlyProject, 1, 1).getTotal())
+                    .isEqualTo(genericCandidateCount);
 
             assertThatThrownBy(() -> projects.update(new UpdateProjectCommand(
                     projectCode, "福利项目", buyerB, "WELFARE",

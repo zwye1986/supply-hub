@@ -450,6 +450,7 @@ Springdoc `components.schemas` 中冲突的通用简单类名。生成契约必�
 即 `BuyerProduct` + 该 SKU 的 L2。
 
 - `GET /supply-chain/buyers/{buyerCode}/products` 分页。可选查询参数 `productType`（动态商品类型编码，可多选）。兼容单个值；重复键 `productType=A&productType=B` 或逗号拼接 `productType=A,B` 均表示命中任一类型。省略、空白或拆分后无有效编码时不筛选；传入后只返回该分销商未移除、且关联平台 SPU 的 `productType` 落在入参集合内的分销商品。无命中返回空页。筛选不改变按 `updatedAt` 倒序，分页默认仍为 `pageNo=1`、`pageSize=20`。命中字段取列表行同源的平台 SPU，而不是供货配置。
+- 项目新增商品弹窗调用同一分页接口时传可选 `projectCode`。后端先校验项目存在且归属路径中的 `buyerCode`；项目不存在或不属于该分销商均返回 `PROJECT_NOT_FOUND`。只排除**该项目** `sc_project_listing.status=AVAILABLE` 所引用的 `buyer_product_id`，不排除同一分销商其它项目的商品；已移除 listing 对应商品重新可选。排除条件与 `productType` 一起在数据库分页前生效，`total` 为过滤后数量。省略或空白 `projectCode` 保持原有分销商品列表语义及响应字段，不从请求来源或会话推断项目。项目商品详情列表仍走项目商品接口。
 - `POST /supply-chain/buyers/{buyerCode}/products` body `{ items: [...] }` 从标品关联；已存在则 `BUYER_PRODUCT_DUPLICATE`。新增分销商品弹窗的选品列表走 `GET /supply-chain/products/management-page`，并传入 `buyerCode` 排除未移除商品；「全部商品」由调用方把该分销商档案中的商品类型编码放进 `productType`。每行可带可选 `pricing`，字段与 `PUT /buyers/{buyerCode}/products/pricing` 的覆盖组相同。`pricing` 省略时只关联并按商品默认定价初始化；传入时在同一事务内保存分销商通用定价。任一条缺少平台默认定价时整单回滚，返回 `PLATFORM_DEFAULT_PRICING_MISSING`。销售价与服务费仍可标记继承。
 - `PATCH /supply-chain/buyers/{buyerCode}/products/{buyerProductCode}` 改价（写/清 L2 覆盖，body 含 `l2AdjustMode` 等）
 - `DELETE /supply-chain/buyers/{buyerCode}/products/{buyerProductCode}` 逻辑移除（不再出现在列表；已发布项目目录不回放删除，新项目不得再选）
@@ -490,6 +491,7 @@ Springdoc `components.schemas` 中冲突的通用简单类名。生成契约必�
 即 `ProjectListing` + L3 覆盖。
 
 - `GET /supply-chain/projects/{projectCode}/products`
+- 项目新增商品待选分页使用 `GET /supply-chain/buyers/{buyerCode}/products?projectCode={projectCode}`；由服务端按项目排除已加入商品并保持当前分销价等列表字段，不在前端用当前页项目商品过滤。
 - `POST /supply-chain/projects/{projectCode}/products` body `{ items: [...] }`：SKU 必须已是所属 Buyer 的未移除分销商品，否则 `PROJECT_SKU_NOT_IN_BUYER_CATALOG`。默认 `l3AdjustMode=FOLLOW_L2`（不写 L3）。批量配置可同时带 L3。
 - 每个 `items[]` 可选带 `pricing`，字段沿用新增分销商品的五组继承/覆盖请求，含 `distributionHideThresholdPercent` 与税务字段；省略时初始化全继承项目通用定价，传入时在新增 listing 的同一供应链事务内保存项目通用定价，任一行定价失败整批回滚。`pricing.distributionInherited=false` 且规则完整时，当前项目通用定价版本的 `distribution_price_cents` 是该 SKU 的项目专属价。旧 `l3AdjustMode` 与行内通用定价不得在同一行同时使用，避免两套 L3 来源冲突。
 - `PATCH /supply-chain/projects/{projectCode}/products/{listingCode}` 改价（写/清 L3，发新 `ProjectListingVersion`）

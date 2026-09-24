@@ -5,10 +5,13 @@ import com.aifuli.framework.common.pojo.PageParam;
 import com.aifuli.framework.common.pojo.PageResult;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerDO;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerProductDO;
+import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerProjectDO;
+import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.ProjectListingDO;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerMapper;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerProductMapper;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerProjectMapper;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.ProjectListingMapper;
+import com.aifuli.module.supplychain.tradecore.buyer.domain.ProjectListingStatus;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerSkuPricingDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerSkuPricingVersionDO;
@@ -40,6 +43,7 @@ import org.mockito.ArgumentCaptor;
 import java.util.List;
 
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BUYER_PROFILE_NOT_FOUND;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PROJECT_NOT_FOUND;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
@@ -59,6 +63,7 @@ class BuyerProductQueryServiceTest {
     private final PlatformSkuMapper skuMapper = mock(PlatformSkuMapper.class);
     private final PlatformSpuMapper spuMapper = mock(PlatformSpuMapper.class);
     private final ProjectListingMapper listingMapper = mock(ProjectListingMapper.class);
+    private final BuyerProjectMapper projectMapper = mock(BuyerProjectMapper.class);
     private final BuyerSkuPricingMapper buyerPricingMapper = mock(BuyerSkuPricingMapper.class);
     private final BuyerSkuPricingVersionMapper buyerPricingVersionMapper = mock(BuyerSkuPricingVersionMapper.class);
     private final PlatformSettlementPriceMapper l1Mapper = mock(PlatformSettlementPriceMapper.class);
@@ -71,6 +76,7 @@ class BuyerProductQueryServiceTest {
     void setUp() {
         MapperBuilderAssistant assistant = new MapperBuilderAssistant(new MybatisConfiguration(), "");
         TableInfoHelper.initTableInfo(assistant, BuyerProductDO.class);
+        TableInfoHelper.initTableInfo(assistant, ProjectListingDO.class);
         TableInfoHelper.initTableInfo(assistant, PlatformSpuDO.class);
         service = new BuyerProductQueryService(
                 buyerMapper, productMapper, skuMapper, spuMapper,
@@ -84,7 +90,7 @@ class BuyerProductQueryServiceTest {
                 platformPricingVersionMapper,
                 listingMapper,
                 mock(ProjectListingVersionMapper.class),
-                mock(BuyerProjectMapper.class),
+                projectMapper,
                 new SettlementPriceResolver(),
                 new ObjectMapper());
         when(buyerMapper.selectByBuyerCode("BYR_A")).thenReturn(BuyerDO.builder().id(9L).buyerCode("BYR_A").build());
@@ -110,6 +116,59 @@ class BuyerProductQueryServiceTest {
         assertThat(page.getTotal()).isEqualTo(0L);
         verify(productMapper, never()).selectList(any());
         verify(skuMapper, never()).selectList(any());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void projectFilterExcludesOnlyCurrentProjectAvailableListingsBeforePagination() {
+        when(projectMapper.selectByProjectCode("PRJ_A")).thenReturn(
+                BuyerProjectDO.builder().id(50L).buyerId(9L).build());
+        when(listingMapper.selectList(any())).thenReturn(List.of(
+                ProjectListingDO.builder().projectId(50L).buyerProductId(31L)
+                        .status(ProjectListingStatus.AVAILABLE.getCode()).build()));
+        when(productMapper.selectPage(any(PageParam.class), any())).thenReturn(new PageResult<>(List.of(), 1L));
+
+        PageResult<BuyerProductQueryService.BuyerProductListItem> page =
+                service.page("BYR_A", List.of(), "PRJ_A", 2, 10);
+
+        assertThat(page.getTotal()).isEqualTo(1L);
+        ArgumentCaptor<LambdaQueryWrapper<ProjectListingDO>> listingQuery =
+                ArgumentCaptor.forClass(LambdaQueryWrapper.class);
+        verify(listingMapper).selectList(listingQuery.capture());
+        assertThat(listingQuery.getValue().getSqlSegment()).contains("project_id", "status");
+        assertThat(listingQuery.getValue().getParamNameValuePairs().values())
+                .contains(50L, ProjectListingStatus.AVAILABLE.getCode());
+        ArgumentCaptor<PageParam> pageParam = ArgumentCaptor.forClass(PageParam.class);
+        ArgumentCaptor<LambdaQueryWrapper<BuyerProductDO>> productQuery =
+                ArgumentCaptor.forClass(LambdaQueryWrapper.class);
+        verify(productMapper).selectPage(pageParam.capture(), productQuery.capture());
+        assertThat(pageParam.getValue().getPageNo()).isEqualTo(2);
+        assertThat(pageParam.getValue().getPageSize()).isEqualTo(10);
+        assertThat(productQuery.getValue().getSqlSegment()).contains("NOT IN");
+        assertThat(productQuery.getValue().getParamNameValuePairs().values()).contains(9L, 31L);
+    }
+
+    @Test
+    void projectFilterRejectsAnotherBuyersProject() {
+        when(projectMapper.selectByProjectCode("PRJ_OTHER")).thenReturn(
+                BuyerProjectDO.builder().id(51L).buyerId(8L).build());
+
+        assertThatThrownBy(() -> service.page("BYR_A", List.of(), "PRJ_OTHER", 1, 20))
+                .isInstanceOf(ServiceException.class)
+                .extracting(ex -> ((ServiceException) ex).getCode())
+                .isEqualTo(PROJECT_NOT_FOUND.getCode());
+        verify(listingMapper, never()).selectList(any());
+        verify(productMapper, never()).selectPage(any(PageParam.class), any());
+    }
+
+    @Test
+    void omittedProjectKeepsBuyerProductPageUnfiltered() {
+        when(productMapper.selectPage(any(PageParam.class), any())).thenReturn(new PageResult<>(List.of(), 0L));
+
+        service.page("BYR_A", List.of(), null, 1, 20);
+
+        verify(projectMapper, never()).selectByProjectCode(any());
+        verify(listingMapper, never()).selectList(any());
     }
 
     @Test

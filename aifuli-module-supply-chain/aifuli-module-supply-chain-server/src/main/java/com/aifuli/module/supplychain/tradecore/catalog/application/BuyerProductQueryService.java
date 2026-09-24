@@ -60,6 +60,7 @@ import java.util.Set;
 import static com.aifuli.framework.common.exception.util.ServiceExceptionUtil.exception;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BUYER_PROFILE_NOT_FOUND;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PLATFORM_SETTLEMENT_PRICE_MISSING;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PROJECT_NOT_FOUND;
 
 /**
  * 分销商品管理端列表：L1 / 有效 L2 / 单项目 L3 展示，金额一律走 {@link SettlementPriceResolver}。
@@ -101,13 +102,24 @@ public class BuyerProductQueryService {
     /**
      * 分页查询未移除分销商品。按更新时间倒序。
      * {@code productType} 可多选：重复键或逗号拼接，命中任一类型。省略、空白或拆分后无有效编码时不筛选；无命中返回空页。
+     * {@code projectCode} 只排除当前项目未移除的 listing，必须在分页前排除以保证 total 和后续页正确。
      * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#63-分销商品}。
      */
     public PageResult<BuyerProductListItem> page(String buyerCode, List<String> productType,
                                                   Integer pageNo, Integer pageSize) {
+        return page(buyerCode, productType, null, pageNo, pageSize);
+    }
+
+    /**
+     * 项目选品时先校验项目归属，再用项目内有效目录项的分销商品主键排除候选；
+     * 不查询同一分销商的其他项目，也不排除已移除的目录项。
+     * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#63-分销商品}。
+     */
+    public PageResult<BuyerProductListItem> page(String buyerCode, List<String> productType,
+                                                  String projectCode, Integer pageNo, Integer pageSize) {
         List<String> productTypes = normalizeProductTypes(productType);
-        log.info("分页查询分销商品 buyerCode={} productTypes={} pageNo={} pageSize={}",
-                buyerCode, productTypes, pageNo, pageSize);
+        log.info("分页查询分销商品 buyerCode={} projectCode={} productTypes={} pageNo={} pageSize={}",
+                buyerCode, projectCode, productTypes, pageNo, pageSize);
         BuyerDO buyer = buyerMapper.selectByBuyerCode(buyerCode);
         if (buyer == null) {
             throw exception(BUYER_PROFILE_NOT_FOUND);
@@ -116,6 +128,19 @@ public class BuyerProductQueryService {
                 .eq(BuyerProductDO::getBuyerId, buyer.getId())
                 .eq(BuyerProductDO::getStatus, BuyerProductStatus.ACTIVE.getCode())
                 .orderByDesc(BuyerProductDO::getUpdatedAt);
+        if (projectCode != null && !projectCode.isBlank()) {
+            BuyerProjectDO project = projectMapper.selectByProjectCode(projectCode);
+            if (project == null || !Objects.equals(project.getBuyerId(), buyer.getId())) {
+                throw exception(PROJECT_NOT_FOUND);
+            }
+            List<Long> listedProductIds = listingMapper.selectList(new LambdaQueryWrapper<ProjectListingDO>()
+                            .eq(ProjectListingDO::getProjectId, project.getId())
+                            .eq(ProjectListingDO::getStatus, ProjectListingStatus.AVAILABLE.getCode()))
+                    .stream().map(ProjectListingDO::getBuyerProductId).filter(Objects::nonNull).distinct().toList();
+            if (!listedProductIds.isEmpty()) {
+                wrapper.notIn(BuyerProductDO::getId, listedProductIds);
+            }
+        }
         if (!productTypes.isEmpty()) {
             Set<Long> skuIds = matchingSkuIds(buyer.getId(), productTypes);
             if (skuIds.isEmpty()) {

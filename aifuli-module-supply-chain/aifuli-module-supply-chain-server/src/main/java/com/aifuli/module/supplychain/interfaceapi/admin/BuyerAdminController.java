@@ -233,15 +233,19 @@ public class BuyerAdminController {
     @Operation(summary = "分页查询分销商品",
             description = "只返回未移除行。可筛 productType（动态商品类型编码，命中关联平台 SPU，可多选）。"
                     + "重复键或逗号拼接表示命中任一类型。省略或空白不筛选，无命中返回空页。"
+                    + "传 projectCode 时排除该项目已加入且未移除的分销商品，过滤在分页前生效；"
+                    + "项目不存在或不属于当前分销商时返回 PROJECT_NOT_FOUND。"
                     + "金额单位 CNY 分；pricingRule 为继承L1/等于L1/自定义公式。")
     public CommonResult<PageResult<BuyerProductListItem>> pageProducts(
             @PathVariable String buyerCode,
             @Parameter(description = "动态商品类型编码，可多选；兼容单个 productType。"
                     + "重复键 productType=A&productType=B，或逗号拼接 productType=A,B")
             @RequestParam(required = false) List<String> productType,
+            @Parameter(description = "可选项目编码；仅排除该项目未移除的项目商品")
+            @RequestParam(required = false) String projectCode,
             @Parameter(description = "页码，从 1 开始") @RequestParam(required = false) Integer pageNo,
             @Parameter(description = "每页条数") @RequestParam(required = false) Integer pageSize) {
-        return success(productQueryService.page(buyerCode, productType, pageNo, pageSize));
+        return success(productQueryService.page(buyerCode, productType, projectCode, pageNo, pageSize));
     }
 
     @PostMapping("/{buyerCode}/products")
