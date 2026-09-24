@@ -327,6 +327,35 @@ class ProjectAdminIntegrationTest {
         assertThat(buyerVersion.getDistributionPriceCents()).isEqualTo(10_000L);
         assertThat(buyerIdentity.getPricingStatus()).isEqualTo(PricingStatus.READY.name());
 
+        // 新增项目商品行内覆盖须在同一事务落成项目版本，列表与详情按项目当前分销价回显。
+        String inlineProjectCode = context.getBean(ProjectAdminCommandService.class).create(new CreateProjectCommand(
+                "行内专属价项目", buyerA, "WELFARE",
+                LocalDate.of(2026, 9, 1), LocalDate.of(2026, 12, 31),
+                null, "行内定价回归", "ACTIVE", 1L));
+        FormulaRule inlineRule = new FormulaRule(PriceMode.CUSTOM, PriceBase.MARKET_PRICE,
+                new BigDecimal("90"), FixedOperator.ADD, BigDecimal.ZERO);
+        var inlineOverrides = new GenericBatchPricingService.ProjectOverrides(false, inlineRule,
+                true, null, true, null, true, null, true, null);
+        String inlineListingCode = context.getBean(ProjectListingCommandService.class).addProducts(
+                inlineProjectCode, List.of(new ListingLine(sku.getSkuCode(), L3AdjustMode.FOLLOW_L2,
+                        null, null, inlineOverrides)), 1L).getFirst();
+        ProjectListingDO inlineListing = context.getBean(ProjectListingMapper.class).selectByCode(inlineListingCode);
+        var inlinePricingMapper = context.getBean(
+                com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProjectSkuPricingMapper.class);
+        var inlineVersionMapper = context.getBean(
+                com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProjectSkuPricingVersionMapper.class);
+        var inlineIdentity = inlinePricingMapper.selectByListingId(inlineListing.getId());
+        assertThat(inlineVersionMapper.selectById(inlineIdentity.getCurrentVersionId()).getDistributionPriceCents())
+                .isEqualTo(9_000L);
+        var inlineRow = context.getBean(ProjectListingQueryService.class)
+                .page(inlineProjectCode, 1, 20).getList().getFirst();
+        assertThat(inlineRow.projectPriceCents()).isEqualTo(9_000L);
+        assertThat(inlineRow.finalPriceCents()).isEqualTo(9_000L);
+        assertThat(inlineRow.priceSource()).isEqualTo(PriceSource.L3.name());
+        assertThat(inlineRow.projectPriceCovered()).isTrue();
+        assertThat(context.getBean(ProjectAdminQueryService.class).get(inlineProjectCode).projectPriceSkuCount())
+                .isEqualTo(1);
+
         ProjectListingDO listing = context.getBean(ProjectListingMapper.class).selectByCode(listingCode);
         var projectPricingMapper = context.getBean(
                 com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProjectSkuPricingMapper.class);

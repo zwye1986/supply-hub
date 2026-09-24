@@ -491,10 +491,13 @@ Springdoc `components.schemas` 中冲突的通用简单类名。生成契约必�
 
 - `GET /supply-chain/projects/{projectCode}/products`
 - `POST /supply-chain/projects/{projectCode}/products` body `{ items: [...] }`：SKU 必须已是所属 Buyer 的未移除分销商品，否则 `PROJECT_SKU_NOT_IN_BUYER_CATALOG`。默认 `l3AdjustMode=FOLLOW_L2`（不写 L3）。批量配置可同时带 L3。
+- 每个 `items[]` 可选带 `pricing`，字段沿用新增分销商品的五组继承/覆盖请求，含 `distributionHideThresholdPercent` 与税务字段；省略时初始化全继承项目通用定价，传入时在新增 listing 的同一供应链事务内保存项目通用定价，任一行定价失败整批回滚。`pricing.distributionInherited=false` 且规则完整时，当前项目通用定价版本的 `distribution_price_cents` 是该 SKU 的项目专属价。旧 `l3AdjustMode` 与行内通用定价不得在同一行同时使用，避免两套 L3 来源冲突。
 - `PATCH /supply-chain/projects/{projectCode}/products/{listingCode}` 改价（写/清 L3，发新 `ProjectListingVersion`）
 - `DELETE /supply-chain/projects/{projectCode}/products/{listingCode}` 逻辑移除（目录项不再可采购；历史订单仍读冻结版本）
 
 新增即对项目可采购（等价上架）。列表金额：`suggestPriceCents`（历史 L1 兼容）、`suggestedSalePriceCents`（C 端 SKU 建议价）、`platformBasePriceCents`（B 端项目调价基数）、`distPriceCents`（当前有效分销价）、`projectPriceCents`、`finalPriceCents`、`priceSource`、`projectPriceCovered`。保留 `l3AdjustMode=EQUAL_L1` 请求枚举，但页面文案改为“等于平台默认分销价”；`CUSTOM` 以同一 B 端基数计算。
+
+项目商品当前通用定价版本明确覆盖分销价（`distributionInherited=false`）时，列表 `projectPriceCents` 与 `finalPriceCents` 取该版本的 `distribution_price_cents`，`priceSource=L3`、`projectPriceCovered=true`；若计算结果因依赖缺失为空，金额保持空值，不回退旧冻结价。通用版本全继承时，旧冻结金额字段仍按原语义读取，旧 L3 覆盖仍显示为专属价。`projectPriceSkuCount` 与列表采用同一覆盖判断，对通用覆盖与旧 L3 取并集，每个 listing 只计一次。此处读取版本快照，不重算价格或改写历史订单。
 
 项目商品分页行追加 `projectPricingConfig`：返回该 listing 的 `sc_project_sku_pricing.current_version_id` 所指向版本的 `override_json`，映射为与 `ProjectOverrides` 同字段、同值的强类型响应对象。对象保留分销价、销售价、服务费、利润隐藏、税务五组各自的 `*Inherited` 开关和覆盖规则；税务返回服务端归一化并保存后的元数据。已有综合定价版本且全部继承时返回五组 `*Inherited=true` 的对象；没有当前综合定价版本的历史行返回 `null`，不得以旧 `ProjectListingVersion` 猜测通用规则。只读取当前指针，不按最大版本号选取，也不以 `effective_config_json` 中的继承结果冒充项目覆盖配置；当前指针悬空、版本不属于该定价身份或 JSON 损坏时应报错，不静默降级。先限定项目并分页 listing，再批量读取本页定价身份与当前版本，避免逐行增加查询。此字段只增补查询响应，原有冻结价字段及订单快照语义不变；读取不触发重算、版本发布或外部字典调用。
 

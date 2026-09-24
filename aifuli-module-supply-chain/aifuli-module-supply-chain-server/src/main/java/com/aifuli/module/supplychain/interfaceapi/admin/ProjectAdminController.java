@@ -23,6 +23,7 @@ import com.aifuli.module.supplychain.interfaceapi.admin.pricing.GenericPricingRe
 import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericBatchPricingService;
 import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericBatchPricingService.PricingPreview;
 import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericBatchPricingService.ProjectOverrides;
+import com.aifuli.module.supplychain.interfaceapi.admin.BuyerAdminController.BuyerProductCreatePricingReqVO;
 import com.aifuli.module.supplychain.tradecore.profile.domain.ClosedEnums;
 import com.aifuli.module.supplychain.tradecore.profile.domain.L3AdjustMode;
 import com.aifuli.module.supplychain.tradecore.profile.domain.ProjectType;
@@ -33,8 +34,10 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
+import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
@@ -247,7 +250,8 @@ public class ProjectAdminController {
     @PostMapping("/{projectCode}/products")
     @PreAuthorize(PROJECT_UPDATE_EXPRESSION)
     @Operation(summary = "从分销商品发布到项目目录",
-            description = "SKU 必须已是所属 Buyer 的未移除分销商品。默认 l3AdjustMode=FOLLOW_L2。编号 PLT_。金额单位 CNY 分。")
+            description = "SKU 必须已是所属 Buyer 的未移除分销商品。默认 l3AdjustMode=FOLLOW_L2。"
+                    + "行内 pricing 可在同一事务保存项目综合定价；省略则全继承。编号 PLT_。金额单位 CNY 分。")
     public CommonResult<List<String>> addProducts(@PathVariable String projectCode,
                                                     @Valid @RequestBody AddProjectProductsReqVO request) {
         List<ListingLine> lines = request.getItems().stream()
@@ -354,7 +358,8 @@ public class ProjectAdminController {
                 item.getPlatformSkuCode(),
                 mode == null ? L3AdjustMode.FOLLOW_L2 : mode,
                 item.getPercent(),
-                item.getAmountCents());
+                item.getAmountCents(),
+                item.getPricing() == null ? null : GenericPricingRequestMapper.toBuyerOverrides(item.getPricing()));
     }
 
     @Data
@@ -394,7 +399,7 @@ public class ProjectAdminController {
     public static class AddProjectProductsReqVO {
         @NotEmpty
         @Schema(description = "待发布标品行")
-        private List<ProjectProductItemReqVO> items;
+        private List<@Valid ProjectProductItemReqVO> items;
     }
 
     @Data
@@ -409,6 +414,9 @@ public class ProjectAdminController {
         private Integer percent;
         @Schema(description = "CUSTOM时加减的CNY分")
         private Long amountCents;
+        @Valid
+        @Schema(description = "可选的项目综合定价覆盖；与新增项目商品在同一事务保存。字段与分销商品行内定价相同")
+        private BuyerProductCreatePricingReqVO pricing;
     }
 
     @Data
@@ -424,26 +432,70 @@ public class ProjectAdminController {
     }
 
     @Data
-    @Schema(description = "项目SKU通用批量定价请求；五组配置可分别继承")
+    @Schema(description = "项目SKU通用批量定价请求；五组配置可分别继承。"
+            + "五个继承标记字段均为必填，缺字段或缺组合规则返回 400 而非 500；契约见 "
+            + "docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#61-项目批量定价请求契约约束2026-09-24-增补")
     public static class ProjectProductBatchPricingReqVO {
         @NotEmpty
         @Size(max = GenericBatchPricingService.MAX_BATCH)
         @Schema(description = "当前项目下的项目商品编码列表", requiredMode = Schema.RequiredMode.REQUIRED)
         private List<@NotBlank String> listingCodes;
-        @Schema(description = "true时继承分销商分销价；false时必须提交 distributionRule")
-        private boolean distributionInherited;
-        @Valid private FormulaRuleReqVO distributionRule;
-        @Schema(description = "true时继承分销商销售价；false时必须提交 salesRule")
-        private boolean salesInherited;
-        @Valid private FormulaRuleReqVO salesRule;
-        @Schema(description = "true时继承分销商服务费；false时必须提交 serviceFeeRule")
-        private boolean serviceFeeInherited;
-        @Valid private ServiceFeeRuleReqVO serviceFeeRule;
-        @Schema(description = "true时继承分销商利润隐藏阈值；false时必须提交 hideRule")
-        private boolean hideInherited;
-        @Valid private HideRuleReqVO hideRule;
-        @Schema(description = "true时继承分销商税务；false时须在 taxMetadata 中同时提交 taxIncluded 与 taxRateCode，税务组不完整则自动降级为继承")
-        private boolean taxInherited;
-        @Valid private TaxMetadataReqVO taxMetadata;
+        @NotNull
+        @Schema(description = "是否继承分销商分销价：true 继承上游、false 表示覆盖并须提交 distributionRule。必填，缺字段返回 400",
+                requiredMode = Schema.RequiredMode.REQUIRED)
+        private Boolean distributionInherited;
+        @Valid
+        @Schema(description = "分销价覆盖规则；distributionInherited=false 时必填且须完整")
+        private FormulaRuleReqVO distributionRule;
+        @NotNull
+        @Schema(description = "是否继承分销商销售价：true 继承上游、false 表示覆盖并须提交 salesRule。必填，缺字段返回 400",
+                requiredMode = Schema.RequiredMode.REQUIRED)
+        private Boolean salesInherited;
+        @Valid
+        @Schema(description = "销售价覆盖规则；salesInherited=false 时必填且须完整")
+        private FormulaRuleReqVO salesRule;
+        @NotNull
+        @Schema(description = "是否继承分销商服务费：true 继承上游、false 表示覆盖并须提交 serviceFeeRule。必填，缺字段返回 400",
+                requiredMode = Schema.RequiredMode.REQUIRED)
+        private Boolean serviceFeeInherited;
+        @Valid
+        @Schema(description = "服务费覆盖规则；serviceFeeInherited=false 时必填且须完整")
+        private ServiceFeeRuleReqVO serviceFeeRule;
+        @NotNull
+        @Schema(description = "是否继承分销商利润隐藏阈值：true 继承上游、false 表示覆盖并须提交 hideRule。必填，缺字段返回 400",
+                requiredMode = Schema.RequiredMode.REQUIRED)
+        private Boolean hideInherited;
+        @Valid
+        @Schema(description = "利润隐藏阈值覆盖；hideInherited=false 时必填且须完整")
+        private HideRuleReqVO hideRule;
+        @NotNull
+        @Schema(description = "是否继承分销商税务：true 继承上游、false 表示覆盖并须在 taxMetadata 中同时提交 taxIncluded 与 taxRateCode，"
+                + "税务组不完整则在边界自动降级为继承。必填，缺字段返回 400",
+                requiredMode = Schema.RequiredMode.REQUIRED)
+        private Boolean taxInherited;
+        @Valid
+        @Schema(description = "税务展示属性；taxInherited=false 时须同时提交 taxIncluded 与 taxRateCode，任一缺失整体降级为继承")
+        private TaxMetadataReqVO taxMetadata;
+
+        /** 组合约束：xxxInherited=false 时对应覆盖配置必须存在，否则在参数绑定阶段返回 400。 */
+        @AssertTrue(message = "distributionInherited=false 时必须提交 distributionRule")
+        public boolean isDistributionRuleProvided() {
+            return !Boolean.FALSE.equals(distributionInherited) || distributionRule != null;
+        }
+
+        @AssertTrue(message = "salesInherited=false 时必须提交 salesRule")
+        public boolean isSalesRuleProvided() {
+            return !Boolean.FALSE.equals(salesInherited) || salesRule != null;
+        }
+
+        @AssertTrue(message = "serviceFeeInherited=false 时必须提交 serviceFeeRule")
+        public boolean isServiceFeeRuleProvided() {
+            return !Boolean.FALSE.equals(serviceFeeInherited) || serviceFeeRule != null;
+        }
+
+        @AssertTrue(message = "hideInherited=false 时必须提交 hideRule")
+        public boolean isHideRuleProvided() {
+            return !Boolean.FALSE.equals(hideInherited) || hideRule != null;
+        }
     }
 }

@@ -127,6 +127,43 @@ class ProjectListingQueryServiceTest {
                 .isEqualByComparingTo("85");
     }
 
+    /** 项目通用分销价覆盖后列表展示当前项目版本金额，旧 L2 冻结价不能遮盖它。 */
+    @Test
+    void returnsGenericProjectDistributionAsExclusivePrice() throws Exception {
+        BuyerProjectMapper projectMapper = mock(BuyerProjectMapper.class);
+        ProjectListingMapper listingMapper = mock(ProjectListingMapper.class);
+        ProjectListingVersionMapper listingVersionMapper = mock(ProjectListingVersionMapper.class);
+        ProjectSkuPricingMapper projectPricingMapper = mock(ProjectSkuPricingMapper.class);
+        ProjectSkuPricingVersionMapper projectPricingVersionMapper = mock(ProjectSkuPricingVersionMapper.class);
+        ObjectMapper objectMapper = new ObjectMapper();
+        ProjectListingQueryService service = new ProjectListingQueryService(projectMapper, listingMapper,
+                listingVersionMapper, projectPricingMapper, projectPricingVersionMapper,
+                mock(BuyerProductMapper.class), mock(PlatformSkuMapper.class),
+                mock(ProjectListingPriceSource.class), objectMapper);
+        when(projectMapper.selectByProjectCode("PRJ_1")).thenReturn(BuyerProjectDO.builder().id(1L).build());
+        when(listingMapper.selectPage(any(PageParam.class), any())).thenReturn(
+                new com.aifuli.framework.common.pojo.PageResult<>(List.of(
+                        ProjectListingDO.builder().id(2L).listingCode("PLT_1").currentVersionId(4L).build()), 1L));
+        when(listingVersionMapper.selectById(4L)).thenReturn(ProjectListingVersionDO.builder()
+                .buyerSettlementUnitPrice(9_800L).settlementPriceLevel(PriceSource.L2.name()).build());
+        when(projectPricingMapper.selectList(any())).thenReturn(List.of(
+                ProjectSkuPricingDO.builder().id(10L).listingId(2L).currentVersionId(12L).build()));
+        ProjectOverrides saved = new ProjectOverrides(false,
+                new FormulaRule(PriceMode.DIRECT_MARKET_PRICE, null, null, null, null),
+                true, null, true, null, true, null, true, null);
+        when(projectPricingVersionMapper.selectList(any())).thenReturn(List.of(
+                ProjectSkuPricingVersionDO.builder().id(12L).pricingId(10L)
+                        .distributionPriceCents(9_900L)
+                        .overrideJson(objectMapper.writeValueAsString(saved)).build()));
+
+        var row = service.page("PRJ_1", 1, 20).getList().getFirst();
+
+        assertThat(row.projectPriceCents()).isEqualTo(9_900L);
+        assertThat(row.finalPriceCents()).isEqualTo(9_900L);
+        assertThat(row.priceSource()).isEqualTo(PriceSource.L3.name());
+        assertThat(row.projectPriceCovered()).isTrue();
+    }
+
     @Test
     void rejectsCurrentVersionFromAnotherPricingIdentity() {
         BuyerProjectMapper projectMapper = mock(BuyerProjectMapper.class);

@@ -11,9 +11,16 @@ import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.ProjectListingMap
 import com.aifuli.module.supplychain.tradecore.buyer.domain.BuyerProjectStatus;
 import com.aifuli.module.supplychain.tradecore.buyer.domain.ProjectListingStatus;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProjectListingVersionDO;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProjectSkuPricingDO;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProjectSkuPricingVersionDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProjectListingVersionMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProjectSkuPricingMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProjectSkuPricingVersionMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericBatchPricingService.ProjectOverrides;
 import com.aifuli.module.supplychain.tradecore.profile.domain.PriceSource;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -45,6 +52,9 @@ public class ProjectAdminQueryService {
     private final BuyerMapper buyerMapper;
     private final ProjectListingMapper listingMapper;
     private final ProjectListingVersionMapper listingVersionMapper;
+    private final ProjectSkuPricingMapper projectPricingMapper;
+    private final ProjectSkuPricingVersionMapper projectPricingVersionMapper;
+    private final ObjectMapper objectMapper;
 
     /**
      * 分页查询项目，按更新时间倒序。
@@ -141,7 +151,8 @@ public class ProjectAdminQueryService {
     }
 
     /**
-     * skuCount 为未移除 listing 数；projectPriceSkuCount 为当前版本 settlement_price_level=L3 的数量。
+     * 项目专属价覆盖数与商品列表一致：通用项目版本显式覆盖分销价，或旧冻结层级为 L3，取并集。
+     * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#72-项目商品}。
      */
     private ListingStats listingStats(Long projectId) {
         List<ProjectListingDO> listings = listingMapper.selectList(new LambdaQueryWrapper<ProjectListingDO>()
@@ -150,6 +161,10 @@ public class ProjectAdminQueryService {
         int skuCount = listings.size();
         int projectPriceSkuCount = 0;
         for (ProjectListingDO listing : listings) {
+            if (hasGenericProjectPrice(listing.getId())) {
+                projectPriceSkuCount++;
+                continue;
+            }
             if (listing.getCurrentVersionId() == null) {
                 continue;
             }
@@ -159,6 +174,26 @@ public class ProjectAdminQueryService {
             }
         }
         return new ListingStats(skuCount, projectPriceSkuCount);
+    }
+
+    private boolean hasGenericProjectPrice(Long listingId) {
+        ProjectSkuPricingDO identity = projectPricingMapper.selectByListingId(listingId);
+        if (identity == null || identity.getCurrentVersionId() == null) {
+            return false;
+        }
+        ProjectSkuPricingVersionDO version = projectPricingVersionMapper.selectById(identity.getCurrentVersionId());
+        if (version == null || !identity.getId().equals(version.getPricingId())) {
+            throw new IllegalStateException("project pricing current version is missing or mismatched for listingId=" + listingId);
+        }
+        try {
+            ProjectOverrides overrides = objectMapper.readValue(version.getOverrideJson(), ProjectOverrides.class);
+            if (overrides == null) {
+                throw new IllegalStateException("project pricing config is null for listingId=" + listingId);
+            }
+            return !overrides.distributionInherited();
+        } catch (JsonProcessingException | IllegalArgumentException ex) {
+            throw new IllegalStateException("project pricing config is invalid for listingId=" + listingId, ex);
+        }
     }
 
     private static List<Short> toStatusCodes(List<BuyerProjectStatus> statuses) {
@@ -231,6 +266,6 @@ public class ProjectAdminQueryService {
             @Schema(description = "项目说明") String description,
             @Schema(description = "目录模式：MANAGED中台管理，INDEPENDENT项目独立") String catalogMode,
             @Schema(description = "未移除项目商品数量") int skuCount,
-            @Schema(description = "当前 listing 中 settlement_price_level=L3 的数量") int projectPriceSkuCount) {
+            @Schema(description = "当前 listing 中项目通用分销价覆盖或旧 L3 冻结覆盖的数量") int projectPriceSkuCount) {
     }
 }

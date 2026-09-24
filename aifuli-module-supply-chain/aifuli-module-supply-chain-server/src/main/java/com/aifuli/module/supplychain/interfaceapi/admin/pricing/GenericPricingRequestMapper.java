@@ -71,14 +71,20 @@ public final class GenericPricingRequestMapper {
     }
 
     public static ProjectOverrides toProjectOverrides(ProjectProductBatchPricingReqVO request) {
+        // 项目层 DTO 五个继承标记字段为 Boolean+@NotNull，调用方保证非空；用 Boolean.TRUE.equals 防御性处理 null。
         TaxMetadataReqVO taxMetadata = request.getTaxMetadata();
-        TaxGroup tax = normalizeTaxGroup(request.isTaxInherited(),
+        TaxGroup tax = normalizeTaxGroup(Boolean.TRUE.equals(request.getTaxInherited()),
                 taxMetadata == null ? null : taxMetadata.getTaxIncluded(),
                 taxMetadata == null ? null : taxMetadata.getTaxRateCode());
-        return new ProjectOverrides(request.isDistributionInherited(), toFormula(request.getDistributionRule(), false),
-                request.isSalesInherited(), toFormula(request.getSalesRule(), false),
-                request.isServiceFeeInherited(), toServiceFee(request.getServiceFeeRule(), false),
-                request.isHideInherited(), toHide(request.getHideRule()),
+        return new ProjectOverrides(
+                Boolean.TRUE.equals(request.getDistributionInherited()),
+                toFormula(request.getDistributionRule(), false),
+                Boolean.TRUE.equals(request.getSalesInherited()),
+                toFormula(request.getSalesRule(), false),
+                Boolean.TRUE.equals(request.getServiceFeeInherited()),
+                toServiceFee(request.getServiceFeeRule(), false),
+                Boolean.TRUE.equals(request.getHideInherited()),
+                toHide(request.getHideRule()),
                 tax.taxInherited(), tax.taxInherited() ? null
                 : new TaxMetadata(tax.taxIncluded(), tax.taxRateCode(), null));
     }

@@ -46,7 +46,8 @@ import static com.aifuli.framework.common.exception.util.ServiceExceptionUtil.ex
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PROJECT_NOT_FOUND;
 
 /**
- * 项目商品列表：旧冻结价字段保持原语义，项目综合定价覆盖配置另按当前版本指针回显。
+ * 项目商品列表：显式项目分销价覆盖优先显示当前通用版本金额；无覆盖时保留旧冻结价，
+ * 项目综合定价覆盖配置按当前版本指针回显。
  * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#72-项目商品}。
  */
 @Slf4j
@@ -142,8 +143,11 @@ public class ProjectListingQueryService {
         Long distPriceCents = basis == null ? null : basis.distributionCents();
         ProjectListingVersionDO frozen = listing.getCurrentVersionId() == null
                 ? null : listingVersionMapper.selectById(listing.getCurrentVersionId());
-        Long finalPriceCents = frozen == null ? null : frozen.getBuyerSettlementUnitPrice();
-        boolean covered = frozen != null && PriceSource.L3.name().equals(frozen.getSettlementPriceLevel());
+        ProjectOverrides savedOverrides = savedPricingOverrides(listing.getId(), pricingVersion);
+        boolean genericCovered = savedOverrides != null && !savedOverrides.distributionInherited();
+        Long finalPriceCents = genericCovered ? pricingVersion.getDistributionPriceCents()
+                : frozen == null ? null : frozen.getBuyerSettlementUnitPrice();
+        boolean covered = genericCovered || frozen != null && PriceSource.L3.name().equals(frozen.getSettlementPriceLevel());
         return new ProjectListingListItem(
                 listing.getListingCode(),
                 sku == null ? null : sku.getSkuCode(),
@@ -154,13 +158,13 @@ public class ProjectListingQueryService {
                 distPriceCents,
                 covered ? finalPriceCents : null,
                 finalPriceCents,
-                frozen == null ? null : frozen.getSettlementPriceLevel(),
+                genericCovered ? PriceSource.L3.name() : frozen == null ? null : frozen.getSettlementPriceLevel(),
                 covered,
-                savedPricingConfig(listing.getId(), pricingVersion));
+                savedOverrides == null ? null : ProjectPricingConfigView.from(savedOverrides));
     }
 
     /** 当前版本未发布时返回 null；已发布却无法解析时保留异常因果，禁止伪造全继承配置。 */
-    private ProjectPricingConfigView savedPricingConfig(Long listingId, ProjectSkuPricingVersionDO pricingVersion) {
+    private ProjectOverrides savedPricingOverrides(Long listingId, ProjectSkuPricingVersionDO pricingVersion) {
         if (pricingVersion == null) {
             return null;
         }
@@ -169,7 +173,7 @@ public class ProjectListingQueryService {
             if (config == null) {
                 throw new IllegalStateException("project pricing config is null for listingId=" + listingId);
             }
-            return ProjectPricingConfigView.from(config);
+            return config;
         } catch (JsonProcessingException | IllegalArgumentException ex) {
             throw new IllegalStateException("project pricing config is invalid for listingId=" + listingId, ex);
         }
@@ -188,10 +192,10 @@ public class ProjectListingQueryService {
             @Schema(description = "平台 SKU 销售建议价，单位 CNY 分；平台 SKU 缺失时为空") Long suggestedSalePriceCents,
             @Schema(description = "旧 L3 调价模式使用的 B 端平台基价，单位 CNY 分；无有效基价时为空") Long platformBasePriceCents,
             @Schema(description = "当前分销商有效分销价，优先通用定价版本，单位 CNY 分；未定价时为空") Long distPriceCents,
-            @Schema(description = "旧项目商品冻结版本为 L3 时的结算单价，单位 CNY 分；否则为空") Long projectPriceCents,
-            @Schema(description = "旧项目商品当前冻结版本的结算单价，单位 CNY 分；无冻结版本时为空") Long finalPriceCents,
-            @Schema(description = "旧冻结版本结算层级：L1、L2、L3；无冻结版本时为空") String priceSource,
-            @Schema(description = "旧冻结版本的结算层级是否为 L3") boolean projectPriceCovered,
+            @Schema(description = "项目通用定价显式覆盖分销价时取当前项目版本分销价；否则旧冻结版本为 L3 时取冻结价，单位 CNY 分") Long projectPriceCents,
+            @Schema(description = "有项目通用分销价覆盖时取当前项目版本分销价，否则取旧冻结单价，单位 CNY 分") Long finalPriceCents,
+            @Schema(description = "项目分销价覆盖或旧冻结版本的结算层级：L1、L2、L3") String priceSource,
+            @Schema(description = "当前通用项目分销价显式覆盖，或旧冻结版本结算层级为 L3") boolean projectPriceCovered,
             @Schema(description = "当前项目综合定价版本保存的五组继承开关及覆盖规则；无当前版本时为空")
             ProjectPricingConfigView projectPricingConfig) {
     }

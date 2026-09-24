@@ -40,6 +40,8 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProjectSkuPrici
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProjectSkuPricingDO;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
 import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericPricingCalculator.PricingStatus;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericBatchPricingService;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericBatchPricingService.ProjectOverrides;
 import com.aifuli.module.supplychain.tradecore.catalog.pricing.ProjectListingPricingInitializationEvent;
 import com.aifuli.module.supplychain.tradecore.profile.domain.L2AdjustMode;
 import com.aifuli.module.supplychain.tradecore.profile.domain.L3AdjustMode;
@@ -95,6 +97,7 @@ class ProjectListingCommandServiceTest {
     private final BusinessNoGenerator businessNoGenerator = mock(BusinessNoGenerator.class);
     private final SupplyChainDatabaseClock databaseClock = mock(SupplyChainDatabaseClock.class);
     private final ApplicationEventPublisher eventPublisher = mock(ApplicationEventPublisher.class);
+    private final GenericBatchPricingService genericPricingService = mock(GenericBatchPricingService.class);
     private ProjectListingCommandService service;
     private BuyerProductCommandService buyerProducts;
     private ProjectListingDO storedListing;
@@ -111,7 +114,7 @@ class ProjectListingCommandServiceTest {
                 databaseClock, eventPublisher, projectMapper, buyerMapper, productMapper, skuMapper,
                 listingMapper, listingVersionMapper,
                 projectPricingMapper, priceSource,
-                businessNoGenerator, resolver);
+                businessNoGenerator, resolver, genericPricingService);
         buyerProducts = new BuyerProductCommandService(
                 databaseClock, eventPublisher, buyerMapper, productMapper, l1Mapper, l1VersionMapper,
                 overrideMapper, overrideVersionMapper, buyerPricingMapper, businessNoGenerator, resolver,
@@ -186,6 +189,23 @@ class ProjectListingCommandServiceTest {
         assertThat(frozen.getL3AdjustMode()).isEqualTo(L3AdjustMode.FOLLOW_L2.name());
         assertThat(frozen.getCurrency()).isEqualTo(Money.CURRENCY_CNY);
         verify(listingVersionMapper, never()).updateById(any(ProjectListingVersionDO.class));
+    }
+
+    /** 行内项目专属价必须在目录事务内调用通用定价保存，不能被 DTO 映射丢弃。 */
+    @Test
+    void savesInlineProjectPricingAfterCreatingListing() {
+        stubLiveBuyerProduct();
+        stubL1(L1_CENTS);
+        ProjectOverrides overrides = new ProjectOverrides(false,
+                new com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericPricingCalculator.FormulaRule(
+                        com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericPricingCalculator.PriceMode.DIRECT_MARKET_PRICE,
+                        null, null, null, null),
+                true, null, true, null, true, null, true, null);
+
+        service.addProducts(PROJECT_CODE,
+                List.of(new ListingLine("MOVIE_100", L3AdjustMode.FOLLOW_L2, null, null, overrides)), 1L);
+
+        verify(genericPricingService).saveProject(PROJECT_CODE, List.of(LISTING_CODE), overrides, 1L);
     }
 
     /** 新 SKU 无旧 L1 时仍按分销商通用版本冻结，避免列表有价但项目发布失败。 */

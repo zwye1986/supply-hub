@@ -129,6 +129,7 @@ SKU 建议价”的限制。本文的“模板”是一次性应用到当前所�
 商品请求携带所选 `platformSkuCodes` 和五组完整默认配置；分销商请求携带 `buyerProductCodes`，项目请求携带 `listingCodes`，两个下游层每组都包含
 `inherit=true` 或完整覆盖配置。预览不落库，逐 SKU 返回三个依赖价格、计算结果、利润率和预期可售状态。
 保存由服务端重新计算，不能信任预览结果。标品尚未发布默认定价时，分销商或项目保存返回 `PLATFORM_DEFAULT_PRICING_MISSING` 并整批回滚，不落成半成品覆盖。`POST /supply-chain/buyers/{buyerCode}/products` 的行内 `pricing` 与上述保存使用同一覆盖对象，并与分销商品关联处在同一事务。
+`POST /supply-chain/projects/{projectCode}/products` 的行内 `pricing` 同样使用项目五组覆盖语义；它在 listing 发布与全继承版本初始化后调用项目定价保存，同一事务内完成并在失败时整批回滚。列表和项目详情如何标记该覆盖见 `docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#72-项目商品`。
 
 SPU+SKU 复合创建/更新不是把 Controller 通过 HTTP 回调自身，而是由商品应用服务在主数据写入后发布同步领域
 事件，通用定价监听器复用与 `PUT /products/skus/pricing` 相同的校验、计算和不可变版本发布逻辑。初始化仅命中
@@ -149,6 +150,37 @@ SPU、SKU 与定价整体回滚。
 空价或错误规则。只有尚未生成通用定价版本的历史分销商品才回退旧 L1/L2 链，避免存量数据在迁移完成前失去展示。
 
 项目目录旧 L3 接口与管理端读模型复用这条优先级：当前分销商通用版本存在时，项目继承价取该版本分销价，平台调价基数取其 `platform_pricing_version_id` 指向的平台默认分销价；只有分销商通用版本缺失时回退历史 L1/L2。版本存在而金额或引用缺失时失败关闭，禁止读取旧价遮盖无效版本。项目新发布冻结当前金额，既有项目版本及订单快照不回写。SKU 的 `suggested_sale_price` 是 C 端销售建议价，只用于展示或通用定价规则依赖，不能替代 B 端平台调价基数。
+
+### 6.1 项目批量定价请求契约约束（2026-09-24 增补）
+
+历史问题：`POST/PUT /supply-chain/projects/{projectCode}/products/pricing[/preview]` 的请求体
+`ProjectProductBatchPricingReqVO` 五个继承标记字段（`distributionInherited`、`salesInherited`、
+`serviceFeeInherited`、`hideInherited`、`taxInherited`）原本使用基本类型 `boolean`，JSON 反序列化
+缺省为 `false`。前端如仅声明覆盖三组（如分销价/隐藏阈值/税务）而未显式传 `salesInherited=true`、
+`serviceFeeInherited=true`，会被默认 `false` 进入覆盖分支，但对应 `xxxRule` 又为 `null`，最终在
+`ProjectPricingConfigMerger.require` 抛 `NullPointerException: downstream override config is required
+when inherit=false`，被全局异常处理器包装为 HTTP 500。错误既无业务语义又掩盖了真正原因，且违反
+"接口边界参数不合法应以 400 拒绝"的统一原则。
+
+契约约束（仅项目层，分销商层与商品默认层契约不变，沿用 §6 原有规则）：
+
+1. 五个继承标记字段改用 `Boolean` 包装类型，必须显式传 `true` 或 `false`，缺字段在参数绑定阶段
+   以 `jakarta.validation.constraints.NotNull` 拒绝，HTTP 400 + 错误码
+   `VALIDATION_ERROR`/`{field}不能为空`，不再默认成 `false`。
+2. `xxxInherited=false` 时对应覆盖配置必须存在且完整：
+   - `distributionInherited=false` → `distributionRule` 非空；
+   - `salesInherited=false` → `salesRule` 非空；
+   - `serviceFeeInherited=false` → `serviceFeeRule` 非空；
+   - `hideInherited=false` → `hideRule` 非空；
+   - `taxInherited=false` → `taxMetadata.taxIncluded` 与 `taxMetadata.taxRateCode` 同时存在
+     （沿用 §4 税务组残缺自动降级为继承的兼容规则，不再单独拒绝）。
+   违反任一组合约束时 `@AssertTrue` 在参数绑定阶段返回 HTTP 400 + message 形如
+   `salesInherited=false 时必须提交 salesRule`，禁止进入业务层。
+3. Swagger 注解 `@Schema(requiredMode = Schema.RequiredMode.REQUIRED)` 标注五个继承字段，
+   `description` 显式说明覆盖/继承语义和组合约束，让前端按 OpenAPI 文档自查。
+4. 边界归一化逻辑（`GenericPricingRequestMapper.normalizeTaxGroup`、
+   `ProjectPricingConfigMerger`）保持不变；本次仅在 DTO 层加固，避免缺字段或组合不合法
+   继续以 NPE/500 形式泄露。
 
 ## 7. 项目报价凭证与标准履约
 

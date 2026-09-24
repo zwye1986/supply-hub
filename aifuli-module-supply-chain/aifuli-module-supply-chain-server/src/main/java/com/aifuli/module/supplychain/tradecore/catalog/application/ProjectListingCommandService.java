@@ -23,6 +23,8 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapp
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProjectListingVersionMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProjectSkuPricingMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericPricingCalculator.PricingStatus;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericBatchPricingService;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericBatchPricingService.ProjectOverrides;
 import com.aifuli.module.supplychain.tradecore.catalog.pricing.ProjectListingPricingInitializationEvent;
 import com.aifuli.module.supplychain.tradecore.profile.domain.L3AdjustMode;
 import com.aifuli.module.supplychain.tradecore.profile.domain.ListingPriceSource;
@@ -71,6 +73,7 @@ public class ProjectListingCommandService {
     private final ProjectListingPriceSource priceSource;
     private final BusinessNoGenerator businessNoGenerator;
     private final SettlementPriceResolver settlementPriceResolver;
+    private final GenericBatchPricingService genericPricingService;
 
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public List<String> addProducts(String projectCode, List<ListingLine> lines, Long operatorId) {
@@ -88,7 +91,15 @@ public class ProjectListingCommandService {
         LocalDateTime now = databaseClock.now();
         List<String> codes = new ArrayList<>();
         for (ListingLine line : lines) {
-            codes.add(addOrRevive(project, line, operatorId, now));
+            if (line.pricingOverrides() != null && line.l3AdjustMode() != null
+                    && line.l3AdjustMode() != L3AdjustMode.FOLLOW_L2) {
+                throw new IllegalArgumentException("行内通用定价不能与旧 L3 调价同时提交");
+            }
+            String listingCode = addOrRevive(project, line, operatorId, now);
+            codes.add(listingCode);
+            if (line.pricingOverrides() != null) {
+                genericPricingService.saveProject(projectCode, List.of(listingCode), line.pricingOverrides(), operatorId);
+            }
         }
         return codes;
     }
@@ -375,8 +386,12 @@ public class ProjectListingCommandService {
     private record FrozenPrice(long unitPriceCents, PriceSource level, ListingPriceSource listingSource) {
     }
 
+    /** 行内定价覆盖与目录发布同事务保存；设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#72-项目商品}。 */
     public record ListingLine(String platformSkuCode, L3AdjustMode l3AdjustMode,
-                              Integer percent, Long amountCents) {
+                              Integer percent, Long amountCents, ProjectOverrides pricingOverrides) {
+        public ListingLine(String platformSkuCode, L3AdjustMode l3AdjustMode, Integer percent, Long amountCents) {
+            this(platformSkuCode, l3AdjustMode, percent, amountCents, null);
+        }
     }
 
     public record L3PricingPreview(
