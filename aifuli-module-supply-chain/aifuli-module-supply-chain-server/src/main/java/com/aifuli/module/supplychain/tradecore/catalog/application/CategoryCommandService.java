@@ -2,6 +2,7 @@ package com.aifuli.module.supplychain.tradecore.catalog.application;
 
 import com.aifuli.module.supplychain.infrastructure.identity.BusinessNoGenerator;
 import com.aifuli.module.supplychain.infrastructure.identity.BusinessNoPrefixes;
+import com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService;
 import com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSpuDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProductCategoryDO;
@@ -17,12 +18,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
-import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 
 import static com.aifuli.framework.common.exception.util.ServiceExceptionUtil.exception;
@@ -31,13 +29,13 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.CATEGORY_NAME_DUPLICATE_UNDER_SAME_PARENT;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.CATEGORY_NOT_FOUND;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.CATEGORY_PARENT_INVALID;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.CATEGORY_PARENT_IMMUTABLE;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_CONCURRENT_UPDATE;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_STATUS_INVALID;
 
 /**
- * 商品分类写服务，负责同级唯一、防循环和移动时整棵子树层级重算。
- * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#33-商品分类树管理无限级同级防重与层级重算}
- * 与 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#213-分类商品类型与描述036-changeset}。
+ * 商品分类写服务，负责同级唯一、直接父级编号与创建后父级不可变。
+ * 设计见 {@code docs/superpowers/specs/2026-09-27-supply-chain-business-code-design.md#4-归属与不可变性}。
  */
 @Slf4j
 @Service
@@ -51,6 +49,7 @@ public class CategoryCommandService {
     private final ProductCategoryMapper categoryMapper;
     private final PlatformSpuMapper spuMapper;
     private final BusinessNoGenerator businessNoGenerator;
+    private final ScopedBusinessCodeService scopedBusinessCodeService;
     private final SupplyChainDatabaseClock databaseClock;
     private final ProductTypeValidationService productTypeValidationService;
 
@@ -62,14 +61,18 @@ public class CategoryCommandService {
         String productType = validatedTypeCodes.isEmpty()
                 ? (hasText(command.productType()) ? command.productType().trim() : null)
                 : validatedTypeCodes.get(0);
-        String code = hasText(command.categoryCode()) ? command.categoryCode().trim()
-                : businessNoGenerator.next(BusinessNoPrefixes.CAT);
+        int nodeNo = scopedBusinessCodeService.allocateCategoryNodeNo();
+        String code = parent == null
+                ? scopedBusinessCodeService.allocateRoot(ScopedBusinessCodeService.Kind.CAT_ROOT,
+                command.categoryCode()).code()
+                : scopedBusinessCodeService.allocateChild(ScopedBusinessCodeService.Kind.CAT_CHILD,
+                parent.getId(), parent.getCategoryNodeNo(), command.categoryCode()).code();
         short level = checkedLevel(parent == null ? ROOT_LEVEL : parent.getCategoryLevel().intValue() + 1);
         requireNameAvailableUnderParent(command.categoryName().trim(),
                 parent == null ? null : parent.getId(), null);
         LocalDateTime now = databaseClock.now();
         ProductCategoryDO category = ProductCategoryDO.builder()
-                .categoryCode(code).categoryName(command.categoryName().trim())
+                .categoryCode(code).categoryNodeNo((short) nodeNo).categoryName(command.categoryName().trim())
                 .productType(productType)
                 .typeCodes(validatedTypeCodes.isEmpty() ? null : validatedTypeCodes)
                 .description(trimToNull(command.description()))
@@ -86,10 +89,8 @@ public class CategoryCommandService {
     }
 
     /**
-     * 更新分类。{@code parentCategoryCode} 采用三态语义：{@code null} 不变更父级、{@code ""} 显式挂到根、
-     * 非空编码挂到该父级；只有实际变更父级时才做防循环校验与整棵子树层级重算，
-     * 避免仅改名或改排序的请求把类目静默迁到根并整体上移子树层级。
-     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#33-商品分类树管理无限级同级防重与层级重算}。
+     * 分类永久编码含创建时父段，因此创建后只能提交原父级或省略父级字段。
+     * 设计见 {@code docs/superpowers/specs/2026-09-27-supply-chain-business-code-design.md#4-归属与不可变性}。
      */
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public void update(String categoryCode, UpdateCommand command) {
@@ -108,35 +109,22 @@ public class CategoryCommandService {
             validatedTypeCodes = category.getTypeCodes();
             productType = category.getProductType();
         }
-        boolean moveParent = command.parentCategoryCode() != null;
-        ProductCategoryDO parent = moveParent && hasText(command.parentCategoryCode())
+        boolean explicitParent = command.parentCategoryCode() != null;
+        ProductCategoryDO parent = explicitParent && hasText(command.parentCategoryCode())
                 ? requireLive(command.parentCategoryCode(), true) : null;
-        if (parent != null && parent.getId().equals(category.getId())) {
-            throw exception(CATEGORY_PARENT_INVALID);
+        Long targetParentId = category.getParentId();
+        if (explicitParent && !java.util.Objects.equals(targetParentId, parent == null ? null : parent.getId())) {
+            throw exception(CATEGORY_PARENT_IMMUTABLE);
         }
-        Long targetParentId = moveParent ? (parent == null ? null : parent.getId()) : category.getParentId();
-        short newLevel = category.getCategoryLevel();
-        List<ProductCategoryDO> all = List.of();
-        if (moveParent) {
-            all = liveCategories();
-            ensureNoCycle(category.getId(), parent, all);
-            newLevel = checkedLevel(parent == null ? ROOT_LEVEL : parent.getCategoryLevel().intValue() + 1);
-        }
-        int delta = newLevel - category.getCategoryLevel();
         requireNameAvailableUnderParent(command.categoryName().trim(), targetParentId, category.getId());
         category.setCategoryName(command.categoryName().trim());
         category.setProductType(productType);
         category.setTypeCodes(validatedTypeCodes);
         category.setDescription(trimToNull(command.description()));
-        category.setParentId(targetParentId);
-        category.setCategoryLevel(newLevel);
         category.setSort(command.sort() == null ? category.getSort() : command.sort());
         category.setVisible(command.visible() == null ? category.getVisible() : command.visible());
         touch(category, command.operatorId());
         updateOrDuplicate(category);
-        if (delta != 0) {
-            updateDescendantLevels(category.getId(), delta, all, command.operatorId());
-        }
     }
 
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
@@ -183,42 +171,6 @@ public class CategoryCommandService {
 
     public ProductCategoryDO detail(String categoryCode) {
         return requireLive(categoryCode, false);
-    }
-
-    private void updateDescendantLevels(Long rootId, int delta, List<ProductCategoryDO> all, Long operatorId) {
-        Map<Long, List<ProductCategoryDO>> children = new HashMap<>();
-        for (ProductCategoryDO node : all) {
-            if (node.getParentId() != null) {
-                children.computeIfAbsent(node.getParentId(), ignored -> new ArrayList<>()).add(node);
-            }
-        }
-        ArrayDeque<ProductCategoryDO> queue = new ArrayDeque<>(children.getOrDefault(rootId, List.of()));
-        while (!queue.isEmpty()) {
-            ProductCategoryDO node = queue.removeFirst();
-            node.setCategoryLevel(checkedLevel(node.getCategoryLevel().intValue() + delta));
-            touch(node, operatorId);
-            requireUpdated(categoryMapper.updateById(node));
-            queue.addAll(children.getOrDefault(node.getId(), List.of()));
-        }
-    }
-
-    private static void ensureNoCycle(Long categoryId, ProductCategoryDO parent, List<ProductCategoryDO> all) {
-        if (parent == null) return;
-        Map<Long, ProductCategoryDO> byId = new HashMap<>();
-        all.forEach(node -> byId.put(node.getId(), node));
-        Set<Long> visited = new HashSet<>();
-        ProductCategoryDO cursor = parent;
-        while (cursor != null) {
-            if (!visited.add(cursor.getId()) || categoryId.equals(cursor.getId())) {
-                throw exception(CATEGORY_PARENT_INVALID);
-            }
-            cursor = cursor.getParentId() == null ? null : byId.get(cursor.getParentId());
-        }
-    }
-
-    private List<ProductCategoryDO> liveCategories() {
-        return categoryMapper.selectList(new LambdaQueryWrapper<ProductCategoryDO>()
-                .ne(ProductCategoryDO::getStatus, CatalogEntityStatus.ARCHIVED.getCode()));
     }
 
     private ProductCategoryDO requireLive(String code, boolean forUpdate) {

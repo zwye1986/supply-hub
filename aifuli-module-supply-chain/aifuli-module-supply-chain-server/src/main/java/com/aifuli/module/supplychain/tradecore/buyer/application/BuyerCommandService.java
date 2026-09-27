@@ -1,5 +1,7 @@
 package com.aifuli.module.supplychain.tradecore.buyer.application;
 
+import com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService;
+
 import com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock;
 
 import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerDO;
@@ -23,13 +25,22 @@ public class BuyerCommandService {
 
     private final BuyerMapper buyerMapper;
     private final BuyerTenantBindingMapper bindingMapper;
+    private final ScopedBusinessCodeService scopedBusinessCodeService;
 
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public String createBuyer(CreateBuyerCommand command) {
+        if (command.buyerCode() != null && !command.buyerCode().isEmpty()) {
+            throw com.aifuli.framework.common.exception.util.ServiceExceptionUtil.exception(
+                    com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BUSINESS_CODE_MANUAL_NOT_ALLOWED,
+                    "分销商");
+        }
+        ScopedBusinessCodeService.Allocation allocation = scopedBusinessCodeService.allocateRoot(
+                ScopedBusinessCodeService.Kind.BYR, null);
         LocalDateTime now = databaseClock.now();
         LocalDateTime validFrom = command.validFrom() == null ? now : command.validFrom();
         BuyerDO buyer = BuyerDO.builder()
-                .buyerCode(command.buyerCode())
+                .buyerCode(allocation.code())
+                .codeScopeNo((short) allocation.number())
                 .buyerName(command.buyerName())
                 .shortName(command.shortName())
                 .buyerType("SAAS_MALL")

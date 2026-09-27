@@ -112,7 +112,7 @@ class CategoryQueryServiceTest {
         CategoryQueryService.CategoryDetail detail = service.detail("CAT_EQUITY_CARD");
 
         assertThat(detail).isEqualTo(new CategoryQueryService.CategoryDetail(
-                "CAT_EQUITY_CARD", "权益卡券", "EQUITY_PRODUCT", List.of("EQUITY_PRODUCT"), "权益卡券分类", "权益卡券分类", 1L, (short) 3, 20,
+                "CAT_EQUITY_CARD", null, "权益卡券", "EQUITY_PRODUCT", List.of("EQUITY_PRODUCT"), "权益卡券分类", "权益卡券分类", 1L, (short) 3, 20,
                 CategoryVisibility.VISIBLE.getCode(), CatalogEntityStatus.ACTIVE.getCode(), createdAt, updatedAt));
     }
 
@@ -133,7 +133,7 @@ class CategoryQueryServiceTest {
         CategoryQueryService.CategoryDetail detail = service.detail("CAT_MULTI");
 
         assertThat(detail).isEqualTo(new CategoryQueryService.CategoryDetail(
-                "CAT_MULTI", "多类型分类", "EQUITY_PRODUCT", List.of("EQUITY_PRODUCT", "MOVIE", "DINING"),
+                "CAT_MULTI", null, "多类型分类", "EQUITY_PRODUCT", List.of("EQUITY_PRODUCT", "MOVIE", "DINING"),
                 "分类备注说明", "分类备注说明", 1L, (short) 3, 10,
                 CategoryVisibility.VISIBLE.getCode(), CatalogEntityStatus.ACTIVE.getCode(), createdAt, updatedAt));
     }

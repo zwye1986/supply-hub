@@ -37,11 +37,23 @@ class CategoryCommandServiceTest {
     private final ProductCategoryMapper categoryMapper = mock(ProductCategoryMapper.class);
     private final PlatformSpuMapper spuMapper = mock(PlatformSpuMapper.class);
     private final BusinessNoGenerator generator = mock(BusinessNoGenerator.class);
+    private final com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService scopedBusinessCodeService =
+            mock(com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService.class);
     private final SupplyChainDatabaseClock clock = mock(SupplyChainDatabaseClock.class);
     private final ProductTypeValidationService productTypeValidationService = mock(ProductTypeValidationService.class);
 
     private final CategoryCommandService service = new CategoryCommandService(
-            categoryMapper, spuMapper, generator, clock, productTypeValidationService);
+            categoryMapper, spuMapper, generator,
+            scopedBusinessCodeService,
+            clock, productTypeValidationService);
+
+    @org.junit.jupiter.api.BeforeEach
+    void setUpCodes() {
+        when(scopedBusinessCodeService.allocateCategoryNodeNo()).thenReturn(1);
+        when(scopedBusinessCodeService.allocateRoot(any(), any())).thenAnswer(inv ->
+                new com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService.Allocation(
+                        generator.next(BusinessNoPrefixes.CAT), 1));
+    }
 
     @Test
     void createPersistsValidatedProductTypeAndDescription() {
@@ -198,7 +210,7 @@ class CategoryCommandServiceTest {
         assertThatThrownBy(() -> service.update("CAT_SELF", cmd))
                 .isInstanceOf(ServiceException.class)
                 .extracting(ex -> ((ServiceException) ex).getCode())
-                .isEqualTo(CATEGORY_PARENT_INVALID.getCode());
+                .isEqualTo(com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.CATEGORY_PARENT_IMMUTABLE.getCode());
     }
 
     /**
@@ -230,9 +242,9 @@ class CategoryCommandServiceTest {
         verify(categoryMapper, never()).selectList(any());
     }
 
-    /** 显式传空字符串表示挂到根，此时才重算层级。 */
+    /** 显式传空字符串请求挂到根，必须拒绝。 */
     @Test
-    void updateWithBlankParentCodeMovesCategoryToRoot() {
+    void updateWithBlankParentCodeRejectsMoveToRoot() {
         ProductCategoryDO child = ProductCategoryDO.builder()
                 .id(20L)
                 .categoryCode("CAT_CHILD")
@@ -248,11 +260,12 @@ class CategoryCommandServiceTest {
         when(categoryMapper.updateById(any(ProductCategoryDO.class))).thenReturn(1);
         when(clock.now()).thenReturn(LocalDateTime.now());
 
-        service.update("CAT_CHILD", new CategoryCommandService.UpdateCommand(
-                "挂到根", null, null, "", null, null, 1L));
-
-        assertThat(child.getParentId()).isNull();
-        assertThat(child.getCategoryLevel()).isEqualTo((short) 1);
+        assertThatThrownBy(() -> service.update("CAT_CHILD", new CategoryCommandService.UpdateCommand(
+                "挂到根", null, null, "", null, null, 1L)))
+                .isInstanceOf(ServiceException.class)
+                .extracting(ex -> ((ServiceException) ex).getCode())
+                .isEqualTo(com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.CATEGORY_PARENT_IMMUTABLE.getCode());
+        assertThat(child.getParentId()).isEqualTo(10L);
     }
 
     /** 应用层预检先于唯一索引给出业务错误码。 */

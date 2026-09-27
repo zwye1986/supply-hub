@@ -1,5 +1,7 @@
 package com.aifuli.module.supplychain.tradecore.catalog.application;
 
+import com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService;
+
 import com.aifuli.framework.common.pojo.PageParam;
 import com.aifuli.framework.common.pojo.PageResult;
 import com.aifuli.module.supplychain.infrastructure.identity.BusinessNoGenerator;
@@ -48,6 +50,7 @@ public class BrandAdminService {
     private final BrandMapper brandMapper;
     private final PlatformSpuMapper spuMapper;
     private final BusinessNoGenerator businessNoGenerator;
+    private final ScopedBusinessCodeService scopedBusinessCodeService;
     private final SupplyChainDatabaseClock databaseClock;
 
     public PageResult<BrandView> page(String keyword, Short status, Integer pageNo, Integer pageSize) {
@@ -90,8 +93,8 @@ public class BrandAdminService {
 
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public String create(CreateCommand command) {
-        String code = hasText(command.brandCode()) ? command.brandCode().trim()
-                : businessNoGenerator.next(BusinessNoPrefixes.BRD);
+        String code = scopedBusinessCodeService.allocateRoot(ScopedBusinessCodeService.Kind.BRD,
+                command.brandCode()).code();
         requireNameAvailable(command.brandName().trim(), null);
         LocalDateTime now = databaseClock.now();
         // TODO(product-center): 品牌默认状态 DRAFT，商品类型默认状态 ACTIVE，两者不一致——待产品确认是否统一。

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.aifuli.module.supplychain.infrastructure.identity.dal.mysql.BusinessCodeExistingMapper">
+    <!-- 表名只能静态选择；不接受调用方传入 SQL 标识符。 -->
+    <select id="selectCodes" resultType="java.lang.String">
+        <choose>
+            <when test="kind == 'SPU'">SELECT spu_code FROM sc_platform_spu</when>
+            <when test="kind == 'SKU'">SELECT sku_code FROM sc_platform_sku</when>
+            <when test="kind == 'CAT_ROOT' or kind == 'CAT_CHILD'">SELECT category_code FROM sc_product_category</when>
+            <when test="kind == 'BRD'">SELECT brand_code FROM sc_brand</when>
+            <when test="kind == 'SPL'">SELECT supplier_code FROM sc_supplier</when>
+            <when test="kind == 'BYR'">SELECT buyer_code FROM sc_buyer</when>
+            <when test="kind == 'PRJ'">SELECT project_code FROM sc_buyer_project</when>
+            <otherwise>SELECT code_kind FROM sc_business_code_scope WHERE 1 = 0</otherwise>
+        </choose>
+    </select>
+</mapper>

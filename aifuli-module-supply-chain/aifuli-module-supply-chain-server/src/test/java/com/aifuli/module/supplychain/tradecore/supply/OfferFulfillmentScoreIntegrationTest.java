@@ -85,8 +85,8 @@ class OfferFulfillmentScoreIntegrationTest {
             scopes.replaceAll(supplierCode, List.of(new ScopeLine(
                     "MOVIE", "MOVIE", "MOVIE_TICKET", List.of("API_DIRECT"), 100L, 1L)), 1L);
             List<String> offerNos = offers.createPublished(supplierCode, List.of(
-                    new DraftLine("MOVIE_100", "FIXED", 9_800L, null, null, "API_DIRECT", 100L, 1L),
-                    new DraftLine("MOVIE_200", "FIXED", 19_800L, null, null, "API_DIRECT", 50L, 1L)), 1L);
+                    new DraftLine("SKU_001_100", "FIXED", 9_800L, null, null, "API_DIRECT", 100L, 1L),
+                    new DraftLine("SKU_001_200", "FIXED", 19_800L, null, null, "API_DIRECT", 50L, 1L)), 1L);
             assertThat(offerNos).hasSize(2);
 
             SupplierOfferDO created = offerMapper.selectByNo(offerNos.getFirst());
@@ -96,28 +96,28 @@ class OfferFulfillmentScoreIntegrationTest {
             int batchUpdated = scores.saveSupplierScores(supplierCode, 80, 70, null, 1L);
             assertThat(batchUpdated).isEqualTo(2);
 
-            var skuView = scores.getSkuScores("MOVIE_100");
+            var skuView = scores.getSkuScores("SKU_001_100");
             assertThat(skuView.items()).hasSize(1);
             assertThat(skuView.items().getFirst().supplierCode()).isEqualTo(supplierCode);
             assertThat(skuView.items().getFirst().stabilityScore()).isEqualTo(80);
             assertThat(skuView.items().getFirst().timelinessScore()).isEqualTo(70);
 
-            int skuUpdated = scores.saveSkuScores("MOVIE_100", List.of(
+            int skuUpdated = scores.saveSkuScores("SKU_001_100", List.of(
                     new SkuSupplierScoreLine(supplierCode, 90, 91)), 1L);
             assertThat(skuUpdated).isEqualTo(1);
 
             assertThat(scores.saveSupplierScores(supplierCode, null, 65,
-                    List.of("MOVIE_100"), 1L)).isEqualTo(1);
-            assertThat(scores.getSkuScores("MOVIE_100").items().getFirst().stabilityScore()).isEqualTo(90);
-            assertThat(scores.getSkuScores("MOVIE_100").items().getFirst().timelinessScore()).isEqualTo(65);
+                    List.of("SKU_001_100"), 1L)).isEqualTo(1);
+            assertThat(scores.getSkuScores("SKU_001_100").items().getFirst().stabilityScore()).isEqualTo(90);
+            assertThat(scores.getSkuScores("SKU_001_100").items().getFirst().timelinessScore()).isEqualTo(65);
 
             var remainingPage = offers.page(supplierCode, null, null, null, 1, 20);
             OfferListItem movie100 = remainingPage.getList().stream()
-                    .filter(item -> "MOVIE_100".equals(item.platformSkuCode()))
+                    .filter(item -> "SKU_001_100".equals(item.platformSkuCode()))
                     .findFirst()
                     .orElseThrow();
             OfferListItem movie200 = remainingPage.getList().stream()
-                    .filter(item -> "MOVIE_200".equals(item.platformSkuCode()))
+                    .filter(item -> "SKU_001_200".equals(item.platformSkuCode()))
                     .findFirst()
                     .orElseThrow();
             assertThat(movie100.stabilityScore()).isEqualTo(90);
@@ -126,16 +126,16 @@ class OfferFulfillmentScoreIntegrationTest {
             assertThat(movie200.timelinessScore()).isEqualTo(70);
 
             offers.updateCommercial(supplierCode, movie100.offerNo(),
-                    new DraftLine("MOVIE_100", "FIXED", 8_800L, null, null, "API_DIRECT", 80L, 1L), 1L);
-            assertThat(scores.getSkuScores("MOVIE_100").items().getFirst().stabilityScore()).isEqualTo(90);
+                    new DraftLine("SKU_001_100", "FIXED", 8_800L, null, null, "API_DIRECT", 80L, 1L), 1L);
+            assertThat(scores.getSkuScores("SKU_001_100").items().getFirst().stabilityScore()).isEqualTo(90);
 
             offers.retire(supplierCode, movie200.offerNo(), 1L);
-            assertThat(scores.getSkuScores("MOVIE_200").items()).isEmpty();
+            assertThat(scores.getSkuScores("SKU_001_200").items()).isEmpty();
             assertThat(scores.saveSupplierScores(supplierCode, 60, 50, null, 1L)).isEqualTo(1);
             assertThat(offerMapper.selectByNo(movie200.offerNo()).getStabilityScore()).isEqualTo(80);
 
             String otherSupplier = command.create(createCommand("旁路供应商", "91110000921000002X"));
-            assertThatThrownBy(() -> scores.saveSkuScores("MOVIE_100", List.of(
+            assertThatThrownBy(() -> scores.saveSkuScores("SKU_001_100", List.of(
                     new SkuSupplierScoreLine(otherSupplier, 10, 10)), 1L))
                     .isInstanceOf(ServiceException.class)
                     .extracting(ex -> ((ServiceException) ex).getCode())
@@ -145,30 +145,30 @@ class OfferFulfillmentScoreIntegrationTest {
 
     private static void seedCatalog(ProductCatalogCommandService catalog) {
         catalog.createBrand(new ProductCatalogCommandService.CreateBrandCommand(
-                "MOVIE_BRAND", "影院品牌", null, null, 0, 1L));
-        catalog.changeBrandStatus("MOVIE_BRAND", CatalogEntityStatus.ACTIVE, 1L);
+                "BRD_001", "影院品牌", null, null, 0, 1L));
+        catalog.changeBrandStatus("BRD_001", CatalogEntityStatus.ACTIVE, 1L);
         catalog.createCategory(new ProductCatalogCommandService.CreateCategoryCommand(
-                "RIGHTS", "权益商品", null, 0, 1L));
-        catalog.changeCategoryStatus("RIGHTS", CatalogEntityStatus.ACTIVE, 1L);
+                "CAT_001", "权益商品", null, 0, 1L));
+        catalog.changeCategoryStatus("CAT_001", CatalogEntityStatus.ACTIVE, 1L);
         catalog.createCategory(new ProductCatalogCommandService.CreateCategoryCommand(
-                "VOUCHER", "卡券", "RIGHTS", 0, 1L));
-        catalog.changeCategoryStatus("VOUCHER", CatalogEntityStatus.ACTIVE, 1L);
+                "CAT_001_001", "卡券", "CAT_001", 0, 1L));
+        catalog.changeCategoryStatus("CAT_001_001", CatalogEntityStatus.ACTIVE, 1L);
         catalog.createCategory(new ProductCatalogCommandService.CreateCategoryCommand(
-                "MOVIE", "电影快充", "VOUCHER", 0, 1L));
-        catalog.changeCategoryStatus("MOVIE", CatalogEntityStatus.ACTIVE, 1L);
+                "CAT_002_001", "电影快充", "CAT_001_001", 0, 1L));
+        catalog.changeCategoryStatus("CAT_002_001", CatalogEntityStatus.ACTIVE, 1L);
         catalog.createSpu(new ProductCatalogCommandService.CreateSpuCommand(
-                "MOVIE_TICKET", "MOVIE_BRAND", "MOVIE",
+                "SPU_001", "BRD_001", "CAT_002_001",
                 "MOVIE", "MOVIE", "MOVIE_TICKET",
                 "电影票", null, null, null, 1L));
-        catalog.changeSpuStatus("MOVIE_TICKET", CatalogEntityStatus.ACTIVE, 1L);
+        catalog.changeSpuStatus("SPU_001", CatalogEntityStatus.ACTIVE, 1L);
         catalog.createSku(new ProductCatalogCommandService.CreateSkuCommand(
-                "MOVIE_100", "MOVIE_TICKET", "电影票 100", FulfillmentType.DIRECT_RECHARGE.name(),
+                "SKU_001_100", "SPU_001", "电影票 100", FulfillmentType.DIRECT_RECHARGE.name(),
                 10_000L, "CNY", 1L));
-        catalog.changeSkuStatus("MOVIE_100", CatalogEntityStatus.ACTIVE, 1L);
+        catalog.changeSkuStatus("SKU_001_100", CatalogEntityStatus.ACTIVE, 1L);
         catalog.createSku(new ProductCatalogCommandService.CreateSkuCommand(
-                "MOVIE_200", "MOVIE_TICKET", "电影票 200", FulfillmentType.DIRECT_RECHARGE.name(),
+                "SKU_001_200", "SPU_001", "电影票 200", FulfillmentType.DIRECT_RECHARGE.name(),
                 20_000L, "CNY", 1L));
-        catalog.changeSkuStatus("MOVIE_200", CatalogEntityStatus.ACTIVE, 1L);
+        catalog.changeSkuStatus("SKU_001_200", CatalogEntityStatus.ACTIVE, 1L);
     }
 
     private static CreateSupplierProfileCommand createCommand(String name, String creditCode) {

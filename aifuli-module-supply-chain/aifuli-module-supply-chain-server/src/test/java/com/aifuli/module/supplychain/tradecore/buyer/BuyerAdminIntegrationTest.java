@@ -310,7 +310,7 @@ class BuyerAdminIntegrationTest {
         BuyerProductCommandService products = context.getBean(BuyerProductCommandService.class);
         BuyerProductQueryService productQuery = context.getBean(BuyerProductQueryService.class);
 
-        PlatformSkuDO sku = skuMapper.selectByCode("MOVIE_100");
+        PlatformSkuDO sku = skuMapper.selectByCode("SKU_001_100");
         assertThat(sku).isNotNull();
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
         PlatformSettlementPriceVersionDO l1Version = PlatformSettlementPriceVersionDO.builder()
@@ -331,7 +331,7 @@ class BuyerAdminIntegrationTest {
                 .build());
 
         List<String> codes = products.addProducts(buyerCode, List.of(
-                new ProductLine("MOVIE_100", L2AdjustMode.FOLLOW_TEMPLATE, null, null, 5, null)), 1L);
+                new ProductLine("SKU_001_100", L2AdjustMode.FOLLOW_TEMPLATE, null, null, 5, null)), 1L);
         assertThat(codes).hasSize(1);
         String buyerProductCode = codes.getFirst();
         assertThat(buyerProductCode).startsWith("BPD_");
@@ -398,26 +398,26 @@ class BuyerAdminIntegrationTest {
 
     private static void seedCatalog(ProductCatalogCommandService catalog) {
         catalog.createBrand(new ProductCatalogCommandService.CreateBrandCommand(
-                "MOVIE_BRAND", "影院品牌", null, null, 0, 1L));
-        catalog.changeBrandStatus("MOVIE_BRAND", CatalogEntityStatus.ACTIVE, 1L);
+                "BRD_001", "影院品牌", null, null, 0, 1L));
+        catalog.changeBrandStatus("BRD_001", CatalogEntityStatus.ACTIVE, 1L);
         catalog.createCategory(new ProductCatalogCommandService.CreateCategoryCommand(
-                "RIGHTS", "权益商品", null, 0, 1L));
-        catalog.changeCategoryStatus("RIGHTS", CatalogEntityStatus.ACTIVE, 1L);
+                "CAT_001", "权益商品", null, 0, 1L));
+        catalog.changeCategoryStatus("CAT_001", CatalogEntityStatus.ACTIVE, 1L);
         catalog.createCategory(new ProductCatalogCommandService.CreateCategoryCommand(
-                "VOUCHER", "卡券", "RIGHTS", 0, 1L));
-        catalog.changeCategoryStatus("VOUCHER", CatalogEntityStatus.ACTIVE, 1L);
+                "CAT_001_001", "卡券", "CAT_001", 0, 1L));
+        catalog.changeCategoryStatus("CAT_001_001", CatalogEntityStatus.ACTIVE, 1L);
         catalog.createCategory(new ProductCatalogCommandService.CreateCategoryCommand(
-                "MOVIE", "电影快充", "VOUCHER", 0, 1L));
-        catalog.changeCategoryStatus("MOVIE", CatalogEntityStatus.ACTIVE, 1L);
+                "CAT_002_001", "电影快充", "CAT_001_001", 0, 1L));
+        catalog.changeCategoryStatus("CAT_002_001", CatalogEntityStatus.ACTIVE, 1L);
         catalog.createSpu(new ProductCatalogCommandService.CreateSpuCommand(
-                "MOVIE_TICKET", "MOVIE_BRAND", "MOVIE",
+                "SPU_001", "BRD_001", "CAT_002_001",
                 "MOVIE", "MOVIE", "MOVIE_TICKET",
                 "电影票", null, null, null, 1L));
-        catalog.changeSpuStatus("MOVIE_TICKET", CatalogEntityStatus.ACTIVE, 1L);
+        catalog.changeSpuStatus("SPU_001", CatalogEntityStatus.ACTIVE, 1L);
         catalog.createSku(new ProductCatalogCommandService.CreateSkuCommand(
-                "MOVIE_100", "MOVIE_TICKET", "电影票 100", FulfillmentType.DIRECT_RECHARGE.name(),
+                "SKU_001_100", "SPU_001", "电影票 100", FulfillmentType.DIRECT_RECHARGE.name(),
                 10_000L, Money.CURRENCY_CNY, 1L));
-        catalog.changeSkuStatus("MOVIE_100", CatalogEntityStatus.ACTIVE, 1L);
+        catalog.changeSkuStatus("SKU_001_100", CatalogEntityStatus.ACTIVE, 1L);
     }
 
     private static CreateBuyerCommand levelOne(String name, Long opening) {

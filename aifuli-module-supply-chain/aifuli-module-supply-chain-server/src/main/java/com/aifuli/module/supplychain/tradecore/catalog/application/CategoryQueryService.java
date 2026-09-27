@@ -124,6 +124,7 @@ public class CategoryQueryService {
                 List<String> typeCodes = resolveTypeCodes(row);
                 String productType = resolveProductType(row, typeCodes);
                 byId.put(row.getId(), new ManagementCategoryNode(row.getId(), row.getCategoryCode(),
+                        row.getCategoryNodeNo(),
                         row.getCategoryName(), productType, typeCodes, row.getDescription(), row.getDescription(),
                         row.getCategoryLevel(), row.getParentId(), row.getSort(),
                         row.getVisible(), row.getStatus(), effectiveVisible(row, rowById, visibilityCache),
@@ -159,7 +160,8 @@ public class CategoryQueryService {
         }
         List<String> typeCodes = resolveTypeCodes(category);
         String productType = resolveProductType(category, typeCodes);
-        return new CategoryDetail(category.getCategoryCode(), category.getCategoryName(), productType,
+        return new CategoryDetail(category.getCategoryCode(), category.getCategoryNodeNo(),
+                category.getCategoryName(), productType,
                 typeCodes, category.getDescription(), category.getDescription(), category.getParentId(),
                 category.getCategoryLevel(), category.getSort(), category.getVisible(), category.getStatus(),
                 category.getCreatedAt(), category.getUpdatedAt());
@@ -303,6 +305,7 @@ public class CategoryQueryService {
     public record ManagementCategoryNode(
             @Schema(description = "商品类目内部主键") Long id,
             @Schema(description = "平台类目永久编码") String categoryCode,
+            @Schema(description = "分类节点内部全局短序号，供直接子分类编码父段引用") Short categoryNodeNo,
             @Schema(description = "类目名称") String categoryName,
             @Schema(description = "商品类型编码，由sc_product_type动态维护（兼容单值）") String productType,
             @Schema(description = "商品类型编码列表，由sc_product_type动态维护") List<String> typeCodes,
@@ -323,6 +326,7 @@ public class CategoryQueryService {
     /** 商品分类详情；字段语义与 {@code sc_product_category} DDL COMMENT 一致。 */
     public record CategoryDetail(
             @Schema(description = "平台类目永久编码") String categoryCode,
+            @Schema(description = "分类节点内部全局短序号，供直接子分类编码父段引用") Short categoryNodeNo,
             @Schema(description = "类目名称") String categoryName,
             @Schema(description = "商品类型编码，由sc_product_type动态维护（兼容单值）") String productType,
             @Schema(description = "商品类型编码列表，由sc_product_type动态维护") List<String> typeCodes,

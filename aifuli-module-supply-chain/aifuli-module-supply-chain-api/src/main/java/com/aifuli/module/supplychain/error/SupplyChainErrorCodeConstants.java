@@ -190,6 +190,12 @@ public interface SupplyChainErrorCodeConstants {
             error(1_050_001_132, "标准商品尚未配置默认定价，无法保存分销价");
     ErrorCode SUPPLIER_CODE_REQUIRED =
             error(1_050_001_133, "排除已添加供应商品时必须指定供应商");
+    ErrorCode BUSINESS_CODE_FORMAT_INVALID = error(1_050_001_139, "业务编码格式错误：{}");
+    ErrorCode BUSINESS_CODE_OCCUPIED = error(1_050_001_140, "业务编码已占用：{}");
+    ErrorCode BUSINESS_CODE_CAPACITY_EXHAUSTED = error(1_050_001_141, "业务编码容量已满：{}");
+    ErrorCode CATEGORY_PARENT_IMMUTABLE = error(1_050_001_142, "分类创建后不能修改父分类");
+    ErrorCode BUSINESS_CODE_PARENT_MISMATCH = error(1_050_001_143, "业务编码父段不匹配：{}");
+    ErrorCode BUSINESS_CODE_MANUAL_NOT_ALLOWED = error(1_050_001_144, "{}编号由系统生成，请勿手填");
 
     /** 订单详情不可用只作为成功响应中的详情标记，不作为 CommonResult 失败码。 */
     String DETAIL_UNAVAILABLE = "DETAIL_UNAVAILABLE";
@@ -332,7 +338,13 @@ public interface SupplyChainErrorCodeConstants {
             entry(ROUTING_RULE_PROTECTED, RetryDirective.DO_NOT_RETRY),
             entry(ROUTING_RULE_WEIGHTS_INVALID, RetryDirective.DO_NOT_RETRY),
             entry(PLATFORM_DEFAULT_PRICING_MISSING, RetryDirective.DO_NOT_RETRY),
-            entry(SUPPLIER_CODE_REQUIRED, RetryDirective.DO_NOT_RETRY));
+            entry(SUPPLIER_CODE_REQUIRED, RetryDirective.DO_NOT_RETRY),
+            entry(BUSINESS_CODE_FORMAT_INVALID, RetryDirective.DO_NOT_RETRY),
+            entry(BUSINESS_CODE_OCCUPIED, RetryDirective.DO_NOT_RETRY),
+            entry(BUSINESS_CODE_CAPACITY_EXHAUSTED, RetryDirective.DO_NOT_RETRY),
+            entry(CATEGORY_PARENT_IMMUTABLE, RetryDirective.DO_NOT_RETRY),
+            entry(BUSINESS_CODE_PARENT_MISMATCH, RetryDirective.DO_NOT_RETRY),
+            entry(BUSINESS_CODE_MANUAL_NOT_ALLOWED, RetryDirective.DO_NOT_RETRY));
 
     static RetryDirective retryDirective(int errorCode) {
         return RETRY_DIRECTIVES.getOrDefault(errorCode, RetryDirective.DO_NOT_RETRY);

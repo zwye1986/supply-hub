@@ -24,6 +24,8 @@ public class ProductCategoryDO {
     @TableId(type = IdType.AUTO)
     private Long id;
     private String categoryCode;
+    /** 分类节点内部全局短序号，供直接子分类编码父段引用 */
+    private Short categoryNodeNo;
     private String categoryName;
     /** 商品类型编码，由sc_product_type动态维护 */
     private String productType;

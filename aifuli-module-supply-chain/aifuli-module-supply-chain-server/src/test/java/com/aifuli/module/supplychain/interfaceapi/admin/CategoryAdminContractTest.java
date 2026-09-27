@@ -58,7 +58,7 @@ class CategoryAdminContractTest {
                 .doesNotContain("ProductCategoryDO");
 
         assertThat(Arrays.stream(CategoryDetail.class.getRecordComponents()).map(component -> component.getName()))
-                .containsExactly("categoryCode", "categoryName", "productType", "typeCodes", "description", "remark",
+                .containsExactly("categoryCode", "categoryNodeNo", "categoryName", "productType", "typeCodes", "description", "remark",
                         "parentId", "categoryLevel", "sort", "visible", "status", "createdAt", "updatedAt");
         Map<String, io.swagger.v3.oas.models.media.Schema> schemas =
                 ModelConverters.getInstance().readAll(CategoryDetail.class);
@@ -66,8 +66,10 @@ class CategoryAdminContractTest {
         assertThat(categorySchema).as("未生成 CategoryDetail OpenAPI schema").isNotNull();
         Map<String, io.swagger.v3.oas.models.media.Schema> properties = categorySchema.getProperties();
         assertThat(properties.keySet()).containsExactlyInAnyOrder(
-                "categoryCode", "categoryName", "productType", "typeCodes", "description", "remark", "parentId",
+                "categoryCode", "categoryNodeNo", "categoryName", "productType", "typeCodes", "description", "remark", "parentId",
                 "categoryLevel", "sort", "visible", "status", "createdAt", "updatedAt");
+        assertThat(properties.get("categoryNodeNo").getDescription())
+                .isEqualTo("分类节点内部全局短序号，供直接子分类编码父段引用");
         properties.forEach((name, property) -> {
             assertThat(property.getDescription())
                     .as("OpenAPI schema CategoryDetail.%s 缺少字段说明", name)
@@ -155,7 +157,7 @@ class CategoryAdminContractTest {
     @SuppressWarnings("rawtypes")
     void managementCategoryNodeUsesDocumentedReadModel() {
         assertThat(Arrays.stream(ManagementCategoryNode.class.getRecordComponents()).map(component -> component.getName()))
-                .containsExactly("id", "categoryCode", "categoryName", "productType", "typeCodes", "description", "remark",
+                .containsExactly("id", "categoryCode", "categoryNodeNo", "categoryName", "productType", "typeCodes", "description", "remark",
                         "categoryLevel", "parentId", "sort", "visible", "status", "effectiveVisible", "productCount",
                         "createdAt", "updatedAt", "children");
         Map<String, io.swagger.v3.oas.models.media.Schema> schemas =
@@ -164,9 +166,11 @@ class CategoryAdminContractTest {
         assertThat(nodeSchema).as("未生成 ManagementCategoryNode OpenAPI schema").isNotNull();
         Map<String, io.swagger.v3.oas.models.media.Schema> properties = nodeSchema.getProperties();
         assertThat(properties.keySet()).containsExactlyInAnyOrder(
-                "id", "categoryCode", "categoryName", "productType", "typeCodes", "description", "remark",
+                "id", "categoryCode", "categoryNodeNo", "categoryName", "productType", "typeCodes", "description", "remark",
                 "categoryLevel", "parentId", "sort", "visible", "status", "effectiveVisible", "productCount",
                 "createdAt", "updatedAt", "children");
+        assertThat(properties.get("categoryNodeNo").getDescription())
+                .isEqualTo("分类节点内部全局短序号，供直接子分类编码父段引用");
         properties.forEach((name, property) -> {
             assertThat(property.getDescription())
                     .as("OpenAPI schema ManagementCategoryNode.%s 缺少字段说明", name)

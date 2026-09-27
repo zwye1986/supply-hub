@@ -148,10 +148,10 @@ class ProjectAdminIntegrationTest {
             String buyerA = buyers.create(createBuyer("一级", "一级科技有限公司", "91110000000000001X"));
             String buyerB = buyers.create(createBuyer("另一级", "另一级科技有限公司", "91110000000000002X"));
             seedCatalog(context.getBean(ProductCatalogCommandService.class));
-            insertL1(context, "MOVIE_100", L1_CENTS);
+            insertL1(context, "SKU_001_100", L1_CENTS);
 
             List<String> buyerProductCodes = products.addProducts(buyerA, List.of(
-                    new ProductLine("MOVIE_100", L2AdjustMode.FOLLOW_TEMPLATE, null, null, null, null)), 1L);
+                    new ProductLine("SKU_001_100", L2AdjustMode.FOLLOW_TEMPLATE, null, null, null, null)), 1L);
             assertThat(buyerProductCodes).hasSize(1);
 
             String projectCode = projects.create(new CreateProjectCommand(
@@ -177,13 +177,13 @@ class ProjectAdminIntegrationTest {
             assertThat(buyerQueries.get(buyerA).sellableCategories()).containsExactly("MOVIE");
 
             assertThatThrownBy(() -> listings.addProducts(projectCode, List.of(
-                    new ListingLine("MOVIE_200", L3AdjustMode.FOLLOW_L2, null, null)), 1L))
+                    new ListingLine("SKU_001_200", L3AdjustMode.FOLLOW_L2, null, null)), 1L))
                     .isInstanceOf(ServiceException.class)
                     .extracting(ex -> ((ServiceException) ex).getCode())
                     .isEqualTo(PROJECT_SKU_NOT_IN_BUYER_CATALOG.getCode());
 
             List<String> listingCodes = listings.addProducts(projectCode, List.of(
-                    new ListingLine("MOVIE_100", L3AdjustMode.FOLLOW_L2, null, null)), 1L);
+                    new ListingLine("SKU_001_100", L3AdjustMode.FOLLOW_L2, null, null)), 1L);
             assertThat(listingCodes).hasSize(1);
             String listingCode = listingCodes.getFirst();
             assertThat(listingCode).startsWith("PLT_");
@@ -249,7 +249,7 @@ class ProjectAdminIntegrationTest {
                     .isEqualTo(10_000L);
 
             // 模拟现场新 SKU：只有通用定价版本，没有旧 L1；新增项目仍须成功并展示真正的 SKU 建议价。
-            PlatformSkuDO genericSku = context.getBean(PlatformSkuMapper.class).selectByCode("MOVIE_100");
+            PlatformSkuDO genericSku = context.getBean(PlatformSkuMapper.class).selectByCode("SKU_001_100");
             context.getBean(PlatformSettlementPriceMapper.class).deleteById(genericSku.getId());
             String genericOnlyProject = projects.create(new CreateProjectCommand(
                     "通用定价项目", buyerA, "WELFARE",
@@ -259,7 +259,7 @@ class ProjectAdminIntegrationTest {
                     .getTotal();
             assertThat(genericCandidateCount).isPositive();
             String genericOnlyListing = listings.addProducts(genericOnlyProject,
-                    List.of(new ListingLine("MOVIE_100", L3AdjustMode.FOLLOW_L2, null, null)), 1L).getFirst();
+                    List.of(new ListingLine("SKU_001_100", L3AdjustMode.FOLLOW_L2, null, null)), 1L).getFirst();
             assertThat(buyerProductQuery.page(buyerA, List.of(), genericOnlyProject, 1, 1).getTotal())
                     .isEqualTo(genericCandidateCount - 1);
             assertThat(listingQuery.page(genericOnlyProject, 1, 20).getList().getFirst())
@@ -298,7 +298,7 @@ class ProjectAdminIntegrationTest {
     private static void verifyGenericBatchPricing(ConfigurableApplicationContext context,
                                                    String buyerA, String projectCode,
                                                    String buyerProductCode, String listingCode) {
-        PlatformSkuDO sku = context.getBean(PlatformSkuMapper.class).selectByCode("MOVIE_100");
+        PlatformSkuDO sku = context.getBean(PlatformSkuMapper.class).selectByCode("SKU_001_100");
         sku.setMarketPrice(10_000L);
         sku.setSuggestedSalePrice(10_000L);
         assertThat(context.getBean(PlatformSkuMapper.class).updateById(sku)).isEqualTo(1);
@@ -442,7 +442,7 @@ class ProjectAdminIntegrationTest {
                 .updatedBy(1L).updatedAt(now).build();
         context.getBean(SupplierMapper.class).insert(supplier);
         SupplierOfferDO offer = SupplierOfferDO.builder().offerNo("OFR_PRICING")
-                .offerCode("MOVIE_100_PRICING").supplierId(supplier.getId()).platformSkuId(sku.getId())
+                .offerCode("SKU_001_100_PRICING").supplierId(supplier.getId()).platformSkuId(sku.getId())
                 .status(OfferStatus.PUBLISHED.getCode()).version(0L).createdBy(1L).createdAt(now)
                 .updatedBy(1L).updatedAt(now).build();
         context.getBean(SupplierOfferMapper.class).insert(offer);
@@ -488,11 +488,11 @@ class ProjectAdminIntegrationTest {
         ProjectListingMapper listingMapper = context.getBean(ProjectListingMapper.class);
         ProjectListingVersionMapper listingVersionMapper = context.getBean(ProjectListingVersionMapper.class);
 
-        insertL1(context, "MOVIE_200", 19_800L);
+        insertL1(context, "SKU_001_200", 19_800L);
         String buyerProductA200Code = products.addProducts(buyerA, List.of(
-                new ProductLine("MOVIE_200", L2AdjustMode.FOLLOW_TEMPLATE, null, null, null, null)), 1L).getFirst();
+                new ProductLine("SKU_001_200", L2AdjustMode.FOLLOW_TEMPLATE, null, null, null, null)), 1L).getFirst();
         String buyerProductB100Code = products.addProducts(buyerB, List.of(
-                new ProductLine("MOVIE_100", L2AdjustMode.FOLLOW_TEMPLATE, null, null, null, null)), 1L).getFirst();
+                new ProductLine("SKU_001_100", L2AdjustMode.FOLLOW_TEMPLATE, null, null, null, null)), 1L).getFirst();
         BuyerProductDO buyerProductA100 = productMapper.selectByCode(buyerProductA100Code);
         BuyerProductDO buyerProductA200 = productMapper.selectByCode(buyerProductA200Code);
 
@@ -551,7 +551,7 @@ class ProjectAdminIntegrationTest {
                 LocalDate.of(2026, 9, 1), LocalDate.of(2026, 12, 31),
                 null, "说明", "ACTIVE", 1L));
         String listingB = listings.addProducts(projectB, List.of(
-                new ListingLine("MOVIE_100", L3AdjustMode.FOLLOW_L2, null, null)), 1L).getFirst();
+                new ListingLine("SKU_001_100", L3AdjustMode.FOLLOW_L2, null, null)), 1L).getFirst();
         ProjectListingDO listingABeforePreview = listingMapper.selectByCode(listingA);
         int listingAVersionCountBeforePreview = listingVersionMapper
                 .selectByListingId(listingABeforePreview.getId()).size();
@@ -698,30 +698,30 @@ class ProjectAdminIntegrationTest {
 
     private static void seedCatalog(ProductCatalogCommandService catalog) {
         catalog.createBrand(new ProductCatalogCommandService.CreateBrandCommand(
-                "MOVIE_BRAND", "影院品牌", null, null, 0, 1L));
-        catalog.changeBrandStatus("MOVIE_BRAND", CatalogEntityStatus.ACTIVE, 1L);
+                "BRD_001", "影院品牌", null, null, 0, 1L));
+        catalog.changeBrandStatus("BRD_001", CatalogEntityStatus.ACTIVE, 1L);
         catalog.createCategory(new ProductCatalogCommandService.CreateCategoryCommand(
-                "RIGHTS", "权益商品", null, 0, 1L));
-        catalog.changeCategoryStatus("RIGHTS", CatalogEntityStatus.ACTIVE, 1L);
+                "CAT_001", "权益商品", null, 0, 1L));
+        catalog.changeCategoryStatus("CAT_001", CatalogEntityStatus.ACTIVE, 1L);
         catalog.createCategory(new ProductCatalogCommandService.CreateCategoryCommand(
-                "VOUCHER", "卡券", "RIGHTS", 0, 1L));
-        catalog.changeCategoryStatus("VOUCHER", CatalogEntityStatus.ACTIVE, 1L);
+                "CAT_001_001", "卡券", "CAT_001", 0, 1L));
+        catalog.changeCategoryStatus("CAT_001_001", CatalogEntityStatus.ACTIVE, 1L);
         catalog.createCategory(new ProductCatalogCommandService.CreateCategoryCommand(
-                "MOVIE", "电影快充", "VOUCHER", 0, 1L));
-        catalog.changeCategoryStatus("MOVIE", CatalogEntityStatus.ACTIVE, 1L);
+                "CAT_002_001", "电影快充", "CAT_001_001", 0, 1L));
+        catalog.changeCategoryStatus("CAT_002_001", CatalogEntityStatus.ACTIVE, 1L);
         catalog.createSpu(new ProductCatalogCommandService.CreateSpuCommand(
-                "MOVIE_TICKET", "MOVIE_BRAND", "MOVIE",
+                "SPU_001", "BRD_001", "CAT_002_001",
                 "MOVIE", "MOVIE", "MOVIE_TICKET",
                 "电影票", null, null, null, 1L));
-        catalog.changeSpuStatus("MOVIE_TICKET", CatalogEntityStatus.ACTIVE, 1L);
+        catalog.changeSpuStatus("SPU_001", CatalogEntityStatus.ACTIVE, 1L);
         catalog.createSku(new ProductCatalogCommandService.CreateSkuCommand(
-                "MOVIE_100", "MOVIE_TICKET", "电影票 100", FulfillmentType.DIRECT_RECHARGE.name(),
+                "SKU_001_100", "SPU_001", "电影票 100", FulfillmentType.DIRECT_RECHARGE.name(),
                 10_000L, Money.CURRENCY_CNY, 1L));
-        catalog.changeSkuStatus("MOVIE_100", CatalogEntityStatus.ACTIVE, 1L);
+        catalog.changeSkuStatus("SKU_001_100", CatalogEntityStatus.ACTIVE, 1L);
         catalog.createSku(new ProductCatalogCommandService.CreateSkuCommand(
-                "MOVIE_200", "MOVIE_TICKET", "电影票 200", FulfillmentType.DIRECT_RECHARGE.name(),
+                "SKU_001_200", "SPU_001", "电影票 200", FulfillmentType.DIRECT_RECHARGE.name(),
                 20_000L, Money.CURRENCY_CNY, 1L));
-        catalog.changeSkuStatus("MOVIE_200", CatalogEntityStatus.ACTIVE, 1L);
+        catalog.changeSkuStatus("SKU_001_200", CatalogEntityStatus.ACTIVE, 1L);
     }
 
     private static CreateBuyerCommand createBuyer(String name, String legalEntity, String creditCode) {

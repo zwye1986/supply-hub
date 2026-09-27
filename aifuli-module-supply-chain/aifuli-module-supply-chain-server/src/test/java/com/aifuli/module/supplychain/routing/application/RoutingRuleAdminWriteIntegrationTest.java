@@ -81,10 +81,10 @@ class RoutingRuleAdminWriteIntegrationTest {
     private static final String EXTERNAL_JDBC_URL = System.getProperty("supply-chain.test.jdbc-url");
     private static final String POLICY_CODE = "STANDARD_PRODUCT_PRIMARY";
     private static final String POLICY_NAME = "标准商品供给路由";
-    private static final String BUYER_CODE = "WUSHENG_WRITE";
+    private static final String BUYER_CODE = "BYR_001";
     private static final String PROJECT_CODE = "WRITE_PROJECT";
     private static final String PRODUCT_TYPE_CODE = "EQUITY_PRODUCT";
-    private static final String SKU_200 = "ROUTE_WRITE_200";
+    private static final String SKU_200 = "SKU_001_200";
     private static final String SUPPLIER_A = "QINAMENG_WRITE";
     private static final String SUPPLIER_B = "ZETA_WRITE";
     private static final String RULE_1 = "RR_WRITE_1";
@@ -267,21 +267,21 @@ class RoutingRuleAdminWriteIntegrationTest {
     private static void seedBuyerAndSku(
             BuyerCommandService buyerService, ProductCatalogCommandService catalog, LocalDateTime now) {
         buyerService.createBuyer(new BuyerCommandService.CreateBuyerCommand(
-                BUYER_CODE, "吾盛写测", "吾盛写测", null, null,
+                null, "吾盛写测", "吾盛写测", null, null,
                 "AIFULI_MALL", "tenant-routing-write", now.minusMinutes(1), 1L));
         catalog.createBrand(new ProductCatalogCommandService.CreateBrandCommand(
-                "WRITE_BRAND", "写测路由品牌", null, null, 0, 1L));
-        catalog.changeBrandStatus("WRITE_BRAND", CatalogEntityStatus.ACTIVE, 1L);
+                "BRD_001", "写测路由品牌", null, null, 0, 1L));
+        catalog.changeBrandStatus("BRD_001", CatalogEntityStatus.ACTIVE, 1L);
         catalog.createCategory(new ProductCatalogCommandService.CreateCategoryCommand(
-                "WRITE_DIRECT", "写测直充", null, 0, 1L));
-        catalog.changeCategoryStatus("WRITE_DIRECT", CatalogEntityStatus.ACTIVE, 1L);
+                "CAT_001", "写测直充", null, 0, 1L));
+        catalog.changeCategoryStatus("CAT_001", CatalogEntityStatus.ACTIVE, 1L);
         catalog.createSpu(new ProductCatalogCommandService.CreateSpuCommand(
-                "WRITE_TELCO", "WRITE_BRAND", "WRITE_DIRECT",
+                "SPU_001", "BRD_001", "CAT_001",
                 "EQUITY", "EQUITY_PRODUCT", "VIRTUAL_CARD",
                 "写测话费直充", null, null, "中台受理后不可自动退款或撤销", 1L));
-        catalog.changeSpuStatus("WRITE_TELCO", CatalogEntityStatus.ACTIVE, 1L);
+        catalog.changeSpuStatus("SPU_001", CatalogEntityStatus.ACTIVE, 1L);
         catalog.createSku(new ProductCatalogCommandService.CreateSkuCommand(
-                SKU_200, "WRITE_TELCO", "写测话费直充 200 元",
+                SKU_200, "SPU_001", "写测话费直充 200 元",
                 "DIRECT_RECHARGE", 20_000L, "CNY", 1L));
         catalog.changeSkuStatus(SKU_200, CatalogEntityStatus.ACTIVE, 1L);
     }

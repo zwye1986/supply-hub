@@ -23,6 +23,8 @@ public class PlatformSpuDO {
     @TableId(type = IdType.AUTO)
     private Long id;
     private String spuCode;
+    /** 平台SPU内部全局短序号，供SKU编码父段引用 */
+    private Short codeScopeNo;
     private Long brandId;
     /** 平台主类目主键，逻辑引用sc_product_category.id（历史字段，主数据保留，不用于供货命中或加购筛选） */
     private Long primaryCategoryId;

@@ -1,5 +1,7 @@
 package com.aifuli.module.supplychain.tradecore.catalog.application;
 
+import com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService;
+
 import com.aifuli.module.supplychain.border.fulfillment.application.FulfillmentTargetSchemaRegistry;
 import com.aifuli.module.supplychain.infrastructure.identity.BusinessNoGenerator;
 import com.aifuli.module.supplychain.infrastructure.identity.BusinessNoPrefixes;
@@ -123,6 +125,7 @@ public class ProductCatalogCommandService {
     private final BuyerListingMapper listingMapper;
     private final BuyerListingAvailabilityMapper availabilityMapper;
     private final BusinessNoGenerator businessNoGenerator;
+    private final ScopedBusinessCodeService scopedBusinessCodeService;
     private final BrandAdminService brandAdminService;
     private final CategoryCommandService categoryCommandService;
     private final ProductTypeValidationService productTypeValidationService;
@@ -181,8 +184,8 @@ public class ProductCatalogCommandService {
             throw exception(PRODUCT_CURRENCY_INVALID);
         }
         PlatformSpuDO spu = requireSpu(command.spuCode());
-        String skuCode = hasText(command.skuCode()) ? command.skuCode().trim()
-                : businessNoGenerator.next(BusinessNoPrefixes.SKU);
+        String skuCode = scopedBusinessCodeService.allocateChild(ScopedBusinessCodeService.Kind.SKU,
+                spu.getId(), spu.getCodeScopeNo(), command.skuCode()).code();
         String fulfillmentType = spu.getFulfillmentType();
         if (hasText(command.fulfillmentType()) && !command.fulfillmentType().trim().equals(fulfillmentType)) {
             throw exception(PRODUCT_SKU_FIELD_INVALID);
@@ -360,8 +363,8 @@ public class ProductCatalogCommandService {
         Set<String> requestCodes = new HashSet<>();
         List<String> defaultPricingInitializationSkuCodes = new ArrayList<>();
         for (SaveSkuLine line : command.skus()) {
-            String skuCode = hasText(line.skuCode()) ? line.skuCode().trim()
-                    : businessNoGenerator.next(BusinessNoPrefixes.SKU);
+            String skuCode = scopedBusinessCodeService.allocateChild(ScopedBusinessCodeService.Kind.SKU,
+                    spu.getId(), spu.getCodeScopeNo(), line.skuCode()).code();
             if (!requestCodes.add(skuCode)) {
                 throw exception(PRODUCT_SKU_CODE_DUPLICATE);
             }
@@ -385,8 +388,9 @@ public class ProductCatalogCommandService {
      * {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线}（d34）。
      */
     private PlatformSpuDO insertSpu(SaveSpuCommand command) {
-        String spuCode = hasText(command.spuCode()) ? command.spuCode().trim()
-                : businessNoGenerator.next(BusinessNoPrefixes.SPU);
+        ScopedBusinessCodeService.Allocation allocation = scopedBusinessCodeService.allocateRoot(
+                ScopedBusinessCodeService.Kind.SPU, command.spuCode());
+        String spuCode = allocation.code();
         CatalogEntityStatus spuStatus = writableStatus(command.status(), CatalogEntityStatus.ACTIVE);
         boolean activeRequired = spuStatus == CatalogEntityStatus.ACTIVE;
         BrandDO brand = resolveBrand(command.brandId(), command.brandCode(), activeRequired);
@@ -403,7 +407,7 @@ public class ProductCatalogCommandService {
         validateQuantity(command.minQuantity(), command.maxQuantity());
         LocalDateTime now = now();
         PlatformSpuDO spu = PlatformSpuDO.builder()
-                .spuCode(spuCode).brandId(brand.getId())
+                .spuCode(spuCode).codeScopeNo((short) allocation.number()).brandId(brand.getId())
                 .primaryCategoryId(primary == null ? null : primary.getId())
                 .sellableCategory(sellable).productType(productType).productClassification(classification)
                 .secondaryCategoryIds(secondary).spuName(command.spuName().trim()).subtitle(command.subtitle())
@@ -483,8 +487,10 @@ public class ProductCatalogCommandService {
         Set<Long> priceDependencyChangedSkuIds = new LinkedHashSet<>();
         LocalDateTime now = now();
         for (SaveSkuLine line : command.skus()) {
-            String code = hasText(line.skuCode()) ? line.skuCode().trim()
-                    : businessNoGenerator.next(BusinessNoPrefixes.SKU);
+            String code = line.skuCode() == null || line.skuCode().isEmpty()
+                    ? scopedBusinessCodeService.allocateChild(ScopedBusinessCodeService.Kind.SKU,
+                    spu.getId(), spu.getCodeScopeNo(), null).code()
+                    : line.skuCode();
             if (!requested.add(code)) throw exception(PRODUCT_SKU_CODE_DUPLICATE);
             PlatformSkuDO sku = byCode.get(code);
             CatalogEntityStatus skuStatus = writableStatus(line.status(), spuStatus);
@@ -494,6 +500,10 @@ public class ProductCatalogCommandService {
             SaveSkuLine inheritedLine = line.withFulfillmentType(spu.getFulfillmentType());
             SchemaDefinition schema = validateSkuLine(inheritedLine, skuStatus == CatalogEntityStatus.ACTIVE);
             if (sku == null) {
+                if (line.skuCode() != null && !line.skuCode().isEmpty()) {
+                    scopedBusinessCodeService.allocateChild(ScopedBusinessCodeService.Kind.SKU,
+                            spu.getId(), spu.getCodeScopeNo(), code);
+                }
                 insertValidatedSku(spu, code, inheritedLine, skuStatus, schema, command.operatorId(), now);
                 defaultPricingInitializationSkuCodes.add(code);
             } else {

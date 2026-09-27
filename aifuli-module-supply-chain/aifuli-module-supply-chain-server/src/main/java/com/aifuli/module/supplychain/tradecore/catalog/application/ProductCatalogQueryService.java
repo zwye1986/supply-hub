@@ -137,7 +137,7 @@ public class ProductCatalogQueryService {
                         sellabilityService.isSellable(sku, spu)))
                 .toList();
         SkuDetail firstSku = skus.isEmpty() ? null : skus.getFirst();
-        return new SpuDetail(spu.getSpuCode(), spu.getSpuName(), spu.getSubtitle(), spu.getBrandId(),
+        return new SpuDetail(spu.getSpuCode(), spu.getCodeScopeNo(), spu.getSpuName(), spu.getSubtitle(), spu.getBrandId(),
                 brand == null ? null : brand.getBrandCode(),
                 brand == null ? null : brand.getBrandName(), spu.getPrimaryCategoryId(),
                 category == null ? null : category.getCategoryName(), spu.getSecondaryCategoryIds(),
@@ -342,6 +342,7 @@ public class ProductCatalogQueryService {
     /** 平台商品详情。 */
     public record SpuDetail(
             @Schema(description = "平台SPU永久业务编码") String spuCode,
+            @Schema(description = "平台SPU内部全局短序号，供SKU编码父段引用") Short codeScopeNo,
             @Schema(description = "平台SPU标准名称") String spuName,
             @Schema(description = "平台SPU副标题") String subtitle,
             @Schema(description = "品牌内部主键") Long brandId,

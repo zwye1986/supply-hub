@@ -50,6 +50,20 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  */
 class ProductCenterContractTest {
 
+    /** 编辑旧 SPU 时必须回显内部父段，以便管理端新增 SKU 使用真实编号。 */
+    @Test
+    void spuDetailDocumentsSkuParentSegment() throws NoSuchMethodException {
+        assertThat(SpuDetail.class.getDeclaredMethod("codeScopeNo")
+                .getAnnotation(Schema.class).description())
+                .isEqualTo("平台SPU内部全局短序号，供SKU编码父段引用");
+        var schemas = ModelConverters.getInstance().readAll(SpuDetail.class);
+        io.swagger.v3.oas.models.media.Schema<?> property =
+                (io.swagger.v3.oas.models.media.Schema<?>) schemas.get("SpuDetail")
+                        .getProperties().get("codeScopeNo");
+        assertThat(property.getDescription())
+                .isEqualTo("平台SPU内部全局短序号，供SKU编码父段引用");
+    }
+
     @Test
     void productAdminControllerDeclaresTagAndOperations() {
         assertThat(ProductAdminController.class.getAnnotation(Tag.class)).isNotNull();

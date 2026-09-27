@@ -1,5 +1,7 @@
 package com.aifuli.module.supplychain.tradecore.buyer.application;
 
+import com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService;
+
 import com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock;
 
 import com.aifuli.module.supplychain.infrastructure.identity.BusinessNoGenerator;
@@ -85,6 +87,7 @@ public class BuyerAdminCommandService {
     private final BuyerFileRefMapper fileRefMapper;
     private final BuyerAccountOpeningService accountOpeningService;
     private final BusinessNoGenerator businessNoGenerator;
+    private final ScopedBusinessCodeService scopedBusinessCodeService;
     private final EnvelopeCryptoPort envelopeCrypto;
     private final ProductTypeValidationService productTypeValidationService;
 
@@ -105,10 +108,13 @@ public class BuyerAdminCommandService {
         if (cooperationStartedAt == null) {
             cooperationStartedAt = now;
         }
-        String buyerCode = businessNoGenerator.next(BusinessNoPrefixes.BYR);
+        ScopedBusinessCodeService.Allocation allocation = scopedBusinessCodeService.allocateRoot(
+                ScopedBusinessCodeService.Kind.BYR, null);
+        String buyerCode = allocation.code();
         ContactLine primary = contacts.getFirst();
         BuyerDO buyer = BuyerDO.builder()
                 .buyerCode(buyerCode)
+                .codeScopeNo((short) allocation.number())
                 .buyerName(command.buyerName())
                 .shortName(truncate(command.buyerName(), NAME_SHORT_LIMIT))
                 .buyerType(BUYER_TYPE_SAAS_MALL)

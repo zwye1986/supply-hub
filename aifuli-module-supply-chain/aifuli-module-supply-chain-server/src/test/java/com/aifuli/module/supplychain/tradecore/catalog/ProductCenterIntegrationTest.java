@@ -107,10 +107,10 @@ class ProductCenterIntegrationTest {
             ObjectMapper objectMapper = context.getBean(ObjectMapper.class);
 
             String brandCode = brandService.create(new BrandAdminService.CreateCommand(
-                    "PC_BRAND", "商品中心测试品牌", "PC品牌", null, "https://example.com/logo.png",
+                    "BRD_001", "商品中心测试品牌", "PC品牌", null, "https://example.com/logo.png",
                     "商品中心测试品牌说明", 0, CatalogEntityStatus.ACTIVE.getCode(), 1L));
             String categoryCode = categoryService.create(new CategoryCommandService.CreateCommand(
-                    "PC_CATEGORY", "商品中心测试分类", null, List.of("EQUITY_PRODUCT", "MOVIE", "DINING"),
+                    "CAT_001", "商品中心测试分类", null, List.of("EQUITY_PRODUCT", "MOVIE", "DINING"),
                     "商品中心测试分类描述", null, 0, (short) 1,
                     CatalogEntityStatus.ACTIVE.getCode(), 1L));
             Long brandId = brandMapper.selectByCode(brandCode).getId();
@@ -118,6 +118,7 @@ class ProductCenterIntegrationTest {
 
             CategoryQueryService.CategoryDetail categoryDetail = categoryQueryService.detail(categoryCode);
             assertThat(categoryDetail.categoryCode()).isEqualTo(categoryCode);
+            assertThat(categoryDetail.categoryNodeNo()).isEqualTo((short) 1);
             assertThat(categoryDetail.categoryName()).isEqualTo("商品中心测试分类");
             assertThat(categoryDetail.productType()).isEqualTo("EQUITY_PRODUCT");
             assertThat(categoryDetail.typeCodes()).containsExactly("EQUITY_PRODUCT", "MOVIE", "DINING");
@@ -127,7 +128,7 @@ class ProductCenterIntegrationTest {
             Set<String> categoryFields = new HashSet<>();
             categoryJson.fieldNames().forEachRemaining(categoryFields::add);
             assertThat(categoryFields).containsExactlyInAnyOrder(
-                    "categoryCode", "categoryName", "productType", "typeCodes", "description", "remark", "parentId",
+                    "categoryCode", "categoryNodeNo", "categoryName", "productType", "typeCodes", "description", "remark", "parentId",
                     "categoryLevel", "sort", "visible", "status", "createdAt", "updatedAt");
             assertThat(categoryFields).doesNotContain("id", "version", "createdBy", "updatedBy");
 
@@ -137,6 +138,7 @@ class ProductCenterIntegrationTest {
             CategoryQueryService.ManagementCategoryNode treeNode = treeNodes.stream()
                     .filter(n -> categoryCode.equals(n.categoryCode())).findFirst().orElseThrow();
             assertThat(treeNode.productType()).isEqualTo("EQUITY_PRODUCT");
+            assertThat(treeNode.categoryNodeNo()).isEqualTo((short) 1);
             assertThat(treeNode.typeCodes()).containsExactly("EQUITY_PRODUCT", "MOVIE", "DINING");
             assertThat(treeNode.remark()).isEqualTo("商品中心测试分类描述");
             assertThat(treeNode.createdAt()).isNotNull();
@@ -159,10 +161,10 @@ class ProductCenterIntegrationTest {
             assertThat(clearedDescDetail.typeCodes()).containsExactly("MOVIE", "DINING");
 
             String spuCode = commandService.createProduct(new SaveSpuCommand(
-                    "PC_SPU", "商品中心虚拟直充", "复合保存回归", brandId, categoryId, List.of(),
+                    "SPU_001", "商品中心虚拟直充", "复合保存回归", brandId, categoryId, List.of(),
                     "EQUITY", "EQUITY_PRODUCT", "VIRTUAL_CARD", null, List.of(), "测试说明",
                     "测试详情", "VIRTUAL", 1L, 100L, CatalogEntityStatus.ACTIVE.getCode(),
-                    List.of(new SaveSkuLine("PC_SKU_100", "商品中心直充100元",
+                    List.of(new SaveSkuLine("SKU_001_100", "商品中心直充100元",
                             "https://example.com/sku-main.png",
                             List.of("https://example.com/sku-detail-1.png", "https://example.com/sku-detail-2.png"),
                             "SKU商品描述", "DIRECT_RECHARGE",
@@ -171,7 +173,7 @@ class ProductCenterIntegrationTest {
                             true, "MONTH", 2L, true, true, "DAY", 2L, 1000L,
                             CatalogEntityStatus.ACTIVE.getCode())), 1L));
 
-            PlatformSkuDO platformSku = skuMapper.selectByCode("PC_SKU_100");
+            PlatformSkuDO platformSku = skuMapper.selectByCode("SKU_001_100");
             assertThat(platformSku.getFaceValue()).isEqualTo(10_000L);
             assertThat(platformSku.getMarketPrice()).isEqualTo(12_000L);
             assertThat(platformSku.getSuggestedSalePrice()).isEqualTo(9_900L);
@@ -233,8 +235,8 @@ class ProductCenterIntegrationTest {
             assertThat(skuListItem.marketPriceCents()).isEqualTo(9_900L);
 
             commandService.batchUpdateSkuTaxMetadata(new ProductCatalogCommandService.SkuTaxMetadataBatchCommand(
-                    List.of("PC_SKU_100"), false, new BigDecimal("0.1300"), 1L));
-            PlatformSkuDO taxUpdatedSku = skuMapper.selectByCode("PC_SKU_100");
+                    List.of("SKU_001_100"), false, new BigDecimal("0.1300"), 1L));
+            PlatformSkuDO taxUpdatedSku = skuMapper.selectByCode("SKU_001_100");
             assertThat(taxUpdatedSku.getTaxIncluded()).isFalse();
             assertThat(taxUpdatedSku.getTaxRate()).isEqualByComparingTo("0.1300");
             assertThat(taxUpdatedSku.getMarketPrice()).isEqualTo(12_000L);
@@ -255,7 +257,7 @@ class ProductCenterIntegrationTest {
                     .isEqualTo(String.valueOf(CatalogEntityStatus.ACTIVE.getCode()));
             assertThat(createdJson.get("skus").get(0).get("status").isTextual()).isTrue();
             assertThat(created.skus()).singleElement().satisfies(sku -> {
-                assertThat(sku.skuCode()).isEqualTo("PC_SKU_100");
+                assertThat(sku.skuCode()).isEqualTo("SKU_001_100");
                 assertThat(sku.mainImageUrl()).isEqualTo("https://example.com/sku-main.png");
                 assertThat(sku.detailImageUrls()).containsExactly(
                         "https://example.com/sku-detail-1.png", "https://example.com/sku-detail-2.png");
@@ -282,11 +284,11 @@ class ProductCenterIntegrationTest {
                     SuggestedSalePriceRule.Operator.ADD,
                     new BigDecimal("1.00"), null, null);
             SaveSkuLine validNewSku = new SaveSkuLine(
-                    "PC_SKU_200", "商品中心直充200元", "DIRECT_RECHARGE",
+                    "SKU_001_200", "商品中心直充200元", "DIRECT_RECHARGE",
                     20_000L, 20_000L, null, SuggestedSalePriceRule.equalMarketPrice(),
                     1L, 10L, CatalogEntityStatus.DRAFT.getCode());
             SaveSkuLine mismatchedExistingSku = new SaveSkuLine(
-                    "PC_SKU_100", "商品中心直充100元",
+                    "SKU_001_100", "商品中心直充100元",
                     "https://example.com/sku-main.png",
                     List.of("https://example.com/sku-detail-1.png", "https://example.com/sku-detail-2.png"),
                     "SKU商品描述", "DIRECT_RECHARGE",
@@ -302,15 +304,15 @@ class ProductCenterIntegrationTest {
                     CatalogEntityStatus.ACTIVE.getCode(),
                     List.of(validNewSku, mismatchedExistingSku), 1L)))
                     .isInstanceOf(ServiceException.class);
-            PlatformSkuDO rolledBackSku = skuMapper.selectByCode("PC_SKU_100");
+            PlatformSkuDO rolledBackSku = skuMapper.selectByCode("SKU_001_100");
             assertThat(rolledBackSku.getSuggestedSalePrice()).isEqualTo(9_900L);
             assertThat(rolledBackSku.getSuggestedSalePriceRuleJson().mode())
                     .isEqualTo(SuggestedSalePriceRule.Mode.FIXED);
-            assertThat(skuMapper.selectByCode("PC_SKU_200")).isNull();
+            assertThat(skuMapper.selectByCode("SKU_001_200")).isNull();
             assertThat(queryService.detail(spuCode).subtitle()).isEqualTo("复合保存回归");
 
             SaveSkuLine validExistingSku = new SaveSkuLine(
-                    "PC_SKU_100", "商品中心直充100元",
+                    "SKU_001_100", "商品中心直充100元",
                     "https://example.com/sku-main.png",
                     List.of("https://example.com/sku-detail-1.png", "https://example.com/sku-detail-2.png"),
                     "SKU商品描述", "DIRECT_RECHARGE",
@@ -323,7 +325,7 @@ class ProductCenterIntegrationTest {
                     "EQUITY", "EQUITY_PRODUCT", "VIRTUAL_CARD", null, List.of(), "测试说明",
                     "测试详情", "VIRTUAL", "DIRECT_RECHARGE", 1L, 100L,
                     CatalogEntityStatus.ACTIVE.getCode(), List.of(validExistingSku), 1L));
-            PlatformSkuDO repricedSku = skuMapper.selectByCode("PC_SKU_100");
+            PlatformSkuDO repricedSku = skuMapper.selectByCode("SKU_001_100");
             assertThat(repricedSku.getSuggestedSalePrice()).isEqualTo(6_100L);
             assertThat(repricedSku.getSuggestedSalePriceRuleJson()).satisfies(persistedRule -> {
                 assertThat(persistedRule.mode()).isEqualTo(customRule.mode());
@@ -338,7 +340,7 @@ class ProductCenterIntegrationTest {
                 assertThat(sku.suggestedSalePriceRule().operator()).isEqualTo("ADD");
             });
 
-            commandService.changeSkuStatus("PC_SKU_100", CatalogEntityStatus.INACTIVE, 1L);
+            commandService.changeSkuStatus("SKU_001_100", CatalogEntityStatus.INACTIVE, 1L);
             commandService.changeSpuStatus(spuCode, CatalogEntityStatus.INACTIVE, 1L);
             commandService.changeSpuStatus(spuCode, CatalogEntityStatus.ACTIVE, 1L);
             assertThat(queryService.detail(spuCode).skus()).singleElement().satisfies(sku -> {
