@@ -81,31 +81,31 @@ class MasterDataLifecycleIntegrationTest {
 
             LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
             buyerService.createBuyer(new BuyerCommandService.CreateBuyerCommand(
-                    "WUSHENG", "吾盛", "吾盛", null, null,
+                    null, "吾盛", "吾盛", null, null,
                     "AIFULI_MALL", "tenant-wusheng", now.minusMinutes(1), 1L));
 
             catalogService.createBrand(new ProductCatalogCommandService.CreateBrandCommand(
-                    "CMCC", "中国移动", "China Mobile", null, 0, 1L));
-            catalogService.changeBrandStatus("CMCC", CatalogEntityStatus.ACTIVE, 1L);
-            catalogService.changeBrandStatus("CMCC", CatalogEntityStatus.INACTIVE, 1L);
-            catalogService.changeBrandStatus("CMCC", CatalogEntityStatus.ACTIVE, 1L);
+                    "BRD_001", "中国移动", "China Mobile", null, 0, 1L));
+            catalogService.changeBrandStatus("BRD_001", CatalogEntityStatus.ACTIVE, 1L);
+            catalogService.changeBrandStatus("BRD_001", CatalogEntityStatus.INACTIVE, 1L);
+            catalogService.changeBrandStatus("BRD_001", CatalogEntityStatus.ACTIVE, 1L);
 
             catalogService.createCategory(new ProductCatalogCommandService.CreateCategoryCommand(
-                    "DIRECT_RECHARGE", "话费直充", null, 0, 1L));
-            catalogService.changeCategoryStatus("DIRECT_RECHARGE", CatalogEntityStatus.ACTIVE, 1L);
+                    "CAT_001", "话费直充", null, 0, 1L));
+            catalogService.changeCategoryStatus("CAT_001", CatalogEntityStatus.ACTIVE, 1L);
             catalogService.createSpu(new ProductCatalogCommandService.CreateSpuCommand(
-                    "TELCO_RECHARGE", "CMCC", "DIRECT_RECHARGE",
+                    "SPU_001", "BRD_001", "CAT_001",
                     "EQUITY", "EQUITY_PRODUCT", "VIRTUAL_CARD",
                     "话费直充", null, null, "充值后不可撤销", 1L));
-            catalogService.changeSpuStatus("TELCO_RECHARGE", CatalogEntityStatus.ACTIVE, 1L);
+            catalogService.changeSpuStatus("SPU_001", CatalogEntityStatus.ACTIVE, 1L);
             catalogService.createSku(new ProductCatalogCommandService.CreateSkuCommand(
-                    "TELCO_100", "TELCO_RECHARGE", "话费直充 100 元", "DIRECT_RECHARGE",
+                    "SKU_001_100", "SPU_001", "话费直充 100 元", "DIRECT_RECHARGE",
                     10_000L, "CNY", 1L));
-            catalogService.changeSkuStatus("TELCO_100", CatalogEntityStatus.ACTIVE, 1L);
+            catalogService.changeSkuStatus("SKU_001_100", CatalogEntityStatus.ACTIVE, 1L);
 
             String listingNo = catalogService.createBuyerListing(
                     new ProductCatalogCommandService.CreateBuyerListingCommand(
-                            "WUSHENG", "TELCO_100", "WS-TELCO-100", 1L));
+                            "BYR_001", "SKU_001_100", "WS-TELCO-100", 1L));
             assertThat(listingNo).startsWith("LST_").hasSize(30);
 
             BuyerListingPublicationService.PublishResult first = publicationService.publish(
@@ -156,15 +156,15 @@ class MasterDataLifecycleIntegrationTest {
 
             assertThatThrownBy(() -> catalogService.createBuyerListing(
                     new ProductCatalogCommandService.CreateBuyerListingCommand(
-                            "WUSHENG", "TELCO_100", "WS-TELCO-100-OTHER", 1L)))
+                            "BYR_001", "SKU_001_100", "WS-TELCO-100-OTHER", 1L)))
                     .isInstanceOf(DataIntegrityViolationException.class);
 
             publicationService.changeStatus(changeStatus(listingNo, 2, BuyerListingStatus.SUSPENDED));
             publicationService.changeStatus(changeStatus(listingNo, 3, BuyerListingStatus.PUBLISHED));
-            buyerService.changeStatus("WUSHENG", BuyerStatus.SUSPENDED, 1L);
-            buyerService.changeStatus("WUSHENG", BuyerStatus.ACTIVE, 1L);
-            buyerService.changeStatus("WUSHENG", BuyerStatus.ARCHIVED, 1L);
-            assertThatThrownBy(() -> buyerService.changeStatus("WUSHENG", BuyerStatus.ACTIVE, 1L))
+            buyerService.changeStatus("BYR_001", BuyerStatus.SUSPENDED, 1L);
+            buyerService.changeStatus("BYR_001", BuyerStatus.ACTIVE, 1L);
+            buyerService.changeStatus("BYR_001", BuyerStatus.ARCHIVED, 1L);
+            assertThatThrownBy(() -> buyerService.changeStatus("BYR_001", BuyerStatus.ACTIVE, 1L))
                     .isInstanceOf(IllegalStateException.class);
         }
     }

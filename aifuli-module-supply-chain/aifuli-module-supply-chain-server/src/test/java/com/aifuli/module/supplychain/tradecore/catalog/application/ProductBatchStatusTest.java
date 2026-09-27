@@ -64,7 +64,9 @@ class ProductBatchStatusTest {
     private final ProductCatalogCommandService service = new ProductCatalogCommandService(
             clock, eventPublisher, brandMapper, categoryMapper, spuMapper, skuMapper, platformSkuPricingMapper,
             buyerMapper, buyerListingMapper,
-            availabilityMapper, generator, brandAdminService, categoryCommandService,
+            availabilityMapper, generator,
+            mock(com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService.class),
+            brandAdminService, categoryCommandService,
             productTypeValidationService, productClassificationValidationService, sellabilityService, deletionValidator, targetSchemaRegistry,
             skuSchemaRegistry);
 

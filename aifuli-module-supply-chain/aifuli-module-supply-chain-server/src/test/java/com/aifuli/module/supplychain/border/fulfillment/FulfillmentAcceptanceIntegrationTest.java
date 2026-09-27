@@ -389,7 +389,7 @@ class FulfillmentAcceptanceIntegrationTest {
     void supplierSkuDailyQuotaSerializesConcurrentAcceptanceAndReleasesFailedOrder() throws Exception {
         try (ConfigurableApplicationContext context = applicationContext()) {
             Fixture fixture = seed(context);
-            PlatformSkuDO sku = context.getBean(PlatformSkuMapper.class).selectByCode("TELCO_100");
+            PlatformSkuDO sku = context.getBean(PlatformSkuMapper.class).selectByCode("SKU_001_100");
             SupplierSkuDailyQuotaMapper quotaMapper = context.getBean(SupplierSkuDailyQuotaMapper.class);
             LocalDateTime now = context.getBean(com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock.class)
                     .now();
@@ -423,26 +423,26 @@ class FulfillmentAcceptanceIntegrationTest {
         BuyerCommandService buyers = context.getBean(BuyerCommandService.class);
         ProductCatalogCommandService catalog = context.getBean(ProductCatalogCommandService.class);
         buyers.createBuyer(new BuyerCommandService.CreateBuyerCommand(
-                "WUSHENG", "吾盛", "吾盛", null, null,
+                null, "吾盛", "吾盛", null, null,
                 "AIFULI_MALL", "tenant-wusheng", now.minusMinutes(5), 1L));
         catalog.createBrand(new ProductCatalogCommandService.CreateBrandCommand(
-                "CMCC", "中国移动", null, null, 0, 1L));
-        catalog.changeBrandStatus("CMCC", CatalogEntityStatus.ACTIVE, 1L);
+                "BRD_001", "中国移动", null, null, 0, 1L));
+        catalog.changeBrandStatus("BRD_001", CatalogEntityStatus.ACTIVE, 1L);
         catalog.createCategory(new ProductCatalogCommandService.CreateCategoryCommand(
-                FulfillmentType.DIRECT_RECHARGE.code(), "话费直充", null, 0, 1L));
-        catalog.changeCategoryStatus(FulfillmentType.DIRECT_RECHARGE.code(), CatalogEntityStatus.ACTIVE, 1L);
+                "CAT_001", "话费直充", null, 0, 1L));
+        catalog.changeCategoryStatus("CAT_001", CatalogEntityStatus.ACTIVE, 1L);
         catalog.createSpu(new ProductCatalogCommandService.CreateSpuCommand(
-                "TELCO_RECHARGE", "CMCC", FulfillmentType.DIRECT_RECHARGE.code(),
+                "SPU_001", "BRD_001", "CAT_001",
                 "EQUITY", "EQUITY_PRODUCT", "VIRTUAL_CARD",
                 "话费直充", null, null, "中台受理后不可自动退款或撤销", 1L));
-        catalog.changeSpuStatus("TELCO_RECHARGE", CatalogEntityStatus.ACTIVE, 1L);
+        catalog.changeSpuStatus("SPU_001", CatalogEntityStatus.ACTIVE, 1L);
         catalog.createSku(new ProductCatalogCommandService.CreateSkuCommand(
-                "TELCO_100", "TELCO_RECHARGE", "话费直充 100 元", FulfillmentType.DIRECT_RECHARGE.code(),
+                "SKU_001_100", "SPU_001", "话费直充 100 元", FulfillmentType.DIRECT_RECHARGE.code(),
                 10_000L, Money.CURRENCY_CNY, 1L));
-        catalog.changeSkuStatus("TELCO_100", CatalogEntityStatus.ACTIVE, 1L);
+        catalog.changeSkuStatus("SKU_001_100", CatalogEntityStatus.ACTIVE, 1L);
         String listingNo = catalog.createBuyerListing(
                 new ProductCatalogCommandService.CreateBuyerListingCommand(
-                        "WUSHENG", "TELCO_100", "WS-TELCO-100", 1L));
+                        "BYR_001", "SKU_001_100", "WS-TELCO-100", 1L));
         context.getBean(BuyerListingPublicationService.class).publish(
                 new BuyerListingPublicationService.PublishListingCommand(
                         listingNo, 0L, 9_800L, "话费直充 100 元", now.minusMinutes(1), null,
@@ -450,16 +450,16 @@ class FulfillmentAcceptanceIntegrationTest {
         setAvailability(context, ListingAvailability.AVAILABLE, "SUPPLY_READY");
 
         Long buyerId = context.getBean(com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerMapper.class)
-                .selectByBuyerCode("WUSHENG").getId();
+                .selectByBuyerCode("BYR_001").getId();
         insertActiveProject(context.getBean(BuyerProjectMapper.class), PROJECT_A, buyerId, now);
         insertActiveProject(context.getBean(BuyerProjectMapper.class), PROJECT_B, buyerId, now);
         context.getBean(BuyerAccountOpeningService.class).open(
                 new BuyerAccountOpeningService.OpeningBalanceCommand(
-                        "WUSHENG", Money.cny(25_000L), 1L, "evidence://opening",
+                        "BYR_001", Money.cny(25_000L), 1L, "evidence://opening",
                         new byte[32], "M1 受理集成测试期初额",
                         "trace-account", null));
 
-        PlatformSkuDO sku = context.getBean(PlatformSkuMapper.class).selectByCode("TELCO_100");
+        PlatformSkuDO sku = context.getBean(PlatformSkuMapper.class).selectByCode("SKU_001_100");
         SupplierDO supplier = createQnmOffer(context, sku, now);
         // 044 预置引导策略占用同类型唯一 active 位；受理链路种子发布自有 CARD_PRIMARY 策略，先停用预置。
         RoutingPolicyPresetFixture.deactivatePresetPolicy(new JdbcTemplate(
@@ -472,7 +472,7 @@ class FulfillmentAcceptanceIntegrationTest {
                         now.minusHours(1), now.plusDays(1), List.of(
                         new RoutingPolicyPublicationService.RuleDraft(
                                 "WS_TELCO", "吾盛话费路由", "FIXED", "QINAMENG",
-                                "SPECIFIED", List.of("WUSHENG"),
+                                "SPECIFIED", List.of("BYR_001"),
                                 "ALL", List.of(),
                                 "SPECIFIED", List.of("EQUITY_PRODUCT"),
                                 "ALL", List.of(),
@@ -523,7 +523,7 @@ class FulfillmentAcceptanceIntegrationTest {
                 .createdBy(1L).createdAt(now).updatedBy(1L).updatedAt(now).build();
         context.getBean(InventorySourceMapper.class).insert(inventory);
         SupplierOfferDO offer = SupplierOfferDO.builder().offerNo("OFR_QNM_TELCO")
-                .offerCode("TELCO_100").supplierId(supplier.getId()).platformSkuId(sku.getId())
+                .offerCode("SKU_001_100").supplierId(supplier.getId()).platformSkuId(sku.getId())
                 .status(OfferStatus.PUBLISHED.getCode()).version(0L)
                 .createdBy(1L).createdAt(now).updatedBy(1L).updatedAt(now).build();
         SupplierOfferMapper offerMapper = context.getBean(SupplierOfferMapper.class);
@@ -550,7 +550,7 @@ class FulfillmentAcceptanceIntegrationTest {
         BuyerListingMapper listingMapper = context.getBean(BuyerListingMapper.class);
         BuyerListingDO listing = listingMapper.selectByBuyerAndSkuCode(
                 context.getBean(com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerMapper.class)
-                        .selectByBuyerCode("WUSHENG").getId(), "WS-TELCO-100");
+                        .selectByBuyerCode("BYR_001").getId(), "WS-TELCO-100");
         BuyerListingAvailabilityMapper mapper = context.getBean(BuyerListingAvailabilityMapper.class);
         BuyerListingAvailabilityDO availability = mapper.selectByListingId(listing.getId());
         availability.setAvailability(value.getCode());
@@ -689,7 +689,7 @@ class FulfillmentAcceptanceIntegrationTest {
 
     private static void configureDailyLimit(ConfigurableApplicationContext context, long quantity) {
         PlatformSkuMapper mapper = context.getBean(PlatformSkuMapper.class);
-        PlatformSkuDO sku = mapper.selectByCode("TELCO_100");
+        PlatformSkuDO sku = mapper.selectByCode("SKU_001_100");
         sku.setUserLimitEnabled(true);
         sku.setUserLimitPeriod("DAY");
         sku.setUserLimitQuantity(quantity);
@@ -699,7 +699,7 @@ class FulfillmentAcceptanceIntegrationTest {
 
     private static void configurePhoneBindDailyLimit(ConfigurableApplicationContext context, long quantity) {
         PlatformSkuMapper mapper = context.getBean(PlatformSkuMapper.class);
-        PlatformSkuDO sku = mapper.selectByCode("TELCO_100");
+        PlatformSkuDO sku = mapper.selectByCode("SKU_001_100");
         sku.setUserLimitEnabled(false);
         sku.setUserLimitPeriod(null);
         sku.setUserLimitQuantity(null);
@@ -711,7 +711,7 @@ class FulfillmentAcceptanceIntegrationTest {
 
     private static void disablePhoneBindLimit(ConfigurableApplicationContext context) {
         PlatformSkuMapper mapper = context.getBean(PlatformSkuMapper.class);
-        PlatformSkuDO sku = mapper.selectByCode("TELCO_100");
+        PlatformSkuDO sku = mapper.selectByCode("SKU_001_100");
         sku.setPhoneBindLimitEnabled(false);
         sku.setPhoneBindLimitPeriod(null);
         sku.setPhoneBindLimitQuantity(null);

@@ -1,5 +1,8 @@
 package com.aifuli.module.supplychain.tradecore.supply.application;
 
+import com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService;
+import com.aifuli.module.supplychain.infrastructure.identity.SystemAssignedBusinessCodeGuard;
+
 import com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock;
 
 import com.aifuli.module.supplychain.infrastructure.identity.BusinessNoGenerator;
@@ -55,16 +58,21 @@ public class SupplierConfigurationCommandService {
     private final AdapterMetadataRegistry metadataRegistry;
     private final ClosedJsonSchemaValidator schemaValidator;
     private final BusinessNoGenerator businessNoGenerator;
+    private final ScopedBusinessCodeService scopedBusinessCodeService;
     private final ObjectMapper objectMapper;
 
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public String createSupplier(CreateSupplierCommand command) {
+        SystemAssignedBusinessCodeGuard.rejectSubmitted(ScopedBusinessCodeService.Kind.SPL,
+                command.supplierCode() != null);
         if (!SUPPLIER_TYPES.contains(command.supplierType())) {
             throw new IllegalArgumentException("Unsupported supplier type: " + command.supplierType());
         }
         LocalDateTime now = now();
         SupplierDO supplier = SupplierDO.builder()
-                .supplierCode(command.supplierCode()).supplierName(command.supplierName())
+                .supplierCode(scopedBusinessCodeService.allocateRoot(ScopedBusinessCodeService.Kind.SPL,
+                        null, command.operatorId()).code())
+                .supplierName(command.supplierName())
                 .shortName(command.shortName()).supplierType(command.supplierType())
                 .legalEntityName(command.legalEntityName()).status(SupplierStatus.ACTIVE.getCode())
                 .version(0L).createdBy(command.operatorId()).createdAt(now)

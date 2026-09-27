@@ -1,5 +1,8 @@
 package com.aifuli.module.supplychain.tradecore.buyer.application;
 
+import com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService;
+import com.aifuli.module.supplychain.infrastructure.identity.SystemAssignedBusinessCodeGuard;
+
 import com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock;
 
 import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerDO;
@@ -23,13 +26,19 @@ public class BuyerCommandService {
 
     private final BuyerMapper buyerMapper;
     private final BuyerTenantBindingMapper bindingMapper;
+    private final ScopedBusinessCodeService scopedBusinessCodeService;
 
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public String createBuyer(CreateBuyerCommand command) {
+        SystemAssignedBusinessCodeGuard.rejectSubmitted(ScopedBusinessCodeService.Kind.BYR,
+                command.buyerCode() != null);
+        ScopedBusinessCodeService.Allocation allocation = scopedBusinessCodeService.allocateRoot(
+                ScopedBusinessCodeService.Kind.BYR, null, command.operatorId());
         LocalDateTime now = databaseClock.now();
         LocalDateTime validFrom = command.validFrom() == null ? now : command.validFrom();
         BuyerDO buyer = BuyerDO.builder()
-                .buyerCode(command.buyerCode())
+                .buyerCode(allocation.code())
+                .codeScopeNo((short) allocation.number())
                 .buyerName(command.buyerName())
                 .shortName(command.shortName())
                 .buyerType("SAAS_MALL")

@@ -1,5 +1,7 @@
 package com.aifuli.module.supplychain.tradecore.supply.application;
 
+import com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService;
+
 import com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock;
 
 import com.aifuli.module.supplychain.infrastructure.identity.BusinessNoGenerator;
@@ -88,6 +90,7 @@ public class SupplierProfileCommandService {
     private final SupplierIntegrationModeMapper integrationModeMapper;
     private final SupplierFileRefMapper fileRefMapper;
     private final BusinessNoGenerator businessNoGenerator;
+    private final ScopedBusinessCodeService scopedBusinessCodeService;
     private final EnvelopeCryptoPort envelopeCrypto;
 
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
@@ -112,7 +115,8 @@ public class SupplierProfileCommandService {
         if (onboardedAt == null) {
             onboardedAt = now;
         }
-        String supplierCode = businessNoGenerator.next(BusinessNoPrefixes.SPL);
+        String supplierCode = scopedBusinessCodeService.allocateRoot(ScopedBusinessCodeService.Kind.SPL,
+                null, command.operatorId()).code();
         String shortName = truncate(command.supplierName(), NAME_SHORT_LIMIT);
         SupplierDO supplier = SupplierDO.builder()
                 .supplierCode(supplierCode)

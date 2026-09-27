@@ -84,7 +84,7 @@ class RoutingPolicyPublicationSuccessorTest {
             SupplyChainDatabaseClock clock = context.getBean(SupplyChainDatabaseClock.class);
 
             LocalDateTime seedNow = clock.now().withNano(0);
-            seedBuyerAndSuppliers(buyerService, supplierMapper, seedNow);
+            String buyerCode = seedBuyerAndSuppliers(buyerService, supplierMapper, seedNow);
 
             // 044 预置引导：策略已带受保护全局默认规则的开放区间生效版本，后继发布接续它。
             SupplierRoutingPolicyDO policy = policyMapper.selectByCode(POLICY_CODE);
@@ -105,7 +105,7 @@ class RoutingPolicyPublicationSuccessorTest {
             // 后继规则集：全局默认 + 分销商商品类型层级，避免启用集同范围冲突。
             List<RoutingPolicyPublicationService.RuleDraft> successorRules = List.of(
                     autoRule("RR_SUCC_1", "后继规则一"),
-                    specifiedDistributorRule("RR_SUCC_2", "后继规则二", "WUSHENG_SUCC"));
+                    specifiedDistributorRule("RR_SUCC_2", "后继规则二", buyerCode));
 
             // 后继发布同时把权重 50/20/30 同步到策略身份行
             RoutingPolicyPublicationService.SuccessorPublishResult successor =
@@ -146,16 +146,17 @@ class RoutingPolicyPublicationSuccessorTest {
         }
     }
 
-    private static void seedBuyerAndSuppliers(
+    private static String seedBuyerAndSuppliers(
             BuyerCommandService buyerService, SupplierMapper supplierMapper, LocalDateTime now) {
-        buyerService.createBuyer(new BuyerCommandService.CreateBuyerCommand(
-                "WUSHENG_SUCC", "吾盛后继", "吾盛后继", null, null,
+        String buyerCode = buyerService.createBuyer(new BuyerCommandService.CreateBuyerCommand(
+                null, "吾盛后继", "吾盛后继", null, null,
                 "AIFULI_MALL", "tenant-routing-succ", now.minusMinutes(1), 1L));
         // AUTO+全部供应商不落候选行；供应商仅为范围校验与后续人工配置预留
         supplierMapper.insert(SupplierDO.builder()
                 .supplierCode("QINAMENG_SUCC").supplierName("奇那梦后继").shortName("奇那梦后继")
                 .supplierType("STANDARD_SUPPLIER").status(SupplierStatus.ACTIVE.getCode()).version(0L)
                 .createdBy(1L).createdAt(now).updatedBy(1L).updatedAt(now).build());
+        return buyerCode;
     }
 
     /** AUTO + 全部供应商规则：分销商/项目/商品类型/供应商四级范围全 ALL，无候选行。 */

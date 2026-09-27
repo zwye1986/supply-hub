@@ -37,13 +37,21 @@ class BrandAdminServiceTest {
     private final BrandMapper brandMapper = mock(BrandMapper.class);
     private final PlatformSpuMapper spuMapper = mock(PlatformSpuMapper.class);
     private final BusinessNoGenerator generator = mock(BusinessNoGenerator.class);
+    private final com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService scopedBusinessCodeService =
+            mock(com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService.class);
     private final SupplyChainDatabaseClock clock = mock(SupplyChainDatabaseClock.class);
 
     private final BrandAdminService service = new BrandAdminService(
-            brandMapper, spuMapper, generator, clock);
+            brandMapper, spuMapper, generator,
+            scopedBusinessCodeService, clock);
 
     @BeforeEach
     void setUp() {
+        when(scopedBusinessCodeService.allocateRoot(
+                org.mockito.ArgumentMatchers.eq(com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService.Kind.BRD),
+                org.mockito.ArgumentMatchers.isNull(),
+                org.mockito.ArgumentMatchers.nullable(Long.class)))
+                .thenReturn(new com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService.Allocation("BRD_001", 1));
         TableInfoHelper.initTableInfo(
                 new MapperBuilderAssistant(new MybatisConfiguration(), ""), PlatformSpuDO.class);
     }
@@ -51,7 +59,6 @@ class BrandAdminServiceTest {
     @Test
     void createBrandDisallowsDuplicateName() {
         when(clock.now()).thenReturn(LocalDateTime.now());
-        when(generator.next(BusinessNoPrefixes.BRD)).thenReturn("BRD_001");
         when(brandMapper.insert(any(BrandDO.class))).thenThrow(new DuplicateKeyException("duplicate"));
 
         BrandAdminService.CreateCommand cmd = new BrandAdminService.CreateCommand(

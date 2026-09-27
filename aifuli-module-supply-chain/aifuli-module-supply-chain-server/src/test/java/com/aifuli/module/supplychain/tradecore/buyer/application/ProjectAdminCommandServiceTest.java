@@ -36,18 +36,20 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * 项目管理端档案命令：草稿可改归属、CLOSED 状态机、仅 DISTRIBUTOR 结算。
+ * 项目管理端档案命令：草稿也禁止改归属、CLOSED 状态机、仅 DISTRIBUTOR 结算。
  * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#71-档案}。
  */
 class ProjectAdminCommandServiceTest {
 
-    private static final String PROJECT_CODE = "PRJ_TESTCODE000000000000001";
+    private static final String PROJECT_CODE = "PRJ_001_001";
     private static final String BUYER_A = "BYR_A";
     private static final String BUYER_B = "BYR_B";
 
     private final BuyerProjectMapper projectMapper = mock(BuyerProjectMapper.class);
     private final BuyerMapper buyerMapper = mock(BuyerMapper.class);
     private final BusinessNoGenerator businessNoGenerator = mock(BusinessNoGenerator.class);
+    private final com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService scopedBusinessCodeService =
+            mock(com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService.class);
     private final SupplyChainDatabaseClock databaseClock = mock(SupplyChainDatabaseClock.class);
     private ProjectAdminCommandService service;
     private BuyerProjectDO stored;
@@ -55,8 +57,11 @@ class ProjectAdminCommandServiceTest {
     @BeforeEach
     void setUp() {
         when(databaseClock.now()).thenReturn(LocalDateTime.of(2026, 9, 4, 11, 0));
-        service = new ProjectAdminCommandService(databaseClock, projectMapper, buyerMapper, businessNoGenerator);
-        when(businessNoGenerator.next(BusinessNoPrefixes.PRJ)).thenReturn(PROJECT_CODE);
+        service = new ProjectAdminCommandService(databaseClock, projectMapper, buyerMapper, businessNoGenerator,
+                scopedBusinessCodeService);
+        when(scopedBusinessCodeService.allocateChild(
+                com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService.Kind.PRJ,
+                1L, 1, null, 1L)).thenReturn(new com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService.Allocation(PROJECT_CODE, 1));
         when(buyerMapper.selectByBuyerCode(BUYER_A)).thenReturn(activeBuyer(1L, BUYER_A));
         when(buyerMapper.selectByBuyerCode(BUYER_B)).thenReturn(activeBuyer(2L, BUYER_B));
         when(projectMapper.insert(any(BuyerProjectDO.class))).thenAnswer(inv -> {
@@ -72,25 +77,29 @@ class ProjectAdminCommandServiceTest {
     }
 
     @Test
-    void draftMayChangeBuyerAndActiveMayNot() {
+    void projectBuyerIsImmutableEvenInDraft() {
         service.create(create(BUYER_A, null, null, null));
-        service.update(update(BUYER_B));
-        assertThat(stored.getBuyerId()).isEqualTo(2L);
+        assertThatThrownBy(() -> service.update(update(BUYER_B)))
+                .isInstanceOf(ServiceException.class)
+                .hasMessageContaining("项目创建后不能修改分销商")
+                .extracting(ex -> ((ServiceException) ex).getCode())
+                .isEqualTo(PROJECT_BUYER_IMMUTABLE.getCode());
+        assertThat(stored.getBuyerId()).isEqualTo(1L);
 
         service.changeStatus(PROJECT_CODE, BuyerProjectStatus.ACTIVE, 1L);
-        assertThatThrownBy(() -> service.update(update(BUYER_A)))
+        assertThatThrownBy(() -> service.update(update(BUYER_B)))
                 .isInstanceOf(ServiceException.class)
                 .extracting(ex -> ((ServiceException) ex).getCode())
                 .isEqualTo(PROJECT_BUYER_IMMUTABLE.getCode());
 
         stored.setStatus(BuyerProjectStatus.SUSPENDED.getCode());
-        assertThatThrownBy(() -> service.update(update(BUYER_A)))
+        assertThatThrownBy(() -> service.update(update(BUYER_B)))
                 .isInstanceOf(ServiceException.class)
                 .extracting(ex -> ((ServiceException) ex).getCode())
                 .isEqualTo(PROJECT_BUYER_IMMUTABLE.getCode());
 
         stored.setStatus(BuyerProjectStatus.CLOSED.getCode());
-        assertThatThrownBy(() -> service.update(update(BUYER_A)))
+        assertThatThrownBy(() -> service.update(update(BUYER_B)))
                 .isInstanceOf(ServiceException.class)
                 .extracting(ex -> ((ServiceException) ex).getCode())
                 .isEqualTo(PROJECT_BUYER_IMMUTABLE.getCode());
@@ -218,6 +227,7 @@ class ProjectAdminCommandServiceTest {
         return BuyerDO.builder()
                 .id(id)
                 .buyerCode(code)
+                .codeScopeNo(id.shortValue())
                 .status(BuyerStatus.ACTIVE.getCode())
                 .build();
     }

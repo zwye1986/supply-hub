@@ -3,6 +3,7 @@ package com.aifuli.module.supplychain.tradecore.catalog.application;
 import com.aifuli.framework.common.exception.ServiceException;
 import com.aifuli.module.supplychain.border.fulfillment.application.FulfillmentTargetSchemaRegistry;
 import com.aifuli.module.supplychain.infrastructure.identity.BusinessNoGenerator;
+import com.aifuli.module.supplychain.infrastructure.identity.BusinessNoPrefixes;
 import com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BrandDO;
@@ -27,6 +28,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import com.aifuli.module.supplychain.tradecore.profile.domain.ProductClassification;
 import com.aifuli.module.supplychain.tradecore.profile.domain.SellableCategory;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.BeforeEach;
 import org.mockito.ArgumentCaptor;
 
 import java.math.BigDecimal;
@@ -45,6 +47,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.doThrow;
@@ -72,6 +75,8 @@ class ProductCatalogCommandServiceTest {
     private final BuyerListingMapper listingMapper = mock(BuyerListingMapper.class);
     private final BuyerListingAvailabilityMapper availabilityMapper = mock(BuyerListingAvailabilityMapper.class);
     private final BusinessNoGenerator generator = mock(BusinessNoGenerator.class);
+    private final com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService scopedBusinessCodeService =
+            mock(com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService.class);
     private final BrandAdminService brandAdminService = mock(BrandAdminService.class);
     private final CategoryCommandService categoryCommandService = mock(CategoryCommandService.class);
     private final ProductTypeValidationService productTypeValidationService =
@@ -86,9 +91,34 @@ class ProductCatalogCommandServiceTest {
     private final ProductCatalogCommandService service = new ProductCatalogCommandService(
             clock, eventPublisher, brandMapper, categoryMapper, spuMapper, skuMapper, platformSkuPricingMapper,
             buyerMapper, listingMapper,
-            availabilityMapper, generator, brandAdminService, categoryCommandService,
+            availabilityMapper, generator,
+            scopedBusinessCodeService,
+            brandAdminService, categoryCommandService,
             productTypeValidationService, productClassificationValidationService, sellabilityService, deletionValidator, targetSchemaRegistry,
             skuSchemaRegistry);
+
+    @BeforeEach
+    void setUpCodes() {
+        when(scopedBusinessCodeService.allocateRoot(any(),
+                org.mockito.ArgumentMatchers.nullable(String.class),
+                org.mockito.ArgumentMatchers.nullable(Long.class))).thenAnswer(inv -> {
+            String requested = inv.getArgument(1);
+            return new com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService.Allocation(
+                    requested == null ? generator.next(BusinessNoPrefixes.SPU) : requested, 1);
+        });
+        when(scopedBusinessCodeService.allocateChild(any(), anyLong(), anyInt(),
+                org.mockito.ArgumentMatchers.nullable(String.class),
+                org.mockito.ArgumentMatchers.nullable(Long.class))).thenAnswer(inv -> {
+            String requested = inv.getArgument(3);
+            return new com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService.Allocation(
+                    requested == null ? generator.next(BusinessNoPrefixes.SKU) : requested, 1);
+        });
+        when(spuMapper.insert(any(PlatformSpuDO.class))).thenAnswer(inv -> {
+            PlatformSpuDO row = inv.getArgument(0);
+            row.setId(1L);
+            return 1;
+        });
+    }
 
     /** 请求中省略、且仍被下游引用的 SKU 保留原状态，不被停用，且整体更新继续成功。 */
     @Test

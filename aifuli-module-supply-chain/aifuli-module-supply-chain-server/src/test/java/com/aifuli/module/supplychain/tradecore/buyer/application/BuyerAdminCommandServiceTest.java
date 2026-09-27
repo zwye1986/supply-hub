@@ -60,6 +60,8 @@ class BuyerAdminCommandServiceTest {
     private final BuyerFileRefMapper fileRefMapper = mock(BuyerFileRefMapper.class);
     private final BuyerAccountOpeningService accountOpeningService = mock(BuyerAccountOpeningService.class);
     private final BusinessNoGenerator businessNoGenerator = mock(BusinessNoGenerator.class);
+    private final com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService scopedBusinessCodeService =
+            mock(com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService.class);
     private final EnvelopeCryptoPort envelopeCrypto = mock(EnvelopeCryptoPort.class);
     private final SupplyChainDatabaseClock databaseClock = mock(SupplyChainDatabaseClock.class);
     private final BuyerTenantBindingMapper tenantBindingMapper = mock(BuyerTenantBindingMapper.class);
@@ -72,7 +74,13 @@ class BuyerAdminCommandServiceTest {
         service = new BuyerAdminCommandService(
                 databaseClock, buyerMapper, contactMapper, integrationModeMapper, cooperationModeMapper,
                 categoryScopeMapper, fileRefMapper, accountOpeningService,
-                businessNoGenerator, envelopeCrypto, productTypeValidationService);
+                businessNoGenerator, scopedBusinessCodeService,
+                envelopeCrypto, productTypeValidationService);
+        when(scopedBusinessCodeService.allocateRoot(
+                org.mockito.ArgumentMatchers.eq(com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService.Kind.BYR),
+                org.mockito.ArgumentMatchers.isNull(),
+                org.mockito.ArgumentMatchers.nullable(Long.class)))
+                .thenReturn(new com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService.Allocation("BYR_001", 1));
         when(productTypeValidationService.requireActiveForUpdate(any())).thenAnswer(invocation ->
                 ProductTypeDO.builder().typeCode(invocation.getArgument(0)).status((short) 10).build());
         when(envelopeCrypto.encrypt(any(), any())).thenReturn(new EncryptedPayload(new byte[]{1}, "test-v1"));
@@ -81,7 +89,6 @@ class BuyerAdminCommandServiceTest {
 
     @Test
     void createGeneratesByrCodeAndOpensBuyerAccountNotSupplier() throws Exception {
-        when(businessNoGenerator.next(BusinessNoPrefixes.BYR)).thenReturn("BYR_TESTCODE000000000000001");
         when(buyerMapper.insert(any(BuyerDO.class))).thenAnswer(inv -> {
             BuyerDO row = inv.getArgument(0);
             row.setId(5L);
@@ -90,7 +97,7 @@ class BuyerAdminCommandServiceTest {
 
         String code = service.create(command(0L));
 
-        assertThat(code).isEqualTo("BYR_TESTCODE000000000000001");
+        assertThat(code).isEqualTo("BYR_001");
         ArgumentCaptor<BuyerDO> inserted = ArgumentCaptor.forClass(BuyerDO.class);
         verify(buyerMapper).insert(inserted.capture());
         BuyerDO row = inserted.getValue();
@@ -103,14 +110,14 @@ class BuyerAdminCommandServiceTest {
         ArgumentCaptor<OpeningBalanceCommand> opening = ArgumentCaptor.forClass(OpeningBalanceCommand.class);
         verify(accountOpeningService).open(opening.capture());
         OpeningBalanceCommand open = opening.getValue();
-        assertThat(open.buyerCode()).isEqualTo("BYR_TESTCODE000000000000001");
+        assertThat(open.buyerCode()).isEqualTo("BYR_001");
         assertThat(open.initialBalance()).isEqualTo(Money.cny(0L));
         assertThat(open.operatorId()).isEqualTo(1L);
         assertThat(open.evidenceRef()).isEqualTo("ADMIN_OPENING:5:CNY");
         assertThat(open.evidenceDigest()).isEqualTo(sha256("OPENING_BALANCE:5:CNY"));
         assertThat(open.auditNote()).isEqualTo("管理端分销商期初");
         assertThat(open.traceId()).isEqualTo("buyer-admin-test");
-        assertThat(open.causationId()).isEqualTo("BYR_TESTCODE000000000000001");
+        assertThat(open.causationId()).isEqualTo("BYR_001");
         verify(tenantBindingMapper, never()).insert(any(BuyerTenantBindingDO.class));
         ArgumentCaptor<byte[]> aad = ArgumentCaptor.forClass(byte[].class);
         verify(envelopeCrypto, org.mockito.Mockito.atLeastOnce()).encrypt(any(), aad.capture());
@@ -120,7 +127,6 @@ class BuyerAdminCommandServiceTest {
 
     @Test
     void createTreatsNullOpeningAsZeroAndTruncatesShortName() {
-        when(businessNoGenerator.next(BusinessNoPrefixes.BYR)).thenReturn("BYR_LONGNAME000000000000001");
         when(buyerMapper.insert(any(BuyerDO.class))).thenAnswer(inv -> {
             BuyerDO row = inv.getArgument(0);
             row.setId(8L);
@@ -141,7 +147,6 @@ class BuyerAdminCommandServiceTest {
 
     @Test
     void createReplacesUnsetCooperationStartedAtWithNow() {
-        when(businessNoGenerator.next(BusinessNoPrefixes.BYR)).thenReturn("BYR_EPOCH000000000000000001");
         when(buyerMapper.insert(any(BuyerDO.class))).thenAnswer(inv -> {
             BuyerDO row = inv.getArgument(0);
             row.setId(9L);
@@ -158,7 +163,6 @@ class BuyerAdminCommandServiceTest {
 
     @Test
     void createKeepsExplicitCooperationStartedAt() {
-        when(businessNoGenerator.next(BusinessNoPrefixes.BYR)).thenReturn("BYR_START000000000000000001");
         when(buyerMapper.insert(any(BuyerDO.class))).thenAnswer(inv -> {
             BuyerDO row = inv.getArgument(0);
             row.setId(10L);

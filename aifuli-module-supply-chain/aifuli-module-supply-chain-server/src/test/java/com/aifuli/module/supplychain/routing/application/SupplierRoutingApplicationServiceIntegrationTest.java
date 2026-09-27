@@ -126,14 +126,14 @@ class SupplierRoutingApplicationServiceIntegrationTest {
 
             LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC).withNano(0);
             createBuyerAndSku(buyerService, catalogService, now);
-            BuyerDO buyer = buyerMapper.selectByBuyerCode("WUSHENG");
+            BuyerDO buyer = buyerMapper.selectByBuyerCode("BYR_001");
             BuyerProjectDO project = BuyerProjectDO.builder()
                     .projectCode(PROJECT_CODE).projectName("路由测试项目").buyerId(buyer.getId())
                     .catalogMode("MANAGED").settlementPartyType("DISTRIBUTOR")
                     .status((short) 10).version(0L).createdBy(1L).createdAt(now)
                     .updatedBy(1L).updatedAt(now).build();
             projectMapper.insert(project);
-            PlatformSkuDO sku = skuMapper.selectByCode("ROUTE_TELCO_100");
+            PlatformSkuDO sku = skuMapper.selectByCode("SKU_001_100");
             OfferFixture qnm = createOfferFixture("QINAMENG", "奇那梦", 900L, 90, 80, sku, now,
                     supplierMapper, credentialMapper, connectorMapper, connectorVersionMapper,
                     inventoryMapper, offerMapper, offerVersionMapper);
@@ -166,7 +166,7 @@ class SupplierRoutingApplicationServiceIntegrationTest {
             assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_std_routing_rule "
                     + "WHERE rule_code = 'WS_TELCO' AND route_mode = 'AUTO'", Long.class)).isEqualTo(1L);
             assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_std_routing_rule_scope "
-                    + "WHERE scope_kind = 'DISTRIBUTOR' AND scope_code = 'WUSHENG'", Long.class))
+                    + "WHERE scope_kind = 'DISTRIBUTOR' AND scope_code = 'BYR_001'", Long.class))
                     .isEqualTo(1L);
             assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_std_routing_candidate",
                     Long.class)).isEqualTo(2L);
@@ -290,23 +290,23 @@ class SupplierRoutingApplicationServiceIntegrationTest {
                                           ProductCatalogCommandService catalog,
                                           LocalDateTime now) {
         buyerService.createBuyer(new BuyerCommandService.CreateBuyerCommand(
-                "WUSHENG", "吾盛", "吾盛", null, null,
+                null, "吾盛", "吾盛", null, null,
                 "AIFULI_MALL", "tenant-routing", now.minusMinutes(1), 1L));
         catalog.createBrand(new ProductCatalogCommandService.CreateBrandCommand(
-                "ROUTE_BRAND", "路由测试品牌", null, null, 0, 1L));
-        catalog.changeBrandStatus("ROUTE_BRAND", CatalogEntityStatus.ACTIVE, 1L);
+                "BRD_001", "路由测试品牌", null, null, 0, 1L));
+        catalog.changeBrandStatus("BRD_001", CatalogEntityStatus.ACTIVE, 1L);
         catalog.createCategory(new ProductCatalogCommandService.CreateCategoryCommand(
-                "ROUTE_DIRECT", "路由直充", null, 0, 1L));
-        catalog.changeCategoryStatus("ROUTE_DIRECT", CatalogEntityStatus.ACTIVE, 1L);
+                "CAT_001", "路由直充", null, 0, 1L));
+        catalog.changeCategoryStatus("CAT_001", CatalogEntityStatus.ACTIVE, 1L);
         catalog.createSpu(new ProductCatalogCommandService.CreateSpuCommand(
-                "ROUTE_TELCO", "ROUTE_BRAND", "ROUTE_DIRECT",
+                "SPU_001", "BRD_001", "CAT_001",
                 "EQUITY", "EQUITY_PRODUCT", "VIRTUAL_CARD",
                 "路由话费直充", null, null, "中台受理后不可自动退款或撤销", 1L));
-        catalog.changeSpuStatus("ROUTE_TELCO", CatalogEntityStatus.ACTIVE, 1L);
+        catalog.changeSpuStatus("SPU_001", CatalogEntityStatus.ACTIVE, 1L);
         catalog.createSku(new ProductCatalogCommandService.CreateSkuCommand(
-                "ROUTE_TELCO_100", "ROUTE_TELCO", "路由话费直充 100 元",
+                "SKU_001_100", "SPU_001", "路由话费直充 100 元",
                 "DIRECT_RECHARGE", 10_000L, "CNY", 1L));
-        catalog.changeSkuStatus("ROUTE_TELCO_100", CatalogEntityStatus.ACTIVE, 1L);
+        catalog.changeSkuStatus("SKU_001_100", CatalogEntityStatus.ACTIVE, 1L);
     }
 
     private static void insertQuotaOrder(JdbcTemplate jdbc, BuyerDO buyer, PlatformSkuDO sku,
@@ -433,7 +433,7 @@ class SupplierRoutingApplicationServiceIntegrationTest {
     private static List<RoutingPolicyPublicationService.RuleDraft> validRules() {
         return List.of(new RoutingPolicyPublicationService.RuleDraft(
                 "WS_TELCO", "吾盛话费路由", "AUTO", null,
-                "SPECIFIED", List.of("WUSHENG"),
+                "SPECIFIED", List.of("BYR_001"),
                 "SPECIFIED", List.of(PROJECT_CODE),
                 "SPECIFIED", List.of(PRODUCT_TYPE_CODE),
                 "SPECIFIED", List.of("QINAMENG", "ZETA"),
@@ -470,7 +470,7 @@ class SupplierRoutingApplicationServiceIntegrationTest {
         RoutingPolicyPublicationService.RuleDraft empty =
                 new RoutingPolicyPublicationService.RuleDraft(
                         "EMPTY", "空候选", "AUTO", null,
-                        "SPECIFIED", List.of("WUSHENG"),
+                        "SPECIFIED", List.of("BYR_001"),
                         "SPECIFIED", List.of(PROJECT_CODE),
                         "SPECIFIED", List.of(PRODUCT_TYPE_CODE),
                         "SPECIFIED", List.of(),
