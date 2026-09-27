@@ -1,5 +1,6 @@
 package com.aifuli.module.supplychain.infrastructure.identity;
 
+import com.aifuli.framework.common.exception.ServiceException;
 import com.aifuli.module.supplychain.infrastructure.identity.dal.dataobject.BusinessCodeClaimDO;
 import com.aifuli.module.supplychain.infrastructure.identity.dal.dataobject.BusinessCodeScopeDO;
 import com.aifuli.module.supplychain.infrastructure.identity.dal.mysql.BusinessCodeClaimMapper;
@@ -11,7 +12,9 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -19,8 +22,10 @@ import java.util.stream.Collectors;
 import static com.aifuli.framework.common.exception.util.ServiceExceptionUtil.exception;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BUSINESS_CODE_CAPACITY_EXHAUSTED;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BUSINESS_CODE_FORMAT_INVALID;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BUSINESS_CODE_LEGACY_PARENT_OCCUPIED;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BUSINESS_CODE_OCCUPIED;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BUSINESS_CODE_PARENT_MISMATCH;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BUSINESS_CODE_PERMANENT_EXISTS;
 
 /**
  * 在供应链独立库中按对象类型与直接父对象分配三位业务编号。
@@ -40,16 +45,28 @@ public class ScopedBusinessCodeService {
     private final SupplyChainDatabaseClock databaseClock;
 
     public enum Kind {
-        SPU("SPU", false), SKU("SKU", true), CAT_ROOT("CAT", false),
-        CAT_CHILD("CAT", true), CAT_NODE(null, false), BRD("BRD", false),
-        SPL("SPL", false), BYR("BYR", false), PRJ("PRJ", true);
+        SPU("SPU", false, "SPU"), SKU("SKU", true, "SKU"),
+        CAT_ROOT("CAT", false, "根分类"), CAT_CHILD("CAT", true, "子分类"),
+        CAT_NODE(null, false, "分类节点"), BRD("BRD", false, "品牌"),
+        SPL("SPL", false, "供应商"), BYR("BYR", false, "分销商"),
+        PRJ("PRJ", true, "项目");
 
         private final String prefix;
         private final boolean child;
+        private final String label;
 
-        Kind(String prefix, boolean child) {
+        Kind(String prefix, boolean child, String label) {
             this.prefix = prefix;
             this.child = child;
+            this.label = label;
+        }
+
+        public String prefix() {
+            return prefix;
+        }
+
+        public String label() {
+            return label;
         }
     }
 
@@ -59,51 +76,105 @@ public class ScopedBusinessCodeService {
     /** 根对象的可见编号；SPU 和分销商的数字段同时用作其子对象父段。 */
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public Allocation allocateRoot(Kind kind, String requested) {
+        return allocateRoot(kind, requested, null);
+    }
+
+    /** 操作人来自创建命令；无人工操作人的兼容或系统调用以 SYSTEM 记录。 */
+    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
+    public Allocation allocateRoot(Kind kind, String requested, Long operatorId) {
         long startedAt = System.nanoTime();
-        if (kind.child || kind.prefix == null) {
-            throw new IllegalArgumentException("编码类型不是可见根对象: " + kind);
-        }
-        Integer preferred;
+        log.debug("业务编码分配入口 kind={} scope={} manual={} requested={} operatorId={}",
+                kind, ROOT_OWNER_ID, requested != null && !requested.isEmpty(), requested, actor(operatorId));
         try {
-            preferred = requested == null || requested.isEmpty()
-                    ? null : ScopedBusinessCodeFormat.parseRoot(kind.prefix, requested);
-        } catch (IllegalArgumentException invalid) {
-            throw exception(BUSINESS_CODE_FORMAT_INVALID, invalid.getMessage());
+            if (kind.child || kind.prefix == null) {
+                throw new IllegalArgumentException("编码类型不是可见根对象: " + kind);
+            }
+            Integer preferred;
+            try {
+                preferred = requested == null || requested.isEmpty()
+                        ? null : ScopedBusinessCodeFormat.parseRoot(kind.prefix, requested);
+            } catch (IllegalArgumentException invalid) {
+                ServiceException businessError = exception(BUSINESS_CODE_FORMAT_INVALID, invalid.getMessage());
+                businessError.initCause(invalid);
+                throw businessError;
+            }
+            int number = claim(kind, ROOT_OWNER_ID, preferred, null, false);
+            String code = ScopedBusinessCodeFormat.root(kind.prefix, number);
+            log.debug("业务编码分配完成 kind={} scope={} code={} number={} manual={} operatorId={} elapsedMicros={}",
+                    kind, ROOT_OWNER_ID, code, number, preferred != null, actor(operatorId),
+                    (System.nanoTime() - startedAt) / 1_000);
+            return new Allocation(code, number);
+        } catch (RuntimeException failure) {
+            logFailure(kind, ROOT_OWNER_ID, operatorId, startedAt, failure);
+            throw failure;
         }
-        int number = claim(kind, ROOT_OWNER_ID, preferred, null, false);
-        String code = ScopedBusinessCodeFormat.root(kind.prefix, number);
-        log.debug("分配根对象编码 kind={} scope={} number={} manual={} elapsedMicros={}",
-                kind, ROOT_OWNER_ID, number, preferred != null, (System.nanoTime() - startedAt) / 1_000);
-        return new Allocation(code, number);
     }
 
     /** 子对象在已持久化父对象的作用域中分配编号，父段由可信父对象内部短序号给出。 */
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public Allocation allocateChild(Kind kind, long parentId, int parentNumber, String requested) {
+        return allocateChild(kind, parentId, parentNumber, requested, null);
+    }
+
+    /** 子对象编号入口含真实父 ID、父短号和操作人，失败时保持原异常供 HTTP 边界映射。 */
+    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
+    public Allocation allocateChild(Kind kind, long parentId, int parentNumber, String requested,
+                                    Long operatorId) {
         long startedAt = System.nanoTime();
-        if (!kind.child || parentId <= 0) {
-            throw new IllegalArgumentException("编码类型或父对象无效: " + kind);
-        }
-        Integer preferred;
+        log.debug("业务编码分配入口 kind={} scope={} parentNumber={} manual={} requested={} operatorId={}",
+                kind, parentId, parentNumber, requested != null && !requested.isEmpty(), requested, actor(operatorId));
         try {
-            preferred = requested == null || requested.isEmpty()
-                    ? null : ScopedBusinessCodeFormat.parseChild(kind.prefix, parentNumber, requested);
-        } catch (IllegalArgumentException invalid) {
-            throw exception(invalid.getMessage().startsWith("父段 ")
-                    ? BUSINESS_CODE_PARENT_MISMATCH : BUSINESS_CODE_FORMAT_INVALID, invalid.getMessage());
+            if (!kind.child || parentId <= 0) {
+                throw new IllegalArgumentException("编码类型或父对象无效: " + kind);
+            }
+            Integer preferred;
+            try {
+                preferred = requested == null || requested.isEmpty()
+                        ? null : ScopedBusinessCodeFormat.parseChild(kind.prefix, parentNumber, requested);
+            } catch (ScopedBusinessCodeFormat.ParentMismatchException mismatch) {
+                ServiceException businessError = exception(BUSINESS_CODE_PARENT_MISMATCH, mismatch.getMessage());
+                businessError.initCause(mismatch);
+                throw businessError;
+            } catch (IllegalArgumentException invalid) {
+                ServiceException businessError = exception(BUSINESS_CODE_FORMAT_INVALID, invalid.getMessage());
+                businessError.initCause(invalid);
+                throw businessError;
+            }
+            int number = claim(kind, parentId, preferred, parentNumber, false);
+            String code = ScopedBusinessCodeFormat.child(kind.prefix, parentNumber, number);
+            log.debug("业务编码分配完成 kind={} scope={} parentNumber={} code={} number={} manual={} "
+                            + "operatorId={} elapsedMicros={}",
+                    kind, parentId, parentNumber, code, number, preferred != null, actor(operatorId),
+                    (System.nanoTime() - startedAt) / 1_000);
+            return new Allocation(code, number);
+        } catch (RuntimeException failure) {
+            logFailure(kind, parentId, operatorId, startedAt, failure);
+            throw failure;
         }
-        int number = claim(kind, parentId, preferred, parentNumber, false);
-        String code = ScopedBusinessCodeFormat.child(kind.prefix, parentNumber, number);
-        log.debug("分配子对象编码 kind={} parentId={} parentNumber={} number={} manual={} elapsedMicros={}",
-                kind, parentId, parentNumber, number, preferred != null,
-                (System.nanoTime() - startedAt) / 1_000);
-        return new Allocation(code, number);
     }
 
     /** 分类节点的独立全局短序号，不作为永久编码直接对外使用。 */
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public int allocateCategoryNodeNo() {
-        return claim(Kind.CAT_NODE, ROOT_OWNER_ID, null, null, false);
+        return allocateCategoryNodeNo(null);
+    }
+
+    /** 分类节点全局内部号先于可见编码占用，保持既定锁顺序。 */
+    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
+    public int allocateCategoryNodeNo(Long operatorId) {
+        long startedAt = System.nanoTime();
+        log.debug("业务编码分配入口 kind={} scope={} manual=false operatorId={}",
+                Kind.CAT_NODE, ROOT_OWNER_ID, actor(operatorId));
+        try {
+            int number = claim(Kind.CAT_NODE, ROOT_OWNER_ID, null, null, false);
+            log.debug("业务编码分配完成 kind={} scope={} number={} manual=false operatorId={} elapsedMicros={}",
+                    Kind.CAT_NODE, ROOT_OWNER_ID, number, actor(operatorId),
+                    (System.nanoTime() - startedAt) / 1_000);
+            return number;
+        } catch (RuntimeException failure) {
+            logFailure(Kind.CAT_NODE, ROOT_OWNER_ID, operatorId, startedAt, failure);
+            throw failure;
+        }
     }
 
     /** 启动补号专用：存量对象的可见编码已存在，给它占同一个父段号码池。 */
@@ -154,16 +225,38 @@ public class ScopedBusinessCodeService {
                         .eq(BusinessCodeClaimDO::getScopeId, scope.getId())
                         .select(BusinessCodeClaimDO::getSerialNo))
                 .forEach(row -> used[row.getSerialNo()] = true);
-        Set<String> existingCodes = kind == Kind.CAT_NODE || legacy ? Set.of()
-                : existingMapper.selectCodes(kind.name()).stream()
+        // 作用域锁内仅以可用号码组成完整候选编码，使用业务表唯一索引做有界匹配。
+        // 手填最多一个候选；自动分配最多 999 个，旧表总行数不会决定本次内存用量。
+        List<String> candidates = new ArrayList<>();
+        if (!legacy && kind != Kind.CAT_NODE) {
+            if (preferred != null) {
+                candidates.add(visibleCode(kind, parentNumber, preferred));
+            } else {
+                for (int candidate = ScopedBusinessCodeFormat.MIN_NO;
+                     candidate <= ScopedBusinessCodeFormat.MAX_NO; candidate++) {
+                    if (!used[candidate]) {
+                        candidates.add(visibleCode(kind, parentNumber, candidate));
+                    }
+                }
+            }
+        }
+        Set<String> existingCodes = candidates.isEmpty() ? Set.of()
+                : existingMapper.selectExistingCodes(kind.name(), candidates).stream()
                 .map(code -> code.toUpperCase(Locale.ROOT)).collect(Collectors.toCollection(HashSet::new));
         int number;
         if (preferred != null) {
             String code = visibleCode(kind, parentNumber, preferred);
-            if (used[preferred] || existingCodes.contains(code)) {
-                if ((kind == Kind.SPU || kind == Kind.BYR) && used[preferred]
-                        && !existingCodes.contains(code)) {
-                    throw exception(BUSINESS_CODE_OCCUPIED, code + "；父段 " + preferred + " 已被旧父对象占用");
+            if (existingCodes.contains(code)) {
+                throw exception(BUSINESS_CODE_PERMANENT_EXISTS, code);
+            }
+            if (used[preferred]) {
+                if (kind == Kind.SPU || kind == Kind.BYR) {
+                    String parentCode = existingMapper.selectParentCodeByNumber(kind.name(), preferred);
+                    if (parentCode != null && !parentCode.equalsIgnoreCase(code)) {
+                        throw exception(BUSINESS_CODE_LEGACY_PARENT_OCCUPIED,
+                                "父段 " + ScopedBusinessCodeFormat.segment(preferred)
+                                        + " 已被旧" + kind.label() + "占用；对象编码=" + parentCode);
+                    }
                 }
                 throw exception(BUSINESS_CODE_OCCUPIED, code + "；类型=" + kind + "，作用域=" + ownerId);
             }
@@ -191,5 +284,17 @@ public class ScopedBusinessCodeService {
         return kind.child
                 ? ScopedBusinessCodeFormat.child(kind.prefix, parentNumber, number)
                 : ScopedBusinessCodeFormat.root(kind.prefix, number);
+    }
+
+    private static Object actor(Long operatorId) {
+        return operatorId == null ? "SYSTEM" : operatorId;
+    }
+
+    private static void logFailure(Kind kind, long scope, Long operatorId, long startedAt,
+                                   RuntimeException failure) {
+        Integer errorCode = failure instanceof ServiceException service ? service.getCode() : null;
+        log.debug("业务编码分配失败 kind={} scope={} operatorId={} errorCode={} errorType={} elapsedMicros={}",
+                kind, scope, actor(operatorId), errorCode, failure.getClass().getSimpleName(),
+                (System.nanoTime() - startedAt) / 1_000);
     }
 }

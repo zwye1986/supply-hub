@@ -28,9 +28,17 @@ class ScopedBusinessCodeFormatTest {
                 .hasMessageContaining("SPU_001");
         assertThatThrownBy(() -> ScopedBusinessCodeFormat.parseChild("SKU", 1, "SKU_002_001"))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("父段 001");
+                .hasMessageContaining("父段 002")
+                .hasMessageContaining("内部短序号 001");
         assertThatThrownBy(() -> ScopedBusinessCodeFormat.child("SKU", 1, 1000))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("999");
+    }
+
+    @Test
+    void legacyRootCandidateIsParsedWithoutUsingExceptionsForOldFormats() {
+        assertThat(ScopedBusinessCodeFormat.preferredRoot("SPU", "SPU_100")).isEqualTo(100);
+        assertThat(ScopedBusinessCodeFormat.preferredRoot("SPU", "SPU_LEGACY")).isNull();
+        assertThat(ScopedBusinessCodeFormat.preferredRoot("SPU", null)).isNull();
     }
 }

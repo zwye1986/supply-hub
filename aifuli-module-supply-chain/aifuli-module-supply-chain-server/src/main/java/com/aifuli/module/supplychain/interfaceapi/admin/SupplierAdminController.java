@@ -5,6 +5,8 @@ import com.aifuli.framework.common.pojo.CommonResult;
 import com.aifuli.framework.common.pojo.PageResult;
 import com.aifuli.framework.common.util.monitor.TracerUtils;
 import com.aifuli.module.supplychain.tradecore.profile.domain.ClosedEnums;
+import com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService;
+import com.aifuli.module.supplychain.infrastructure.identity.SystemAssignedBusinessCodeGuard;
 import com.aifuli.module.supplychain.tradecore.supply.application.OfferFulfillmentScoreService;
 import com.aifuli.module.supplychain.tradecore.supply.application.OfferFulfillmentScoreService.ScoreUpdateResult;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierInvoiceService;
@@ -29,6 +31,7 @@ import com.aifuli.module.supplychain.tradecore.supply.domain.SupplierStatus;
 import com.fasterxml.jackson.annotation.JsonAlias;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.annotation.JsonSetter;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -151,6 +154,8 @@ public class SupplierAdminController {
     @Operation(summary = "新增供应商（含期初）",
             description = "系统生成 SPL_ 编码。openingBalanceCents 仅创建可写，单位 CNY 分。")
     public CommonResult<String> create(@Valid @RequestBody SupplierSaveReqVO request) {
+        SystemAssignedBusinessCodeGuard.rejectSubmitted(ScopedBusinessCodeService.Kind.SPL,
+                request.isSupplierCodeSubmitted());
         return success(commandService.create(new CreateSupplierProfileCommand(
                 request.resolvedSupplierName(), toContacts(request.getContacts()),
                 request.getDeliveryRegionType(), request.getDeliveryRegionAdcodes(),
@@ -443,6 +448,17 @@ public class SupplierAdminController {
     @Data
     @Schema(name = "SupplierSaveReqVO", description = "供应商档案保存")
     public static class SupplierSaveReqVO {
+        @JsonIgnore
+        @Schema(hidden = true)
+        private boolean supplierCodeSubmitted;
+
+        /** 只记录请求是否出现该字段；创建入口不接受任何手填值，包括 null 和空串。 */
+        @JsonSetter("supplierCode")
+        @Schema(hidden = true)
+        public void acceptSupplierCode(String ignored) {
+            supplierCodeSubmitted = true;
+        }
+
         /** 供应商标准名称 */
         @Size(max = 128)
         @Schema(description = "供应商标准名称", example = "爱奇艺")

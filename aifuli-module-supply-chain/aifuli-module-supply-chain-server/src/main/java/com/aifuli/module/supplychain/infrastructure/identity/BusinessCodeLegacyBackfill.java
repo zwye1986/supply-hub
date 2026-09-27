@@ -13,8 +13,13 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import javax.sql.DataSource;
+import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * Liquibase 建列后、服务接单前给历史父对象补不可变短序号。迁移可重入，任何错误使启动失败。
@@ -46,40 +51,37 @@ public class BusinessCodeLegacyBackfill implements ApplicationRunner {
 
     /** 也供发布前迁移验证和真实 MySQL 集成测试调用。 */
     public void backfillNow() {
+        log.info("历史业务编号补号预检及执行入口");
         transaction.executeWithoutResult(status -> {
             backfillParent("sc_platform_spu", "spu_code", "code_scope_no",
-                    ScopedBusinessCodeService.Kind.SPU, "SPU");
+                    ScopedBusinessCodeService.Kind.SPU);
             backfillParent("sc_buyer", "buyer_code", "code_scope_no",
-                    ScopedBusinessCodeService.Kind.BYR, "BYR");
+                    ScopedBusinessCodeService.Kind.BYR);
             backfillCategories();
         });
     }
 
     private void backfillParent(String table, String codeColumn, String noColumn,
-                                ScopedBusinessCodeService.Kind kind, String prefix) {
+                                ScopedBusinessCodeService.Kind kind) {
         codes.lockRootScope(kind);
         List<LegacyRow> rows = rows(table, codeColumn, noColumn);
-        checkCapacity(table, rows);
+        ParentPlan plan = preflightParent(table, kind, rows);
         rows.stream().filter(row -> row.number() != null)
                 .forEach(row -> codes.ensureExistingRootClaim(kind, row.number()));
-        List<LegacyRow> missing = rows.stream().filter(row -> row.number() == null).toList();
-        List<LegacyRow> normalized = missing.stream()
-                .filter(row -> preferred(prefix, row.code()) != null).toList();
-        List<LegacyRow> other = missing.stream()
-                .filter(row -> preferred(prefix, row.code()) == null).toList();
-        for (LegacyRow row : normalized) {
-            assign(table, noColumn, row, codes.claimLegacyParent(kind, preferred(prefix, row.code())));
+        for (LegacyCandidate candidate : plan.normalized()) {
+            assign(table, noColumn, candidate.row(), codes.claimLegacyParent(kind, candidate.preferred()));
         }
-        for (LegacyRow row : other) {
+        for (LegacyRow row : plan.other()) {
             assign(table, noColumn, row, codes.claimLegacyParent(kind, null));
         }
-        log.info("历史业务编号补号 table={} total={} assigned={}", table, rows.size(), missing.size());
+        log.info("历史业务编号补号 table={} total={} assigned={}", table, rows.size(),
+                plan.normalized().size() + plan.other().size());
     }
 
     private void backfillCategories() {
         codes.lockRootScope(ScopedBusinessCodeService.Kind.CAT_NODE);
         List<LegacyRow> rows = rows("sc_product_category", "category_code", "category_node_no");
-        checkCapacity("sc_product_category", rows);
+        preflightCategories(rows);
         rows.stream().filter(row -> row.number() != null)
                 .forEach(row -> codes.ensureExistingRootClaim(ScopedBusinessCodeService.Kind.CAT_NODE, row.number()));
         int assigned = 0;
@@ -116,12 +118,105 @@ public class BusinessCodeLegacyBackfill implements ApplicationRunner {
         }
     }
 
-    private static Integer preferred(String prefix, String code) {
-        try {
-            return ScopedBusinessCodeFormat.parseRoot(prefix, code);
-        } catch (IllegalArgumentException ignored) {
-            return null;
+    /**
+     * 写入任何短序号前，对历史可见父段、已有内部号和占号记录做全量交叉检查。
+     * 失败信息直接指向冲突对象，整个补号事务随异常回滚。
+     * 设计见 docs/superpowers/specs/2026-09-27-supply-chain-business-code-design.md#5-存储迁移与并发。
+     */
+    private ParentPlan preflightParent(String table, ScopedBusinessCodeService.Kind kind,
+                                       List<LegacyRow> rows) {
+        checkCapacity(table, rows);
+        Map<Integer, LegacyRow> assignedByNumber = new HashMap<>();
+        Map<Integer, LegacyRow> preferredByNumber = new HashMap<>();
+        List<LegacyCandidate> normalized = new ArrayList<>();
+        List<LegacyRow> other = new ArrayList<>();
+        for (LegacyRow row : rows) {
+            if (row.number() != null) {
+                LegacyRow previous = assignedByNumber.putIfAbsent((int) row.number(), row);
+                if (previous != null) {
+                    throw conflict(table, row.number(), previous, row);
+                }
+            }
+            Integer preferred = ScopedBusinessCodeFormat.preferredRoot(kind.prefix(), row.code());
+            if (preferred != null) {
+                LegacyRow previous = preferredByNumber.putIfAbsent(preferred, row);
+                if (previous != null) {
+                    throw conflict(table, preferred, previous, row);
+                }
+            }
+            if (row.number() == null) {
+                if (preferred == null) {
+                    other.add(row);
+                } else {
+                    normalized.add(new LegacyCandidate(row, preferred));
+                }
+            }
         }
+        Set<Integer> claimed = claimedNumbers(kind);
+        for (Map.Entry<Integer, LegacyRow> entry : preferredByNumber.entrySet()) {
+            int number = entry.getKey();
+            LegacyRow row = entry.getValue();
+            LegacyRow assigned = assignedByNumber.get(number);
+            if (assigned != null && assigned.id() != row.id()) {
+                throw conflict(table, number, assigned, row);
+            }
+            if (row.number() == null && claimed.contains(number) && assigned == null) {
+                throw new IllegalStateException("历史父段被占号记录占用: table=" + table
+                        + "，" + describe(row) + "，号码=" + number);
+            }
+        }
+        Set<Integer> reserved = new HashSet<>(claimed);
+        reserved.addAll(assignedByNumber.keySet());
+        normalized.forEach(candidate -> reserved.add(candidate.preferred()));
+        if (other.size() > ScopedBusinessCodeFormat.MAX_NO - reserved.size()) {
+            throw new IllegalStateException("历史父段无法唯一分配: table=" + table
+                    + "，剩余号码=" + (ScopedBusinessCodeFormat.MAX_NO - reserved.size())
+                    + "，待分配对象=" + other.stream().limit(5).map(BusinessCodeLegacyBackfill::describe).toList());
+        }
+        return new ParentPlan(normalized, other);
+    }
+
+    private void preflightCategories(List<LegacyRow> rows) {
+        String table = "sc_product_category";
+        checkCapacity(table, rows);
+        Map<Integer, LegacyRow> assignedByNumber = new HashMap<>();
+        for (LegacyRow row : rows) {
+            if (row.number() != null) {
+                LegacyRow previous = assignedByNumber.putIfAbsent((int) row.number(), row);
+                if (previous != null) {
+                    throw conflict(table, row.number(), previous, row);
+                }
+            }
+        }
+        Set<Integer> reserved = claimedNumbers(ScopedBusinessCodeService.Kind.CAT_NODE);
+        reserved.addAll(assignedByNumber.keySet());
+        List<LegacyRow> missing = rows.stream().filter(row -> row.number() == null).toList();
+        if (missing.size() > ScopedBusinessCodeFormat.MAX_NO - reserved.size()) {
+            throw new IllegalStateException("历史分类节点无法唯一分配: table=" + table
+                    + "，剩余号码=" + (ScopedBusinessCodeFormat.MAX_NO - reserved.size())
+                    + "，待分配对象=" + missing.stream().limit(5).map(BusinessCodeLegacyBackfill::describe).toList());
+        }
+    }
+
+    private Set<Integer> claimedNumbers(ScopedBusinessCodeService.Kind kind) {
+        return new HashSet<>(jdbc.queryForList("SELECT c.serial_no FROM sc_business_code_claim c "
+                        + "JOIN sc_business_code_scope s ON s.id = c.scope_id "
+                        + "WHERE s.code_kind = ? AND s.owner_id = 0", Integer.class, kind.name()));
+    }
+
+    private static IllegalStateException conflict(String table, int number, LegacyRow first, LegacyRow second) {
+        return new IllegalStateException("历史父段重复或冲突: table=" + table + "，号码=" + number
+                + "，" + describe(first) + "，" + describe(second));
+    }
+
+    private static String describe(LegacyRow row) {
+        return "id=" + row.id() + ", code=" + row.code() + ", internalNo=" + row.number();
+    }
+
+    private record LegacyCandidate(LegacyRow row, Integer preferred) {
+    }
+
+    private record ParentPlan(List<LegacyCandidate> normalized, List<LegacyRow> other) {
     }
 
     private record LegacyRow(long id, String code, Short number) {

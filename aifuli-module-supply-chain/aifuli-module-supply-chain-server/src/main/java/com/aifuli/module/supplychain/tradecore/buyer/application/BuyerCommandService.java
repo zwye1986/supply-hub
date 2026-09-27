@@ -1,6 +1,7 @@
 package com.aifuli.module.supplychain.tradecore.buyer.application;
 
 import com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService;
+import com.aifuli.module.supplychain.infrastructure.identity.SystemAssignedBusinessCodeGuard;
 
 import com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock;
 
@@ -29,13 +30,10 @@ public class BuyerCommandService {
 
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public String createBuyer(CreateBuyerCommand command) {
-        if (command.buyerCode() != null && !command.buyerCode().isEmpty()) {
-            throw com.aifuli.framework.common.exception.util.ServiceExceptionUtil.exception(
-                    com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BUSINESS_CODE_MANUAL_NOT_ALLOWED,
-                    "分销商");
-        }
+        SystemAssignedBusinessCodeGuard.rejectSubmitted(ScopedBusinessCodeService.Kind.BYR,
+                command.buyerCode() != null);
         ScopedBusinessCodeService.Allocation allocation = scopedBusinessCodeService.allocateRoot(
-                ScopedBusinessCodeService.Kind.BYR, null);
+                ScopedBusinessCodeService.Kind.BYR, null, command.operatorId());
         LocalDateTime now = databaseClock.now();
         LocalDateTime validFrom = command.validFrom() == null ? now : command.validFrom();
         BuyerDO buyer = BuyerDO.builder()

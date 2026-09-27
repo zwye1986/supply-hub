@@ -75,7 +75,7 @@ public interface SupplyChainErrorCodeConstants {
     ErrorCode BUYER_PRODUCT_DUPLICATE = error(1_050_001_059, "分销商品 SKU 已存在");
     ErrorCode L2_OVERRIDE_INVALID = error(1_050_001_060, "L2 覆盖公式或金额不合法");
     ErrorCode L3_OVERRIDE_INVALID = error(1_050_001_061, "L3 覆盖不合法");
-    ErrorCode PROJECT_BUYER_IMMUTABLE = error(1_050_001_062, "非草稿项目不可改分销商");
+    ErrorCode PROJECT_BUYER_IMMUTABLE = error(1_050_001_062, "项目创建后不能修改分销商");
     ErrorCode PROJECT_PLATFORM_SETTLEMENT_NOT_ENABLED = error(1_050_001_063, "平台结算未开放");
     ErrorCode PROJECT_STATUS_INVALID = error(1_050_001_064, "非法项目状态迁移");
     ErrorCode PROJECT_SKU_NOT_IN_BUYER_CATALOG = error(1_050_001_065, "项目 SKU 不是该分销商的分销商品");
@@ -191,11 +191,13 @@ public interface SupplyChainErrorCodeConstants {
     ErrorCode SUPPLIER_CODE_REQUIRED =
             error(1_050_001_133, "排除已添加供应商品时必须指定供应商");
     ErrorCode BUSINESS_CODE_FORMAT_INVALID = error(1_050_001_139, "业务编码格式错误：{}");
-    ErrorCode BUSINESS_CODE_OCCUPIED = error(1_050_001_140, "业务编码已占用：{}");
+    ErrorCode BUSINESS_CODE_OCCUPIED = error(1_050_001_140, "作用域号码已占用：{}");
     ErrorCode BUSINESS_CODE_CAPACITY_EXHAUSTED = error(1_050_001_141, "业务编码容量已满：{}");
     ErrorCode CATEGORY_PARENT_IMMUTABLE = error(1_050_001_142, "分类创建后不能修改父分类");
     ErrorCode BUSINESS_CODE_PARENT_MISMATCH = error(1_050_001_143, "业务编码父段不匹配：{}");
     ErrorCode BUSINESS_CODE_MANUAL_NOT_ALLOWED = error(1_050_001_144, "{}编号由系统生成，请勿手填");
+    ErrorCode BUSINESS_CODE_PERMANENT_EXISTS = error(1_050_001_145, "永久编码已存在：{}");
+    ErrorCode BUSINESS_CODE_LEGACY_PARENT_OCCUPIED = error(1_050_001_146, "旧父对象占用父段：{}");
 
     /** 订单详情不可用只作为成功响应中的详情标记，不作为 CommonResult 失败码。 */
     String DETAIL_UNAVAILABLE = "DETAIL_UNAVAILABLE";
@@ -344,7 +346,9 @@ public interface SupplyChainErrorCodeConstants {
             entry(BUSINESS_CODE_CAPACITY_EXHAUSTED, RetryDirective.DO_NOT_RETRY),
             entry(CATEGORY_PARENT_IMMUTABLE, RetryDirective.DO_NOT_RETRY),
             entry(BUSINESS_CODE_PARENT_MISMATCH, RetryDirective.DO_NOT_RETRY),
-            entry(BUSINESS_CODE_MANUAL_NOT_ALLOWED, RetryDirective.DO_NOT_RETRY));
+            entry(BUSINESS_CODE_MANUAL_NOT_ALLOWED, RetryDirective.DO_NOT_RETRY),
+            entry(BUSINESS_CODE_PERMANENT_EXISTS, RetryDirective.DO_NOT_RETRY),
+            entry(BUSINESS_CODE_LEGACY_PARENT_OCCUPIED, RetryDirective.DO_NOT_RETRY));
 
     static RetryDirective retryDirective(int errorCode) {
         return RETRY_DIRECTIVES.getOrDefault(errorCode, RetryDirective.DO_NOT_RETRY);

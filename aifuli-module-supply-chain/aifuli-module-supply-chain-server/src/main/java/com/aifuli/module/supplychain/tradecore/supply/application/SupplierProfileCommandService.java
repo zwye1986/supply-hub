@@ -115,7 +115,8 @@ public class SupplierProfileCommandService {
         if (onboardedAt == null) {
             onboardedAt = now;
         }
-        String supplierCode = scopedBusinessCodeService.allocateRoot(ScopedBusinessCodeService.Kind.SPL, null).code();
+        String supplierCode = scopedBusinessCodeService.allocateRoot(ScopedBusinessCodeService.Kind.SPL,
+                null, command.operatorId()).code();
         String shortName = truncate(command.supplierName(), NAME_SHORT_LIMIT);
         SupplierDO supplier = SupplierDO.builder()
                 .supplierCode(supplierCode)

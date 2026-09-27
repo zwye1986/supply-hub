@@ -77,7 +77,9 @@ class BuyerAdminCommandServiceTest {
                 businessNoGenerator, scopedBusinessCodeService,
                 envelopeCrypto, productTypeValidationService);
         when(scopedBusinessCodeService.allocateRoot(
-                com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService.Kind.BYR, null))
+                org.mockito.ArgumentMatchers.eq(com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService.Kind.BYR),
+                org.mockito.ArgumentMatchers.isNull(),
+                org.mockito.ArgumentMatchers.nullable(Long.class)))
                 .thenReturn(new com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService.Allocation("BYR_001", 1));
         when(productTypeValidationService.requireActiveForUpdate(any())).thenAnswer(invocation ->
                 ProductTypeDO.builder().typeCode(invocation.getArgument(0)).status((short) 10).build());

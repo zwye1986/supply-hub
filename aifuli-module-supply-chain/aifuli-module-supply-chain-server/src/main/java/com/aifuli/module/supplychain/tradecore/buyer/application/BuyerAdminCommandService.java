@@ -109,7 +109,7 @@ public class BuyerAdminCommandService {
             cooperationStartedAt = now;
         }
         ScopedBusinessCodeService.Allocation allocation = scopedBusinessCodeService.allocateRoot(
-                ScopedBusinessCodeService.Kind.BYR, null);
+                ScopedBusinessCodeService.Kind.BYR, null, command.operatorId());
         String buyerCode = allocation.code();
         ContactLine primary = contacts.getFirst();
         BuyerDO buyer = BuyerDO.builder()

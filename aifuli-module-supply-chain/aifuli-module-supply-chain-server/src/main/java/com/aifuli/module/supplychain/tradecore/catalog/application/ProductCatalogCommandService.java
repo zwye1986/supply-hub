@@ -185,7 +185,7 @@ public class ProductCatalogCommandService {
         }
         PlatformSpuDO spu = requireSpu(command.spuCode());
         String skuCode = scopedBusinessCodeService.allocateChild(ScopedBusinessCodeService.Kind.SKU,
-                spu.getId(), spu.getCodeScopeNo(), command.skuCode()).code();
+                spu.getId(), spu.getCodeScopeNo(), command.skuCode(), command.operatorId()).code();
         String fulfillmentType = spu.getFulfillmentType();
         if (hasText(command.fulfillmentType()) && !command.fulfillmentType().trim().equals(fulfillmentType)) {
             throw exception(PRODUCT_SKU_FIELD_INVALID);
@@ -364,7 +364,7 @@ public class ProductCatalogCommandService {
         List<String> defaultPricingInitializationSkuCodes = new ArrayList<>();
         for (SaveSkuLine line : command.skus()) {
             String skuCode = scopedBusinessCodeService.allocateChild(ScopedBusinessCodeService.Kind.SKU,
-                    spu.getId(), spu.getCodeScopeNo(), line.skuCode()).code();
+                    spu.getId(), spu.getCodeScopeNo(), line.skuCode(), command.operatorId()).code();
             if (!requestCodes.add(skuCode)) {
                 throw exception(PRODUCT_SKU_CODE_DUPLICATE);
             }
@@ -389,7 +389,7 @@ public class ProductCatalogCommandService {
      */
     private PlatformSpuDO insertSpu(SaveSpuCommand command) {
         ScopedBusinessCodeService.Allocation allocation = scopedBusinessCodeService.allocateRoot(
-                ScopedBusinessCodeService.Kind.SPU, command.spuCode());
+                ScopedBusinessCodeService.Kind.SPU, command.spuCode(), command.operatorId());
         String spuCode = allocation.code();
         CatalogEntityStatus spuStatus = writableStatus(command.status(), CatalogEntityStatus.ACTIVE);
         boolean activeRequired = spuStatus == CatalogEntityStatus.ACTIVE;
@@ -489,7 +489,7 @@ public class ProductCatalogCommandService {
         for (SaveSkuLine line : command.skus()) {
             String code = line.skuCode() == null || line.skuCode().isEmpty()
                     ? scopedBusinessCodeService.allocateChild(ScopedBusinessCodeService.Kind.SKU,
-                    spu.getId(), spu.getCodeScopeNo(), null).code()
+                    spu.getId(), spu.getCodeScopeNo(), null, command.operatorId()).code()
                     : line.skuCode();
             if (!requested.add(code)) throw exception(PRODUCT_SKU_CODE_DUPLICATE);
             PlatformSkuDO sku = byCode.get(code);
@@ -502,7 +502,7 @@ public class ProductCatalogCommandService {
             if (sku == null) {
                 if (line.skuCode() != null && !line.skuCode().isEmpty()) {
                     scopedBusinessCodeService.allocateChild(ScopedBusinessCodeService.Kind.SKU,
-                            spu.getId(), spu.getCodeScopeNo(), code);
+                            spu.getId(), spu.getCodeScopeNo(), code, command.operatorId());
                 }
                 insertValidatedSku(spu, code, inheritedLine, skuStatus, schema, command.operatorId(), now);
                 defaultPricingInitializationSkuCodes.add(code);

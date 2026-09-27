@@ -61,12 +61,12 @@ public class CategoryCommandService {
         String productType = validatedTypeCodes.isEmpty()
                 ? (hasText(command.productType()) ? command.productType().trim() : null)
                 : validatedTypeCodes.get(0);
-        int nodeNo = scopedBusinessCodeService.allocateCategoryNodeNo();
+        int nodeNo = scopedBusinessCodeService.allocateCategoryNodeNo(command.operatorId());
         String code = parent == null
                 ? scopedBusinessCodeService.allocateRoot(ScopedBusinessCodeService.Kind.CAT_ROOT,
-                command.categoryCode()).code()
+                command.categoryCode(), command.operatorId()).code()
                 : scopedBusinessCodeService.allocateChild(ScopedBusinessCodeService.Kind.CAT_CHILD,
-                parent.getId(), parent.getCategoryNodeNo(), command.categoryCode()).code();
+                parent.getId(), parent.getCategoryNodeNo(), command.categoryCode(), command.operatorId()).code();
         short level = checkedLevel(parent == null ? ROOT_LEVEL : parent.getCategoryLevel().intValue() + 1);
         requireNameAvailableUnderParent(command.categoryName().trim(),
                 parent == null ? null : parent.getId(), null);

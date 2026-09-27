@@ -94,7 +94,7 @@ public class BrandAdminService {
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public String create(CreateCommand command) {
         String code = scopedBusinessCodeService.allocateRoot(ScopedBusinessCodeService.Kind.BRD,
-                command.brandCode()).code();
+                command.brandCode(), command.operatorId()).code();
         requireNameAvailable(command.brandName().trim(), null);
         LocalDateTime now = databaseClock.now();
         // TODO(product-center): 品牌默认状态 DRAFT，商品类型默认状态 ACTIVE，两者不一致——待产品确认是否统一。

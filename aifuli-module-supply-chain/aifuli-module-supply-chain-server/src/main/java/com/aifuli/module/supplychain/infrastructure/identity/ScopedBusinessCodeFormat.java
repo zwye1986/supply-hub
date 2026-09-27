@@ -14,6 +14,13 @@ public final class ScopedBusinessCodeFormat {
     public static final int MAX_NO = 999;
     private static final Pattern THREE_DIGITS = Pattern.compile("[0-9]{3}");
 
+    /** 已通过子编码的结构校验，但用户提交的父段与所选父对象不一致。 */
+    public static final class ParentMismatchException extends IllegalArgumentException {
+        public ParentMismatchException(String message) {
+            super(message);
+        }
+    }
+
     private ScopedBusinessCodeFormat() {
     }
 
@@ -26,13 +33,22 @@ public final class ScopedBusinessCodeFormat {
     }
 
     public static int parseRoot(String prefix, String code) {
+        Integer preferred = preferredRoot(prefix, code);
+        if (preferred == null) {
+            throw new IllegalArgumentException(rootHint(prefix));
+        }
+        return preferred;
+    }
+
+    /** 旧编码可能是 ULID 或历史手填值；不符合新根格式时正常返回空，不靠异常分支。 */
+    static Integer preferredRoot(String prefix, String code) {
         String expectedPrefix = prefix + "_";
         if (code == null || !code.startsWith(expectedPrefix)) {
-            throw new IllegalArgumentException(rootHint(prefix));
+            return null;
         }
         String suffix = code.substring(expectedPrefix.length());
         if (!THREE_DIGITS.matcher(suffix).matches() || "000".equals(suffix)) {
-            throw new IllegalArgumentException(rootHint(prefix));
+            return null;
         }
         return Integer.parseInt(suffix);
     }
@@ -48,13 +64,14 @@ public final class ScopedBusinessCodeFormat {
             throw new IllegalArgumentException(childHint(prefix, parentNumber));
         }
         if (!matcher.group(1).equals(segment(parentNumber))) {
-            throw new IllegalArgumentException("父段 " + segment(parentNumber) + " 与所属父对象不一致；"
+            throw new ParentMismatchException("编码 " + code + " 的父段 " + matcher.group(1)
+                    + " 与所选父对象的内部短序号 " + segment(parentNumber) + " 不一致；"
                     + childHint(prefix, parentNumber));
         }
         return Integer.parseInt(matcher.group(2));
     }
 
-    private static String segment(int number) {
+    static String segment(int number) {
         if (number < MIN_NO || number > MAX_NO) {
             throw new IllegalArgumentException("三位流水号范围为 001–999");
         }

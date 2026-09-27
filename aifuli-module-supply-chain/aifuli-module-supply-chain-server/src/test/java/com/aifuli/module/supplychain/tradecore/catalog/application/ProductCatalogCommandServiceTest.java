@@ -99,12 +99,16 @@ class ProductCatalogCommandServiceTest {
 
     @BeforeEach
     void setUpCodes() {
-        when(scopedBusinessCodeService.allocateRoot(any(), any())).thenAnswer(inv -> {
+        when(scopedBusinessCodeService.allocateRoot(any(),
+                org.mockito.ArgumentMatchers.nullable(String.class),
+                org.mockito.ArgumentMatchers.nullable(Long.class))).thenAnswer(inv -> {
             String requested = inv.getArgument(1);
             return new com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService.Allocation(
                     requested == null ? generator.next(BusinessNoPrefixes.SPU) : requested, 1);
         });
-        when(scopedBusinessCodeService.allocateChild(any(), anyLong(), anyInt(), any())).thenAnswer(inv -> {
+        when(scopedBusinessCodeService.allocateChild(any(), anyLong(), anyInt(),
+                org.mockito.ArgumentMatchers.nullable(String.class),
+                org.mockito.ArgumentMatchers.nullable(Long.class))).thenAnswer(inv -> {
             String requested = inv.getArgument(3);
             return new com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService.Allocation(
                     requested == null ? generator.next(BusinessNoPrefixes.SKU) : requested, 1);

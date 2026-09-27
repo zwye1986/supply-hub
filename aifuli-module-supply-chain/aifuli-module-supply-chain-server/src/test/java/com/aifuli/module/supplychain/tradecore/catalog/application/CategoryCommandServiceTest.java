@@ -49,8 +49,11 @@ class CategoryCommandServiceTest {
 
     @org.junit.jupiter.api.BeforeEach
     void setUpCodes() {
-        when(scopedBusinessCodeService.allocateCategoryNodeNo()).thenReturn(1);
-        when(scopedBusinessCodeService.allocateRoot(any(), any())).thenAnswer(inv ->
+        when(scopedBusinessCodeService.allocateCategoryNodeNo(
+                org.mockito.ArgumentMatchers.nullable(Long.class))).thenReturn(1);
+        when(scopedBusinessCodeService.allocateRoot(any(),
+                org.mockito.ArgumentMatchers.nullable(String.class),
+                org.mockito.ArgumentMatchers.nullable(Long.class))).thenAnswer(inv ->
                 new com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService.Allocation(
                         generator.next(BusinessNoPrefixes.CAT), 1));
     }

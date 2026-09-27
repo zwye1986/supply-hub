@@ -95,6 +95,109 @@ class ScopedBusinessCodeIntegrationTest {
     }
 
     @Test
+    void historicalLookupReturnsOnlyRequestedCandidateCodes() {
+        try (ConfigurableApplicationContext context = context()) {
+            JdbcTemplate jdbc = new JdbcTemplate(context.getBean(DataSource.class));
+            jdbc.update("INSERT INTO sc_brand (brand_code, brand_name, status, created_at, updated_at) "
+                    + "VALUES ('BRD_001', '候选品牌', 0, NOW(3), NOW(3))");
+            jdbc.update("INSERT INTO sc_brand (brand_code, brand_name, status, created_at, updated_at) "
+                    + "VALUES ('BRD_LEGACY', '无关历史品牌', 0, NOW(3), NOW(3))");
+            var mapper = context.getBean(
+                    com.aifuli.module.supplychain.infrastructure.identity.dal.mysql.BusinessCodeExistingMapper.class);
+            assertThat(mapper.selectExistingCodes(ScopedBusinessCodeService.Kind.BRD.name(),
+                    List.of("BRD_001", "BRD_002"))).containsExactly("BRD_001");
+        }
+    }
+
+    @Test
+    void allocationLogsEntranceAndResultWithOperator() {
+        try (ConfigurableApplicationContext context = context()) {
+            var logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory
+                    .getLogger(ScopedBusinessCodeService.class);
+            var priorLevel = logger.getLevel();
+            var appender = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+            appender.start();
+            logger.addAppender(appender);
+            logger.setLevel(ch.qos.logback.classic.Level.DEBUG);
+            try {
+                context.getBean(ScopedBusinessCodeService.class)
+                        .allocateRoot(ScopedBusinessCodeService.Kind.BRD, null, 42L);
+                assertThat(appender.list.stream().map(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage))
+                        .anyMatch(message -> message.contains("分配入口") && message.contains("operatorId=42"))
+                        .anyMatch(message -> message.contains("分配完成") && message.contains("BRD_001")
+                                && message.contains("operatorId=42"));
+            } finally {
+                logger.detachAppender(appender);
+                logger.setLevel(priorLevel);
+                appender.stop();
+            }
+        }
+    }
+
+    @Test
+    void permanentCodeCollisionAndScopeClaimHaveDistinctErrorCodes() {
+        try (ConfigurableApplicationContext context = context()) {
+            JdbcTemplate jdbc = new JdbcTemplate(context.getBean(DataSource.class));
+            jdbc.update("INSERT INTO sc_brand (brand_code, brand_name, status, created_at, updated_at) "
+                    + "VALUES ('BRD_100', '历史品牌', 0, NOW(3), NOW(3))");
+            ScopedBusinessCodeService service = context.getBean(ScopedBusinessCodeService.class);
+            ServiceException permanent = org.assertj.core.api.Assertions.catchThrowableOfType(
+                    () -> service.allocateRoot(ScopedBusinessCodeService.Kind.BRD, "BRD_100"),
+                    ServiceException.class);
+            service.allocateRoot(ScopedBusinessCodeService.Kind.BRD, "BRD_101");
+            ServiceException occupied = org.assertj.core.api.Assertions.catchThrowableOfType(
+                    () -> service.allocateRoot(ScopedBusinessCodeService.Kind.BRD, "BRD_101"),
+                    ServiceException.class);
+            assertThat(permanent.getCode()).isNotEqualTo(occupied.getCode());
+        }
+    }
+
+    @Test
+    void legacyParentCollisionReportsParentTypeWithDedicatedError() {
+        try (ConfigurableApplicationContext context = context()) {
+            JdbcTemplate jdbc = new JdbcTemplate(context.getBean(DataSource.class));
+            jdbc.update("INSERT INTO sc_buyer (buyer_code, buyer_name, short_name, buyer_type, status, "
+                    + "created_at, updated_at) VALUES ('BYR_OLD', '旧分销商', '旧', 'SAAS_MALL', 10, NOW(3), NOW(3))");
+            context.getBean(BusinessCodeLegacyBackfill.class).backfillNow();
+            ScopedBusinessCodeService service = context.getBean(ScopedBusinessCodeService.class);
+            ServiceException conflict = org.assertj.core.api.Assertions.catchThrowableOfType(
+                    () -> service.allocateRoot(ScopedBusinessCodeService.Kind.BYR, "BYR_001"),
+                    ServiceException.class);
+            assertThat(conflict.getCode())
+                    .isNotEqualTo(com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants
+                            .BUSINESS_CODE_OCCUPIED.getCode());
+            assertThat(conflict.getMessage()).contains("旧分销商");
+        }
+    }
+
+    @Test
+    void backfillReportsBothObjectsBeforeConflictingParentNumbersAreWritten() {
+        try (ConfigurableApplicationContext context = context()) {
+            JdbcTemplate jdbc = new JdbcTemplate(context.getBean(DataSource.class));
+            jdbc.update("INSERT INTO sc_buyer (buyer_code, code_scope_no, buyer_name, short_name, "
+                    + "buyer_type, status, created_at, updated_at) "
+                    + "VALUES ('BYR_OLD', 100, '旧分销商甲', '甲', 'SAAS_MALL', 10, NOW(3), NOW(3))");
+            jdbc.update("INSERT INTO sc_buyer (buyer_code, buyer_name, short_name, buyer_type, status, "
+                    + "created_at, updated_at) VALUES ('BYR_100', '旧分销商乙', '乙', 'SAAS_MALL', 10, NOW(3), NOW(3))");
+            long firstId = jdbc.queryForObject("SELECT id FROM sc_buyer WHERE buyer_code='BYR_OLD'", Long.class);
+            long secondId = jdbc.queryForObject("SELECT id FROM sc_buyer WHERE buyer_code='BYR_100'", Long.class);
+            try {
+                assertThatThrownBy(() -> context.getBean(BusinessCodeLegacyBackfill.class).backfillNow())
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessageContaining("BYR_OLD")
+                        .hasMessageContaining("BYR_100")
+                        .hasMessageContaining("id=" + firstId)
+                        .hasMessageContaining("id=" + secondId);
+                assertThat(jdbc.queryForObject("SELECT code_scope_no FROM sc_buyer WHERE id=?", Integer.class,
+                        secondId)).isNull();
+            } finally {
+                // 下一测试启动时会先执行 ApplicationRunner；冲突样本必须在关闭上下文前清掉。
+                jdbc.update("DELETE FROM sc_buyer WHERE buyer_code IN ('BYR_OLD', 'BYR_100')");
+            }
+        }
+    }
+
+    @Test
     void oldBuyerGetsStableHiddenNumberWithoutChangingPermanentCode() {
         try (ConfigurableApplicationContext context = context()) {
             JdbcTemplate jdbc = new JdbcTemplate(context.getBean(DataSource.class));

@@ -6,10 +6,15 @@ import org.apache.ibatis.annotations.Param;
 import java.util.List;
 
 /**
- * 查询七类对象的历史永久编码，避免旧数据与新流水直接重名。
- * 设计见 docs/superpowers/specs/2026-09-27-supply-chain-business-code-design.md#3-手填与自动分配。
+ * 通过各业务表已有的永久编码唯一索引，只查询本次分配可能命中的历史编码。
+ * 候选集合最多 999 个，禁止无条件读取整张业务表。
+ * 设计见 docs/superpowers/specs/2026-09-27-supply-chain-business-code-design.md#5-存储迁移与并发。
  */
 @Mapper
 public interface BusinessCodeExistingMapper {
-    List<String> selectCodes(@Param("kind") String kind);
+    List<String> selectExistingCodes(@Param("kind") String kind,
+                                     @Param("candidates") List<String> candidates);
+
+    /** 旧 SPU/分销商的父段归属查询；无业务行时保留占号记录的通用作用域错误。 */
+    String selectParentCodeByNumber(@Param("kind") String kind, @Param("number") int number);
 }

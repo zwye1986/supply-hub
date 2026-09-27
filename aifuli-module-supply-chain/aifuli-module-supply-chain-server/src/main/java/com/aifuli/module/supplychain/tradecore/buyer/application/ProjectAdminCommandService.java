@@ -65,7 +65,7 @@ public class ProjectAdminCommandService {
         BuyerProjectStatus status = resolveCreateStatus(command.status());
         LocalDateTime now = databaseClock.now();
         String projectCode = scopedBusinessCodeService.allocateChild(ScopedBusinessCodeService.Kind.PRJ,
-                buyer.getId(), buyer.getCodeScopeNo(), null).code();
+                buyer.getId(), buyer.getCodeScopeNo(), null, command.operatorId()).code();
         BuyerProjectDO project = BuyerProjectDO.builder()
                 .projectCode(projectCode)
                 .projectName(command.projectName())

@@ -48,7 +48,9 @@ class BrandAdminServiceTest {
     @BeforeEach
     void setUp() {
         when(scopedBusinessCodeService.allocateRoot(
-                com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService.Kind.BRD, null))
+                org.mockito.ArgumentMatchers.eq(com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService.Kind.BRD),
+                org.mockito.ArgumentMatchers.isNull(),
+                org.mockito.ArgumentMatchers.nullable(Long.class)))
                 .thenReturn(new com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService.Allocation("BRD_001", 1));
         TableInfoHelper.initTableInfo(
                 new MapperBuilderAssistant(new MybatisConfiguration(), ""), PlatformSpuDO.class);

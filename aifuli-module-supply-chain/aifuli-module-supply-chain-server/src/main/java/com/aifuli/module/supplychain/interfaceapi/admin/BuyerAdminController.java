@@ -33,6 +33,10 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;
+import com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService;
+import com.aifuli.module.supplychain.infrastructure.identity.SystemAssignedBusinessCodeGuard;
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonSetter;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -180,6 +184,8 @@ public class BuyerAdminController {
     @Operation(summary = "新增分销商（含期初）",
             description = "系统生成 BYR_ 编码。openingBalanceCents 仅创建可写，空视为 0，单位 CNY 分。")
     public CommonResult<String> create(@Valid @RequestBody BuyerSaveReqVO request) {
+        SystemAssignedBusinessCodeGuard.rejectSubmitted(ScopedBusinessCodeService.Kind.BYR,
+                request.isBuyerCodeSubmitted());
         return success(commandService.create(toCreateCommand(request)));
     }
 
@@ -399,6 +405,17 @@ public class BuyerAdminController {
     @Data
     @Schema(description = "分销商档案保存")
     public static class BuyerSaveReqVO {
+        @JsonIgnore
+        @Schema(hidden = true)
+        private boolean buyerCodeSubmitted;
+
+        /** 只记录请求是否出现该字段；创建入口不接受任何手填值，包括 null 和空串。 */
+        @JsonSetter("buyerCode")
+        @Schema(hidden = true)
+        public void acceptBuyerCode(String ignored) {
+            buyerCodeSubmitted = true;
+        }
+
         @NotBlank @Size(max = 128)
         @Schema(description = "采购商标准名称")
         private String buyerName;

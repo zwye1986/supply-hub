@@ -36,7 +36,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * 项目管理端档案命令：草稿可改归属、CLOSED 状态机、仅 DISTRIBUTOR 结算。
+ * 项目管理端档案命令：草稿也禁止改归属、CLOSED 状态机、仅 DISTRIBUTOR 结算。
  * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#71-档案}。
  */
 class ProjectAdminCommandServiceTest {
@@ -61,7 +61,7 @@ class ProjectAdminCommandServiceTest {
                 scopedBusinessCodeService);
         when(scopedBusinessCodeService.allocateChild(
                 com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService.Kind.PRJ,
-                1L, 1, null)).thenReturn(new com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService.Allocation(PROJECT_CODE, 1));
+                1L, 1, null, 1L)).thenReturn(new com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService.Allocation(PROJECT_CODE, 1));
         when(buyerMapper.selectByBuyerCode(BUYER_A)).thenReturn(activeBuyer(1L, BUYER_A));
         when(buyerMapper.selectByBuyerCode(BUYER_B)).thenReturn(activeBuyer(2L, BUYER_B));
         when(projectMapper.insert(any(BuyerProjectDO.class))).thenAnswer(inv -> {
@@ -81,6 +81,7 @@ class ProjectAdminCommandServiceTest {
         service.create(create(BUYER_A, null, null, null));
         assertThatThrownBy(() -> service.update(update(BUYER_B)))
                 .isInstanceOf(ServiceException.class)
+                .hasMessageContaining("项目创建后不能修改分销商")
                 .extracting(ex -> ((ServiceException) ex).getCode())
                 .isEqualTo(PROJECT_BUYER_IMMUTABLE.getCode());
         assertThat(stored.getBuyerId()).isEqualTo(1L);

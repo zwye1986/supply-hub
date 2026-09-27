@@ -31,6 +31,10 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;
+import com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService;
+import com.aifuli.module.supplychain.infrastructure.identity.SystemAssignedBusinessCodeGuard;
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonSetter;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -188,6 +192,8 @@ public class ProjectAdminController {
     @Operation(summary = "新增项目",
             description = "系统生成 PRJ_ 编码。catalogMode 恒 MANAGED。创建允许 DRAFT 或 ACTIVE。")
     public CommonResult<String> create(@Valid @RequestBody ProjectSaveReqVO request) {
+        SystemAssignedBusinessCodeGuard.rejectSubmitted(ScopedBusinessCodeService.Kind.PRJ,
+                request.isProjectCodeSubmitted());
         return success(commandService.create(toCreateCommand(request)));
     }
 
@@ -366,6 +372,17 @@ public class ProjectAdminController {
     @Data
     @Schema(description = "项目档案保存")
     public static class ProjectSaveReqVO {
+        @JsonIgnore
+        @Schema(hidden = true)
+        private boolean projectCodeSubmitted;
+
+        /** 只记录请求是否出现该字段；创建入口不接受任何手填值，包括 null 和空串。 */
+        @JsonSetter("projectCode")
+        @Schema(hidden = true)
+        public void acceptProjectCode(String ignored) {
+            projectCodeSubmitted = true;
+        }
+
         @NotBlank
         @Size(max = 128)
         @Schema(description = "采购项目名称")
