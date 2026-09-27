@@ -484,7 +484,7 @@ Springdoc `components.schemas` 中冲突的通用简单类名。生成契约必�
 
 `catalogMode` 默认 `MANAGED`，本批页面不展示。`appId`/`appKey` 本批不返回（避免密钥进入管理端列表）。
 
-归属：`DRAFT` 可改 `buyerCode`；`ACTIVE`/`SUSPENDED`/`CLOSED` 改归属 → `PROJECT_BUYER_IMMUTABLE`。
+归属：项目创建后 `buyerCode` 永久不可变，`DRAFT` 也不得改归属；任何状态下显式提交不同分销商均返回 `PROJECT_BUYER_IMMUTABLE`。原草稿态可改归属的例外由[2026-09-27 业务编码规范化设计 §4](./2026-09-27-supply-chain-business-code-design.md#4-归属与不可变性)覆盖。
 
 `PATCH /supply-chain/projects/{projectCode}` `{ "status": "ACTIVE"|"SUSPENDED"|"CLOSED" }` 按第 4.2 节迁移，作为状态操作的兼容入口；`PUT` 传入 `status` 时执行相同状态机校验。页面按钮：启动、暂停、恢复、结束。
 

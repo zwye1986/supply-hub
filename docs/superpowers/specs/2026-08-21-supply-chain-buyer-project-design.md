@@ -87,6 +87,8 @@ Buyer 暂停时，其下所有项目停止新业务；历史查询、在途订�
 
 `BuyerProject` 是采购商下独立识别、接入和配置的采购单元，至少保存 `projectCode/projectName/buyerId/catalogMode/status/version`。`projectCode` 全局永久唯一，归档后不得复用；项目创建后不得修改 `buyerId`。
 
+2026-09-27 起项目编号按所属分销商的三位内部短序号和该分销商内三位流水号生成；管理端草稿项目也不得更换归属。编码与存量兼容规则见[《供应链中台业务编码规范化设计》](./2026-09-27-supply-chain-business-code-design.md)。
+
 项目状态为：
 
 - `DRAFT`：配置中，不接受业务请求。
