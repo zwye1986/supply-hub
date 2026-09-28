@@ -18,14 +18,18 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSk
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSpuDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceVersionMapper;
+import com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSpuMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.EffectiveSupplyPrice;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierOfferDO;
+import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierOfferVersionDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierSupplyScopeDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferMapper;
+import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferVersionMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierSupplyScopeMapper;
 import com.aifuli.module.supplychain.tradecore.supply.domain.OfferStatus;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
@@ -34,6 +38,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -63,6 +68,9 @@ public class PlatformSkuQueryService {
     private final SupplierMapper supplierMapper;
     private final SupplierSupplyScopeMapper scopeMapper;
     private final SupplierOfferMapper offerMapper;
+    private final SupplierOfferVersionMapper offerVersionMapper;
+    private final CategoryQueryService categoryQueryService;
+    private final SupplyChainDatabaseClock databaseClock;
     private final BuyerMapper buyerMapper;
     private final BuyerProductMapper buyerProductMapper;
     private final BuyerProjectMapper buyerProjectMapper;
@@ -141,7 +149,7 @@ public class PlatformSkuQueryService {
         for (PlatformSpuDO spu : spus) {
             spuById.put(spu.getId(), spu);
             spuIds.add(spu.getId());
-            if (keywordPresent && spu.getSpuName() != null && spu.getSpuName().contains(query.keyword())) {
+            if (keywordPresent && spuMatchesKeyword(spu, query.keyword())) {
                 keywordSpuIds.add(spu.getId());
             }
         }
@@ -152,7 +160,8 @@ public class PlatformSkuQueryService {
                 .orderByDesc(PlatformSkuDO::getCreatedAt);
         if (keywordPresent) {
             skuWrapper.and(w -> {
-                w.like(PlatformSkuDO::getSkuName, query.keyword());
+                w.like(PlatformSkuDO::getSkuName, query.keyword())
+                        .or().like(PlatformSkuDO::getSkuCode, query.keyword());
                 if (!keywordSpuIds.isEmpty()) {
                     w.or().in(PlatformSkuDO::getSpuId, keywordSpuIds);
                 }
@@ -171,10 +180,27 @@ public class PlatformSkuQueryService {
         PageResult<PlatformSkuDO> page = skuMapper.selectPage(pageParam, skuWrapper);
 
         List<SkuListItem> items = new ArrayList<>();
+        Map<Long, String> categoryNames = categoryNames(page.getList(), spuById);
+        Map<Long, Long> supplyPrices = minimumSupplyPrices(page.getList());
         for (PlatformSkuDO sku : page.getList()) {
-            items.add(toListItem(sku, spuById.get(sku.getSpuId())));
+            PlatformSpuDO spu = spuById.get(sku.getSpuId());
+            String categoryName = spu == null || spu.getPrimaryCategoryId() == null
+                    ? null : categoryNames.get(spu.getPrimaryCategoryId());
+            items.add(toListItem(sku, spu, categoryName, supplyPrices.get(sku.getId())));
         }
         return new PageResult<>(items, page.getTotal());
+    }
+
+    /**
+     * 名称或编码包含即命中。编码与名称同一口径，供新增分销商品弹窗按「名称/编号」搜索。
+     * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#44-标品-sku-分页}。
+     */
+    private static boolean spuMatchesKeyword(PlatformSpuDO spu, String keyword) {
+        return contains(spu.getSpuName(), keyword) || contains(spu.getSpuCode(), keyword);
+    }
+
+    private static boolean contains(String value, String keyword) {
+        return value != null && keyword != null && value.contains(keyword);
     }
 
     /**
@@ -230,7 +256,87 @@ public class PlatformSkuQueryService {
         return new ProjectSkuFilter(includeSkuIds, listedSkuIds);
     }
 
-    private SkuListItem toListItem(PlatformSkuDO sku, PlatformSpuDO spu) {
+    /**
+     * 当页主类目名称一次批量回显。没有主类目时不查类目服务。
+     * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#44-标品-sku-分页}。
+     */
+    private Map<Long, String> categoryNames(List<PlatformSkuDO> skus, Map<Long, PlatformSpuDO> spuById) {
+        Set<Long> categoryIds = new HashSet<>();
+        for (PlatformSkuDO sku : skus) {
+            PlatformSpuDO spu = spuById.get(sku.getSpuId());
+            if (spu != null && spu.getPrimaryCategoryId() != null) {
+                categoryIds.add(spu.getPrimaryCategoryId());
+            }
+        }
+        if (categoryIds.isEmpty()) {
+            return Map.of();
+        }
+        return categoryQueryService.resolveCategoryNamesByIds(categoryIds);
+    }
+
+    /**
+     * 当前页 SKU 的最低有效供货价。口径与通用定价一致：供应商启用、Offer 已发布；
+     * 当前版本有效则用版本单价，否则回退身份列；多条取最低。0 是有效价格，没有候选则为空。
+     * 设计见 {@code docs/superpowers/specs/2026-09-22-effective-supply-price-identity-fallback-design.md}。
+     */
+    private Map<Long, Long> minimumSupplyPrices(List<PlatformSkuDO> skus) {
+        List<Long> skuIds = new ArrayList<>();
+        Map<Long, Long> suggestedBySku = new HashMap<>();
+        for (PlatformSkuDO sku : skus) {
+            if (sku.getId() != null) {
+                skuIds.add(sku.getId());
+                suggestedBySku.put(sku.getId(), sku.getSuggestedSalePrice());
+            }
+        }
+        if (skuIds.isEmpty()) {
+            return Map.of();
+        }
+        List<SupplierOfferDO> offers = offerMapper.selectList(new LambdaQueryWrapper<SupplierOfferDO>()
+                .in(SupplierOfferDO::getPlatformSkuId, skuIds)
+                .eq(SupplierOfferDO::getStatus, OfferStatus.PUBLISHED.getCode()));
+        if (offers.isEmpty()) {
+            return Map.of();
+        }
+        Set<Long> versionIds = new HashSet<>();
+        Set<Long> supplierIds = new HashSet<>();
+        for (SupplierOfferDO offer : offers) {
+            if (offer.getCurrentVersionId() != null) {
+                versionIds.add(offer.getCurrentVersionId());
+            }
+            if (offer.getSupplierId() != null) {
+                supplierIds.add(offer.getSupplierId());
+            }
+        }
+        Map<Long, SupplierOfferVersionDO> versions = new HashMap<>();
+        if (!versionIds.isEmpty()) {
+            for (SupplierOfferVersionDO version : offerVersionMapper.selectList(new LambdaQueryWrapper<SupplierOfferVersionDO>()
+                    .in(SupplierOfferVersionDO::getId, versionIds))) {
+                versions.put(version.getId(), version);
+            }
+        }
+        Map<Long, SupplierDO> suppliers = new HashMap<>();
+        if (!supplierIds.isEmpty()) {
+            for (SupplierDO supplier : supplierMapper.selectList(new LambdaQueryWrapper<SupplierDO>()
+                    .in(SupplierDO::getId, supplierIds))) {
+                suppliers.put(supplier.getId(), supplier);
+            }
+        }
+        LocalDateTime now = databaseClock.now();
+        Map<Long, Long> minimumBySku = new HashMap<>();
+        for (SupplierOfferDO offer : offers) {
+            SupplierOfferVersionDO version = offer.getCurrentVersionId() == null
+                    ? null : versions.get(offer.getCurrentVersionId());
+            Long suggested = offer.getPlatformSkuId() == null ? null : suggestedBySku.get(offer.getPlatformSkuId());
+            Long price = EffectiveSupplyPrice.of(offer, suppliers.get(offer.getSupplierId()), version, suggested, now);
+            if (price == null || offer.getPlatformSkuId() == null) {
+                continue;
+            }
+            minimumBySku.merge(offer.getPlatformSkuId(), price, Math::min);
+        }
+        return minimumBySku;
+    }
+
+    private SkuListItem toListItem(PlatformSkuDO sku, PlatformSpuDO spu, String categoryName, Long supplyPriceCents) {
         return new SkuListItem(
                 sku.getId(),
                 sku.getSkuCode(),
@@ -241,7 +347,9 @@ public class PlatformSkuQueryService {
                 spu == null ? null : spu.getProductType(),
                 spu == null ? null : spu.getProductClassification(),
                 resolveSuggestPriceCents(sku.getId()),
-                sku.getSuggestedSalePrice());
+                sku.getSuggestedSalePrice(),
+                categoryName,
+                supplyPriceCents);
     }
 
     /**
@@ -296,6 +404,10 @@ public class PlatformSkuQueryService {
             @Schema(description = "动态商品类型编码") String productType,
             @Schema(description = "商品分类封闭枚举名") String productClassification,
             @Schema(description = "L1 B端结算单价，CNY分，允许0") Long suggestPriceCents,
-            @Schema(description = "兼容字段名；C端建议价，取自平台SKU销售建议价，单位CNY分") Long marketPriceCents) {
+            @Schema(description = "兼容字段名；C端建议价，取自平台SKU销售建议价，单位CNY分") Long marketPriceCents,
+            @Schema(description = "SPU主类目名称；归档或缺失为空，只展示不参与筛选") String categoryName,
+            @Schema(description = "当前最低有效供货价，单位CNY分。供应商须启用，Offer须已发布；"
+                    + "当前版本有效则用版本单价，否则回退身份列，多条取最低；没有有效报价为空，0是有效价格")
+            Long supplyPriceCents) {
     }
 }

@@ -1,5 +1,7 @@
 package com.aifuli.module.supplychain.tradecore.buyer.application;
 
+import com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService;
+
 import com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock;
 
 import com.aifuli.module.supplychain.infrastructure.identity.BusinessNoGenerator;
@@ -85,6 +87,7 @@ public class BuyerAdminCommandService {
     private final BuyerFileRefMapper fileRefMapper;
     private final BuyerAccountOpeningService accountOpeningService;
     private final BusinessNoGenerator businessNoGenerator;
+    private final ScopedBusinessCodeService scopedBusinessCodeService;
     private final EnvelopeCryptoPort envelopeCrypto;
     private final ProductTypeValidationService productTypeValidationService;
 
@@ -101,10 +104,17 @@ public class BuyerAdminCommandService {
             throw new IllegalArgumentException("Opening balance cannot be negative");
         }
         LocalDateTime now = databaseClock.now();
-        String buyerCode = businessNoGenerator.next(BusinessNoPrefixes.BYR);
+        LocalDateTime cooperationStartedAt = normalizeCooperationStartedAt(command.cooperationStartedAt());
+        if (cooperationStartedAt == null) {
+            cooperationStartedAt = now;
+        }
+        ScopedBusinessCodeService.Allocation allocation = scopedBusinessCodeService.allocateRoot(
+                ScopedBusinessCodeService.Kind.BYR, null, command.operatorId());
+        String buyerCode = allocation.code();
         ContactLine primary = contacts.getFirst();
         BuyerDO buyer = BuyerDO.builder()
                 .buyerCode(buyerCode)
+                .codeScopeNo((short) allocation.number())
                 .buyerName(command.buyerName())
                 .shortName(truncate(command.buyerName(), NAME_SHORT_LIMIT))
                 .buyerType(BUYER_TYPE_SAAS_MALL)
@@ -115,7 +125,7 @@ public class BuyerAdminCommandService {
                 .supplyPreference(blankToNull(command.supplyPreference()))
                 .settlementMethod(blankToNull(command.settlementMethod()))
                 .settlementCycleDays(command.settlementCycleDays())
-                .cooperationStartedAt(command.cooperationStartedAt())
+                .cooperationStartedAt(cooperationStartedAt)
                 .cooperationNote(command.cooperationNote())
                 .legalEntityName(command.legalEntityName())
                 .creditCode(command.creditCode())
@@ -170,8 +180,9 @@ public class BuyerAdminCommandService {
         buyer.setSupplyPreference(blankToNull(command.supplyPreference()));
         buyer.setSettlementMethod(blankToNull(command.settlementMethod()));
         buyer.setSettlementCycleDays(command.settlementCycleDays());
-        if (command.cooperationStartedAt() != null) {
-            buyer.setCooperationStartedAt(command.cooperationStartedAt());
+        LocalDateTime cooperationStartedAt = normalizeCooperationStartedAt(command.cooperationStartedAt());
+        if (cooperationStartedAt != null) {
+            buyer.setCooperationStartedAt(cooperationStartedAt);
         }
         buyer.setCooperationNote(command.cooperationNote());
         buyer.setLegalEntityName(command.legalEntityName());
@@ -521,6 +532,18 @@ public class BuyerAdminCommandService {
         } catch (NoSuchAlgorithmException ex) {
             throw new IllegalStateException("SHA-256 is required", ex);
         }
+    }
+
+    /**
+     * 管理端日期选择器空值常序列化为 Unix 0，不能当成真实合作开始时间。
+     * {@code null}、年份不晚于 1970 的值视为未填。
+     * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#62-列表与档案}。
+     */
+    static LocalDateTime normalizeCooperationStartedAt(LocalDateTime value) {
+        if (value == null || value.getYear() <= 1970) {
+            return null;
+        }
+        return value;
     }
 
     private static String truncate(String value, int max) {

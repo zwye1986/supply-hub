@@ -14,6 +14,7 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.INSTORE_ENTRY_URL_UNAVAILABLE;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.INSTORE_MEMBER_PROFILE_INVALID;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.INSTORE_MEMBER_PROFILE_UNAVAILABLE;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.ROUTING_RULE_WRITE_NOT_OPEN;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.SUPPLIER_OPENING_ALREADY_DONE;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -99,7 +100,25 @@ class SupplyChainErrorMappingTest {
             "1050001108,RETRY_SAME_KEY_AFTER_CONDITION_CHANGE",
             "1050001109,DO_NOT_RETRY",
             "1050001110,RETRY_SAME_KEY_AFTER_CONDITION_CHANGE",
-            "1050001111,DO_NOT_RETRY"
+            "1050001111,DO_NOT_RETRY",
+            "1050001116,DO_NOT_RETRY",
+            "1050001117,DO_NOT_RETRY",
+            "1050001118,DO_NOT_RETRY",
+            "1050001119,DO_NOT_RETRY",
+            "1050001120,DO_NOT_RETRY",
+            "1050001121,DO_NOT_RETRY",
+            "1050001122,DO_NOT_RETRY",
+            "1050001123,DO_NOT_RETRY",
+            "1050001124,DO_NOT_RETRY",
+            "1050001125,DO_NOT_RETRY",
+            "1050001126,DO_NOT_RETRY",
+            "1050001127,DO_NOT_RETRY",
+            "1050001128,DO_NOT_RETRY",
+            "1050001129,DO_NOT_RETRY",
+            "1050001130,DO_NOT_RETRY",
+            "1050001131,DO_NOT_RETRY",
+            "1050001132,DO_NOT_RETRY",
+            "1050001133,DO_NOT_RETRY"
     })
     void mapsStableErrorCodesToRetryDirectives(int code, RetryDirective expected) {
         assertThat(SupplyChainErrorCodeConstants.retryDirective(code)).isEqualTo(expected);
@@ -141,6 +160,16 @@ class SupplyChainErrorMappingTest {
     void preservesBrandLegacyApiRetirementContract() {
         assertErrorContract(BRAND_LEGACY_API_DEPRECATED, 1_050_001_106,
                 "品牌旧接口已废弃，请使用 POST /supply-chain/brands", RetryDirective.DO_NOT_RETRY);
+    }
+
+    /**
+     * 写入口开放后，120 号错误码仅保留稳定目录语义，不再从写路径抛出。
+     * 设计见 {@code docs/superpowers/specs/2026-09-21-routing-rule-admin-write-design.md#7-稳定错误码}。
+     */
+    @Test
+    void preservesRoutingRuleWriteNotOpenRetirementMessage() {
+        assertThat(ROUTING_RULE_WRITE_NOT_OPEN.getMsg())
+                .isEqualTo("路由规则写入口已开放，本错误码不再使用");
     }
 
     @Test

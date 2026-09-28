@@ -13,6 +13,10 @@ public interface SupplierRoutingPolicyMapper extends BaseMapperX<SupplierRouting
     /** 与 {@link com.aifuli.module.supplychain.routing.application.RoutingPolicyPublicationService} 中 POLICY_ACTIVE 一致。 */
     short POLICY_ACTIVE = 10;
 
+    default SupplierRoutingPolicyDO selectByCode(String policyCode) {
+        return selectOne(SupplierRoutingPolicyDO::getPolicyCode, policyCode);
+    }
+
     default SupplierRoutingPolicyDO selectByCodeForUpdate(String policyCode) {
         return selectOneForUpdate(SupplierRoutingPolicyDO::getPolicyCode, policyCode);
     }

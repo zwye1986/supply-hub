@@ -27,6 +27,7 @@ import com.aifuli.module.supplychain.tradecore.catalog.application.ProductCatalo
 import com.aifuli.module.supplychain.tradecore.catalog.application.ProjectListingCommandService;
 import com.aifuli.module.supplychain.tradecore.catalog.application.ProjectListingCommandService.ListingLine;
 import com.aifuli.module.supplychain.tradecore.catalog.application.ProjectListingQueryService;
+import com.aifuli.module.supplychain.tradecore.catalog.application.ProjectListingPriceSource;
 import com.aifuli.module.supplychain.tradecore.catalog.application.SettlementPriceResolver;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerProductL2OverrideDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerProductL2OverrideVersionDO;
@@ -42,6 +43,20 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapp
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProjectListingVersionMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.FulfillmentType;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericBatchPricingService;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.PricingDependencyChangedEvent;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericPricingCalculator.*;
+import com.aifuli.module.supplychain.integration.system.TaxRateDictionaryAdapter;
+import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierDO;
+import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierOfferDO;
+import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierOfferVersionDO;
+import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierMapper;
+import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferMapper;
+import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferVersionMapper;
+import com.aifuli.module.supplychain.tradecore.supply.domain.OfferStatus;
+import com.aifuli.module.supplychain.tradecore.supply.domain.SupplierStatus;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.aifuli.module.supplychain.tradecore.ledger.application.AccountLedgerWriter;
 import com.aifuli.module.supplychain.tradecore.profile.domain.L2AdjustMode;
 import com.aifuli.module.supplychain.tradecore.profile.domain.L3AdjustMode;
@@ -55,12 +70,14 @@ import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
+import org.springframework.context.annotation.Bean;
 import com.aifuli.module.supplychain.testsupport.ProductCenterTestConfiguration;
 import org.testcontainers.containers.MySQLContainer;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import java.math.BigDecimal;
 import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -77,6 +94,10 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PROJECT_SKU_NOT_IN_BUYER_CATALOG;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /**
  * 项目商品归属、L2/L3 批量定价、冻结版本、事务回滚与并发行锁的真实 MySQL 集成门禁。
@@ -115,6 +136,7 @@ class ProjectAdminIntegrationTest {
         try (ConfigurableApplicationContext context = applicationContext()) {
             BuyerAdminCommandService buyers = context.getBean(BuyerAdminCommandService.class);
             BuyerAdminQueryService buyerQueries = context.getBean(BuyerAdminQueryService.class);
+            ProjectAdminQueryService projectQueries = context.getBean(ProjectAdminQueryService.class);
             BuyerProductCommandService products = context.getBean(BuyerProductCommandService.class);
             ProjectAdminCommandService projects = context.getBean(ProjectAdminCommandService.class);
             ProjectListingCommandService listings = context.getBean(ProjectListingCommandService.class);
@@ -126,17 +148,22 @@ class ProjectAdminIntegrationTest {
             String buyerA = buyers.create(createBuyer("一级", "一级科技有限公司", "91110000000000001X"));
             String buyerB = buyers.create(createBuyer("另一级", "另一级科技有限公司", "91110000000000002X"));
             seedCatalog(context.getBean(ProductCatalogCommandService.class));
-            insertL1(context, "MOVIE_100", L1_CENTS);
+            insertL1(context, "SKU_001_100", L1_CENTS);
 
             List<String> buyerProductCodes = products.addProducts(buyerA, List.of(
-                    new ProductLine("MOVIE_100", L2AdjustMode.FOLLOW_TEMPLATE, null, null, null)), 1L);
+                    new ProductLine("SKU_001_100", L2AdjustMode.FOLLOW_TEMPLATE, null, null, null, null)), 1L);
             assertThat(buyerProductCodes).hasSize(1);
 
             String projectCode = projects.create(new CreateProjectCommand(
                     "福利项目", buyerA, "WELFARE",
                     LocalDate.of(2026, 9, 1), LocalDate.of(2026, 12, 31),
-                    null, "说明", "ACTIVE", 1L));
+                    null, "说明", "DRAFT", 1L));
             assertThat(projectCode).startsWith("PRJ_");
+            projects.update(new UpdateProjectCommand(
+                    projectCode, "福利项目", buyerA, "WELFARE",
+                    LocalDate.of(2026, 9, 1), LocalDate.of(2026, 12, 31),
+                    null, "说明", "ACTIVE", 1L));
+            assertThat(projectQueries.get(projectCode).status()).isEqualTo("ACTIVE");
 
             var buyerPage = buyerQueries.page(new BuyerAdminQueryService.BuyerPageQuery(
                     null, buyerA, List.of(), List.of(), List.of(), List.of(), null, null, 1, 20));
@@ -150,13 +177,13 @@ class ProjectAdminIntegrationTest {
             assertThat(buyerQueries.get(buyerA).sellableCategories()).containsExactly("MOVIE");
 
             assertThatThrownBy(() -> listings.addProducts(projectCode, List.of(
-                    new ListingLine("MOVIE_200", L3AdjustMode.FOLLOW_L2, null, null)), 1L))
+                    new ListingLine("SKU_001_200", L3AdjustMode.FOLLOW_L2, null, null)), 1L))
                     .isInstanceOf(ServiceException.class)
                     .extracting(ex -> ((ServiceException) ex).getCode())
                     .isEqualTo(PROJECT_SKU_NOT_IN_BUYER_CATALOG.getCode());
 
             List<String> listingCodes = listings.addProducts(projectCode, List.of(
-                    new ListingLine("MOVIE_100", L3AdjustMode.FOLLOW_L2, null, null)), 1L);
+                    new ListingLine("SKU_001_100", L3AdjustMode.FOLLOW_L2, null, null)), 1L);
             assertThat(listingCodes).hasSize(1);
             String listingCode = listingCodes.getFirst();
             assertThat(listingCode).startsWith("PLT_");
@@ -168,6 +195,9 @@ class ProjectAdminIntegrationTest {
             assertThat(version1.getSettlementPriceLevel()).isEqualTo(PriceSource.L1.name());
             assertThat(version1.getPriceSource()).isEqualTo(ListingPriceSource.INHERITED.name());
             assertThat(version1.getVersionNo()).isEqualTo(1);
+            BuyerProductQueryService buyerProductQuery = context.getBean(BuyerProductQueryService.class);
+            assertThat(buyerProductQuery.page(buyerA, List.of(), 1, 20).getTotal()).isEqualTo(1L);
+            assertThat(buyerProductQuery.page(buyerA, List.of(), projectCode, 1, 1).getTotal()).isZero();
             var initialListingPage = listingQuery.page(projectCode, 1, 20).getList();
             assertThat(initialListingPage).hasSize(1);
             assertThat(initialListingPage.getFirst().distPriceCents()).isEqualTo(L1_CENTS);
@@ -200,15 +230,243 @@ class ProjectAdminIntegrationTest {
             verifyBatchPricingDatabaseSemantics(context, buyerA, buyerB, projectCode,
                     buyerProductCodes.getFirst(), listingCode);
 
+            // 历史 L1/L2 的事务与冻结测试完成后，再发布通用版本，验证当前版本优先且旧冻结价不回放。
+            Long frozenBeforeGeneric = listingVersionMapper.selectById(
+                    listingMapper.selectByCode(listingCode).getCurrentVersionId()).getBuyerSettlementUnitPrice();
+            verifyGenericBatchPricing(context, buyerA, projectCode,
+                    buyerProductCodes.getFirst(), listingCode);
+            var genericBuyerRow = context.getBean(BuyerProductQueryService.class)
+                    .page(buyerA, List.of(), 1, 20).getList().stream()
+                    .filter(row -> buyerProductCodes.getFirst().equals(row.buyerProductCode())).findFirst().orElseThrow();
+            assertThat(genericBuyerRow.suggestedSalePriceCents()).isEqualTo(10_000L);
+            assertThat(genericBuyerRow.platformBasePriceCents()).isEqualTo(10_000L);
+            assertThat(genericBuyerRow.distPriceCents()).isEqualTo(10_000L);
+            var genericProjectRow = listingQuery.page(projectCode, 1, 20).getList().getFirst();
+            assertThat(genericProjectRow.distPriceCents()).isEqualTo(10_000L);
+            assertThat(genericProjectRow.finalPriceCents()).isEqualTo(frozenBeforeGeneric);
+            listings.patchL3(projectCode, listingCode, L3AdjustMode.FOLLOW_L2, null, null, 1L);
+            assertThat(listingQuery.page(projectCode, 1, 20).getList().getFirst().finalPriceCents())
+                    .isEqualTo(10_000L);
+
+            // 模拟现场新 SKU：只有通用定价版本，没有旧 L1；新增项目仍须成功并展示真正的 SKU 建议价。
+            PlatformSkuDO genericSku = context.getBean(PlatformSkuMapper.class).selectByCode("SKU_001_100");
+            context.getBean(PlatformSettlementPriceMapper.class).deleteById(genericSku.getId());
+            String genericOnlyProject = projects.create(new CreateProjectCommand(
+                    "通用定价项目", buyerA, "WELFARE",
+                    LocalDate.of(2026, 9, 1), LocalDate.of(2026, 12, 31),
+                    null, "验证无旧L1", "ACTIVE", 1L));
+            long genericCandidateCount = buyerProductQuery.page(buyerA, List.of(), genericOnlyProject, 1, 1)
+                    .getTotal();
+            assertThat(genericCandidateCount).isPositive();
+            String genericOnlyListing = listings.addProducts(genericOnlyProject,
+                    List.of(new ListingLine("SKU_001_100", L3AdjustMode.FOLLOW_L2, null, null)), 1L).getFirst();
+            assertThat(buyerProductQuery.page(buyerA, List.of(), genericOnlyProject, 1, 1).getTotal())
+                    .isEqualTo(genericCandidateCount - 1);
+            assertThat(listingQuery.page(genericOnlyProject, 1, 20).getList().getFirst())
+                    .satisfies(row -> {
+                        assertThat(row.listingCode()).isEqualTo(genericOnlyListing);
+                        assertThat(row.suggestPriceCents()).isNull();
+                        assertThat(row.suggestedSalePriceCents()).isEqualTo(10_000L);
+                        assertThat(row.platformBasePriceCents()).isEqualTo(10_000L);
+                        assertThat(row.distPriceCents()).isEqualTo(10_000L);
+                        assertThat(row.finalPriceCents()).isEqualTo(10_000L);
+                    });
+            listings.retire(genericOnlyProject, genericOnlyListing, 1L);
+            assertThat(buyerProductQuery.page(buyerA, List.of(), genericOnlyProject, 1, 1).getTotal())
+                    .isEqualTo(genericCandidateCount);
+            var retiredProjectRow = projectQueries.page(new ProjectAdminQueryService.ProjectPageQuery(
+                    null, genericOnlyProject, List.of(), null, List.of(), null, null, 1, 20))
+                    .getList().getFirst();
+            assertThat(retiredProjectRow.skuCount()).isZero();
+            assertThat(retiredProjectRow.projectPriceSkuCount()).isZero();
+
             assertThatThrownBy(() -> projects.update(new UpdateProjectCommand(
                     projectCode, "福利项目", buyerB, "WELFARE",
                     LocalDate.of(2026, 9, 1), LocalDate.of(2026, 12, 31),
-                    null, "说明", 1L)))
+                    null, "说明", null, 1L)))
                     .isInstanceOf(ServiceException.class)
                     .extracting(ex -> ((ServiceException) ex).getCode())
                     .isEqualTo(PROJECT_BUYER_IMMUTABLE.getCode());
             assertThat(L2_CENTS).isEqualTo(Math.round(L1_CENTS * (L2_PERCENT / 100.0d)) + L2_AMOUNT_CENTS);
         }
+    }
+
+    /**
+     * 在真实 MySQL 上验证通用规则的原子保存、项目继承/覆盖、最低供货价重算及利润隐藏自动恢复。
+     * 设计见 {@code docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#8-自动化测试与联调门禁}。
+     */
+    private static void verifyGenericBatchPricing(ConfigurableApplicationContext context,
+                                                   String buyerA, String projectCode,
+                                                   String buyerProductCode, String listingCode) {
+        PlatformSkuDO sku = context.getBean(PlatformSkuMapper.class).selectByCode("SKU_001_100");
+        sku.setMarketPrice(10_000L);
+        sku.setSuggestedSalePrice(10_000L);
+        assertThat(context.getBean(PlatformSkuMapper.class).updateById(sku)).isEqualTo(1);
+        SupplierOfferDO offer = insertEffectiveOffer(context, sku, 8_000L);
+        GenericBatchPricingService pricing = context.getBean(GenericBatchPricingService.class);
+        PricingConfig config = new PricingConfig(directMarket(), directMarket(),
+                new ServiceFeeRule(new BigDecimal("2"), FixedOperator.ADD,
+                        new BigDecimal("1.00"), false, "服务费："),
+                new HideRule(new BigDecimal("10"), new BigDecimal("5")),
+                new TaxMetadata(false, "NON_TAXABLE", null));
+        pricing.savePlatform(List.of(sku.getSkuCode()), config, 1L);
+        GenericBatchPricingService.PlatformPricingDetail platformDetail =
+                pricing.getPlatformPricing(sku.getSkuCode());
+        assertThat(platformDetail.currentVersionId()).isNotNull();
+        assertThat(platformDetail.versionNo()).isEqualTo(1);
+        assertThat(platformDetail.pricingStatus()).isEqualTo(PricingStatus.READY.name());
+        assertThat(platformDetail.distributionRule()).isEqualTo(config.distributionRule());
+        assertThat(platformDetail.salesRule()).isEqualTo(config.salesRule());
+        assertThat(platformDetail.serviceFeeRule().percentage())
+                .isEqualByComparingTo(config.serviceFeeRule().percentage());
+        assertThat(platformDetail.serviceFeeRule().operator()).isEqualTo(config.serviceFeeRule().operator());
+        assertThat(platformDetail.serviceFeeRule().operand())
+                .isEqualByComparingTo(config.serviceFeeRule().operand());
+        assertThat(platformDetail.serviceFeeRule().hideCopy()).isEqualTo(config.serviceFeeRule().hideCopy());
+        assertThat(platformDetail.serviceFeeRule().copy()).isEqualTo(config.serviceFeeRule().copy());
+        assertThat(platformDetail.hideRule()).isEqualTo(config.hideRule());
+        assertThat(platformDetail.taxMetadata().taxIncluded()).isFalse();
+        assertThat(platformDetail.taxMetadata().taxRateCode()).isEqualTo("NON_TAXABLE");
+        assertThat(platformDetail.taxMetadata().taxRateLabel()).isEqualTo("不征税");
+        assertThat(platformDetail.marketPriceCents()).isEqualTo(10_000L);
+        assertThat(platformDetail.supplyPriceCents()).isEqualTo(8_000L);
+        assertThat(platformDetail.distributionPriceCents()).isEqualTo(10_000L);
+        pricing.saveBuyer(buyerA, List.of(buyerProductCode),
+                GenericBatchPricingService.ProjectOverrides.allInherited(), 1L);
+
+        var buyerProduct = context.getBean(BuyerProductMapper.class).selectByCode(buyerProductCode);
+        var buyerIdentity = context.getBean(com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerSkuPricingMapper.class)
+                .selectByBuyerProductId(buyerProduct.getId());
+        var buyerVersion = context.getBean(com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerSkuPricingVersionMapper.class)
+                .selectById(buyerIdentity.getCurrentVersionId());
+        assertThat(buyerVersion.getSupplyPriceCents()).isEqualTo(8_000L);
+        assertThat(buyerVersion.getDistributionPriceCents()).isEqualTo(10_000L);
+        assertThat(buyerIdentity.getPricingStatus()).isEqualTo(PricingStatus.READY.name());
+
+        // 新增项目商品行内覆盖须在同一事务落成项目版本，列表与详情按项目当前分销价回显。
+        String inlineProjectCode = context.getBean(ProjectAdminCommandService.class).create(new CreateProjectCommand(
+                "行内专属价项目", buyerA, "WELFARE",
+                LocalDate.of(2026, 9, 1), LocalDate.of(2026, 12, 31),
+                null, "行内定价回归", "ACTIVE", 1L));
+        FormulaRule inlineRule = new FormulaRule(PriceMode.CUSTOM, PriceBase.MARKET_PRICE,
+                new BigDecimal("90"), FixedOperator.ADD, BigDecimal.ZERO);
+        var inlineOverrides = new GenericBatchPricingService.ProjectOverrides(false, inlineRule,
+                true, null, true, null, true, null, true, null);
+        String inlineListingCode = context.getBean(ProjectListingCommandService.class).addProducts(
+                inlineProjectCode, List.of(new ListingLine(sku.getSkuCode(), L3AdjustMode.FOLLOW_L2,
+                        null, null, inlineOverrides)), 1L).getFirst();
+        ProjectListingDO inlineListing = context.getBean(ProjectListingMapper.class).selectByCode(inlineListingCode);
+        var inlinePricingMapper = context.getBean(
+                com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProjectSkuPricingMapper.class);
+        var inlineVersionMapper = context.getBean(
+                com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProjectSkuPricingVersionMapper.class);
+        var inlineIdentity = inlinePricingMapper.selectByListingId(inlineListing.getId());
+        assertThat(inlineVersionMapper.selectById(inlineIdentity.getCurrentVersionId()).getDistributionPriceCents())
+                .isEqualTo(9_000L);
+        var inlineRow = context.getBean(ProjectListingQueryService.class)
+                .page(inlineProjectCode, 1, 20).getList().getFirst();
+        assertThat(inlineRow.projectPriceCents()).isEqualTo(9_000L);
+        assertThat(inlineRow.finalPriceCents()).isEqualTo(9_000L);
+        assertThat(inlineRow.priceSource()).isEqualTo(PriceSource.L3.name());
+        assertThat(inlineRow.projectPriceCovered()).isTrue();
+        assertThat(context.getBean(ProjectAdminQueryService.class).get(inlineProjectCode).projectPriceSkuCount())
+                .isEqualTo(1);
+        var projectPage = context.getBean(ProjectAdminQueryService.class).page(
+                new ProjectAdminQueryService.ProjectPageQuery(
+                        null, null, List.of(), null, List.of(), null, null, 1, 50));
+        var inlineProjectRow = projectPage.getList().stream()
+                .filter(row -> inlineProjectCode.equals(row.projectCode())).findFirst().orElseThrow();
+        assertThat(inlineProjectRow.skuCount()).isEqualTo(1);
+        assertThat(inlineProjectRow.projectPriceSkuCount()).isEqualTo(1);
+
+        ProjectListingDO listing = context.getBean(ProjectListingMapper.class).selectByCode(listingCode);
+        var projectPricingMapper = context.getBean(
+                com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProjectSkuPricingMapper.class);
+        var projectVersionMapper = context.getBean(
+                com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProjectSkuPricingVersionMapper.class);
+        var inheritedIdentity = projectPricingMapper.selectByListingId(listing.getId());
+        var inheritedVersion = projectVersionMapper.selectById(inheritedIdentity.getCurrentVersionId());
+        assertThat(inheritedVersion.getBuyerPricingVersionId()).isEqualTo(buyerVersion.getId());
+        assertThat(inheritedVersion.getSalesPriceCents()).isEqualTo(10_000L);
+        ObjectMapper responseMapper = context.getBean(ObjectMapper.class);
+        JsonNode inheritedConfig = responseMapper.valueToTree(context.getBean(ProjectListingQueryService.class)
+                .page(projectCode, 1, 20).getList().getFirst().projectPricingConfig());
+        assertThat(inheritedConfig)
+                .isEqualTo(responseMapper.valueToTree(GenericBatchPricingService.ProjectOverrides.allInherited()));
+
+        Long currentBeforeRejectedBatch = buyerIdentity.getCurrentVersionId();
+        assertThatThrownBy(() -> pricing.saveBuyer(buyerA,
+                List.of(buyerProductCode, "BPD_NOT_BELONG_TO_CURRENT_BUYER"),
+                GenericBatchPricingService.ProjectOverrides.allInherited(), 1L))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThat(context.getBean(com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerSkuPricingMapper.class)
+                .selectByBuyerProductId(buyerProduct.getId()).getCurrentVersionId())
+                .isEqualTo(currentBeforeRejectedBatch);
+
+        FormulaRule projectSales = new FormulaRule(PriceMode.CUSTOM, PriceBase.MARKET_PRICE,
+                new BigDecimal("120"), FixedOperator.ADD, BigDecimal.ZERO);
+        var savedOverrides = new GenericBatchPricingService.ProjectOverrides(true, null, false, projectSales,
+                true, null, true, null, true, null);
+        pricing.saveProject(projectCode, List.of(listingCode), savedOverrides, 2L);
+        var overriddenIdentity = projectPricingMapper.selectByListingId(listing.getId());
+        assertThat(projectVersionMapper.selectById(overriddenIdentity.getCurrentVersionId()).getSalesPriceCents())
+                .isEqualTo(12_000L);
+        JsonNode savedConfig = responseMapper.valueToTree(context.getBean(ProjectListingQueryService.class)
+                .page(projectCode, 1, 20).getList().getFirst().projectPricingConfig());
+        assertThat(savedConfig).isEqualTo(responseMapper.valueToTree(savedOverrides));
+
+        publishSupplyPrice(context, offer, 9_500L, 2);
+        pricing.recalculatePlatformSku(new PricingDependencyChangedEvent(sku.getId()));
+        assertThat(projectPricingMapper.selectByListingId(listing.getId()).getPricingStatus())
+                .isEqualTo(PricingStatus.MARGIN_HIDDEN.name());
+
+        publishSupplyPrice(context, offer, 7_000L, 3);
+        pricing.recalculatePlatformSku(new PricingDependencyChangedEvent(sku.getId()));
+        assertThat(projectPricingMapper.selectByListingId(listing.getId()).getPricingStatus())
+                .isEqualTo(PricingStatus.READY.name());
+        JsonNode recalculatedConfig = responseMapper.valueToTree(context.getBean(ProjectListingQueryService.class)
+                .page(projectCode, 1, 20).getList().getFirst().projectPricingConfig());
+        assertThat(recalculatedConfig).isEqualTo(responseMapper.valueToTree(savedOverrides));
+    }
+
+    private static FormulaRule directMarket() {
+        return new FormulaRule(PriceMode.DIRECT_MARKET_PRICE, null, null, null, null);
+    }
+
+    private static SupplierOfferDO insertEffectiveOffer(ConfigurableApplicationContext context,
+                                                         PlatformSkuDO sku, long price) {
+        LocalDateTime now = context.getBean(com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock.class).now();
+        SupplierDO supplier = SupplierDO.builder().supplierCode("PRICING_SUPPLIER")
+                .supplierName("定价供应商").shortName("定价供应商").supplierType("STANDARD_SUPPLIER")
+                .status(SupplierStatus.ACTIVE.getCode()).version(0L).createdBy(1L).createdAt(now)
+                .updatedBy(1L).updatedAt(now).build();
+        context.getBean(SupplierMapper.class).insert(supplier);
+        SupplierOfferDO offer = SupplierOfferDO.builder().offerNo("OFR_PRICING")
+                .offerCode("SKU_001_100_PRICING").supplierId(supplier.getId()).platformSkuId(sku.getId())
+                .status(OfferStatus.PUBLISHED.getCode()).version(0L).createdBy(1L).createdAt(now)
+                .updatedBy(1L).updatedAt(now).build();
+        context.getBean(SupplierOfferMapper.class).insert(offer);
+        publishSupplyPrice(context, offer, price, 1);
+        return offer;
+    }
+
+    private static void publishSupplyPrice(ConfigurableApplicationContext context, SupplierOfferDO offer,
+                                           long price, int versionNo) {
+        LocalDateTime now = context.getBean(com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock.class).now();
+        SupplierOfferVersionDO version = SupplierOfferVersionDO.builder().offerId(offer.getId())
+                .versionNo(versionNo).externalSkuCode("EXT-MOVIE-100-V" + versionNo)
+                .supplierSettlementUnitPrice(price).currency("CNY").connectorVersionId(1L)
+                .inventorySourceId(1L).minQuantity(1L).maxQuantity(100L).quantityStep(1L)
+                .primaryCapabilityCode("DIRECT_RECHARGE").completionMode("SYNCHRONOUS")
+                .createIdempotencyMode("DEDUP_ONLY").unknownResultPolicy("MANUAL")
+                .partialDeliveryMode("FORBIDDEN").resultMultiplicity("SINGLE")
+                .fulfillmentConfigSchemaVersion(1).fulfillmentConfigJson("{}")
+                .validFrom(now.minusMinutes(1)).validTo(null).publishReason("定价集成测试")
+                .publishedBy(1L).publishedAt(now).createdAt(now).build();
+        context.getBean(SupplierOfferVersionMapper.class).insert(version);
+        offer.setCurrentVersionId(version.getId());
+        offer.setUpdatedAt(now);
+        context.getBean(SupplierOfferMapper.class).updateById(offer);
     }
 
     /**
@@ -230,11 +488,11 @@ class ProjectAdminIntegrationTest {
         ProjectListingMapper listingMapper = context.getBean(ProjectListingMapper.class);
         ProjectListingVersionMapper listingVersionMapper = context.getBean(ProjectListingVersionMapper.class);
 
-        insertL1(context, "MOVIE_200", 19_800L);
+        insertL1(context, "SKU_001_200", 19_800L);
         String buyerProductA200Code = products.addProducts(buyerA, List.of(
-                new ProductLine("MOVIE_200", L2AdjustMode.FOLLOW_TEMPLATE, null, null, null)), 1L).getFirst();
+                new ProductLine("SKU_001_200", L2AdjustMode.FOLLOW_TEMPLATE, null, null, null, null)), 1L).getFirst();
         String buyerProductB100Code = products.addProducts(buyerB, List.of(
-                new ProductLine("MOVIE_100", L2AdjustMode.FOLLOW_TEMPLATE, null, null, null)), 1L).getFirst();
+                new ProductLine("SKU_001_100", L2AdjustMode.FOLLOW_TEMPLATE, null, null, null, null)), 1L).getFirst();
         BuyerProductDO buyerProductA100 = productMapper.selectByCode(buyerProductA100Code);
         BuyerProductDO buyerProductA200 = productMapper.selectByCode(buyerProductA200Code);
 
@@ -293,7 +551,7 @@ class ProjectAdminIntegrationTest {
                 LocalDate.of(2026, 9, 1), LocalDate.of(2026, 12, 31),
                 null, "说明", "ACTIVE", 1L));
         String listingB = listings.addProducts(projectB, List.of(
-                new ListingLine("MOVIE_100", L3AdjustMode.FOLLOW_L2, null, null)), 1L).getFirst();
+                new ListingLine("SKU_001_100", L3AdjustMode.FOLLOW_L2, null, null)), 1L).getFirst();
         ProjectListingDO listingABeforePreview = listingMapper.selectByCode(listingA);
         int listingAVersionCountBeforePreview = listingVersionMapper
                 .selectByListingId(listingABeforePreview.getId()).size();
@@ -440,30 +698,30 @@ class ProjectAdminIntegrationTest {
 
     private static void seedCatalog(ProductCatalogCommandService catalog) {
         catalog.createBrand(new ProductCatalogCommandService.CreateBrandCommand(
-                "MOVIE_BRAND", "影院品牌", null, null, 0, 1L));
-        catalog.changeBrandStatus("MOVIE_BRAND", CatalogEntityStatus.ACTIVE, 1L);
+                "BRD_001", "影院品牌", null, null, 0, 1L));
+        catalog.changeBrandStatus("BRD_001", CatalogEntityStatus.ACTIVE, 1L);
         catalog.createCategory(new ProductCatalogCommandService.CreateCategoryCommand(
-                "RIGHTS", "权益商品", null, 0, 1L));
-        catalog.changeCategoryStatus("RIGHTS", CatalogEntityStatus.ACTIVE, 1L);
+                "CAT_001", "权益商品", null, 0, 1L));
+        catalog.changeCategoryStatus("CAT_001", CatalogEntityStatus.ACTIVE, 1L);
         catalog.createCategory(new ProductCatalogCommandService.CreateCategoryCommand(
-                "VOUCHER", "卡券", "RIGHTS", 0, 1L));
-        catalog.changeCategoryStatus("VOUCHER", CatalogEntityStatus.ACTIVE, 1L);
+                "CAT_001_001", "卡券", "CAT_001", 0, 1L));
+        catalog.changeCategoryStatus("CAT_001_001", CatalogEntityStatus.ACTIVE, 1L);
         catalog.createCategory(new ProductCatalogCommandService.CreateCategoryCommand(
-                "MOVIE", "电影快充", "VOUCHER", 0, 1L));
-        catalog.changeCategoryStatus("MOVIE", CatalogEntityStatus.ACTIVE, 1L);
+                "CAT_002_001", "电影快充", "CAT_001_001", 0, 1L));
+        catalog.changeCategoryStatus("CAT_002_001", CatalogEntityStatus.ACTIVE, 1L);
         catalog.createSpu(new ProductCatalogCommandService.CreateSpuCommand(
-                "MOVIE_TICKET", "MOVIE_BRAND", "MOVIE",
+                "SPU_001", "BRD_001", "CAT_002_001",
                 "MOVIE", "MOVIE", "MOVIE_TICKET",
                 "电影票", null, null, null, 1L));
-        catalog.changeSpuStatus("MOVIE_TICKET", CatalogEntityStatus.ACTIVE, 1L);
+        catalog.changeSpuStatus("SPU_001", CatalogEntityStatus.ACTIVE, 1L);
         catalog.createSku(new ProductCatalogCommandService.CreateSkuCommand(
-                "MOVIE_100", "MOVIE_TICKET", "电影票 100", FulfillmentType.DIRECT_RECHARGE.name(),
+                "SKU_001_100", "SPU_001", "电影票 100", FulfillmentType.DIRECT_RECHARGE.name(),
                 10_000L, Money.CURRENCY_CNY, 1L));
-        catalog.changeSkuStatus("MOVIE_100", CatalogEntityStatus.ACTIVE, 1L);
+        catalog.changeSkuStatus("SKU_001_100", CatalogEntityStatus.ACTIVE, 1L);
         catalog.createSku(new ProductCatalogCommandService.CreateSkuCommand(
-                "MOVIE_200", "MOVIE_TICKET", "电影票 200", FulfillmentType.DIRECT_RECHARGE.name(),
+                "SKU_001_200", "SPU_001", "电影票 200", FulfillmentType.DIRECT_RECHARGE.name(),
                 20_000L, Money.CURRENCY_CNY, 1L));
-        catalog.changeSkuStatus("MOVIE_200", CatalogEntityStatus.ACTIVE, 1L);
+        catalog.changeSkuStatus("SKU_001_200", CatalogEntityStatus.ACTIVE, 1L);
     }
 
     private static CreateBuyerCommand createBuyer(String name, String legalEntity, String creditCode) {
@@ -514,7 +772,20 @@ class ProjectAdminIntegrationTest {
             BuyerAdminCommandService.class, BuyerAdminQueryService.class,
             BuyerProductCommandService.class, BuyerProductQueryService.class,
             ProjectAdminCommandService.class, ProjectAdminQueryService.class,
-            ProjectListingCommandService.class, ProjectListingQueryService.class})
+            ProjectListingCommandService.class, ProjectListingQueryService.class, ProjectListingPriceSource.class,
+            GenericBatchPricingService.class})
     static class TestConfiguration {
+        @Bean
+        ObjectMapper objectMapper() {
+            return new ObjectMapper().findAndRegisterModules();
+        }
+
+        @Bean
+        TaxRateDictionaryAdapter taxRateDictionaryAdapter() {
+            TaxRateDictionaryAdapter adapter = mock(TaxRateDictionaryAdapter.class);
+            when(adapter.requireEnabled(any(), anyString())).thenAnswer(invocation ->
+                    new TaxMetadata(invocation.getArgument(0), invocation.getArgument(1), "不征税"));
+            return adapter;
+        }
     }
 }

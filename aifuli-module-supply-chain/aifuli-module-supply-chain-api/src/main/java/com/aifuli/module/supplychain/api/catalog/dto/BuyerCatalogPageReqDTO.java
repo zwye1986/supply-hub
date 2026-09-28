@@ -31,6 +31,6 @@ public class BuyerCatalogPageReqDTO extends PageParam {
     @Size(max = 32)
     private String fulfillmentType;
 
-    @Schema(description = "仅返回当前可用商品", example = "true")
+    @Schema(description = "仅返回当前可用且分销商定价为 READY 的标准商品", example = "true")
     private Boolean availableOnly;
 }

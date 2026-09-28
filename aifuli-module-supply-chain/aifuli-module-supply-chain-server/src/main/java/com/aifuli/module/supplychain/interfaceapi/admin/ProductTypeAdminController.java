@@ -37,7 +37,7 @@ public class ProductTypeAdminController {
     public CommonResult<PageResult<ProductTypeView>> page(
             @Parameter(description = "商品类型编码或名称模糊搜索", example = "权益")
             @RequestParam(required = false) String keyword,
-            @Parameter(description = "商品类型状态：0草稿，10启用，20停用", example = "10")
+            @Parameter(description = "商品类型状态：10启用，20禁用；字典 supply_chain_product_type_status", example = "10")
             @RequestParam(required = false) Short status,
             @Parameter(description = "页码，从1开始", example = "1") @RequestParam(required = false) Integer pageNo,
             @Parameter(description = "每页条数，默认20", example = "20") @RequestParam(required = false) Integer pageSize) {
@@ -67,7 +67,7 @@ public class ProductTypeAdminController {
             @Parameter(description = "商品类型永久业务编码", example = "PT_01ABC") @PathVariable String typeCode,
             @Valid @RequestBody ProductTypeSaveReqVO request) {
         service.update(typeCode, new ProductTypeAdminService.UpdateCommand(request.typeName, request.iconUrl,
-                request.sort, request.description, request.remark, getLoginUserId()));
+                request.sort, request.status, request.description, request.remark, getLoginUserId()));
         return success(true);
     }
 
@@ -97,7 +97,7 @@ public class ProductTypeAdminController {
         @NotBlank @Size(max = 128) @Schema(description = "商品类型名称") private String typeName;
         @NotBlank @Size(max = 512) @Schema(description = "商品类型图标地址") private String iconUrl;
         @Schema(description = "展示排序值，越小越靠前") private Integer sort;
-        @Schema(description = "管理状态：10启用，20停用；创建时可选，默认10启用") private Short status;
+        @Schema(description = "管理状态：10启用，20禁用，90已归档；字典 supply_chain_product_type_status；创建时可选，默认10启用；更新时可选，传入则联动更新状态") private Short status;
         @Size(max = 512) @Schema(description = "商品类型详细描述") private String description;
         @Size(max = 512) @Schema(description = "类型内部备注与说明") private String remark;
     }

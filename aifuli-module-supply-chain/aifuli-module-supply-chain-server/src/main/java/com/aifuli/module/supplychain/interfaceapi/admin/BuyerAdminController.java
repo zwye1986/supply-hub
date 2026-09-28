@@ -22,15 +22,25 @@ import com.aifuli.module.supplychain.tradecore.catalog.application.BuyerProductC
 import com.aifuli.module.supplychain.tradecore.catalog.application.BuyerProductCommandService.ProductLine;
 import com.aifuli.module.supplychain.tradecore.catalog.application.BuyerProductQueryService;
 import com.aifuli.module.supplychain.tradecore.catalog.application.BuyerProductQueryService.BuyerProductListItem;
+import com.aifuli.module.supplychain.interfaceapi.admin.pricing.GenericPricingAdminVos.FormulaRuleReqVO;
+import com.aifuli.module.supplychain.interfaceapi.admin.pricing.GenericPricingAdminVos.ServiceFeeRuleReqVO;
+import com.aifuli.module.supplychain.interfaceapi.admin.pricing.GenericPricingRequestMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericBatchPricingService;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericBatchPricingService.PricingPreview;
 import com.aifuli.module.supplychain.tradecore.profile.domain.ClosedEnums;
 import com.aifuli.module.supplychain.tradecore.profile.domain.L2AdjustMode;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;
+import com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService;
+import com.aifuli.module.supplychain.infrastructure.identity.SystemAssignedBusinessCodeGuard;
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonSetter;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
@@ -51,6 +61,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.LocalDateTime;
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.UUID;
 
@@ -83,13 +94,17 @@ public class BuyerAdminController {
     private final BuyerAdminQueryService queryService;
     private final BuyerProductCommandService productCommandService;
     private final BuyerProductQueryService productQueryService;
+    private final GenericBatchPricingService genericPricingService;
     private final BuyerInvoiceService invoiceService;
 
     @GetMapping
     @PreAuthorize(BUYER_QUERY_EXPRESSION)
     @Operation(summary = "分页查询分销商",
-            description = "筛选用 buyerName/buyerCode/distributionLevels/cooperationModes/sellableCategories/status"
-                    + " 与 updatedFrom/To。view=simple 返回 {buyerCode,buyerName}[]；"
+            description = "默认分页按组织树返回：根列表只有一级，children 嵌套二级和三级。"
+                    + "pageNo/pageSize/total 只计一级。筛选用 buyerName/buyerCode/distributionLevels/"
+                    + "cooperationModes/sellableCategories/status 与 updatedFrom/To。"
+                    + "命中二级或三级时带回一级祖先，children 只保留命中分支。"
+                    + "view=simple 返回 {buyerCode,buyerName}[]；"
                     + "view=parent-options 收 excludeBuyerCode、forLevel。金额单位 CNY 分。",
             responses = @ApiResponse(responseCode = "200", description = "默认分销商分页响应",
                     content = @Content(schema = @Schema(implementation = BuyerPageResponse.class))))
@@ -169,6 +184,8 @@ public class BuyerAdminController {
     @Operation(summary = "新增分销商（含期初）",
             description = "系统生成 BYR_ 编码。openingBalanceCents 仅创建可写，空视为 0，单位 CNY 分。")
     public CommonResult<String> create(@Valid @RequestBody BuyerSaveReqVO request) {
+        SystemAssignedBusinessCodeGuard.rejectSubmitted(ScopedBusinessCodeService.Kind.BYR,
+                request.isBuyerCodeSubmitted());
         return success(commandService.create(toCreateCommand(request)));
     }
 
@@ -220,19 +237,35 @@ public class BuyerAdminController {
     @GetMapping("/{buyerCode}/products")
     @PreAuthorize(BUYER_QUERY_EXPRESSION)
     @Operation(summary = "分页查询分销商品",
-            description = "只返回未移除行。金额单位 CNY 分；pricingRule 为继承L1/等于L1/自定义公式。")
+            description = "只返回未移除行。可筛 productType（动态商品类型编码，命中关联平台 SPU，可多选）。"
+                    + "重复键或逗号拼接表示命中任一类型。省略或空白不筛选，无命中返回空页。"
+                    + "传 projectCode 时排除该项目已加入且未移除的分销商品，过滤在分页前生效；"
+                    + "项目不存在或不属于当前分销商时返回 PROJECT_NOT_FOUND。"
+                    + "金额单位 CNY 分；pricingRule 为继承L1/等于L1/自定义公式。")
     public CommonResult<PageResult<BuyerProductListItem>> pageProducts(
             @PathVariable String buyerCode,
+            @Parameter(description = "动态商品类型编码，可多选；兼容单个 productType。"
+                    + "重复键 productType=A&productType=B，或逗号拼接 productType=A,B")
+            @RequestParam(required = false) List<String> productType,
+            @Parameter(description = "可选项目编码；仅排除该项目未移除的项目商品")
+            @RequestParam(required = false) String projectCode,
             @Parameter(description = "页码，从 1 开始") @RequestParam(required = false) Integer pageNo,
             @Parameter(description = "每页条数") @RequestParam(required = false) Integer pageSize) {
-        return success(productQueryService.page(buyerCode, pageNo, pageSize));
+        return success(productQueryService.page(buyerCode, productType, projectCode, pageNo, pageSize));
     }
 
     @PostMapping("/{buyerCode}/products")
     @PreAuthorize(BUYER_UPDATE_EXPRESSION)
     @Operation(summary = "从标品关联分销商品",
-            description = "默认 l2AdjustMode=FOLLOW_TEMPLATE，其语义为无手工覆盖时继承L1，不读取模板价。编号 BPD_。已移除同行复活而非插入。金额单位 CNY 分。")
-    public CommonResult<List<String>> addProducts(@PathVariable String buyerCode,
+            description = "默认 l2AdjustMode=FOLLOW_TEMPLATE，其语义为无手工覆盖时继承L1，不读取模板价。"
+                    + "页面「按分销价=销售建议价」须显式传 EQUAL_L1，覆盖值取当前 L1 结算分，不是 C 端销售建议价。"
+                    + "CUSTOM 为 round(L1结算分 × percent / 100) + amountCents，结果必须大于 0，否则 L2_OVERRIDE_INVALID。"
+                    + "displayThresholdPercent 省略则落空；传入须为 0～100 的整数，越界同样 L2_OVERRIDE_INVALID。"
+                    + "行内 pricing 省略时只关联并继承商品默认定价；传入时与关联处在同一事务，"
+                    + "字段与批量保存分销商通用定价相同。任一条缺少平台默认定价则整单回滚，返回 PLATFORM_DEFAULT_PRICING_MISSING。"
+                    + "编号 BPD_。已存在未移除行返回 BUYER_PRODUCT_DUPLICATE；已移除同行复活而非插入。金额单位 CNY 分。")
+    public CommonResult<List<String>> addProducts(
+            @Parameter(description = "采购商永久业务编码", example = "BYR_01ABC") @PathVariable String buyerCode,
                                                     @Valid @RequestBody AddBuyerProductsReqVO request) {
         List<ProductLine> lines = request.getItems().stream()
                 .map(BuyerAdminController::toProductLine)
@@ -243,9 +276,14 @@ public class BuyerAdminController {
     @PatchMapping("/{buyerCode}/products/{buyerProductCode}")
     @PreAuthorize(BUYER_UPDATE_EXPRESSION)
     @Operation(summary = "改分销商品L2覆盖",
-            description = "FOLLOW_TEMPLATE 清手工覆盖并继承L1，不读取模板价；EQUAL_L1/CUSTOM 无 L1 拒绝。金额单位 CNY 分。")
-    public CommonResult<Boolean> patchProduct(@PathVariable String buyerCode,
-                                              @PathVariable String buyerProductCode,
+            description = "FOLLOW_TEMPLATE 清手工覆盖并继承L1，不读取模板价。"
+                    + "EQUAL_L1 覆盖值取当前 L1 结算分；CUSTOM 为 round(L1结算分 × percent / 100) + amountCents，"
+                    + "结果必须大于 0。无 L1 时 EQUAL_L1/CUSTOM 拒绝。"
+                    + "displayThresholdPercent 省略则不改该列；传入须为 0～100 的整数，越界返回 L2_OVERRIDE_INVALID。"
+                    + "阈值本批只落库，不触发 C 端隐藏。金额单位 CNY 分。")
+    public CommonResult<Boolean> patchProduct(
+            @Parameter(description = "采购商永久业务编码", example = "BYR_01ABC") @PathVariable String buyerCode,
+            @Parameter(description = "分销商品稳定业务编码", example = "BPD_01ABC") @PathVariable String buyerProductCode,
                                               @Valid @RequestBody PatchBuyerProductReqVO request) {
         productCommandService.patchL2(
                 buyerCode, buyerProductCode,
@@ -257,27 +295,24 @@ public class BuyerAdminController {
 
     @PostMapping("/{buyerCode}/products/pricing/preview")
     @PreAuthorize(BUYER_QUERY_EXPRESSION)
-    @Operation(summary = "批量试算分销商商品L2价格",
-            description = "只读试算当前分销商作用域内的L2有效价，不写价格版本；税务元数据不参与计算。")
-    public CommonResult<List<L2PricingPreview>> previewProductPricing(
+    @Operation(summary = "批量试算分销商通用定价",
+            description = "只读试算当前分销商作用域内的分销价、销售价、服务费与利润隐藏；税务仅校验展示属性，不参与金额计算。")
+    public CommonResult<List<PricingPreview>> previewProductPricing(
             @Parameter(description = "采购商永久业务编码") @PathVariable String buyerCode,
             @Valid @RequestBody BuyerProductBatchPricingReqVO request) {
-        return success(productCommandService.previewL2Batch(buyerCode, request.getBuyerProductCodes(),
-                ClosedEnums.parseRequired(L2AdjustMode.class, request.getL2AdjustMode()),
-                request.getPercent(), request.getAmountCents()));
+        return success(genericPricingService.previewBuyer(buyerCode, request.getBuyerProductCodes(),
+                GenericPricingRequestMapper.toBuyerOverrides(request)));
     }
 
     @PutMapping("/{buyerCode}/products/pricing")
     @PreAuthorize(BUYER_UPDATE_EXPRESSION)
-    @Operation(summary = "批量保存分销商商品L2价格",
-            description = "仅更新路径分销商下选中商品的L2价格版本；单事务全量成功或回滚，税务元数据不参与计算。")
+    @Operation(summary = "批量保存分销商通用定价",
+            description = "仅更新路径分销商下选中商品的通用定价版本；单事务全量成功或回滚，税务仅用于结算展示。")
     public CommonResult<Boolean> updateProductPricing(
             @Parameter(description = "采购商永久业务编码") @PathVariable String buyerCode,
             @Valid @RequestBody BuyerProductBatchPricingReqVO request) {
-        productCommandService.patchL2Batch(buyerCode, request.getBuyerProductCodes(),
-                ClosedEnums.parseRequired(L2AdjustMode.class, request.getL2AdjustMode()),
-                request.getPercent(), request.getAmountCents(), request.getDisplayThresholdPercent(),
-                getLoginUserId());
+        genericPricingService.saveBuyer(buyerCode, request.getBuyerProductCodes(),
+                GenericPricingRequestMapper.toBuyerOverrides(request), getLoginUserId());
         return success(true);
     }
 
@@ -358,7 +393,8 @@ public class BuyerAdminController {
                 mode == null ? L2AdjustMode.FOLLOW_TEMPLATE : mode,
                 item.getPercent(),
                 item.getAmountCents(),
-                item.getDisplayThresholdPercent());
+                item.getDisplayThresholdPercent(),
+                item.getPricing() == null ? null : GenericPricingRequestMapper.toBuyerOverrides(item.getPricing()));
     }
 
     private static String traceId() {
@@ -369,6 +405,17 @@ public class BuyerAdminController {
     @Data
     @Schema(description = "分销商档案保存")
     public static class BuyerSaveReqVO {
+        @JsonIgnore
+        @Schema(hidden = true)
+        private boolean buyerCodeSubmitted;
+
+        /** 只记录请求是否出现该字段；创建入口不接受任何手填值，包括 null 和空串。 */
+        @JsonSetter("buyerCode")
+        @Schema(hidden = true)
+        public void acceptBuyerCode(String ignored) {
+            buyerCodeSubmitted = true;
+        }
+
         @NotBlank @Size(max = 128)
         @Schema(description = "采购商标准名称")
         private String buyerName;
@@ -492,12 +539,50 @@ public class BuyerAdminController {
         private String platformSkuCode;
         @Schema(description = "L2调价方式：FOLLOW_TEMPLATE（清手工覆盖并继承L1，不读取模板价）/ EQUAL_L1 / CUSTOM，默认 FOLLOW_TEMPLATE")
         private String l2AdjustMode;
-        @Schema(description = "CUSTOM时的整数百分比，100等于L1")
+        @Schema(description = "CUSTOM 时的整数百分比，100 等于当前 L1 结算分；小于 1 返回 L2_OVERRIDE_INVALID。EQUAL_L1 可省略")
         private Integer percent;
-        @Schema(description = "CUSTOM时加减的CNY分")
+        @Schema(description = "CUSTOM 时在百分比结果上加减的金额，单位 CNY 分，可为负；省略按 0。EQUAL_L1 可省略")
         private Long amountCents;
-        @Schema(description = "利润空间低于该百分比时C端隐藏，本批不消费")
+        @Min(0)
+        @Max(100)
+        @Schema(description = "利润空间低于该百分比时 C 端隐藏。0 到 100 的整数；省略则该列落空。本批只落库，不触发隐藏",
+                example = "20")
         private Integer displayThresholdPercent;
+        @Valid
+        @Schema(description = "一并写入的分销商通用定价。省略则只关联并继承商品默认定价；传入时与关联同一事务")
+        private BuyerProductCreatePricingReqVO pricing;
+    }
+
+    @Data
+    @Schema(description = "新增分销商品时的通用定价覆盖。语义与批量保存分销商通用定价相同，不含商品编码")
+    public static class BuyerProductCreatePricingReqVO {
+        @Schema(description = "true时继承商品默认分销价")
+        private boolean distributionInherited;
+        @Valid
+        @Schema(description = "分销价覆盖规则")
+        private FormulaRuleReqVO distributionRule;
+        @Schema(description = "true时继承商品默认销售价")
+        private boolean salesInherited;
+        @Valid
+        @Schema(description = "销售价覆盖规则")
+        private FormulaRuleReqVO salesRule;
+        @Schema(description = "true时继承商品默认服务费")
+        private boolean serviceFeeInherited;
+        @Valid
+        @Schema(description = "服务费覆盖规则")
+        private ServiceFeeRuleReqVO serviceFeeRule;
+        @Schema(description = "true时继承商品默认利润隐藏阈值")
+        private boolean hideInherited;
+        @Schema(description = "分销区利润隐藏阈值百分数，0到100，最多2位小数")
+        private java.math.BigDecimal distributionHideThresholdPercent;
+        @Schema(description = "销售区利润隐藏阈值百分数，0到100，最多2位小数")
+        private java.math.BigDecimal salesHideThresholdPercent;
+        @Schema(description = "true时继承商品默认税务；false时须同时提交 taxIncluded 与 taxRateCode，税务组不完整则自动降级为继承")
+        private boolean taxInherited;
+        @Schema(description = "是否含税；覆盖时须与 taxRateCode 同时提交，任一缺失则整体降级为继承")
+        private Boolean taxIncluded;
+        @Schema(description = "system动态字典supply_chain_tax_rate的启用值；覆盖时须与 taxIncluded 同时提交，缺失则整体降级为继承")
+        private String taxRateCode;
     }
 
     @Data
@@ -506,30 +591,47 @@ public class BuyerAdminController {
         @NotBlank
         @Schema(description = "L2调价方式：FOLLOW_TEMPLATE（清手工覆盖并继承L1，不读取模板价）/ EQUAL_L1 / CUSTOM")
         private String l2AdjustMode;
-        @Schema(description = "CUSTOM时的整数百分比，100等于L1")
+        @Schema(description = "CUSTOM 时的整数百分比，100 等于当前 L1 结算分；小于 1 返回 L2_OVERRIDE_INVALID。非 CUSTOM 可省略")
         private Integer percent;
-        @Schema(description = "CUSTOM时加减的CNY分")
+        @Schema(description = "CUSTOM 时在百分比结果上加减的金额，单位 CNY 分，可为负；省略按 0。非 CUSTOM 可省略")
         private Long amountCents;
-        @Schema(description = "利润空间低于该百分比时C端隐藏，本批不消费")
+        @Min(0)
+        @Max(100)
+        @Schema(description = "利润空间低于该百分比时 C 端隐藏。0 到 100 的整数；省略则不改原值。本批只落库，不触发隐藏",
+                example = "20")
         private Integer displayThresholdPercent;
     }
 
     @Data
-    @Schema(description = "分销商商品L2批量定价请求")
+    @Schema(description = "分销商SKU通用批量定价请求")
     public static class BuyerProductBatchPricingReqVO {
         @NotEmpty
-        @Size(max = 200)
+        @Size(max = GenericBatchPricingService.MAX_BATCH)
         @Schema(description = "当前分销商下的分销商品编码列表", requiredMode = Schema.RequiredMode.REQUIRED)
         private List<@NotBlank String> buyerProductCodes;
-        @NotBlank
-        @Schema(description = "L2调价方式：FOLLOW_TEMPLATE（继承L1）/ EQUAL_L1 / CUSTOM",
-                requiredMode = Schema.RequiredMode.REQUIRED)
-        private String l2AdjustMode;
-        @Schema(description = "CUSTOM时的整数百分比，100等于L1")
-        private Integer percent;
-        @Schema(description = "CUSTOM时加减的CNY分")
-        private Long amountCents;
-        @Schema(description = "利润空间低于该百分比时C端隐藏，本批不消费")
-        private Integer displayThresholdPercent;
+        @Schema(description = "true时继承商品默认分销价")
+        private boolean distributionInherited;
+        @Valid @Schema(description = "分销价覆盖规则")
+        private FormulaRuleReqVO distributionRule;
+        @Schema(description = "true时继承商品默认销售价")
+        private boolean salesInherited;
+        @Valid @Schema(description = "销售价覆盖规则")
+        private FormulaRuleReqVO salesRule;
+        @Schema(description = "true时继承商品默认服务费")
+        private boolean serviceFeeInherited;
+        @Valid @Schema(description = "服务费覆盖规则")
+        private ServiceFeeRuleReqVO serviceFeeRule;
+        @Schema(description = "true时继承商品默认利润隐藏阈值")
+        private boolean hideInherited;
+        @Schema(description = "分销区利润隐藏阈值百分数，0到100，最多2位小数")
+        private BigDecimal distributionHideThresholdPercent;
+        @Schema(description = "销售区利润隐藏阈值百分数，0到100，最多2位小数")
+        private BigDecimal salesHideThresholdPercent;
+        @Schema(description = "true时继承商品默认税务；false时须同时提交 taxIncluded 与 taxRateCode，税务组不完整则自动降级为继承")
+        private boolean taxInherited;
+        @Schema(description = "是否含税；覆盖时须与 taxRateCode 同时提交，任一缺失则整体降级为继承")
+        private Boolean taxIncluded;
+        @Schema(description = "system动态字典supply_chain_tax_rate的启用值；覆盖时须与 taxIncluded 同时提交，缺失则整体降级为继承")
+        private String taxRateCode;
     }
 }

@@ -12,10 +12,12 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BrandMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerListingAvailabilityMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerListingMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuPricingMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSpuMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProductCategoryMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.UnshelveMode;
+import org.springframework.context.ApplicationEventPublisher;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
@@ -39,10 +41,12 @@ import static org.mockito.Mockito.*;
 class ProductBatchStatusTest {
 
     private final SupplyChainDatabaseClock clock = mock(SupplyChainDatabaseClock.class);
+    private final ApplicationEventPublisher eventPublisher = mock(ApplicationEventPublisher.class);
     private final BrandMapper brandMapper = mock(BrandMapper.class);
     private final ProductCategoryMapper categoryMapper = mock(ProductCategoryMapper.class);
     private final PlatformSpuMapper spuMapper = mock(PlatformSpuMapper.class);
     private final PlatformSkuMapper skuMapper = mock(PlatformSkuMapper.class);
+    private final PlatformSkuPricingMapper platformSkuPricingMapper = mock(PlatformSkuPricingMapper.class);
     private final BuyerMapper buyerMapper = mock(BuyerMapper.class);
     private final BuyerListingMapper buyerListingMapper = mock(BuyerListingMapper.class);
     private final BuyerListingAvailabilityMapper availabilityMapper = mock(BuyerListingAvailabilityMapper.class);
@@ -50,15 +54,20 @@ class ProductBatchStatusTest {
     private final BrandAdminService brandAdminService = mock(BrandAdminService.class);
     private final CategoryCommandService categoryCommandService = mock(CategoryCommandService.class);
     private final ProductTypeValidationService productTypeValidationService = mock(ProductTypeValidationService.class);
+    private final ProductClassificationValidationService productClassificationValidationService =
+            new ProductClassificationValidationService(categoryMapper);
     private final ProductSellabilityService sellabilityService = mock(ProductSellabilityService.class);
     private final ProductDeletionValidator deletionValidator = mock(ProductDeletionValidator.class);
     private final FulfillmentTargetSchemaRegistry targetSchemaRegistry = mock(FulfillmentTargetSchemaRegistry.class);
     private final PlatformSkuSchemaRegistry skuSchemaRegistry = new PlatformSkuSchemaRegistry(targetSchemaRegistry);
 
     private final ProductCatalogCommandService service = new ProductCatalogCommandService(
-            clock, brandMapper, categoryMapper, spuMapper, skuMapper, buyerMapper, buyerListingMapper,
-            availabilityMapper, generator, brandAdminService, categoryCommandService,
-            productTypeValidationService, sellabilityService, deletionValidator, targetSchemaRegistry,
+            clock, eventPublisher, brandMapper, categoryMapper, spuMapper, skuMapper, platformSkuPricingMapper,
+            buyerMapper, buyerListingMapper,
+            availabilityMapper, generator,
+            mock(com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService.class),
+            brandAdminService, categoryCommandService,
+            productTypeValidationService, productClassificationValidationService, sellabilityService, deletionValidator, targetSchemaRegistry,
             skuSchemaRegistry);
 
     @BeforeEach

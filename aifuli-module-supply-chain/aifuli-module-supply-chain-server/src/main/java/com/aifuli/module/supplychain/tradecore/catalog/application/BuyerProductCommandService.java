@@ -11,13 +11,19 @@ import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerProductMappe
 import com.aifuli.module.supplychain.tradecore.buyer.domain.BuyerProductStatus;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerProductL2OverrideDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerProductL2OverrideVersionDO;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerSkuPricingDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSettlementPriceDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSettlementPriceVersionDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerProductL2OverrideMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerProductL2OverrideVersionMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerSkuPricingMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceVersionMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericBatchPricingService;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericBatchPricingService.ProjectOverrides;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericPricingCalculator.PricingStatus;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.BuyerProductPricingInitializationEvent;
 import com.aifuli.module.supplychain.tradecore.profile.domain.L2AdjustMode;
 import com.aifuli.module.supplychain.tradecore.profile.domain.PriceSource;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -25,6 +31,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
@@ -36,8 +43,8 @@ import static com.aifuli.framework.common.exception.util.ServiceExceptionUtil.ex
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BUYER_PRODUCT_DUPLICATE;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BUYER_PRODUCT_NOT_FOUND;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BUYER_PROFILE_NOT_FOUND;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.L2_OVERRIDE_INVALID;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PLATFORM_SETTLEMENT_PRICE_MISSING;
-import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.SKU_NOT_SALEABLE;
 
 /**
  * 分销商品命令：从标品关联、复活已移除行、写/清手工 L2；不发布模板、不写账本。
@@ -49,9 +56,12 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
 public class BuyerProductCommandService {
 
     private final SupplyChainDatabaseClock databaseClock;
+    private final ApplicationEventPublisher eventPublisher;
 
     private static final String TRANSACTION_MANAGER = "supplyChainTransactionManager";
     private static final int MAX_BATCH_PRODUCT_COUNT = 200;
+    private static final int MIN_DISPLAY_THRESHOLD_PERCENT = 0;
+    private static final int MAX_DISPLAY_THRESHOLD_PERCENT = 100;
 
     private final BuyerMapper buyerMapper;
     private final BuyerProductMapper productMapper;
@@ -59,9 +69,11 @@ public class BuyerProductCommandService {
     private final PlatformSettlementPriceVersionMapper l1VersionMapper;
     private final BuyerProductL2OverrideMapper overrideMapper;
     private final BuyerProductL2OverrideVersionMapper overrideVersionMapper;
+    private final BuyerSkuPricingMapper buyerPricingMapper;
     private final BusinessNoGenerator businessNoGenerator;
     private final SettlementPriceResolver settlementPriceResolver;
     private final ProductSellabilityService productSellabilityService;
+    private final GenericBatchPricingService genericPricingService;
 
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public List<String> addProducts(String buyerCode, List<ProductLine> lines, Long operatorId) {
@@ -74,7 +86,12 @@ public class BuyerProductCommandService {
         LocalDateTime now = databaseClock.now();
         List<String> codes = new ArrayList<>();
         for (ProductLine line : lines) {
-            codes.add(addOrRevive(buyer, line, operatorId, now));
+            String buyerProductCode = addOrRevive(buyer, line, operatorId, now);
+            codes.add(buyerProductCode);
+            if (line.pricingOverrides() != null) {
+                genericPricingService.saveBuyer(buyerCode, List.of(buyerProductCode),
+                        line.pricingOverrides(), operatorId);
+            }
         }
         return codes;
     }
@@ -85,6 +102,7 @@ public class BuyerProductCommandService {
         log.info("改分销商品L2 buyerCode={} buyerProductCode={} l2AdjustMode={} operatorId={}",
                 buyerCode, buyerProductCode, mode, operatorId);
         BuyerProductDO product = requireLiveProduct(buyerCode, buyerProductCode);
+        requireDisplayThreshold(displayThresholdPercent);
         LocalDateTime now = databaseClock.now();
         if (displayThresholdPercent != null) {
             product.setDisplayThresholdPercent(displayThresholdPercent);
@@ -135,6 +153,7 @@ public class BuyerProductCommandService {
         log.info("批量修改分销商品L2 buyerCode={} productCount={} l2AdjustMode={} operatorId={}",
                 buyerCode, codes.size(), mode, operatorId);
         BuyerDO buyer = requireBuyerForUpdate(buyerCode);
+        requireDisplayThreshold(displayThresholdPercent);
         LocalDateTime now = databaseClock.now();
         L2AdjustMode resolvedMode = mode == null ? L2AdjustMode.FOLLOW_TEMPLATE : mode;
         for (String buyerProductCode : codes) {
@@ -165,7 +184,22 @@ public class BuyerProductCommandService {
         }
     }
 
+    /**
+     * 展示阈值省略表示不设置；传入时必须是 0～100 的整数。本批只落库，不触发 C 端隐藏。
+     * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#63-分销商品}。
+     */
+    private static void requireDisplayThreshold(Integer displayThresholdPercent) {
+        if (displayThresholdPercent == null) {
+            return;
+        }
+        if (displayThresholdPercent < MIN_DISPLAY_THRESHOLD_PERCENT
+                || displayThresholdPercent > MAX_DISPLAY_THRESHOLD_PERCENT) {
+            throw exception(L2_OVERRIDE_INVALID);
+        }
+    }
+
     private String addOrRevive(BuyerDO buyer, ProductLine line, Long operatorId, LocalDateTime now) {
+        requireDisplayThreshold(line.displayThresholdPercent());
         PlatformSkuDO sku = requireActiveSku(line.platformSkuCode());
         BuyerProductDO existing = productMapper.selectByBuyerAndSku(buyer.getId(), sku.getId());
         L2AdjustMode mode = line.l2AdjustMode() == null ? L2AdjustMode.FOLLOW_TEMPLATE : line.l2AdjustMode();
@@ -185,6 +219,8 @@ public class BuyerProductCommandService {
             if (mode != L2AdjustMode.FOLLOW_TEMPLATE) {
                 applyL2Override(existing, sku, mode, line.percent(), line.amountCents(), operatorId, now);
             }
+            ensureUnpricedIdentity(existing.getId(), now);
+            eventPublisher.publishEvent(new BuyerProductPricingInitializationEvent(existing.getId(), operatorId));
             return existing.getBuyerProductCode();
         }
         String code = businessNoGenerator.next(BusinessNoPrefixes.BPD);
@@ -206,7 +242,26 @@ public class BuyerProductCommandService {
             throw exception(BUYER_PRODUCT_DUPLICATE);
         }
         applyL2Override(product, sku, mode, line.percent(), line.amountCents(), operatorId, now);
+        ensureUnpricedIdentity(product.getId(), now);
+        eventPublisher.publishEvent(new BuyerProductPricingInitializationEvent(product.getId(), operatorId));
         return code;
+    }
+
+    /**
+     * 新建或复活分销商品时写入通用定价身份，未配置规则前保持 UNPRICED。
+     * 设计见 {@code docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#1-范围与不变量}。
+     */
+    private void ensureUnpricedIdentity(Long buyerProductId, LocalDateTime now) {
+        if (buyerPricingMapper.selectByBuyerProductId(buyerProductId) != null) {
+            return;
+        }
+        buyerPricingMapper.insert(BuyerSkuPricingDO.builder()
+                .buyerProductId(buyerProductId)
+                .pricingStatus(PricingStatus.UNPRICED.name())
+                .version(0L)
+                .createdAt(now)
+                .updatedAt(now)
+                .build());
     }
 
     /**
@@ -345,8 +400,14 @@ public class BuyerProductCommandService {
         return productSellabilityService.requireSellableById(skuId).sku();
     }
 
+    /**
+     * 关联一行分销商品。{@code pricingOverrides} 为空时只建立目录并初始化继承定价；
+     * 非空时与目录写入处在同一事务，缺少平台默认定价则整单回滚。
+     * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#63-分销商品}。
+     */
     public record ProductLine(String platformSkuCode, L2AdjustMode l2AdjustMode,
-                              Integer percent, Long amountCents, Integer displayThresholdPercent) {
+                              Integer percent, Long amountCents, Integer displayThresholdPercent,
+                              ProjectOverrides pricingOverrides) {
     }
 
     public record L2PricingPreview(

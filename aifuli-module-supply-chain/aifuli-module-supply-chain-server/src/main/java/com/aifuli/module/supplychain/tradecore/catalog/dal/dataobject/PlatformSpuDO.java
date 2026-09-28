@@ -23,6 +23,8 @@ public class PlatformSpuDO {
     @TableId(type = IdType.AUTO)
     private Long id;
     private String spuCode;
+    /** 平台SPU内部全局短序号，供SKU编码父段引用 */
+    private Short codeScopeNo;
     private Long brandId;
     /** 平台主类目主键，逻辑引用sc_product_category.id（历史字段，主数据保留，不用于供货命中或加购筛选） */
     private Long primaryCategoryId;
@@ -30,7 +32,7 @@ public class PlatformSpuDO {
     private String sellableCategory;
     /** 启用商品类型编码，来源sc_product_type，供货命中用 */
     private String productType;
-    /** 商品分类封闭枚举，见ProductClassification，供货命中用 */
+    /** 商品分类供货命中码：ProductClassification枚举名或sc_product_category.category_code */
     private String productClassification;
     /** 辅助/扩展分类ID列表(JSON数组) */
     @TableField(typeHandler = JacksonTypeHandler.class)
@@ -49,6 +51,8 @@ public class PlatformSpuDO {
     private String unshelveMode;
     /** 配送履约模式：VIRTUAL虚拟发货, EXPRESS物流快递, PICKUP自提核销 */
     private String deliveryType;
+    /** 履约类型：DIRECT_RECHARGE直充，VOUCHER_CODE券码，CARD_CODE_SECRET卡号卡密，VOUCHER_URL券链接，ACCOUNT_BOUND_BENEFIT账户绑定权益 */
+    private String fulfillmentType;
     /** SPU默认单次最低起购量 */
     private Long minQuantity;
     /** SPU默认单次最高限购量 */

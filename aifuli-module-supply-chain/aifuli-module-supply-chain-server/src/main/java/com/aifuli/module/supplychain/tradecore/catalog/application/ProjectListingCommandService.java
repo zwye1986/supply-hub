@@ -15,19 +15,17 @@ import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerProjectMappe
 import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.ProjectListingMapper;
 import com.aifuli.module.supplychain.tradecore.buyer.domain.BuyerProductStatus;
 import com.aifuli.module.supplychain.tradecore.buyer.domain.ProjectListingStatus;
-import com.aifuli.module.supplychain.tradecore.catalog.application.SettlementPriceResolver.ResolvedPrice;
-import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerProductL2OverrideDO;
-import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerProductL2OverrideVersionDO;
-import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSettlementPriceDO;
-import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSettlementPriceVersionDO;
+import com.aifuli.module.supplychain.tradecore.catalog.application.ProjectListingPriceSource.PriceBasis;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProjectListingVersionDO;
-import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerProductL2OverrideMapper;
-import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerProductL2OverrideVersionMapper;
-import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceMapper;
-import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceVersionMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProjectSkuPricingDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProjectListingVersionMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProjectSkuPricingMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericPricingCalculator.PricingStatus;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericBatchPricingService;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericBatchPricingService.ProjectOverrides;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.ProjectListingPricingInitializationEvent;
 import com.aifuli.module.supplychain.tradecore.profile.domain.L3AdjustMode;
 import com.aifuli.module.supplychain.tradecore.profile.domain.ListingPriceSource;
 import com.aifuli.module.supplychain.tradecore.profile.domain.PriceSource;
@@ -36,6 +34,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
@@ -59,6 +58,7 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
 public class ProjectListingCommandService {
 
     private final SupplyChainDatabaseClock databaseClock;
+    private final ApplicationEventPublisher eventPublisher;
 
     private static final String TRANSACTION_MANAGER = "supplyChainTransactionManager";
     private static final int MAX_BATCH_LISTING_COUNT = 200;
@@ -69,12 +69,11 @@ public class ProjectListingCommandService {
     private final PlatformSkuMapper skuMapper;
     private final ProjectListingMapper listingMapper;
     private final ProjectListingVersionMapper listingVersionMapper;
-    private final PlatformSettlementPriceMapper l1Mapper;
-    private final PlatformSettlementPriceVersionMapper l1VersionMapper;
-    private final BuyerProductL2OverrideMapper overrideMapper;
-    private final BuyerProductL2OverrideVersionMapper overrideVersionMapper;
+    private final ProjectSkuPricingMapper projectPricingMapper;
+    private final ProjectListingPriceSource priceSource;
     private final BusinessNoGenerator businessNoGenerator;
     private final SettlementPriceResolver settlementPriceResolver;
+    private final GenericBatchPricingService genericPricingService;
 
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public List<String> addProducts(String projectCode, List<ListingLine> lines, Long operatorId) {
@@ -92,7 +91,15 @@ public class ProjectListingCommandService {
         LocalDateTime now = databaseClock.now();
         List<String> codes = new ArrayList<>();
         for (ListingLine line : lines) {
-            codes.add(addOrRevive(project, line, operatorId, now));
+            if (line.pricingOverrides() != null && line.l3AdjustMode() != null
+                    && line.l3AdjustMode() != L3AdjustMode.FOLLOW_L2) {
+                throw new IllegalArgumentException("行内通用定价不能与旧 L3 调价同时提交");
+            }
+            String listingCode = addOrRevive(project, line, operatorId, now);
+            codes.add(listingCode);
+            if (line.pricingOverrides() != null) {
+                genericPricingService.saveProject(projectCode, List.of(listingCode), line.pricingOverrides(), operatorId);
+            }
         }
         return codes;
     }
@@ -127,17 +134,19 @@ public class ProjectListingCommandService {
             if (sku == null) {
                 throw exception(PROJECT_SKU_NOT_IN_BUYER_CATALOG);
             }
-            Long l1 = loadL1Cents(product.getPlatformSkuId());
-            Long l2Override = loadOverrideCents(product.getId());
-            ResolvedPrice l2 = settlementPriceResolver.resolve(null, l2Override, l1);
+            PriceBasis basis = priceSource.resolve(product);
+            if (basis.distributionCents() == null || basis.distributionSource() == null
+                    || basis.generic() && basis.platformBaseCents() == null) {
+                throw exception(PLATFORM_SETTLEMENT_PRICE_MISSING);
+            }
             ProjectListingVersionDO currentVersion = listing.getCurrentVersionId() == null ? null
                     : listingVersionMapper.selectById(listing.getCurrentVersionId());
             if (currentVersion == null) {
                 throw exception(PROJECT_LISTING_NOT_FOUND);
             }
-            FrozenPrice preview = freeze(product, resolvedMode, percent, amountCents);
-            previews.add(new L3PricingPreview(listing.getListingCode(), sku.getSkuCode(), l1,
-                    l2.unitPriceCents(), l2.source(), currentVersion.getBuyerSettlementUnitPrice(),
+            FrozenPrice preview = freeze(basis, resolvedMode, percent, amountCents);
+            previews.add(new L3PricingPreview(listing.getListingCode(), sku.getSkuCode(), basis.platformBaseCents(),
+                    basis.distributionCents(), basis.distributionSource(), currentVersion.getBuyerSettlementUnitPrice(),
                     PriceSource.valueOf(currentVersion.getSettlementPriceLevel()),
                     preview.unitPriceCents(), preview.level()));
         }
@@ -187,6 +196,8 @@ public class ProjectListingCommandService {
             existing.setUpdatedBy(operatorId);
             existing.setUpdatedAt(now);
             publishVersion(existing, product, mode, line.percent(), line.amountCents(), operatorId, now);
+            ensureUnpricedIdentity(existing.getId(), now);
+            eventPublisher.publishEvent(new ProjectListingPricingInitializationEvent(existing.getId(), operatorId));
             return existing.getListingCode();
         }
         String code = businessNoGenerator.next(BusinessNoPrefixes.PLT);
@@ -212,15 +223,37 @@ public class ProjectListingCommandService {
             raced.setUpdatedBy(operatorId);
             raced.setUpdatedAt(now);
             publishVersion(raced, product, mode, line.percent(), line.amountCents(), operatorId, now);
+            ensureUnpricedIdentity(raced.getId(), now);
+            eventPublisher.publishEvent(new ProjectListingPricingInitializationEvent(raced.getId(), operatorId));
             return raced.getListingCode();
         }
         publishVersion(listing, product, mode, line.percent(), line.amountCents(), operatorId, now);
+        ensureUnpricedIdentity(listing.getId(), now);
+        eventPublisher.publishEvent(new ProjectListingPricingInitializationEvent(listing.getId(), operatorId));
         return code;
     }
 
     /**
+     * 新建或复活项目商品时写入通用定价身份，未配置规则前保持 UNPRICED。
+     * 设计见 {@code docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#1-范围与不变量}。
+     */
+    private void ensureUnpricedIdentity(Long listingId, LocalDateTime now) {
+        if (projectPricingMapper.selectByListingId(listingId) != null) {
+            return;
+        }
+        projectPricingMapper.insert(ProjectSkuPricingDO.builder()
+                .listingId(listingId)
+                .pricingStatus(PricingStatus.UNPRICED.name())
+                .version(0L)
+                .createdAt(now)
+                .updatedAt(now)
+                .build());
+    }
+
+    /**
      * 同一本地事务插入不可变 version 并切换 current_version_id；FOLLOW_L2 不写 L3，EQUAL_L1/CUSTOM 为项目覆盖。
-     * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#8-定价解析本批管理端}。
+     * 价格输入以当前分销商通用版本为准，仅历史行回退旧链。
+     * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#72-项目商品}。
      */
     private void publishVersion(ProjectListingDO listing, BuyerProductDO product, L3AdjustMode mode,
                                 Integer percent, Long amountCents, Long operatorId, LocalDateTime now) {
@@ -251,17 +284,29 @@ public class ProjectListingCommandService {
     }
 
     private FrozenPrice freeze(BuyerProductDO product, L3AdjustMode mode, Integer percent, Long amountCents) {
-        Long l1 = loadL1Cents(product.getPlatformSkuId());
-        Long l2Override = loadOverrideCents(product.getId());
-        if (mode == L3AdjustMode.FOLLOW_L2) {
-            settlementPriceResolver.applyL3(mode, l1 == null ? 0L : l1, percent, amountCents);
-            ResolvedPrice resolved = settlementPriceResolver.resolve(null, l2Override, l1);
-            return new FrozenPrice(resolved.unitPriceCents(), resolved.source(), ListingPriceSource.INHERITED);
-        }
-        if (l1 == null) {
+        return freeze(priceSource.resolve(product), mode, percent, amountCents);
+    }
+
+    /**
+     * 试算复用已读取的同一组版本输入，避免在一次请求里混合两次读取结果。
+     * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#72-项目商品}。
+     */
+    private FrozenPrice freeze(PriceBasis basis, L3AdjustMode mode, Integer percent, Long amountCents) {
+        if (basis.generic() && (basis.platformBaseCents() == null || basis.distributionCents() == null)) {
             throw exception(PLATFORM_SETTLEMENT_PRICE_MISSING);
         }
-        Long l3 = settlementPriceResolver.applyL3(mode, l1, percent, amountCents);
+        if (mode == L3AdjustMode.FOLLOW_L2) {
+            settlementPriceResolver.applyL3(mode, basis.platformBaseCents() == null ? 0L : basis.platformBaseCents(),
+                    percent, amountCents);
+            if (basis.distributionCents() == null || basis.distributionSource() == null) {
+                throw exception(PLATFORM_SETTLEMENT_PRICE_MISSING);
+            }
+            return new FrozenPrice(basis.distributionCents(), basis.distributionSource(), ListingPriceSource.INHERITED);
+        }
+        if (basis.platformBaseCents() == null) {
+            throw exception(PLATFORM_SETTLEMENT_PRICE_MISSING);
+        }
+        Long l3 = settlementPriceResolver.applyL3(mode, basis.platformBaseCents(), percent, amountCents);
         return new FrozenPrice(l3, PriceSource.L3, ListingPriceSource.PROJECT_OVERRIDE);
     }
 
@@ -338,32 +383,15 @@ public class ProjectListingCommandService {
         return List.copyOf(normalized);
     }
 
-    private Long loadL1Cents(Long skuId) {
-        if (skuId == null) {
-            return null;
-        }
-        PlatformSettlementPriceDO identity = l1Mapper.selectById(skuId);
-        if (identity == null || identity.getCurrentVersionId() == null) {
-            return null;
-        }
-        PlatformSettlementPriceVersionDO version = l1VersionMapper.selectById(identity.getCurrentVersionId());
-        return version == null ? null : version.getUnitPriceCents();
-    }
-
-    private Long loadOverrideCents(Long buyerProductId) {
-        BuyerProductL2OverrideDO identity = overrideMapper.selectByBuyerProductId(buyerProductId);
-        if (identity == null || identity.getCurrentVersionId() == null) {
-            return null;
-        }
-        BuyerProductL2OverrideVersionDO version = overrideVersionMapper.selectById(identity.getCurrentVersionId());
-        return version == null ? null : version.getResolvedUnitPriceCents();
-    }
-
     private record FrozenPrice(long unitPriceCents, PriceSource level, ListingPriceSource listingSource) {
     }
 
+    /** 行内定价覆盖与目录发布同事务保存；设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#72-项目商品}。 */
     public record ListingLine(String platformSkuCode, L3AdjustMode l3AdjustMode,
-                              Integer percent, Long amountCents) {
+                              Integer percent, Long amountCents, ProjectOverrides pricingOverrides) {
+        public ListingLine(String platformSkuCode, L3AdjustMode l3AdjustMode, Integer percent, Long amountCents) {
+            this(platformSkuCode, l3AdjustMode, percent, amountCents, null);
+        }
     }
 
     public record L3PricingPreview(

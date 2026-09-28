@@ -3,6 +3,7 @@ package com.aifuli.module.supplychain.tradecore.supply.application;
 import com.aifuli.framework.common.pojo.PageParam;
 import com.aifuli.framework.common.pojo.PageResult;
 import com.aifuli.module.supplychain.infrastructure.security.EnvelopeCryptoPort;
+import com.aifuli.module.supplychain.tradecore.catalog.application.CategoryQueryService;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierProfileQueryService.DeliveryRegionView;
@@ -22,16 +23,25 @@ import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierSettleme
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierSupplyScopeMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierSupplyScopeModeMapper;
 import com.aifuli.module.supplychain.tradecore.supply.domain.SupplierStatus;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.MybatisConfiguration;
+import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
+import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentMatchers;
+import org.mockito.ArgumentCaptor;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -47,16 +57,19 @@ class SupplierProfileQueryServiceTest {
     private final SupplierSupplyScopeModeMapper modeMapper = mock(SupplierSupplyScopeModeMapper.class);
     private final SupplierOfferMapper offerMapper = mock(SupplierOfferMapper.class);
     private final PlatformSkuMapper platformSkuMapper = mock(PlatformSkuMapper.class);
+    private final CategoryQueryService categoryQueryService = mock(CategoryQueryService.class);
     private SupplierProfileQueryService service;
 
     @BeforeEach
     void setUp() {
+        TableInfoHelper.initTableInfo(new MapperBuilderAssistant(new MybatisConfiguration(), ""), SupplierDO.class);
+        when(categoryQueryService.resolveCategoryIdsByCodes(anyCollection())).thenReturn(Map.of());
         service = new SupplierProfileQueryService(
                 supplierMapper, contactMapper, mock(SupplierDeliveryRegionMapper.class),
                 scopeMapper, modeMapper, offerMapper, platformSkuMapper, mock(SupplierSettlementAccountMapper.class),
                 mock(com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierFileRefMapper.class),
                 mock(com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierIntegrationModeMapper.class),
-                mock(EnvelopeCryptoPort.class));
+                mock(EnvelopeCryptoPort.class), categoryQueryService);
     }
 
     @Test
@@ -144,6 +157,62 @@ class SupplierProfileQueryServiceTest {
         assertThat(views.getFirst().productClassification()).isEqualTo("VIRTUAL_CARD");
     }
 
+    /**
+     * 封闭枚举名的供货配置行：categoryId 必须为 null，且不进入类目批量解析。
+     * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#54-供货配置}。
+     */
+    @Test
+    void listSupplyScopesKeepsCategoryIdNullForClosedEnumName() {
+        SupplierDO supplier = SupplierDO.builder()
+                .id(1L).supplierCode("SPL_SCOPE").supplierName("范围供应商")
+                .status(SupplierStatus.ACTIVE.getCode()).build();
+        when(supplierMapper.selectByCode("SPL_SCOPE")).thenReturn(supplier);
+        stubListItem(supplier, 101L, "API_DIRECT");
+        when(modeMapper.selectByScopeIds(any())).thenReturn(List.of());
+
+        var views = service.listSupplyScopes("SPL_SCOPE");
+
+        assertThat(views.getFirst().categoryId()).isNull();
+        verify(categoryQueryService).resolveCategoryIdsByCodes(java.util.Set.of());
+    }
+
+    /**
+     * productClassification 为类目编码的供货配置行：categoryId 回填 sc_product_category 内部主键；
+     * 归档类目（归档即视为不可回显）与未知编码不在解析结果中，按 null 兜底。
+     */
+    @Test
+    void listSupplyScopesResolvesCategoryIdByCategoryCode() {
+        SupplierDO supplier = SupplierDO.builder()
+                .id(1L).supplierCode("SPL_CAT").supplierName("类目供应商")
+                .status(SupplierStatus.ACTIVE.getCode()).build();
+        when(supplierMapper.selectByCode("SPL_CAT")).thenReturn(supplier);
+        when(scopeMapper.selectBySupplierId(1L)).thenReturn(List.of(
+                SupplierSupplyScopeDO.builder().id(101L).supplierId(1L)
+                        .sellableCategory("EQUITY").productType("VIP")
+                        .productClassification("C_ACTIVE").build(),
+                SupplierSupplyScopeDO.builder().id(102L).supplierId(1L)
+                        .sellableCategory("EQUITY").productType("VIP")
+                        .productClassification("C_ARCHIVED").build(),
+                SupplierSupplyScopeDO.builder().id(103L).supplierId(1L)
+                        .sellableCategory("EQUITY").productType("VIP")
+                        .productClassification("C_MISSING").build(),
+                SupplierSupplyScopeDO.builder().id(104L).supplierId(1L)
+                        .sellableCategory("EQUITY").productType("VIP")
+                        .productClassification("C_ACTIVE").build()));
+        when(modeMapper.selectByScopeIds(any())).thenReturn(List.of());
+        when(categoryQueryService.resolveCategoryIdsByCodes(anyCollection()))
+                .thenReturn(Map.of("C_ACTIVE", 10L));
+
+        var views = service.listSupplyScopes("SPL_CAT");
+
+        assertThat(views).hasSize(4);
+        assertThat(views.get(0).categoryId()).isEqualTo(10L);
+        assertThat(views.get(1).categoryId()).isNull();
+        assertThat(views.get(2).categoryId()).isNull();
+        assertThat(views.get(3).categoryId()).isEqualTo(10L);
+        verify(categoryQueryService, times(1)).resolveCategoryIdsByCodes(anyCollection());
+    }
+
     @Test
     void simpleViewReturnsCodeAndNameOnly() {
         when(supplierMapper.selectList(any())).thenReturn(List.of(
@@ -155,6 +224,12 @@ class SupplierProfileQueryServiceTest {
         assertThat(items).containsExactly(
                 new SimpleSupplierItem("SPL_A", "甲供应商"),
                 new SimpleSupplierItem("SPL_B", "乙供应商"));
+
+        ArgumentCaptor<LambdaQueryWrapper<SupplierDO>> wrapperCaptor = ArgumentCaptor.forClass(LambdaQueryWrapper.class);
+        verify(supplierMapper).selectList(wrapperCaptor.capture());
+        assertThat(wrapperCaptor.getValue().getSqlSegment()).contains("status");
+        assertThat(wrapperCaptor.getValue().getParamNameValuePairs().values())
+                .contains(SupplierStatus.ACTIVE.getCode());
     }
 
     private void stubListItem(SupplierDO supplier, Long scopeId, String supplyMode) {

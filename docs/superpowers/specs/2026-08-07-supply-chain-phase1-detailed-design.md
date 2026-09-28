@@ -890,7 +890,7 @@ Lifecycle、Facade、集成测试与 Outbox/Timer 处理器必须共用下列领
 | --- | --- | --- |
 | `AcceptanceReceiptStatus` | `border.fulfillment.domain` | `PROCESSING=0（处理中）`、`ORDER_CREATED=10（已创建采购方订单）`、`REJECTED_FINAL=30（边界最终拒绝）`；不存在可重开状态 |
 | `BuyerOrderStatus` | `border.order.domain` | `FULFILLING=10（履约中）`、`SUCCEEDED=30（采购方订单成功）`、`FAILED=40（采购方订单失败）`、`MANUAL=90（自动流程无法收敛）` |
-| `FulfillmentRequestStatus` | `border.fulfillment.domain` | `ACCEPTED=10（已受理）`、`FULFILLING=20（履约中）`、`SUCCEEDED=30（已交付）`、`FAILED=40（候选耗尽）`、`MANUAL=90（等待受控恢复）` |
+| `FulfillmentRequestStatus` | `border.fulfillment.domain` | `PENDING_ROUTING=0（待路由）`、`ROUTING=10（路由中）`、`FULFILLING=20（履约中）`、`SUCCEEDED=40（已交付）`、`FAILED=50（候选耗尽）`、`MANUAL=90（等待受控恢复）`；码值与 `sc_fulfillment_request.status` CHECK/COMMENT 一致 |
 | `SupplierOrderStatus` | `border.order.domain` | `PENDING=0（待执行）`、`PROCESSING=10（供应商处理中）`、`RESULT_UNKNOWN=20（结果未知）`、`SUCCEEDED=30（供应商事实成功）`、`FAILED=40（供应商权威失败）`、`MANUAL=90（自动流程无法收敛）` |
 | `BuyerOrderFailureStage` | `border.order.domain` | `BUYER_VALIDATION`、`LISTING_VALIDATION`、`REQUEST_VALIDATION`、`FUND_RESERVATION`、`ROUTING`、`SUPPLIER_FULFILLMENT` |
 | `BuyerOrderFailureCode` | `border.order.domain` | `BUYER_SUSPENDED`、`LISTING_VERSION_EXPIRED`、`QUANTITY_NOT_SUPPORTED`、`INVALID_TARGET`、`BUYER_ACCOUNT_NOT_OPENED`、`BUYER_BALANCE_INSUFFICIENT`（二期恢复余额门槛前不受理/预下单抛出）、`NO_ROUTABLE_SUPPLIER`、`ALL_SUPPLIERS_FAILED` 等稳定编码 |
@@ -900,7 +900,7 @@ Lifecycle、Facade、集成测试与 Outbox/Timer 处理器必须共用下列领
 | `SupplierOrderOperationKind` | `border.order.domain` | `FULFILL`、`QUERY_ORDER`、`QUERY_ASSET`、`VOID_ASSET`、`UNBIND_ASSET` |
 | `SupplierOrderOperationStatus` | `border.order.domain` | `PENDING=0（待执行）`、`CLAIMED=10（已认领）`、`EXECUTING=20（执行中）`、`RESULT_UNKNOWN=30（结果未知）`、`SUCCEEDED=40（操作成功）`、`FAILED=50（操作明确失败）`、`MANUAL=90（停止自动执行）` |
 | `FulfillmentAssetStatus` | `border.fulfillment.domain` | `AVAILABLE=10（可交付）`、`DELIVERED=20（已交付）`、`VOIDED=30（已作废）`、`UNBOUND=40（已解绑）`、`EXPIRED=50（已过期）`、`QUARANTINED=90（隔离且不可向采购方交付）` |
-| `FulfillmentExceptionCaseStatus` | `border.order.domain` | `OPEN=0（风险未收敛）`、`RESOLVED=10（风险已受控处置）`；不是审批状态 |
+| `FulfillmentExceptionCaseStatus` | `border.fulfillment.domain` | `OPEN=0（待处置）`、`PROCESSING=10（处置中）`、`RESOLVED=20（已解决）`、`CLOSED=30（已关闭）`；与 `sc_fulfillment_exception_case.status` CHECK 一致 |
 | `FulfillmentTargetSchemaCode` 及目标字段封闭值 | `border.fulfillment.domain` | Schema：`DIRECT_RECHARGE_TARGET`、`ACCOUNT_BOUND_BENEFIT_TARGET`、`VOUCHER_DELIVERY_TARGET`；`accountType`：`MOBILE`/`EXTERNAL_ACCOUNT`；`deliveryMode`：`BUYER_ASSET_QUERY` |
 | `RoutingType` / `RoutingSubjectType` / `RoutingDecisionStatus` | `routing.domain` | 类型：`STANDARD_PRODUCT`/`SCENARIO`；主体：`STANDARD_REQUEST`/`SCENARIO_REQUEST`；决策：`SELECTED=10`、`NO_CANDIDATE=20`、`CONFLICT=30` |
 | `RoutingRecordDecisionCode` | `routing.domain` | 候选记录：`SELECTED`、`ELIGIBLE_NOT_SELECTED`（淘汰原因仍可来自引擎动态列表） |
@@ -979,6 +979,57 @@ valid_from, valid_until, lifecycle_status, version
 
 `FulfillmentWorkflowPort` 根据已完成 Operation 规划下一协议步骤，`OperationExecutorPort` 执行一个不可变 Operation ticket 并返回标准结果。简单协议复用单步骤 Workflow；ELEMO 的“创建任务→发权益”和 TAO_BAO 的“创建订单→取卡密”只增加 Adapter Workflow，不增加订单表。Operation 是恢复真相，CallLog 只是每次网络尝试的脱敏传输审计，PersistentTimer 只负责可靠唤醒。
 
+#### 7.3.1 OperationExecutorPort 契约模型
+
+`OperationExecutorPort` 位于供应链履约域（`border.fulfillment.domain`），定义统一的领域出站调用端口：
+
+```java
+public interface OperationExecutorPort {
+    boolean supports(String adapterType);
+    OperationOutcome execute(OperationTicket ticket);
+}
+```
+
+1. **不可变输入凭据 `OperationTicket`**：
+   - 标识信息：`operationNo`、`bOrderNo`、`billno`（稳定业务单号）、`externalOrderNo`、`idempotencyKey`、`traceId`。
+   - 步骤与能力：`operationKind`（`FULFILL/QUERY_ORDER/...`）、`adapterStepCode`（`SEND/SEND_KM/...`）、`sequenceNo`。
+   - 标品与充值目标：`externalSkuCode`（供应商商品编码/`productid`）、`quantity`（固定1）、`rechargeAccount`（明文充值账号）、`targetSchemaCode`、`callbackUrl`。
+   - 配置与通信：`supplierCode`、`adapterType`、`baseUrl`、`merchantAccount`、`secretKey`（通信密钥，禁止日志明文记录）、`timeoutSeconds`、`checkpointPayload`、`extraParameters`。
+2. **标准化输出结果 `OperationOutcome`**：
+   - 结果分类：`outcomeClass`（`ACCEPTED/SUCCEEDED/PARTIALLY_SUCCEEDED/REJECTED/NOT_FOUND/RESULT_UNKNOWN/MANUAL_REQUIRED`）。
+   - 外部业务事实：`externalOrderNo`（供应商订单号/`orderSn`）、`reportedSettlementAmount`（报告结算金额/`sumPrice`，单位分）、`externalErrorCode`、`externalErrorMessage`。
+   - 资产事实：`List<OperationAssetFact>`（包含 `assetType`、`externalAssetId`、`cardNo`、`cardSecret`、`validFrom`、`validUntil` 等）。
+   - 观测与审计事实：`rawObservation`（`RawObservationFact`）、`callDigest`（`CallDigestFact`）。
+   - 状态隔离不变量：Adapter 仅返回上述类型化事实，严禁在适配器内部直接持久化订单表或操作账本。
+
+#### 7.3.2 Task 11 任务执行器接入状态机推进与资产资金闭环
+
+1. **Outbox 派发处理器补齐**：
+   - `SupplyChainOrderEventDispatchHandler`：处理目标 `supply-chain-order-event`（`FulfillmentOutboxCodes.TARGET_SUPPLY_CHAIN_ORDER_EVENT`），消费中台订单状态变更事件（如 `SUPPLY_CHAIN_ORDER_CHANGED`），记录结构化日志；
+   - `BuyerEventRpcDispatchHandler`：处理目标 `buyer-event-rpc`（`FulfillmentOutboxCodes.TARGET_BUYER_EVENT_RPC`），消费采购商事件（如 `BUYER_ORDER_SUMMARY_CHANGED`、`O2O_ORDER_SUMMARY_CHANGED`、`INSTORE_ORDER_SUMMARY_CHANGED`），解耦采购商异步 RPC 通知，消除 Outbox 派发引擎抛出 `No OutboxDispatchHandler for targetName` 的崩溃隐患。
+
+2. **履约操作执行器 `FulfillmentOperationExecuteHandler`**：
+   - 实现 `PersistentTimerHandler`，消费 `FulfillmentTimerTaskTypes.OPERATION_EXECUTE`；
+   - 幂等保护：若 Operation 已处于终态（40 SUCCEEDED / 50 FAILED / 90 MANUAL），直接跳过返回；若已为 `RESULT_UNKNOWN=30` 或 `EXECUTING=20`，本切片禁止再次 `/GameOrder/Send`，等待 Task 12 查单恢复；
+   - 加载依赖：从数据库装配 BOrder、Operation、FulfillmentRequest、SupplyChainOrder、Supplier 档案与已发布连接器版本配置；
+   - 凭证解析与账号解密：通过 `CredentialProvider` 解析供应商通信密钥；使用 `EnvelopeCryptoPort` 对称解密 `targetCiphertext` 提取目标手机号或账号。**解密失败或密文无法解析出账号必须失败关闭**：不得外呼供应商，立即 `transition(MANUAL_REQUIRED)`；
+   - 短事务 claim：仅当 Operation 为 `PENDING=0` 或 `CLAIMED=10` 时 CAS 推进为 `EXECUTING=20`，claim 成功后才允许事务外调用适配器（§14）；claim 失败则跳过外呼；
+   - 组装不可变 `OperationTicket`：`timeoutSeconds` 默认 10（与 OkHttp 读/写 10s、连接 5s 对齐，禁止默认 15s 覆盖读超时）；`callbackUrl`=`aifuli.supply-chain.fulfillment.public-callback-base-url` + ConnectorVersion.`callbackPath`，作为 QNM `notifyurl`；
+   - 调用 `OperationExecutorPort.execute(ticket)`，将 `OperationOutcome` 交给 `SupplierOrderLifecycle.transition`。
+
+3. **供应商订单生命周期 `SupplierOrderLifecycle`**：
+   - 短事务与 CAS 乐观锁：在 `@Transactional(transactionManager = "supplyChainTransactionManager")` 中加锁/条件更新 BOrder 与 Operation；
+   - 状态机收敛：
+     - **权威成功（`SUCCEEDED`）**：Operation 状态更新为 40（SUCCEEDED），BOrder 状态更新为 40（SUCCEEDED），`active_flag` 设为 NULL，`completed_at` 设为当前时间，更新结算金额并标记 `settlement_status=10（已匹配）`；FulfillmentRequest 状态更新为 40（SUCCEEDED）；通过 `CardOrderSummaryPolicy` 推进总订单为 30（SUCCEEDED）、业务阶段为 `CARD_FULFILLED`；追加写入 `sc_order_status_log` 审计日志；调用 `fundReservationService.commitByReference` 实扣预冻结资金；将交付资产写入 `sc_fulfillment_asset`（`lifecycle_status=AVAILABLE=10`）；同步追加 `sc_fulfillment_call_log` 与 `sc_raw_status_observation`（只存摘要，禁止明文卡密）；
+     - **权威成功但卡密为空（SEND_KM）**：BOrder/Operation 仍标记供应商权威成功并 `commit` 一次资金；FulfillmentRequest 与 BuyerOrder 进入 MANUAL；写入 `sc_fulfillment_exception_case`（`reason_code=QNM_ASSET_MISSING_AFTER_SUCCESS`，活动 Case 唯一键 `(operation_id, active_case_flag)`），订单状态日志 `reasonCode=QNM-ASSET-RECOVERY-001`；
+     - **权威失败（`REJECTED`）**：Operation 状态更新为 50（FAILED），BOrder 状态更新为 50（FAILED），`active_flag` 设为 NULL，`completed_at` 设为当前时间；M1 阶段单候选耗尽，FulfillmentRequest 状态更新为 50（FAILED）；通过 `CardOrderSummaryPolicy` 推进总订单为 40（FAILED）、业务阶段为 `CARD_FAILED`；追加写入 `sc_order_status_log` 审计日志；调用 `fundReservationService.releaseByReference` 释放预冻结资金；
+     - **结果未知（`RESULT_UNKNOWN`）**：Operation 状态更新为 30（RESULT_UNKNOWN），递增 `attempt_count`，设置 `next_recover_at`；BOrder 状态保持 20（查询中 / RESULT_UNKNOWN）；总订单与资金保持不变，返回 `RESULT_UNKNOWN` 由 PersistentTimer 等待查单或重试。
+
+4. **敏感履约资产加密入库与授权查询**：
+   - 持久化模型：`FulfillmentAssetDO` 与 `FulfillmentAssetMapper` 映射 `sc_fulfillment_asset` 表；
+   - 卡密信封加密与指纹计算：调用 `EnvelopeCryptoPort.encrypt` 对卡密明文进行 AES-GCM 信封加密，附加 `associatedData` 防止跨订单串改；调用 `HmacFingerprintPort.fingerprint` 生成 HMAC SHA-256 指纹保证供应商维度卡密去重；
+   - 授权解密查询：`BuyerFulfillmentQueryApi.getFulfillmentAssets` 入口由 `BuyerFulfillmentQueryFacade` 做非空校验后委派至 `BuyerFulfillmentQueryService`；必须同时校验采购商、`buyerUserId` 所有权和请求声明的 `FULFILLMENT_ASSET_READ` scope（缺省或其它 scope 拒绝并写审计 `result_status=20`）；只返回 `lifecycle_status∈{AVAILABLE=10, DELIVERED=20}` 的资产，隔离态 `QUARANTINED=90` 不得暴露；解密失败写审计 `result_status=30` 并失败关闭。
+
 ### 7.4 FulfillmentExceptionCase 与奇那梦卡密恢复
 
 `sc_fulfillment_exception_case` 是履约风险事实工单，不是订单或审批流。它以 `case_no/exception_key` 唯一，保存 BuyerOrder、FulfillmentRequest、SupplierOrder、可选 Operation、异常类型、证据、解决说明和时间。状态只允许 `OPEN/RESOLVED`。稳定幂等键为 `RECOVER_ASSET:{supplierOrderId}`、`LATE_SUCCESS_AFTER_FAILOVER:{supplierOrderId}`、`DUPLICATE_SUPPLIER_SUCCESS:{buyerOrderId}:{supplierOrderId}`、`LATE_SUCCESS_AFTER_RELEASE:{supplierOrderId}`；重复回调只追加观察和调用审计。
@@ -1021,7 +1072,7 @@ RoutingDecision decide(
 
 标准候选配置只绑定 Supplier，不绑定报价版本；运行时按 Buyer、PlatformSKU、数量和业务时间解析唯一适用的 SupplierOfferVersion，使报价正常发布不必同步重发路由策略。场景路由不依赖中台 PlatformSKU、SupplierOffer、菜品、影片、场次或座位。
 
-一期实现 `STANDARD_PRODUCT` 路由；奇那梦也必须通过该路由模块选出，不能由业务代码硬编码。本期保持现有规则维度和静态优先级（`candidatePriority` → `supplierCode` → `offerId`，原因码 `SELECTED_BY_STABLE_PRIORITY`），不物化四级配置组，不启用 `PRICE_ASC`、综合权重、稳定性/时效评分、自动学习、表达式 DSL 或拆量路由。`SCENARIO` 表保留但不建设应用服务；淘宝闪购与大润发继续使用渠道绑定的固定商户，不进入标准商品路由。边界见[《供应链中台 PRD 一期范围对齐》§7](./2026-09-12-supply-chain-prd-scope-alignment-design.md#7-路由)。
+一期实现 `STANDARD_PRODUCT` 路由；奇那梦也必须通过该路由模块选出，不能由业务代码硬编码。本期保持现有规则维度和静态优先级（`candidatePriority` → `supplierCode` → `offerId`，原因码 `SELECTED_BY_STABLE_PRIORITY`），不物化四级配置组，不启用 `PRICE_ASC`、综合权重、自动学习、表达式 DSL 或拆量路由。稳定性/时效评分允许运营人工写在 `sc_supplier_offer` 身份列，作为预备输入；`SupplierRoutingEngine` 本期不读这些分，`routing.domain` 不引入分数字段。挂点契约见[《合作商品履约能力评分》](./2026-09-21-offer-fulfillment-score-design.md)。`SCENARIO` 表保留但不建设应用服务；淘宝闪购与大润发继续使用渠道绑定的固定商户，不进入标准商品路由。边界见[《供应链中台 PRD 一期范围对齐》§7](./2026-09-12-supply-chain-prd-scope-alignment-design.md#7-路由)。
 
 ### 8.3 策略、版本和强类型规则
 
@@ -1177,7 +1228,41 @@ productid 属于 SupplierOfferVersion，account 属于 FulfillmentRequest 加密
 
 `sc_fulfillment_call_log` 至少保存 `call_no/operation_id/attempt_no/direction/connector_version_id/endpoint_code/started_at/duration_ms/result_class/http_status/request_digest/response_digest/redaction_version/trace_id`；`call_no` 和 `(operation_id,attempt_no)` 唯一。CallLog 不保存可用于恢复的明文上下文，也不能作为 Operation 当前状态来源。
 
-### 10.1 Cardshop 外部供应商兼容性评估
+### 10.1 奇那梦（QNM）GameOrder V1 协议实现规约
+
+奇那梦适配器（`QnmSupplierAdapter`）作为一期首个落地供应商适配器，实现 `OperationExecutorPort` 端口，封装 `/GameOrder/Send`、`/GameOrder/SendKm` 与 `/GameOrder/Query` 端点：
+
+1. **接口签名算法（MD5）**：
+   - 过滤 `sign` 与 `sign_type` 以及空值/空白参数；参数键前后空白自动 trim；
+   - 必须包含至少一个有效业务参数方可验签，防止空载荷利用伪造空签名绕过；
+   - 剩余键按 ASCII 字典序升序排序；
+   - 以 `k1=v1&k2=v2...&key={secretKey}` 格式拼接待签规范串；
+   - 使用 UTF-8 编码计算 32 位小写 MD5 十六进制散列；
+   - 验签时进行忽略大小写的常量时间比较。
+2. **直充外呼 `/GameOrder/Send`**：
+   - 参数组装：`customerid`、`productid`（`externalSkuCode`）、`billno`、`account`、`number=1`（`quantity <= 0` 默认兜底为 1）、`notifyurl`、`timestamp`、`sign`。
+   - 响应处理：
+     - HTTP 5xx / 408 / 429 瞬时网关服务端错误与连接超时：映射为 `RESULT_UNKNOWN`，严禁误判为终态 `REJECTED`；
+     - HTTP 400 / 401 / 403 客户端配置/鉴权错误：映射为 `MANUAL_REQUIRED`；
+     - HTTP 200 业务响应：`ResCode=1` 或 `ResCode=OK` 映射为 `ACCEPTED`，提取 `orderSn` 与 `sumPrice`（支持浮点元转分与整型分）；若返回非 1 则映射为 `REJECTED` 并记录错误码/错误信息。
+3. **卡密/券码发券 `/GameOrder/SendKm`**：
+   - 参数组装：与直充一致；
+   - 响应处理：成功响应（`ResCode=1/OK`）同步解析 `cards` 列表，支持对象数组（`cardNo`/`cardPwd`/`expireTime` 及其别名）以及纯字符串数组；无卡密仅有卡号时自动分类为 `VOUCHER_CODE`，包含卡密时为 `CARD_CODE_SECRET`。
+   - 若响应声明成功但未返回卡密（空 `cards`），返回 `SUCCEEDED`（或待查 `ACCEPTED`）并在生命周期层触发 `QNM-ASSET-RECOVERY-001` 人工处置流程。
+4. **主动查单 `/GameOrder/Query`**：
+   - 参数组装：`customerid`、`billno`、`orderSn`（可选）、`timestamp`、`sign`。
+   - 响应状态映射：
+     - HTTP 404 或 `ResCode` 提示订单不存在：映射为 `NOT_FOUND`；
+     - `orderStatus=0` -> `ACCEPTED`（供应商处理中）；
+     - `orderStatus=1` -> `SUCCEEDED`（成功，提取 `sumPrice` 与可选 `cards`）；
+     - `orderStatus=2` -> `REJECTED`（供应商明确失败）；
+     - 未知状态码或 HTTP 5xx / 408 / 429 -> `RESULT_UNKNOWN`。
+5. **异常与脱敏边界**：
+   - 网络超时、连接异常及 HTTP 5xx / 408 / 429：统一映射为 `RESULT_UNKNOWN`，交由 PersistentTimer 触发重试/查单，不抛出非受控异常打断业务事务。
+   - 日志脱敏：充值账号掩码（如手机号 `138****1234`）、卡号掩码（前4后4）、卡密密文掩码（`****`）、密钥明文严禁打印。
+   - 契约不可变性：`OperationTicket` 防御性复制 `extraParameters` 与 `checkpointPayload` 并支持 null 安全，`OperationOutcome` 防御性过滤 `assets` 中的 null 元素。
+
+### 10.2 Cardshop 外部供应商兼容性评估
 
 评估基线是 Cardshop `SupplierServiceFactory` 中除百联 `BL_STOCK` 和本地卡池 `STOCK` 外的 19 个外部供应商。严格接入标准为：后续只增加 Adapter/Workflow、Connector 与 Offer 配置、封闭 JSON Schema、错误码/状态映射和 ContractTest，不增加供应商专属订单、资产、账本或资金冻结表。
 

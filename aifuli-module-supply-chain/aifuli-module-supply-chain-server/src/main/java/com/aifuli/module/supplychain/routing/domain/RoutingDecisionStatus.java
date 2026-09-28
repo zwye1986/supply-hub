@@ -16,4 +16,16 @@ public enum RoutingDecisionStatus {
     CONFLICT((short) 30);
 
     private final short code;
+
+    public static RoutingDecisionStatus fromCode(Short code) {
+        if (code == null) {
+            throw new IllegalArgumentException("Unknown routing decision status: null");
+        }
+        for (RoutingDecisionStatus status : values()) {
+            if (status.code == code) {
+                return status;
+            }
+        }
+        throw new IllegalArgumentException("Unknown routing decision status: " + code);
+    }
 }

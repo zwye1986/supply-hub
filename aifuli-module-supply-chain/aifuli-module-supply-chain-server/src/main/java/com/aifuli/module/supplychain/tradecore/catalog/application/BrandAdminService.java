@@ -1,5 +1,7 @@
 package com.aifuli.module.supplychain.tradecore.catalog.application;
 
+import com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService;
+
 import com.aifuli.framework.common.pojo.PageParam;
 import com.aifuli.framework.common.pojo.PageResult;
 import com.aifuli.module.supplychain.infrastructure.identity.BusinessNoGenerator;
@@ -48,6 +50,7 @@ public class BrandAdminService {
     private final BrandMapper brandMapper;
     private final PlatformSpuMapper spuMapper;
     private final BusinessNoGenerator businessNoGenerator;
+    private final ScopedBusinessCodeService scopedBusinessCodeService;
     private final SupplyChainDatabaseClock databaseClock;
 
     public PageResult<BrandView> page(String keyword, Short status, Integer pageNo, Integer pageSize) {
@@ -90,8 +93,8 @@ public class BrandAdminService {
 
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public String create(CreateCommand command) {
-        String code = hasText(command.brandCode()) ? command.brandCode().trim()
-                : businessNoGenerator.next(BusinessNoPrefixes.BRD);
+        String code = scopedBusinessCodeService.allocateRoot(ScopedBusinessCodeService.Kind.BRD,
+                command.brandCode(), command.operatorId()).code();
         requireNameAvailable(command.brandName().trim(), null);
         LocalDateTime now = databaseClock.now();
         // TODO(product-center): 品牌默认状态 DRAFT，商品类型默认状态 ACTIVE，两者不一致——待产品确认是否统一。
@@ -196,7 +199,7 @@ public class BrandAdminService {
     }
 
     private BrandView toView(BrandDO brand, long productCount) {
-        return new BrandView(brand.getBrandCode(), brand.getBrandName(), brand.getShortName(),
+        return new BrandView(brand.getId(), brand.getBrandCode(), brand.getBrandName(), brand.getShortName(),
                 brand.getEnglishName(), brand.getLogoUrl(), brand.getDescription(),
                 brand.getSort(), brand.getStatus(), productCount, productCount,
                 brand.getCreatedAt(), brand.getUpdatedAt());
@@ -229,8 +232,9 @@ public class BrandAdminService {
                                 String description, Integer sort, Long operatorId) {
     }
 
-    /** 商品品牌管理端投影；字段语义与 {@code sc_brand} DDL COMMENT 一致。 */
+    /** 商品品牌管理端投影；字段语义与 {@code sc_brand} DDL COMMENT 一致。设计见 docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#43-商品品牌管理brandadmincontroller（d33）。 */
     public record BrandView(
+            @Schema(description = "品牌内部主键") Long id,
             @Schema(description = "平台品牌永久业务编码") String brandCode,
             @Schema(description = "品牌中文或标准名称") String brandName,
             @Schema(description = "品牌简称") String shortName,

@@ -2,6 +2,7 @@ package com.aifuli.module.supplychain.api.fulfillment;
 
 import com.aifuli.module.supplychain.api.fulfillment.dto.AcceptFulfillmentReqDTO;
 import com.aifuli.module.supplychain.api.fulfillment.dto.FulfillmentAcceptanceReceiptRespDTO;
+import com.aifuli.module.supplychain.api.fulfillment.dto.FulfillmentAssetQueryReqDTO;
 import com.aifuli.module.supplychain.api.fulfillment.dto.FulfillmentTargetDTO;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -58,6 +59,7 @@ class BuyerFulfillmentContractTest {
                 "buyerUserId",
                 "buyerSkuCode",
                 "listingVersion",
+                "pricingQuoteToken",
                 "quantity",
                 "target",
                 "paidAt");
@@ -90,6 +92,23 @@ class BuyerFulfillmentContractTest {
     }
 
     @Test
+    void assetQueryRequiresScopeCode() {
+        FulfillmentAssetQueryReqDTO request = new FulfillmentAssetQueryReqDTO();
+        request.setSourceSystem("AIFULI_MALL");
+        request.setExternalTenantId("tenant-wusheng");
+        request.setFulfillmentRequestNo("FR_01K1XXXXXXXXXXXX");
+        request.setBuyerUserId("member-1024");
+
+        Set<String> properties = validator.validate(request).stream()
+                .map(v -> v.getPropertyPath().toString())
+                .collect(Collectors.toSet());
+        assertThat(properties).contains("scopeCode");
+
+        request.setScopeCode("FULFILLMENT_ASSET_READ");
+        assertThat(validator.validate(request)).isEmpty();
+    }
+
+    @Test
     void receiptContractExposesStableRejectionCode() {
         assertThat(java.util.Arrays.stream(FulfillmentAcceptanceReceiptRespDTO.class.getDeclaredFields())
                 .map(field -> field.getName()))
@@ -108,6 +127,7 @@ class BuyerFulfillmentContractTest {
         request.setBuyerUserId("13800138000");
         request.setBuyerSkuCode("TELCO-100");
         request.setListingVersion(42L);
+        request.setPricingQuoteToken("8a849b77e8cd4b7eb12fe6fc3ea5c2ee");
         request.setQuantity(1L);
         request.setTarget(target);
         request.setPaidAt(OffsetDateTime.parse("2026-08-11T10:30:00+08:00"));

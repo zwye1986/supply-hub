@@ -75,7 +75,7 @@ public interface SupplyChainErrorCodeConstants {
     ErrorCode BUYER_PRODUCT_DUPLICATE = error(1_050_001_059, "分销商品 SKU 已存在");
     ErrorCode L2_OVERRIDE_INVALID = error(1_050_001_060, "L2 覆盖公式或金额不合法");
     ErrorCode L3_OVERRIDE_INVALID = error(1_050_001_061, "L3 覆盖不合法");
-    ErrorCode PROJECT_BUYER_IMMUTABLE = error(1_050_001_062, "非草稿项目不可改分销商");
+    ErrorCode PROJECT_BUYER_IMMUTABLE = error(1_050_001_062, "项目创建后不能修改分销商");
     ErrorCode PROJECT_PLATFORM_SETTLEMENT_NOT_ENABLED = error(1_050_001_063, "平台结算未开放");
     ErrorCode PROJECT_STATUS_INVALID = error(1_050_001_064, "非法项目状态迁移");
     ErrorCode PROJECT_SKU_NOT_IN_BUYER_CATALOG = error(1_050_001_065, "项目 SKU 不是该分销商的分销商品");
@@ -136,6 +136,68 @@ public interface SupplyChainErrorCodeConstants {
             error(1_050_001_110, "当前项目下该履约手机号购买数量已达到SKU周期限购上限");
     ErrorCode PHONE_BIND_TARGET_REQUIRED =
             error(1_050_001_111, "绑定手机号限购要求履约目标为手机号");
+    ErrorCode CATEGORY_PRODUCT_TYPE_REQUIRED =
+            error(1_050_001_112, "商品类型不能为空");
+    ErrorCode PRODUCT_FULFILLMENT_TYPE_IMMUTABLE =
+            error(1_050_001_113, "商品履约方式已锁定，禁止修改");
+    ErrorCode PRODUCT_SUGGESTED_PRICE_RULE_INVALID =
+            error(1_050_001_114, "SKU销售建议价规则不合法");
+    ErrorCode FULFILLMENT_ASSET_SCOPE_DENIED =
+            error(1_050_001_115, "缺少独立授予的 FULFILLMENT_ASSET_READ 权限");
+    ErrorCode FULFILLMENT_SCORE_INVALID =
+            error(1_050_001_116, "稳定性评分与时效性评分为 0-100 的整数");
+    ErrorCode FULFILLMENT_SCORE_SUPPLIER_NOT_COOPERATING =
+            error(1_050_001_117, "该供应商当前未合作供应此 SKU");
+    ErrorCode FULFILLMENT_SCORE_ITEMS_REQUIRED =
+            error(1_050_001_118, "履约能力评分至少提交一行");
+    ErrorCode SUPPLY_CHAIN_B_ORDER_NOT_FOUND =
+            error(1_050_001_119, "供应商履约尝试不存在");
+    ErrorCode ROUTING_RULE_WRITE_NOT_OPEN =
+            error(1_050_001_120, "路由规则写入口已开放，本错误码不再使用");
+    ErrorCode ROUTING_RULE_NOT_FOUND =
+            error(1_050_001_121, "路由规则不存在");
+    ErrorCode ROUTING_RULE_CODE_MISMATCH =
+            error(1_050_001_122, "规则编码与路径不一致");
+    ErrorCode ROUTING_RULE_SCOPE_NOT_OPEN =
+            error(1_050_001_123, "路由规则不支持按项目或商品类型配置");
+    ErrorCode ROUTING_RULE_SUPPLIER_ALL_NOT_OPEN =
+            error(1_050_001_124, "路由规则必须指定候选供应商，不支持全部供应商");
+    ErrorCode ROUTING_RULE_BUYER_REQUIRED =
+            error(1_050_001_125, "适用分销商必须指定恰好一个");
+    ErrorCode ROUTING_RULE_STRATEGY_NOT_OPEN =
+            error(1_050_001_126, "本期仅支持按候选顺序的稳定优先");
+    ErrorCode ROUTING_RULE_CANDIDATE_INVALID =
+            error(1_050_001_127, "固定模式必须一个主供应商，自动模式必须两个及以上互异有序候选");
+    ErrorCode ROUTING_RULE_MATCH_OVERLAP =
+            error(1_050_001_128, "已存在相同分销商、平台SKU与履约类型的路由规则");
+    ErrorCode ROUTING_RULE_LAST_CANNOT_REMOVE =
+            error(1_050_001_129, "当前生效版本至少保留一条路由规则");
+    ErrorCode ROUTING_RULE_VERSION_CONFLICT =
+            error(1_050_001_130, "路由规则版本已变更，请刷新后重试");
+    ErrorCode ROUTING_RULE_FULFILLMENT_MISMATCH =
+            error(1_050_001_131, "履约类型必须与平台SKU档案一致");
+    ErrorCode ROUTING_RULE_NAME_DUPLICATED =
+            error(1_050_001_134, "启用集内已存在同名路由规则");
+    ErrorCode ROUTING_RULE_SCOPE_DUPLICATED =
+            error(1_050_001_135, "已存在相同适用范围的路由规则，请调整适用范围或停用原规则");
+    ErrorCode ROUTING_RULE_PROTECTED =
+            error(1_050_001_136, "系统预置的全局默认规则不可删除，范围与路由模式不可修改");
+    ErrorCode ROUTING_RULE_WEIGHTS_INVALID =
+            error(1_050_001_137, "综合排序权重之和必须等于100");
+    ErrorCode ORDER_EXPORT_EXCEED_LIMIT =
+            error(1_050_001_138, "导出结果超过上限，请缩小筛选范围后重试");
+    ErrorCode PLATFORM_DEFAULT_PRICING_MISSING =
+            error(1_050_001_132, "标准商品尚未配置默认定价，无法保存分销价");
+    ErrorCode SUPPLIER_CODE_REQUIRED =
+            error(1_050_001_133, "排除已添加供应商品时必须指定供应商");
+    ErrorCode BUSINESS_CODE_FORMAT_INVALID = error(1_050_001_139, "业务编码格式错误：{}");
+    ErrorCode BUSINESS_CODE_OCCUPIED = error(1_050_001_140, "作用域号码已占用：{}");
+    ErrorCode BUSINESS_CODE_CAPACITY_EXHAUSTED = error(1_050_001_141, "业务编码容量已满：{}");
+    ErrorCode CATEGORY_PARENT_IMMUTABLE = error(1_050_001_142, "分类创建后不能修改父分类");
+    ErrorCode BUSINESS_CODE_PARENT_MISMATCH = error(1_050_001_143, "业务编码父段不匹配：{}");
+    ErrorCode BUSINESS_CODE_MANUAL_NOT_ALLOWED = error(1_050_001_144, "{}编号由系统生成，请勿手填");
+    ErrorCode BUSINESS_CODE_PERMANENT_EXISTS = error(1_050_001_145, "永久编码已存在：{}");
+    ErrorCode BUSINESS_CODE_LEGACY_PARENT_OCCUPIED = error(1_050_001_146, "旧父对象占用父段：{}");
 
     /** 订单详情不可用只作为成功响应中的详情标记，不作为 CommonResult 失败码。 */
     String DETAIL_UNAVAILABLE = "DETAIL_UNAVAILABLE";
@@ -251,7 +313,42 @@ public interface SupplyChainErrorCodeConstants {
             entry(PRODUCT_CURRENCY_INVALID, RetryDirective.DO_NOT_RETRY),
             entry(SUPPLY_CHAIN_ORDER_NOT_FOUND, RetryDirective.DO_NOT_RETRY),
             entry(ORDER_QUERY_TIME_RANGE_INVALID, RetryDirective.DO_NOT_RETRY),
-            entry(BRAND_LEGACY_API_DEPRECATED, RetryDirective.DO_NOT_RETRY));
+            entry(ORDER_EXPORT_EXCEED_LIMIT, RetryDirective.DO_NOT_RETRY),
+            entry(BRAND_LEGACY_API_DEPRECATED, RetryDirective.DO_NOT_RETRY),
+            entry(CATEGORY_PRODUCT_TYPE_REQUIRED, RetryDirective.DO_NOT_RETRY),
+            entry(PRODUCT_FULFILLMENT_TYPE_IMMUTABLE, RetryDirective.DO_NOT_RETRY),
+            entry(PRODUCT_SUGGESTED_PRICE_RULE_INVALID, RetryDirective.DO_NOT_RETRY),
+            entry(FULFILLMENT_ASSET_SCOPE_DENIED, RetryDirective.DO_NOT_RETRY),
+            entry(FULFILLMENT_SCORE_INVALID, RetryDirective.DO_NOT_RETRY),
+            entry(FULFILLMENT_SCORE_SUPPLIER_NOT_COOPERATING, RetryDirective.DO_NOT_RETRY),
+            entry(FULFILLMENT_SCORE_ITEMS_REQUIRED, RetryDirective.DO_NOT_RETRY),
+            entry(SUPPLY_CHAIN_B_ORDER_NOT_FOUND, RetryDirective.DO_NOT_RETRY),
+            entry(ROUTING_RULE_WRITE_NOT_OPEN, RetryDirective.DO_NOT_RETRY),
+            entry(ROUTING_RULE_NOT_FOUND, RetryDirective.DO_NOT_RETRY),
+            entry(ROUTING_RULE_CODE_MISMATCH, RetryDirective.DO_NOT_RETRY),
+            entry(ROUTING_RULE_SCOPE_NOT_OPEN, RetryDirective.DO_NOT_RETRY),
+            entry(ROUTING_RULE_SUPPLIER_ALL_NOT_OPEN, RetryDirective.DO_NOT_RETRY),
+            entry(ROUTING_RULE_BUYER_REQUIRED, RetryDirective.DO_NOT_RETRY),
+            entry(ROUTING_RULE_STRATEGY_NOT_OPEN, RetryDirective.DO_NOT_RETRY),
+            entry(ROUTING_RULE_CANDIDATE_INVALID, RetryDirective.DO_NOT_RETRY),
+            entry(ROUTING_RULE_MATCH_OVERLAP, RetryDirective.DO_NOT_RETRY),
+            entry(ROUTING_RULE_LAST_CANNOT_REMOVE, RetryDirective.DO_NOT_RETRY),
+            entry(ROUTING_RULE_VERSION_CONFLICT, RetryDirective.DO_NOT_RETRY),
+            entry(ROUTING_RULE_FULFILLMENT_MISMATCH, RetryDirective.DO_NOT_RETRY),
+            entry(ROUTING_RULE_NAME_DUPLICATED, RetryDirective.DO_NOT_RETRY),
+            entry(ROUTING_RULE_SCOPE_DUPLICATED, RetryDirective.DO_NOT_RETRY),
+            entry(ROUTING_RULE_PROTECTED, RetryDirective.DO_NOT_RETRY),
+            entry(ROUTING_RULE_WEIGHTS_INVALID, RetryDirective.DO_NOT_RETRY),
+            entry(PLATFORM_DEFAULT_PRICING_MISSING, RetryDirective.DO_NOT_RETRY),
+            entry(SUPPLIER_CODE_REQUIRED, RetryDirective.DO_NOT_RETRY),
+            entry(BUSINESS_CODE_FORMAT_INVALID, RetryDirective.DO_NOT_RETRY),
+            entry(BUSINESS_CODE_OCCUPIED, RetryDirective.DO_NOT_RETRY),
+            entry(BUSINESS_CODE_CAPACITY_EXHAUSTED, RetryDirective.DO_NOT_RETRY),
+            entry(CATEGORY_PARENT_IMMUTABLE, RetryDirective.DO_NOT_RETRY),
+            entry(BUSINESS_CODE_PARENT_MISMATCH, RetryDirective.DO_NOT_RETRY),
+            entry(BUSINESS_CODE_MANUAL_NOT_ALLOWED, RetryDirective.DO_NOT_RETRY),
+            entry(BUSINESS_CODE_PERMANENT_EXISTS, RetryDirective.DO_NOT_RETRY),
+            entry(BUSINESS_CODE_LEGACY_PARENT_OCCUPIED, RetryDirective.DO_NOT_RETRY));
 
     static RetryDirective retryDirective(int errorCode) {
         return RETRY_DIRECTIVES.getOrDefault(errorCode, RetryDirective.DO_NOT_RETRY);

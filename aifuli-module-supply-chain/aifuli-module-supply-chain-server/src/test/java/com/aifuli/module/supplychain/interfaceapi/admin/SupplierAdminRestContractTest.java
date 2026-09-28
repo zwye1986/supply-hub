@@ -1,9 +1,13 @@
 package com.aifuli.module.supplychain.interfaceapi.admin;
 
+import com.aifuli.module.supplychain.tradecore.supply.application.SupplierCooperativeProductService.OfferListItem;
+import com.aifuli.module.supplychain.tradecore.supply.domain.OfferFulfillmentScore;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import org.junit.jupiter.api.Test;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -21,6 +25,19 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#36-openapiswagger}。
  */
 class SupplierAdminRestContractTest {
+
+    @Test
+    void simpleSupplierProjectionDocumentsActiveOnly() {
+        Method page = Arrays.stream(SupplierAdminController.class.getDeclaredMethods())
+                .filter(method -> method.getName().equals("page"))
+                .findFirst()
+                .orElseThrow();
+
+        assertThat(page.getAnnotation(Operation.class).description())
+                .contains("view=simple")
+                .contains("ACTIVE")
+                .contains("只返回正常");
+    }
 
     @Test
     void saveReqSerializesCentsAndEnumNames() throws Exception {
@@ -85,6 +102,22 @@ class SupplierAdminRestContractTest {
         Method listScopes = SupplierAdminController.class.getDeclaredMethod("listScopes", String.class);
         assertThat(listScopes.getGenericReturnType().getTypeName()).contains("SupplyScopeView");
         assertThat(listScopes.getGenericReturnType().getTypeName()).doesNotContain("SupplierSupplyScopeDO");
+        // 供货配置回显契约：SupplyScopeView 必须携带 categoryId（productClassification 为未归档
+        // 类目编码时回填，封闭枚举名/已删除/已归档为 null），口径见 admin-frontend-api-design §5.4
+        java.lang.reflect.Type listType = ((java.lang.reflect.ParameterizedType) listScopes.getGenericReturnType())
+                .getActualTypeArguments()[0];
+        Class<?> viewType = (Class<?>) ((java.lang.reflect.ParameterizedType) listType).getActualTypeArguments()[0];
+        assertThat(viewType.getSimpleName()).isEqualTo("SupplyScopeView");
+        java.lang.reflect.RecordComponent categoryId = Arrays.stream(viewType.getRecordComponents())
+                .filter(component -> "categoryId".equals(component.getName()))
+                .findFirst().orElse(null);
+        assertThat(categoryId).as("SupplyScopeView 必须携带 categoryId 回显字段").isNotNull();
+        // @Schema 无 RECORD_COMPONENT Target，注解会传播到 accessor 方法
+        io.swagger.v3.oas.annotations.media.Schema schema = categoryId.getAccessor()
+                .getAnnotation(io.swagger.v3.oas.annotations.media.Schema.class);
+        assertThat(schema).as("categoryId 必须带 @Schema 说明").isNotNull();
+        assertThat(schema.description())
+                .contains("未归档类目编码时回填").contains("归档即视为不可回显");
     }
 
     @Test
@@ -124,6 +157,60 @@ class SupplierAdminRestContractTest {
         vo.setItems(List.of(item));
         String json = new ObjectMapper().writeValueAsString(vo);
         assertThat(json).contains("items").contains("MOVIE_100");
+        io.swagger.v3.oas.annotations.media.Schema priceModeSchema =
+                SupplierAdminController.DraftReqVO.class.getDeclaredField("priceMode")
+                        .getAnnotation(io.swagger.v3.oas.annotations.media.Schema.class);
+        assertThat(priceModeSchema.description()).contains("supply_chain_offer_price_mode");
+        java.lang.reflect.RecordComponent listPriceMode =
+                Arrays.stream(com.aifuli.module.supplychain.tradecore.supply.application
+                                .SupplierCooperativeProductService.OfferListItem.class.getRecordComponents())
+                        .filter(component -> "priceMode".equals(component.getName()))
+                        .findFirst()
+                        .orElseThrow();
+        assertThat(listPriceMode.getAccessor()
+                .getAnnotation(io.swagger.v3.oas.annotations.media.Schema.class)
+                .description())
+                .contains("supply_chain_offer_price_mode");
+    }
+
+    @Test
+    void fulfillmentScoresUseNounResourceAndOfferListExposesScores() throws Exception {
+        boolean scoresPut = Arrays.stream(SupplierAdminController.class.getDeclaredMethods())
+                .anyMatch(method -> {
+                    org.springframework.web.bind.annotation.PutMapping put =
+                            method.getAnnotation(org.springframework.web.bind.annotation.PutMapping.class);
+                    return put != null
+                            && String.join(",", put.value()).equals("/{supplierCode}/fulfillment-scores");
+                });
+        assertThat(scoresPut).isTrue();
+        assertThat(Arrays.stream(SupplierAdminController.class.getDeclaredMethods())
+                .filter(method -> {
+                    org.springframework.web.bind.annotation.PutMapping put =
+                            method.getAnnotation(org.springframework.web.bind.annotation.PutMapping.class);
+                    return put != null
+                            && String.join(",", put.value()).contains("fulfillment-scores");
+                })
+                .map(SupplierAdminRestContractTest::joinedPaths)
+                .noneMatch(path -> path.contains("/batch"))).isTrue();
+        assertThat(Arrays.stream(OfferListItem.class.getRecordComponents())
+                .map(java.lang.reflect.RecordComponent::getName))
+                .contains("stabilityScore", "timelinessScore");
+        java.lang.reflect.RecordComponent stability = Arrays.stream(OfferListItem.class.getRecordComponents())
+                .filter(component -> "stabilityScore".equals(component.getName()))
+                .findFirst()
+                .orElseThrow();
+        java.lang.reflect.RecordComponent timeliness = Arrays.stream(OfferListItem.class.getRecordComponents())
+                .filter(component -> "timelinessScore".equals(component.getName()))
+                .findFirst()
+                .orElseThrow();
+        assertThat(stability.getAccessor().getAnnotation(io.swagger.v3.oas.annotations.media.Schema.class)
+                .description()).isEqualTo("稳定性评分，人工录入，0-100，默认80");
+        assertThat(timeliness.getAccessor().getAnnotation(io.swagger.v3.oas.annotations.media.Schema.class)
+                .description()).isEqualTo("时效性评分，人工录入，0-100，默认80");
+        assertScoreRange(SupplierAdminController.FulfillmentScoreSaveReqVO.class
+                .getDeclaredField("stabilityScore"));
+        assertScoreRange(SupplierAdminController.FulfillmentScoreSaveReqVO.class
+                .getDeclaredField("timelinessScore"));
     }
 
     private static boolean hasHttpMapping(Method method) {
@@ -159,5 +246,10 @@ class SupplierAdminRestContractTest {
             return String.join(",", delete.value());
         }
         return "";
+    }
+
+    private static void assertScoreRange(java.lang.reflect.Field field) {
+        assertThat(field.getAnnotation(Min.class).value()).isEqualTo(OfferFulfillmentScore.MIN);
+        assertThat(field.getAnnotation(Max.class).value()).isEqualTo(OfferFulfillmentScore.MAX);
     }
 }

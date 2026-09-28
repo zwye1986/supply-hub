@@ -3,9 +3,9 @@ package com.aifuli.module.supplychain.tradecore.supply.application;
 import com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock;
 
 import com.aifuli.framework.common.exception.ServiceException;
+import com.aifuli.module.supplychain.tradecore.catalog.application.ProductClassificationValidationService;
 import com.aifuli.module.supplychain.tradecore.catalog.application.ProductTypeValidationService;
 import com.aifuli.module.supplychain.tradecore.profile.domain.ClosedEnums;
-import com.aifuli.module.supplychain.tradecore.profile.domain.ProductClassification;
 import com.aifuli.module.supplychain.tradecore.profile.domain.SellableCategory;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierSupplyScopeDO;
@@ -36,7 +36,9 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
 /**
  * 供货配置整表替换。供货模式落在子表，一行对应多种模式；三码（可售品类/商品类型/商品分类）互相独立，
  * 不校验父子链，唯一性以供应商内三码组合判重。允许最低起订量为预留字段，仅存储和回显。
- * 设计见 {@code docs/superpowers/specs/2026-09-07-供应链管理端表单字典与标品标签设计.md#41-rest}。
+ * 商品分类写入与 SPU 相同：封闭枚举名或类目 {@code category_code}，命中仍按字符串全等。
+ * 设计见 {@code docs/superpowers/specs/2026-09-07-供应链管理端表单字典与标品标签设计.md#41-rest}、
+ * {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线}（d34）。
  */
 @Slf4j
 @Service
@@ -51,6 +53,7 @@ public class SupplierSupplyScopeService {
     private final SupplierSupplyScopeMapper scopeMapper;
     private final SupplierSupplyScopeModeMapper modeMapper;
     private final ProductTypeValidationService productTypeValidationService;
+    private final ProductClassificationValidationService productClassificationValidationService;
 
     /**
      * 全量替换供应商供货配置。无 FK，必须先按现有 scope id 删除模式子表再删主表。
@@ -67,13 +70,14 @@ public class SupplierSupplyScopeService {
         Set<String> triples = new HashSet<>();
         List<ScopeLine> normalized = lines == null ? List.of() : lines;
         Map<String, String> normalizedProductTypes = new HashMap<>();
+        Map<String, String> normalizedClassifications = new HashMap<>();
         int modeCount = 0;
         for (ScopeLine line : normalized) {
             String sellableCategory = ClosedEnums.parseRequired(SellableCategory.class, line.sellableCategory()).name();
             String productType = normalizedProductTypes.computeIfAbsent(line.productType(),
                     code -> productTypeValidationService.requireActiveForUpdate(code).getTypeCode());
-            String productClassification =
-                    ClosedEnums.parseRequired(ProductClassification.class, line.productClassification()).name();
+            String productClassification = normalizedClassifications.computeIfAbsent(line.productClassification(),
+                    code -> productClassificationValidationService.requireWritable(code, true, null));
             String key = sellableCategory + ":" + productType + ":" + productClassification;
             if (!triples.add(key)) {
                 throw exception(SUPPLIER_SCOPE_CONFLICT);
@@ -100,8 +104,7 @@ public class SupplierSupplyScopeService {
                         .supplierId(supplier.getId())
                         .sellableCategory(ClosedEnums.parseRequired(SellableCategory.class, line.sellableCategory()).name())
                         .productType(normalizedProductTypes.get(line.productType()))
-                        .productClassification(
-                                ClosedEnums.parseRequired(ProductClassification.class, line.productClassification()).name())
+                        .productClassification(normalizedClassifications.get(line.productClassification()))
                         .maxQuantity(line.maxQuantity())
                         .minQuantity(line.minQuantity())
                         .version(0L)

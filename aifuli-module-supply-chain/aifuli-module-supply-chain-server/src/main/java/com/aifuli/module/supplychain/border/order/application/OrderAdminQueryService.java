@@ -5,8 +5,14 @@ import com.aifuli.framework.common.pojo.PageResult;
 import com.aifuli.module.supplychain.api.order.dto.DetailAvailability;
 import com.aifuli.module.supplychain.api.order.dto.SupplyChainAftersaleStatus;
 import com.aifuli.module.supplychain.api.order.dto.SupplyChainOrderStatus;
+import com.aifuli.module.supplychain.border.fulfillment.dal.dataobject.BOrderDO;
 import com.aifuli.module.supplychain.border.fulfillment.dal.dataobject.FulfillmentRequestDO;
+import com.aifuli.module.supplychain.border.fulfillment.dal.dataobject.SupplierRoutingRecordDO;
+import com.aifuli.module.supplychain.border.fulfillment.dal.dataobject.SupplierRoutingRoundDO;
+import com.aifuli.module.supplychain.border.fulfillment.dal.mysql.BOrderMapper;
 import com.aifuli.module.supplychain.border.fulfillment.dal.mysql.FulfillmentRequestMapper;
+import com.aifuli.module.supplychain.border.fulfillment.dal.mysql.SupplierRoutingRecordMapper;
+import com.aifuli.module.supplychain.border.fulfillment.dal.mysql.SupplierRoutingRoundMapper;
 import com.aifuli.module.supplychain.border.fulfillment.domain.FulfillmentRequestStatus;
 import com.aifuli.module.supplychain.border.instore.dal.dataobject.InstoreChannelOrderDO;
 import com.aifuli.module.supplychain.border.instore.dal.dataobject.InstorePaymentFlowDO;
@@ -24,7 +30,10 @@ import com.aifuli.module.supplychain.border.order.dal.dataobject.SupplyChainOrde
 import com.aifuli.module.supplychain.border.order.dal.mysql.SupplyChainOrderMapper;
 import com.aifuli.module.supplychain.border.order.domain.SupplyChainOrderType;
 import com.aifuli.module.supplychain.border.order.domain.SupplyChainOrderTypes;
+import com.aifuli.module.supplychain.routing.domain.RoutingDecisionStatus;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -33,7 +42,12 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 import static com.aifuli.framework.common.exception.util.ServiceExceptionUtil.exception;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.DETAIL_UNAVAILABLE;
@@ -41,11 +55,12 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.SUPPLY_CHAIN_ORDER_NOT_FOUND;
 
 /**
- * 平台订单管理端只读查询。列表严格只读总订单表；详情按 {@code detail_type} 只加载一个场景分支，
- * 不读取履约资产、账户或账本，也不在查询线程调用渠道与供应商。
+ * 平台订单管理端只读查询。列表严格只读总订单表；详情按 {@code detail_type} 只加载一个场景分支；
+ * 路由记录只读已冻结轮次与候选。不读取履约资产、账户或账本，也不在查询线程调用渠道与供应商。
  *
  * <p>设计见
- * {@code docs/superpowers/specs/2026-09-12-supply-chain-order-admin-readonly-design.md#4-分层与数据访问}。</p>
+ * {@code docs/superpowers/specs/2026-09-12-supply-chain-order-admin-readonly-design.md#4-分层与数据访问}
+ * 与 {@code docs/superpowers/specs/2026-09-21-order-routing-records-admin-design.md}。</p>
  */
 @Slf4j
 @Service
@@ -55,12 +70,16 @@ public class OrderAdminQueryService {
     private static final String TRANSACTION_MANAGER = "supplyChainTransactionManager";
     private static final int DEFAULT_PAGE_NO = 1;
     private static final int DEFAULT_PAGE_SIZE = 20;
+    private static final ObjectMapper CHECK_RESULT_JSON = new ObjectMapper();
 
     private final SupplyChainOrderMapper orderMapper;
     private final FulfillmentRequestMapper fulfillmentRequestMapper;
     private final O2OChannelDetailMapper o2oDetailMapper;
     private final InstoreChannelOrderMapper instoreOrderMapper;
     private final InstorePaymentFlowMapper instorePaymentFlowMapper;
+    private final SupplierRoutingRoundMapper routingRoundMapper;
+    private final SupplierRoutingRecordMapper routingRecordMapper;
+    private final BOrderMapper bOrderMapper;
 
     /**
      * 分页查询总订单摘要。场景详情 Mapper 不得在该方法中出现，避免列表 N+1 与跨场景耦合。
@@ -118,6 +137,123 @@ public class OrderAdminQueryService {
             case SupplyChainOrderTypes.DETAIL_TYPE_INSTORE_CHANNEL -> instoreDetail(order, summary);
             default -> unavailable(summary);
         };
+    }
+
+    /**
+     * 查询平台订单冻结的路由轮次与候选。O2O/INSTORE 不走标准路由，返回空 rounds。
+     */
+    @Transactional(transactionManager = TRANSACTION_MANAGER, readOnly = true)
+    public OrderRoutingRecordsView getRoutingRecords(String orderNo) {
+        log.info("查询平台订单路由记录 orderNo={}", orderNo);
+        SupplyChainOrderDO order = orderMapper.selectByOrderNo(orderNo);
+        if (order == null) {
+            throw exception(SUPPLY_CHAIN_ORDER_NOT_FOUND);
+        }
+        SupplyChainOrderType orderType = SupplyChainOrderType.valueOf(order.getOrderType());
+        if (orderType != SupplyChainOrderType.CARD) {
+            log.info("查询平台订单路由记录完成 orderNo={} orderType={} roundCount=0", orderNo, orderType);
+            return emptyRoutingRecords(order, orderType);
+        }
+        List<SupplierRoutingRoundDO> rounds = routingRoundMapper.selectList(
+                new LambdaQueryWrapper<SupplierRoutingRoundDO>()
+                        .eq(SupplierRoutingRoundDO::getOrderId, order.getId())
+                        .orderByAsc(SupplierRoutingRoundDO::getRoundSequence)
+                        .orderByAsc(SupplierRoutingRoundDO::getId));
+        List<RoutingRoundView> roundViews = new ArrayList<>();
+        Set<Long> attemptIds = new HashSet<>();
+        List<List<SupplierRoutingRecordDO>> recordsByRound = new ArrayList<>();
+        for (SupplierRoutingRoundDO round : rounds) {
+            List<SupplierRoutingRecordDO> records = routingRecordMapper.selectList(
+                    new LambdaQueryWrapper<SupplierRoutingRecordDO>()
+                            .eq(SupplierRoutingRecordDO::getRoutingRoundId, round.getId())
+                            .orderByAsc(SupplierRoutingRecordDO::getCandidateSequence)
+                            .orderByAsc(SupplierRoutingRecordDO::getId));
+            recordsByRound.add(records);
+            for (SupplierRoutingRecordDO record : records) {
+                if (record.getAttemptBOrderId() != null) {
+                    attemptIds.add(record.getAttemptBOrderId());
+                }
+            }
+        }
+        Map<Long, String> bOrderNos = loadBOrderNos(attemptIds);
+        for (int i = 0; i < rounds.size(); i++) {
+            roundViews.add(toRoundView(rounds.get(i), recordsByRound.get(i), bOrderNos));
+        }
+        log.info("查询平台订单路由记录完成 orderNo={} orderType={} roundCount={}",
+                orderNo, orderType, roundViews.size());
+        return new OrderRoutingRecordsView(order.getOrderNo(), orderType, order.getSkuCodeSnapshot(),
+                order.getSkuNameSnapshot(), order.getBuyerCodeSnapshot(), List.copyOf(roundViews));
+    }
+
+    private Map<Long, String> loadBOrderNos(Set<Long> attemptIds) {
+        Map<Long, String> bOrderNos = new HashMap<>();
+        if (attemptIds.isEmpty()) {
+            return bOrderNos;
+        }
+        for (BOrderDO attempt : bOrderMapper.selectBatchIds(attemptIds)) {
+            if (attempt != null && attempt.getId() != null) {
+                bOrderNos.put(attempt.getId(), attempt.getBOrderNo());
+            }
+        }
+        return bOrderNos;
+    }
+
+    private static OrderRoutingRecordsView emptyRoutingRecords(SupplyChainOrderDO order,
+                                                               SupplyChainOrderType orderType) {
+        return new OrderRoutingRecordsView(order.getOrderNo(), orderType, order.getSkuCodeSnapshot(),
+                order.getSkuNameSnapshot(), order.getBuyerCodeSnapshot(), List.of());
+    }
+
+    private static RoutingRoundView toRoundView(SupplierRoutingRoundDO round,
+                                                List<SupplierRoutingRecordDO> records,
+                                                Map<Long, String> bOrderNos) {
+        List<RoutingCandidateView> candidates = records.stream()
+                .map(record -> toCandidateView(record, bOrderNos))
+                .toList();
+        return new RoutingRoundView(round.getRoutingRoundNo(), round.getRoundSequence(), round.getRoutingType(),
+                RoutingDecisionStatus.fromCode(round.getDecisionStatus()), round.getDecisionReasonCode(),
+                round.getDecisionReasonMessage(), round.getCandidateCount(), round.getComputedAt(),
+                List.copyOf(candidates));
+    }
+
+    private static RoutingCandidateView toCandidateView(SupplierRoutingRecordDO record,
+                                                        Map<Long, String> bOrderNos) {
+        return new RoutingCandidateView(
+                record.getCandidateSequence(),
+                record.getSupplierCodeSnapshot(),
+                record.getSupplierNameSnapshot(),
+                record.getConfiguredPriority(),
+                record.getAvailabilityClass(),
+                record.getSupplierSettlementUnitPrice(),
+                Boolean.TRUE.equals(record.getEligibleFlag()),
+                Boolean.TRUE.equals(record.getSelectedFlag()),
+                record.getDecisionReasonCode(),
+                record.getDecisionReasonMessage(),
+                record.getAttemptBOrderId() == null ? null : bOrderNos.get(record.getAttemptBOrderId()),
+                parseCheckResult(record.getCheckResultJson()));
+    }
+
+    private static RoutingCheckResult parseCheckResult(String json) {
+        try {
+            JsonNode node = CHECK_RESULT_JSON.readTree(json == null ? "{}" : json);
+            List<String> reasons = new ArrayList<>();
+            JsonNode reasonsNode = node.get("reasons");
+            if (reasonsNode != null && reasonsNode.isArray()) {
+                reasonsNode.forEach(item -> reasons.add(item.asText()));
+            }
+            return new RoutingCheckResult(
+                    textOrNull(node, "inventory"),
+                    textOrNull(node, "balance"),
+                    textOrNull(node, "health"),
+                    List.copyOf(reasons));
+        } catch (Exception exception) {
+            throw new IllegalStateException("Routing check snapshot JSON is corrupted", exception);
+        }
+    }
+
+    private static String textOrNull(JsonNode node, String field) {
+        JsonNode value = node.get(field);
+        return value == null || value.isNull() ? null : value.asText();
     }
 
     private OrderDetail cardDetail(SupplyChainOrderDO order, OrderSummary summary) {
@@ -188,6 +324,8 @@ public class OrderAdminQueryService {
         return new OrderSummary(order.getOrderNo(), SupplyChainOrderType.valueOf(order.getOrderType()),
                 order.getBuyerCodeSnapshot(), order.getBuyerNameSnapshot(), order.getBuyerOrderNo(),
                 order.getDisplaySupplierCode(), order.getDisplaySupplierName(), order.getBuyerSettlementAmount(),
+                order.getSalesUnitPriceCents(), order.getProductSubtotalCents(), order.getServiceFeeCents(),
+                order.getUserPayableAmountCents(),
                 order.getCurrency(), order.getSkuCodeSnapshot(), order.getSkuNameSnapshot(), order.getQuantity(),
                 SupplyChainOrderStatus.fromCode(order.getOrderStatus()),
                 SupplyChainAftersaleStatus.fromCode(order.getAftersaleStatus()), order.getBusinessStage(),
@@ -219,6 +357,10 @@ public class OrderAdminQueryService {
             @Schema(description = "列表展示供应商编码快照") String supplierCode,
             @Schema(description = "列表展示供应商名称快照") String supplierName,
             @Schema(description = "采购商应向中台结算的订单金额，单位为分") Long buyerSettlementAmount,
+            @Schema(description = "冻结的商品销售单价，单位CNY分") Long salesUnitPriceCents,
+            @Schema(description = "冻结的商品小计，单位CNY分") Long productSubtotalCents,
+            @Schema(description = "冻结的平台服务费，单位CNY分") Long serviceFeeCents,
+            @Schema(description = "冻结的用户应付总额，单位CNY分") Long userPayableAmountCents,
             @Schema(description = "订单币种，一期固定CNY") String currency,
             @Schema(description = "CARD场景平台SKU编码快照") String skuCode,
             @Schema(description = "CARD场景平台SKU名称快照") String skuName,
@@ -320,5 +462,53 @@ public class OrderAdminQueryService {
             @Schema(description = "支付流水创建时间") LocalDateTime createdAt,
             @Schema(description = "支付流水最后更新时间") LocalDateTime updatedAt,
             @Schema(description = "支付流水进入终态时间") LocalDateTime completedAt) {
+    }
+
+    /** 平台订单路由记录弹窗；rounds 在无冻结轮次或非 CARD 时为空数组。 */
+    public record OrderRoutingRecordsView(
+            @Schema(description = "供应链总订单稳定业务编号") String orderNo,
+            @Schema(description = "订单类型：CARD/O2O/INSTORE") SupplyChainOrderType orderType,
+            @Schema(description = "CARD场景平台SKU编码快照") String skuCode,
+            @Schema(description = "CARD场景平台SKU名称快照") String skuName,
+            @Schema(description = "受理时采购商业务编码快照") String buyerCode,
+            @Schema(description = "冻结的供应商路由轮次") List<RoutingRoundView> rounds) {
+    }
+
+    /** 供应商路由轮次只读投影。 */
+    public record RoutingRoundView(
+            @Schema(description = "供应商路由轮次稳定业务编号") String routingRoundNo,
+            @Schema(description = "同一路由主体内的轮次序号，从1递增；场景路由固定为1") Integer roundSequence,
+            @Schema(description = "路由类型：STANDARD_PRODUCT标准商品供给路由，SCENARIO场景供应商路由") String routingType,
+            @Schema(description = "对外返回枚举名：SELECTED / NO_CANDIDATE / CONFLICT（码 10/20/30）")
+            RoutingDecisionStatus decisionStatus,
+            @Schema(description = "本轮最终决策稳定原因码") String decisionReasonCode,
+            @Schema(description = "本轮最终决策中文说明快照") String decisionReasonMessage,
+            @Schema(description = "本轮候选供应商数量") Integer candidateCount,
+            @Schema(description = "纯路由计算完成时间") LocalDateTime computedAt,
+            @Schema(description = "本轮候选排序、检查和选择事实") List<RoutingCandidateView> candidates) {
+    }
+
+    /** 供应商路由候选只读投影。 */
+    public record RoutingCandidateView(
+            @Schema(description = "本轮候选排序序号，从1递增") Integer candidateSequence,
+            @Schema(description = "候选供应商编码快照") String supplierCode,
+            @Schema(description = "候选供应商名称快照") String supplierName,
+            @Schema(description = "已发布规则中配置的候选优先级，数值越小越优先") Integer configuredPriority,
+            @Schema(description = "动态可用性分类：CONFIRMED已确认，UNKNOWN未知，UNAVAILABLE不可用") String availabilityClass,
+            @Schema(description = "标准商品候选供应商履约结算单价快照，单位为分") Long supplierSettlementUnitPrice,
+            @Schema(description = "候选资格：true符合，false被淘汰") boolean eligible,
+            @Schema(description = "本轮选中标记：true选中，false未选中") boolean selected,
+            @Schema(description = "进入、淘汰或选择的稳定原因码") String decisionReasonCode,
+            @Schema(description = "进入、淘汰或选择的中文说明快照") String decisionReasonMessage,
+            @Schema(description = "选中后创建的B端履约尝试稳定业务编号；未关联时为空") String attemptBOrderNo,
+            @Schema(description = "库存、余额、健康度等检查模式、结果、耗时和脱敏原因快照") RoutingCheckResult checkResult) {
+    }
+
+    /** 候选检查快照；来自 check_result_json，不含供应商原始报文。 */
+    public record RoutingCheckResult(
+            @Schema(description = "库存检查结果快照") String inventory,
+            @Schema(description = "余额检查结果快照") String balance,
+            @Schema(description = "健康度检查结果快照") String health,
+            @Schema(description = "脱敏淘汰原因列表") List<String> reasons) {
     }
 }

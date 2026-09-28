@@ -2,6 +2,10 @@ package com.aifuli.module.supplychain.infrastructure.configuration;
 
 import com.alibaba.druid.pool.DruidDataSource;
 import com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock;
+import com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService;
+import com.aifuli.module.supplychain.infrastructure.identity.dal.mysql.BusinessCodeScopeMapper;
+import com.aifuli.module.supplychain.infrastructure.identity.dal.mysql.BusinessCodeClaimMapper;
+import com.aifuli.module.supplychain.infrastructure.identity.dal.mysql.BusinessCodeExistingMapper;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.extension.plugins.MybatisPlusInterceptor;
 import com.baomidou.mybatisplus.extension.plugins.inner.OptimisticLockerInnerInterceptor;
@@ -53,6 +57,15 @@ public class SupplyChainDataSourceConfiguration {
     SupplyChainDatabaseClock supplyChainDatabaseClock(
             @Qualifier("supplyChainDataSource") DataSource dataSource) {
         return new SupplyChainDatabaseClock(dataSource);
+    }
+
+    /** 显式绑定供应链 Mapper 和数据库时钟，供管理服务及独立集成测试共用。 */
+    @Bean
+    ScopedBusinessCodeService scopedBusinessCodeService(BusinessCodeScopeMapper scopeMapper,
+                                                        BusinessCodeClaimMapper claimMapper,
+                                                        BusinessCodeExistingMapper existingMapper,
+                                                        SupplyChainDatabaseClock databaseClock) {
+        return new ScopedBusinessCodeService(scopeMapper, claimMapper, existingMapper, databaseClock);
     }
 
     @Bean("supplyChainTransactionManager")

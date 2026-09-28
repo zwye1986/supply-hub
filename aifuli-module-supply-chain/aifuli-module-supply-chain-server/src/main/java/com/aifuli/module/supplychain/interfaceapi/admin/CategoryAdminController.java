@@ -24,12 +24,15 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
 
+import static com.aifuli.framework.common.exception.util.ServiceExceptionUtil.exception;
 import static com.aifuli.framework.common.pojo.CommonResult.success;
 import static com.aifuli.framework.security.core.util.SecurityFrameworkUtils.getLoginUserId;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.CATEGORY_PRODUCT_TYPE_REQUIRED;
 import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.CATEGORY_CREATE_EXPRESSION;
 import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.CATEGORY_DELETE_EXPRESSION;
 import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.CATEGORY_QUERY_EXPRESSION;
@@ -62,9 +65,14 @@ public class CategoryAdminController {
 
     @GetMapping("/management-tree")
     @PreAuthorize(CATEGORY_QUERY_EXPRESSION)
-    @Operation(summary = "查询商品分类管理树", description = "包含草稿、停用节点、显示状态和关联商品数。")
-    public CommonResult<List<ManagementCategoryNode>> managementTree() {
-        return success(queryService.managementTree());
+    @Operation(summary = "查询商品分类管理树",
+            description = "包含草稿、停用节点、显示状态和关联商品数。支持状态与关键字筛选，采用树枝保留模式保留命中节点祖先链路。")
+    public CommonResult<List<ManagementCategoryNode>> managementTree(
+            @Parameter(description = "分类编码或名称模糊搜索", example = "电子")
+            @RequestParam(required = false) String keyword,
+            @Parameter(description = "分类状态：0草稿，10启用，20禁用；字典 supply_chain_category_status", example = "10")
+            @RequestParam(required = false) Short status) {
+        return success(queryService.managementTree(keyword, status));
     }
 
     @GetMapping("/{categoryCode}")
@@ -80,9 +88,15 @@ public class CategoryAdminController {
     @PreAuthorize(CATEGORY_CREATE_EXPRESSION)
     @Operation(summary = "创建商品分类", description = "categoryCode 为空时生成 CAT_+ULID；同一父级下名称唯一。")
     public CommonResult<String> create(@Valid @RequestBody CategorySaveReqVO request) {
+        if (!request.hasProductType()) {
+            throw exception(CATEGORY_PRODUCT_TYPE_REQUIRED);
+        }
+        List<String> typeCodes = request.resolveTypeCodes();
+        String primaryProductType = request.resolveProductType();
+        String description = request.resolveDescription();
         return success(commandService.create(new CategoryCommandService.CreateCommand(request.categoryCode,
-                request.categoryName, request.parentCategoryCode, request.sort, request.visible, request.status,
-                getLoginUserId())));
+                request.categoryName, primaryProductType, typeCodes, description, request.parentCategoryCode,
+                request.sort, request.visible, request.status, getLoginUserId())));
     }
 
     @PutMapping("/{categoryCode}")
@@ -94,8 +108,12 @@ public class CategoryAdminController {
             @Parameter(description = "平台类目永久编码", example = "CAT_01ABC")
             @PathVariable String categoryCode,
             @Valid @RequestBody CategorySaveReqVO request) {
+        List<String> typeCodes = request.hasExplicitProductTypeInput() ? request.resolveTypeCodes() : null;
+        String primaryProductType = request.hasExplicitProductTypeInput() ? request.resolveProductType() : null;
+        String description = request.resolveDescription();
         commandService.update(categoryCode, new CategoryCommandService.UpdateCommand(request.categoryName,
-                request.parentCategoryCode, request.sort, request.visible, getLoginUserId()));
+                primaryProductType, typeCodes, description, request.parentCategoryCode, request.sort,
+                request.visible, getLoginUserId()));
         return success(true);
     }
 
@@ -123,14 +141,82 @@ public class CategoryAdminController {
     @Data
     @Schema(description = "商品分类保存请求")
     public static class CategorySaveReqVO {
-        @Size(max = 32) @Schema(description = "分类编码；创建时可空") private String categoryCode;
-        @NotBlank @Size(max = 128) @Schema(description = "分类名称") private String categoryName;
+        @Size(max = 32)
+        @Schema(description = "分类编码；创建时可空")
+        private String categoryCode;
+
+        @NotBlank
+        @Size(max = 128)
+        @Schema(description = "分类名称")
+        private String categoryName;
+
+        @Size(max = 32)
+        @Schema(description = "商品类型编码，由sc_product_type动态维护")
+        private String productType;
+
+        @Schema(description = "商品类型编码列表，由sc_product_type动态维护")
+        private List<@NotBlank @Size(max = 32) String> typeCodes;
+
+        @Size(max = 200)
+        @Schema(description = "分类描述")
+        private String description;
+
+        @Size(max = 200)
+        @Schema(description = "分类描述/备注")
+        private String remark;
+
         @Size(max = 32)
         @Schema(description = "父分类编码。创建时为空表示根分类；更新时三态：不传或 null 表示不变更父级，"
                 + "空字符串表示显式挂到根，非空编码表示挂到该父级")
         private String parentCategoryCode;
-        @Schema(description = "同级排序") private Integer sort;
-        @Schema(description = "前端展示可见性：1显示，0隐藏") private Short visible;
-        @Schema(description = "创建状态：0草稿，10启用") private Short status;
+
+        @Schema(description = "同级排序")
+        private Integer sort;
+
+        @Schema(description = "前端展示可见性：1显示，0隐藏")
+        private Short visible;
+
+        @Schema(description = "创建状态：0草稿，10启用；字典 supply_chain_category_status")
+        private Short status;
+
+        public List<String> resolveTypeCodes() {
+            if (typeCodes != null) {
+                List<String> cleaned = typeCodes.stream()
+                        .filter(s -> s != null && !s.isBlank())
+                        .map(String::trim)
+                        .distinct()
+                        .toList();
+                if (!cleaned.isEmpty()) {
+                    return cleaned;
+                }
+            }
+            if (productType != null && !productType.isBlank()) {
+                return List.of(productType.trim());
+            }
+            return List.of();
+        }
+
+        public String resolveProductType() {
+            List<String> resolved = resolveTypeCodes();
+            return resolved.isEmpty() ? null : resolved.get(0);
+        }
+
+        public String resolveDescription() {
+            if (remark != null && !remark.isBlank()) {
+                return remark.trim();
+            }
+            if (description != null && !description.isBlank()) {
+                return description.trim();
+            }
+            return null;
+        }
+
+        public boolean hasProductType() {
+            return !resolveTypeCodes().isEmpty();
+        }
+
+        public boolean hasExplicitProductTypeInput() {
+            return !resolveTypeCodes().isEmpty();
+        }
     }
 }

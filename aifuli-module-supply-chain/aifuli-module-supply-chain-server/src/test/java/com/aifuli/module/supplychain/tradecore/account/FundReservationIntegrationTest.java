@@ -93,9 +93,8 @@ class FundReservationIntegrationTest {
                                 FundReservationService reservationService,
                                 BuyerAccountMapper accountMapper,
                                 JdbcTemplate jdbc) throws Exception {
-        String buyerCode = "FUNDS_" + round;
-        buyerService.createBuyer(new BuyerCommandService.CreateBuyerCommand(
-                buyerCode, "资金并发采购商" + round, "资金采购商" + round,
+        String buyerCode = buyerService.createBuyer(new BuyerCommandService.CreateBuyerCommand(
+                null, "资金并发采购商" + round, "资金采购商" + round,
                 null, null, "AIFULI_MALL", "tenant-funds-" + round,
                 LocalDateTime.now(ZoneOffset.UTC), 1L));
 
@@ -195,13 +194,13 @@ class FundReservationIntegrationTest {
             BuyerAccountOpeningService openingService,
             FundReservationService reservationService,
             BuyerAccountMapper accountMapper) {
-        buyerService.createBuyer(new BuyerCommandService.CreateBuyerCommand(
-                "FUNDS_ZERO", "零余额采购商", "零余额采购商",
+        String zeroBuyerCode = buyerService.createBuyer(new BuyerCommandService.CreateBuyerCommand(
+                null, "零余额采购商", "零余额采购商",
                 null, null, "AIFULI_MALL", "tenant-funds-zero",
                 LocalDateTime.now(ZoneOffset.UTC), 1L));
         BuyerAccountOpeningService.AccountSnapshot opened = openingService.open(
                 new BuyerAccountOpeningService.OpeningBalanceCommand(
-                        "FUNDS_ZERO", Money.cny(0L), 1L,
+                        zeroBuyerCode, Money.cny(0L), 1L,
                         "evidence://opening/zero", new byte[32], "零期初",
                         "trace-opening-zero", "test-opening-zero"));
         assertThat(opened.balance()).isZero();
@@ -221,12 +220,12 @@ class FundReservationIntegrationTest {
         BuyerAccountDO afterCommit = accountMapper.selectByBuyerId(opened.buyerId());
         assertAccount(afterCommit, -FREEZE_AMOUNT, 0L);
 
-        buyerService.createBuyer(new BuyerCommandService.CreateBuyerCommand(
-                "FUNDS_NOACC", "未开户采购商", "未开户采购商",
+        String noAccountBuyerCode = buyerService.createBuyer(new BuyerCommandService.CreateBuyerCommand(
+                null, "未开户采购商", "未开户采购商",
                 null, null, "AIFULI_MALL", "tenant-funds-noacc",
                 LocalDateTime.now(ZoneOffset.UTC), 1L));
         Long missingBuyerId = context.getBean(BuyerMapper.class)
-                .selectByBuyerCode("FUNDS_NOACC").getId();
+                .selectByBuyerCode(noAccountBuyerCode).getId();
         assertThatThrownBy(() -> reservationService.freeze(
                 new FundReservationService.FreezeCommand(
                         missingBuyerId, "CARD_ORDER", "missing-account",

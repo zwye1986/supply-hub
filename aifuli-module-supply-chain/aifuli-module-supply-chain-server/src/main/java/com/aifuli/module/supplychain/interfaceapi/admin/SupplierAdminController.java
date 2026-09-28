@@ -5,6 +5,10 @@ import com.aifuli.framework.common.pojo.CommonResult;
 import com.aifuli.framework.common.pojo.PageResult;
 import com.aifuli.framework.common.util.monitor.TracerUtils;
 import com.aifuli.module.supplychain.tradecore.profile.domain.ClosedEnums;
+import com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService;
+import com.aifuli.module.supplychain.infrastructure.identity.SystemAssignedBusinessCodeGuard;
+import com.aifuli.module.supplychain.tradecore.supply.application.OfferFulfillmentScoreService;
+import com.aifuli.module.supplychain.tradecore.supply.application.OfferFulfillmentScoreService.ScoreUpdateResult;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierInvoiceService;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierInvoiceService.SaveInvoiceCommand;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierInvoiceService.SupplierInvoiceView;
@@ -21,17 +25,20 @@ import com.aifuli.module.supplychain.tradecore.supply.application.SupplierProfil
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierProfileQueryService.SupplyScopeView;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierSupplyScopeService;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierSupplyScopeService.ScopeLine;
+import com.aifuli.module.supplychain.tradecore.supply.domain.OfferFulfillmentScore;
 import com.aifuli.module.supplychain.tradecore.supply.domain.OfferStatus;
 import com.aifuli.module.supplychain.tradecore.supply.domain.SupplierStatus;
 import com.fasterxml.jackson.annotation.JsonAlias;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.annotation.JsonSetter;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.AssertTrue;
+import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
@@ -83,12 +90,14 @@ public class SupplierAdminController {
     private final SupplierSupplyScopeService scopeService;
     private final SupplierCooperativeProductService cooperativeProductService;
     private final SupplierInvoiceService invoiceService;
+    private final OfferFulfillmentScoreService offerFulfillmentScoreService;
 
     @GetMapping
     @PreAuthorize(SUPPLIER_QUERY_EXPRESSION)
     @Operation(summary = "分页查询供应商",
             description = "筛选用多值 status/sellableCategories/supplyModes 与 updatedFrom/To。"
-                    + "view=simple 返回 {supplierCode,supplierName}[]，不强制分页。身份用 supplierCode，金额单位 CNY 分。")
+                    + "view=simple 只返回正常（ACTIVE）的 {supplierCode,supplierName}[]，不强制分页。"
+                    + "身份用 supplierCode，金额单位 CNY 分。")
     public CommonResult<?> page(
             @Parameter(description = "供应商标准名称，模糊") @RequestParam(required = false) String supplierName,
             @Parameter(description = "供应商永久业务编码") @RequestParam(required = false) String supplierCode,
@@ -145,6 +154,8 @@ public class SupplierAdminController {
     @Operation(summary = "新增供应商（含期初）",
             description = "系统生成 SPL_ 编码。openingBalanceCents 仅创建可写，单位 CNY 分。")
     public CommonResult<String> create(@Valid @RequestBody SupplierSaveReqVO request) {
+        SystemAssignedBusinessCodeGuard.rejectSubmitted(ScopedBusinessCodeService.Kind.SPL,
+                request.isSupplierCodeSubmitted());
         return success(commandService.create(new CreateSupplierProfileCommand(
                 request.resolvedSupplierName(), toContacts(request.getContacts()),
                 request.getDeliveryRegionType(), request.getDeliveryRegionAdcodes(),
@@ -251,16 +262,32 @@ public class SupplierAdminController {
         return success(true);
     }
 
+    @PutMapping("/{supplierCode}/fulfillment-scores")
+    @PreAuthorize(SUPPLIER_UPDATE_EXPRESSION)
+    @Operation(summary = "保存供应商合作商品履约能力评分",
+            description = "人工录入稳定性与时效性评分，挂在未退役 Offer 身份列。"
+                    + "可只改其中一列，省略的列保持原值。"
+                    + "省略 platformSkuCodes 则覆盖该供应商全部未退役 Offer；给出列表则只覆盖这些 SKU。"
+                    + "改价 PUT .../offers/{offerNo} 不碰评分。")
+    public CommonResult<ScoreUpdateResult> saveFulfillmentScores(
+            @Parameter(description = "供应商永久业务编码") @PathVariable String supplierCode,
+            @Valid @RequestBody FulfillmentScoreSaveReqVO request) {
+        int updated = offerFulfillmentScoreService.saveSupplierScores(
+                supplierCode, request.getStabilityScore(), request.getTimelinessScore(),
+                request.getPlatformSkuCodes(), getLoginUserId());
+        return success(new ScoreUpdateResult(updated));
+    }
+
     @GetMapping("/{supplierCode}/offers")
     @PreAuthorize(SUPPLIER_QUERY_EXPRESSION)
     @Operation(summary = "合作商品列表（不含已移除）",
             description = "分页，默认 pageNo=1 pageSize=20，按 createdAt 倒序。可筛 sellableCategory/productType/productClassification。"
-                    + "身份用 supplierCode。金额单位 CNY 分。不暴露 DO。")
+                    + "身份用 supplierCode。金额单位 CNY 分。含可空稳定性/时效性评分。不暴露 DO。")
     public CommonResult<PageResult<OfferListItem>> listOffers(
             @PathVariable String supplierCode,
             @Parameter(description = "可售品类枚举名") @RequestParam(required = false) String sellableCategory,
             @Parameter(description = "动态商品类型编码") @RequestParam(required = false) String productType,
-            @Parameter(description = "商品分类枚举名") @RequestParam(required = false) String productClassification,
+            @Parameter(description = "商品分类：字典枚举名或类目 categoryCode") @RequestParam(required = false) String productClassification,
             @Parameter(description = "页码，默认1") @RequestParam(required = false) Integer pageNo,
             @Parameter(description = "每页条数，默认20") @RequestParam(required = false) Integer pageSize) {
         return success(cooperativeProductService.page(supplierCode, sellableCategory, productType,
@@ -421,6 +448,17 @@ public class SupplierAdminController {
     @Data
     @Schema(name = "SupplierSaveReqVO", description = "供应商档案保存")
     public static class SupplierSaveReqVO {
+        @JsonIgnore
+        @Schema(hidden = true)
+        private boolean supplierCodeSubmitted;
+
+        /** 只记录请求是否出现该字段；创建入口不接受任何手填值，包括 null 和空串。 */
+        @JsonSetter("supplierCode")
+        @Schema(hidden = true)
+        public void acceptSupplierCode(String ignored) {
+            supplierCodeSubmitted = true;
+        }
+
         /** 供应商标准名称 */
         @Size(max = 128)
         @Schema(description = "供应商标准名称", example = "爱奇艺")
@@ -626,7 +664,7 @@ public class SupplierAdminController {
         @Schema(description = "动态商品类型编码")
         private String productType;
         @NotBlank
-        @Schema(description = "商品分类枚举名")
+        @Schema(description = "商品分类：字典枚举名或类目 categoryCode")
         private String productClassification;
         @NotEmpty
         @Schema(description = "供货模式枚举名列表，不可为空")
@@ -681,7 +719,7 @@ public class SupplierAdminController {
         @Schema(description = "平台SKU永久业务编码")
         private String platformSkuCode;
         @NotBlank
-        @Schema(description = "供应价模式：FIXED固定值，REALTIME实时，DISCOUNT折扣")
+        @Schema(description = "供应价模式（字典supply_chain_offer_price_mode）：FIXED固定值，REALTIME实时更新，DISCOUNT按供货折扣")
         private String priceMode;
         @Schema(description = "草稿供应价，CNY分；REALTIME为空")
         private Long unitPriceCents;
@@ -698,5 +736,21 @@ public class SupplierAdminController {
         @Min(1)
         @Schema(description = "草稿最低起购量，空则取1，不继承供货配置预留字段")
         private Long minQuantity;
+    }
+
+    @Data
+    @Schema(description = "供应商合作商品履约能力评分保存")
+    public static class FulfillmentScoreSaveReqVO {
+        @Min(OfferFulfillmentScore.MIN)
+        @Max(OfferFulfillmentScore.MAX)
+        @Schema(description = OfferFulfillmentScore.STABILITY_COMMENT, example = "80")
+        private Integer stabilityScore;
+        @Min(OfferFulfillmentScore.MIN)
+        @Max(OfferFulfillmentScore.MAX)
+        @Schema(description = OfferFulfillmentScore.TIMELINESS_COMMENT, example = "70")
+        private Integer timelinessScore;
+        @Schema(description = "平台SKU永久业务编码列表；省略则覆盖该供应商全部未退役 Offer",
+                example = "[\"MOVIE_100\"]")
+        private List<String> platformSkuCodes;
     }
 }

@@ -2,6 +2,7 @@ package com.aifuli.module.supplychain.tradecore.catalog.application;
 
 import com.aifuli.framework.common.exception.ServiceException;
 import com.aifuli.module.supplychain.infrastructure.identity.BusinessNoGenerator;
+import com.aifuli.module.supplychain.infrastructure.identity.BusinessNoPrefixes;
 import com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerDO;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerProductDO;
@@ -16,22 +17,30 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSe
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSettlementPriceVersionDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSpuDO;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerSkuPricingDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerProductL2OverrideMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerProductL2OverrideVersionMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerSkuPricingMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceVersionMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSpuMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericPricingCalculator.PricingStatus;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.BuyerProductPricingInitializationEvent;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericBatchPricingService;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericBatchPricingService.ProjectOverrides;
 import com.aifuli.module.supplychain.tradecore.profile.domain.L2AdjustMode;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.context.ApplicationEventPublisher;
 
 import java.util.List;
 import java.time.LocalDateTime;
 
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BUYER_PRODUCT_DUPLICATE;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.L2_OVERRIDE_INVALID;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PLATFORM_SETTLEMENT_PRICE_MISSING;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -59,17 +68,21 @@ class BuyerProductCommandServiceTest {
     private final BuyerProductL2OverrideMapper overrideMapper = mock(BuyerProductL2OverrideMapper.class);
     private final BuyerProductL2OverrideVersionMapper overrideVersionMapper =
             mock(BuyerProductL2OverrideVersionMapper.class);
+    private final BuyerSkuPricingMapper buyerPricingMapper = mock(BuyerSkuPricingMapper.class);
     private final BusinessNoGenerator businessNoGenerator = mock(BusinessNoGenerator.class);
     private final SupplyChainDatabaseClock databaseClock = mock(SupplyChainDatabaseClock.class);
+    private final ApplicationEventPublisher eventPublisher = mock(ApplicationEventPublisher.class);
+    private final GenericBatchPricingService genericPricingService = mock(GenericBatchPricingService.class);
     private BuyerProductCommandService service;
 
     @BeforeEach
     void setUp() {
         when(databaseClock.now()).thenReturn(LocalDateTime.of(2026, 9, 4, 11, 0));
         service = new BuyerProductCommandService(
-                databaseClock, buyerMapper, productMapper, l1Mapper, l1VersionMapper,
-                overrideMapper, overrideVersionMapper, businessNoGenerator,
-                new SettlementPriceResolver(), new ProductSellabilityService(skuMapper, spuMapper));
+                databaseClock, eventPublisher, buyerMapper, productMapper, l1Mapper, l1VersionMapper,
+                overrideMapper, overrideVersionMapper, buyerPricingMapper, businessNoGenerator,
+                new SettlementPriceResolver(), new ProductSellabilityService(skuMapper, spuMapper),
+                genericPricingService);
         when(buyerMapper.selectByBuyerCodeForUpdate("BYR_A")).thenReturn(
                 BuyerDO.builder().id(5L).buyerCode("BYR_A").build());
         when(skuMapper.selectByCode("MOVIE_100")).thenReturn(PlatformSkuDO.builder()
@@ -218,6 +231,62 @@ class BuyerProductCommandServiceTest {
                 assertThat(version.getResolvedUnitPriceCents()).isEqualTo(900L));
     }
 
+    @Test
+    void addProductsWritesUnpricedIdentity() {
+        when(productMapper.selectByBuyerAndSku(5L, 11L)).thenReturn(null);
+        when(businessNoGenerator.next(BusinessNoPrefixes.BPD)).thenReturn("BPD_NEW");
+        when(productMapper.insert(any(BuyerProductDO.class))).thenAnswer(inv -> {
+            BuyerProductDO row = inv.getArgument(0);
+            row.setId(88L);
+            return 1;
+        });
+        when(buyerPricingMapper.selectByBuyerProductId(88L)).thenReturn(null);
+
+        service.addProducts("BYR_A", List.of(follow("MOVIE_100")), 1L);
+
+        verify(genericPricingService, never()).saveBuyer(any(), any(), any(), any());
+        ArgumentCaptor<BuyerSkuPricingDO> identity = ArgumentCaptor.forClass(BuyerSkuPricingDO.class);
+        verify(buyerPricingMapper).insert(identity.capture());
+        assertThat(identity.getValue().getBuyerProductId()).isEqualTo(88L);
+        assertThat(identity.getValue().getPricingStatus()).isEqualTo(PricingStatus.UNPRICED.name());
+        assertThat(identity.getValue().getCurrentVersionId()).isNull();
+        ArgumentCaptor<BuyerProductPricingInitializationEvent> event =
+                ArgumentCaptor.forClass(BuyerProductPricingInitializationEvent.class);
+        verify(eventPublisher).publishEvent(event.capture());
+        assertThat(event.getValue().buyerProductId()).isEqualTo(88L);
+        assertThat(event.getValue().operatorId()).isEqualTo(1L);
+    }
+
+    @Test
+    void addProductsSavesGenericPricingWhenTheLineCarriesOverrides() {
+        when(productMapper.selectByBuyerAndSku(5L, 11L)).thenReturn(null);
+        when(businessNoGenerator.next(BusinessNoPrefixes.BPD)).thenReturn("BPD_NEW");
+        when(productMapper.insert(any(BuyerProductDO.class))).thenAnswer(invocation -> {
+            BuyerProductDO row = invocation.getArgument(0);
+            row.setId(88L);
+            return 1;
+        });
+        when(buyerPricingMapper.selectByBuyerProductId(88L)).thenReturn(null);
+        ProjectOverrides overrides = ProjectOverrides.allInherited();
+
+        service.addProducts("BYR_A", List.of(new ProductLine(
+                "MOVIE_100", L2AdjustMode.FOLLOW_TEMPLATE, null, null, null, overrides)), 9L);
+
+        verify(genericPricingService).saveBuyer(eq("BYR_A"), eq(List.of("BPD_NEW")), eq(overrides), eq(9L));
+    }
+
+    @Test
+    void displayThresholdOutsideZeroToOneHundredIsRejected() {
+        when(productMapper.selectByBuyerAndSku(5L, 11L)).thenReturn(null);
+
+        assertThatThrownBy(() -> service.addProducts("BYR_A", List.of(
+                new ProductLine("MOVIE_100", L2AdjustMode.EQUAL_L1, null, null, 101, null)), 1L))
+                .isInstanceOf(ServiceException.class)
+                .extracting(ex -> ((ServiceException) ex).getCode())
+                .isEqualTo(L2_OVERRIDE_INVALID.getCode());
+        verify(productMapper, never()).insert(any(BuyerProductDO.class));
+    }
+
     private void stubLiveProduct() {
         when(productMapper.selectByCodeForUpdate("BPD_1")).thenReturn(BuyerProductDO.builder()
                 .id(77L).buyerProductCode("BPD_1").buyerId(5L).platformSkuId(11L)
@@ -242,6 +311,6 @@ class BuyerProductCommandServiceTest {
     }
 
     private static ProductLine follow(String skuCode) {
-        return new ProductLine(skuCode, L2AdjustMode.FOLLOW_TEMPLATE, null, null, null);
+        return new ProductLine(skuCode, L2AdjustMode.FOLLOW_TEMPLATE, null, null, null, null);
     }
 }

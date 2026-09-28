@@ -100,7 +100,7 @@ class ConnectorPublicationIntegrationTest {
 
             createDirectRechargeSku(catalog);
             configuration.createSupplier(new SupplierConfigurationCommandService.CreateSupplierCommand(
-                    "QINAMENG", "奇那梦", "奇那梦", "STANDARD_SUPPLIER", null, 1L));
+                    null, "奇那梦", "奇那梦", "STANDARD_SUPPLIER", null, 1L));
             String slotNo = configuration.createCredentialSlot(
                     new SupplierConfigurationCommandService.CreateCredentialSlotCommand(
                             "ENV", "env:QNM_TEST_USERKEY", "qnm-****", "v1", 1L));
@@ -166,10 +166,10 @@ class ConnectorPublicationIntegrationTest {
 
             String sourceNo = offerService.createRemoteOnDemandInventory(
                     new SupplierOfferPublicationService.CreateInventorySourceCommand(
-                            "QINAMENG", "QNM_TELCO_100", "QNM-REMOTE", 1L));
+                            "SPL_001", "SKU_001_100", "QNM-REMOTE", 1L));
             offerService.activateInventorySource(sourceNo, 0L, 1L);
             String offerNo = offerService.createOffer(new SupplierOfferPublicationService.CreateOfferCommand(
-                    "QINAMENG", "QNM_TELCO_100", "QNM-TELCO-100", 1L));
+                    "SPL_001", "SKU_001_100", "QNM-TELCO-100", 1L));
             LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
             SupplierOfferPublicationService.PublishResult first = offerService.publish(
                     publishOffer(offerNo, 0L, draft.connectorVersionId(), sourceNo, 9_700L, now));
@@ -220,26 +220,26 @@ class ConnectorPublicationIntegrationTest {
 
     private static void createDirectRechargeSku(ProductCatalogCommandService catalog) {
         catalog.createBrand(new ProductCatalogCommandService.CreateBrandCommand(
-                "QNM_BRAND", "奇那梦测试品牌", null, null, 0, 1L));
-        catalog.changeBrandStatus("QNM_BRAND", CatalogEntityStatus.ACTIVE, 1L);
+                "BRD_001", "奇那梦测试品牌", null, null, 0, 1L));
+        catalog.changeBrandStatus("BRD_001", CatalogEntityStatus.ACTIVE, 1L);
         catalog.createCategory(new ProductCatalogCommandService.CreateCategoryCommand(
-                "QNM_DIRECT", "奇那梦直充", null, 0, 1L));
-        catalog.changeCategoryStatus("QNM_DIRECT", CatalogEntityStatus.ACTIVE, 1L);
+                "CAT_001", "奇那梦直充", null, 0, 1L));
+        catalog.changeCategoryStatus("CAT_001", CatalogEntityStatus.ACTIVE, 1L);
         catalog.createSpu(new ProductCatalogCommandService.CreateSpuCommand(
-                "QNM_TELCO", "QNM_BRAND", "QNM_DIRECT",
+                "SPU_001", "BRD_001", "CAT_001",
                 "EQUITY", "EQUITY_PRODUCT", "VIRTUAL_CARD",
                 "奇那梦话费直充", null, null, "中台受理后不可自动退款或撤销", 1L));
-        catalog.changeSpuStatus("QNM_TELCO", CatalogEntityStatus.ACTIVE, 1L);
+        catalog.changeSpuStatus("SPU_001", CatalogEntityStatus.ACTIVE, 1L);
         catalog.createSku(new ProductCatalogCommandService.CreateSkuCommand(
-                "QNM_TELCO_100", "QNM_TELCO", "话费直充 100 元", "DIRECT_RECHARGE",
+                "SKU_001_100", "SPU_001", "话费直充 100 元", "DIRECT_RECHARGE",
                 10_000L, "CNY", 1L));
-        catalog.changeSkuStatus("QNM_TELCO_100", CatalogEntityStatus.ACTIVE, 1L);
+        catalog.changeSkuStatus("SKU_001_100", CatalogEntityStatus.ACTIVE, 1L);
     }
 
     private static SupplierConfigurationCommandService.CreateConnectorDraftCommand draft(
             String slotNo, String adapterType, String baseUrl, String config, String code) {
         return new SupplierConfigurationCommandService.CreateConnectorDraftCommand(
-                "QINAMENG", code, adapterType, baseUrl, "qnm-user", slotNo, "V1",
+                "SPL_001", code, adapterType, baseUrl, "qnm-user", slotNo, "V1",
                 "/callbacks/qnm/game-order/v1", 3_000, 10_000, 100, 20, config, 1L);
     }
 

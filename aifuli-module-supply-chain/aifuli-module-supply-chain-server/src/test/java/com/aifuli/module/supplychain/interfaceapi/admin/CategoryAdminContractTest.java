@@ -1,10 +1,15 @@
 package com.aifuli.module.supplychain.interfaceapi.admin;
 
+import com.aifuli.module.supplychain.tradecore.catalog.application.CategoryQueryService;
 import com.aifuli.module.supplychain.tradecore.catalog.application.CategoryQueryService.CategoryDetail;
+import com.aifuli.module.supplychain.tradecore.catalog.application.CategoryQueryService.ManagementCategoryNode;
 import io.swagger.v3.core.converter.ModelConverters;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
 import org.junit.jupiter.api.Test;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -53,16 +58,18 @@ class CategoryAdminContractTest {
                 .doesNotContain("ProductCategoryDO");
 
         assertThat(Arrays.stream(CategoryDetail.class.getRecordComponents()).map(component -> component.getName()))
-                .containsExactly("categoryCode", "categoryName", "parentId", "categoryLevel", "sort", "visible",
-                        "status", "createdAt", "updatedAt");
+                .containsExactly("categoryCode", "categoryNodeNo", "categoryName", "productType", "typeCodes", "description", "remark",
+                        "parentId", "categoryLevel", "sort", "visible", "status", "createdAt", "updatedAt");
         Map<String, io.swagger.v3.oas.models.media.Schema> schemas =
                 ModelConverters.getInstance().readAll(CategoryDetail.class);
         io.swagger.v3.oas.models.media.Schema<?> categorySchema = schemas.get("CategoryDetail");
         assertThat(categorySchema).as("未生成 CategoryDetail OpenAPI schema").isNotNull();
         Map<String, io.swagger.v3.oas.models.media.Schema> properties = categorySchema.getProperties();
         assertThat(properties.keySet()).containsExactlyInAnyOrder(
-                "categoryCode", "categoryName", "parentId", "categoryLevel", "sort", "visible", "status",
-                "createdAt", "updatedAt");
+                "categoryCode", "categoryNodeNo", "categoryName", "productType", "typeCodes", "description", "remark", "parentId",
+                "categoryLevel", "sort", "visible", "status", "createdAt", "updatedAt");
+        assertThat(properties.get("categoryNodeNo").getDescription())
+                .isEqualTo("分类节点内部全局短序号，供直接子分类编码父段引用");
         properties.forEach((name, property) -> {
             assertThat(property.getDescription())
                     .as("OpenAPI schema CategoryDetail.%s 缺少字段说明", name)
@@ -77,6 +84,98 @@ class CategoryAdminContractTest {
                     assertThat(document).as("分类 Path 参数 %s 缺少 @Parameter", parameter.getName()).isNotNull();
                     assertThat(document.description()).isNotBlank();
                 });
+    }
+
+    /** 分类保存契约必须接收并约束详情回显所需的商品类型多选/单选与分类描述/备注。 */
+    @Test
+    void categorySaveRequestDefinesProductTypeAndDescription() throws NoSuchFieldException {
+        var productType = CategoryAdminController.CategorySaveReqVO.class.getDeclaredField("productType");
+        assertThat(productType.getAnnotation(Size.class).max()).isEqualTo(32);
+        assertThat(productType.getAnnotation(io.swagger.v3.oas.annotations.media.Schema.class).description())
+                .isEqualTo("商品类型编码，由sc_product_type动态维护");
+
+        var typeCodes = CategoryAdminController.CategorySaveReqVO.class.getDeclaredField("typeCodes");
+        assertThat(typeCodes.getAnnotation(Schema.class).description())
+                .isEqualTo("商品类型编码列表，由sc_product_type动态维护");
+
+        var description = CategoryAdminController.CategorySaveReqVO.class.getDeclaredField("description");
+        assertThat(description.getAnnotation(Size.class).max()).isEqualTo(200);
+        assertThat(description.getAnnotation(Schema.class).description())
+                .isEqualTo("分类描述");
+
+        var remark = CategoryAdminController.CategorySaveReqVO.class.getDeclaredField("remark");
+        assertThat(remark.getAnnotation(Size.class).max()).isEqualTo(200);
+        assertThat(remark.getAnnotation(Schema.class).description())
+                .isEqualTo("分类描述/备注");
+    }
+
+    /**
+     * 分类管理树参数、保存请求与响应模型必须明确状态字典。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#53-商品中心数据字典与配置变更}。
+     */
+    @Test
+    @SuppressWarnings("rawtypes")
+    void categoryDocumentsStatusDictionary() throws Exception {
+        Method managementTreeMethod = Arrays.stream(CategoryAdminController.class.getDeclaredMethods())
+                .filter(method -> method.getName().equals("managementTree"))
+                .findFirst()
+                .orElseThrow();
+        Map<String, String> paramDescriptions = Arrays.stream(managementTreeMethod.getParameters())
+                .filter(p -> p.isAnnotationPresent(Parameter.class))
+                .collect(java.util.stream.Collectors.toMap(
+                        java.lang.reflect.Parameter::getName,
+                        p -> p.getAnnotation(Parameter.class).description()));
+
+        assertThat(paramDescriptions.get("status"))
+                .contains("supply_chain_category_status", "0草稿", "10启用", "20禁用");
+
+        var saveStatusField = CategoryAdminController.CategorySaveReqVO.class.getDeclaredField("status");
+        assertThat(saveStatusField.getAnnotation(Schema.class).description())
+                .contains("supply_chain_category_status");
+
+        Map<String, io.swagger.v3.oas.models.media.Schema> detailSchemas =
+                ModelConverters.getInstance().readAll(CategoryDetail.class);
+        io.swagger.v3.oas.models.media.Schema<?> detailSchema = detailSchemas.get("CategoryDetail");
+        assertThat(detailSchema).isNotNull();
+        io.swagger.v3.oas.models.media.Schema<?> detailStatusProperty =
+                (io.swagger.v3.oas.models.media.Schema<?>) detailSchema.getProperties().get("status");
+        assertThat(detailStatusProperty.getDescription())
+                .contains("supply_chain_category_status");
+
+        Map<String, io.swagger.v3.oas.models.media.Schema> managementNodeSchemas =
+                ModelConverters.getInstance().readAll(ManagementCategoryNode.class);
+        io.swagger.v3.oas.models.media.Schema<?> nodeSchema = managementNodeSchemas.get("ManagementCategoryNode");
+        assertThat(nodeSchema).isNotNull();
+        io.swagger.v3.oas.models.media.Schema<?> nodeStatusProperty =
+                (io.swagger.v3.oas.models.media.Schema<?>) nodeSchema.getProperties().get("status");
+        assertThat(nodeStatusProperty.getDescription())
+                .contains("supply_chain_category_status");
+    }
+
+    /** 管理树节点契约必须包含原型回显所需的时间、商品类型多选/单选、描述/备注与商品计数，且所有字段都有 OpenAPI 语义。 */
+    @Test
+    @SuppressWarnings("rawtypes")
+    void managementCategoryNodeUsesDocumentedReadModel() {
+        assertThat(Arrays.stream(ManagementCategoryNode.class.getRecordComponents()).map(component -> component.getName()))
+                .containsExactly("id", "categoryCode", "categoryNodeNo", "categoryName", "productType", "typeCodes", "description", "remark",
+                        "categoryLevel", "parentId", "sort", "visible", "status", "effectiveVisible", "productCount",
+                        "createdAt", "updatedAt", "children");
+        Map<String, io.swagger.v3.oas.models.media.Schema> schemas =
+                ModelConverters.getInstance().readAll(ManagementCategoryNode.class);
+        io.swagger.v3.oas.models.media.Schema<?> nodeSchema = schemas.get("ManagementCategoryNode");
+        assertThat(nodeSchema).as("未生成 ManagementCategoryNode OpenAPI schema").isNotNull();
+        Map<String, io.swagger.v3.oas.models.media.Schema> properties = nodeSchema.getProperties();
+        assertThat(properties.keySet()).containsExactlyInAnyOrder(
+                "id", "categoryCode", "categoryNodeNo", "categoryName", "productType", "typeCodes", "description", "remark",
+                "categoryLevel", "parentId", "sort", "visible", "status", "effectiveVisible", "productCount",
+                "createdAt", "updatedAt", "children");
+        assertThat(properties.get("categoryNodeNo").getDescription())
+                .isEqualTo("分类节点内部全局短序号，供直接子分类编码父段引用");
+        properties.forEach((name, property) -> {
+            assertThat(property.getDescription())
+                    .as("OpenAPI schema ManagementCategoryNode.%s 缺少字段说明", name)
+                    .isNotBlank();
+        });
     }
 
     private record GetMappingAlias(String[] paths) {

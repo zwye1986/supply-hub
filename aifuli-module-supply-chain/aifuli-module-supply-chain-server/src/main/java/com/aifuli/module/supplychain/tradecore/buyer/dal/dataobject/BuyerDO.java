@@ -27,6 +27,8 @@ public class BuyerDO {
     private Long id;
     /** 采购商永久业务编码 */
     private String buyerCode;
+    /** 分销商内部全局短序号，供项目编码父段引用 */
+    private Short codeScopeNo;
     /** 采购商标准名称 */
     private String buyerName;
     /** 采购商列表简称 */

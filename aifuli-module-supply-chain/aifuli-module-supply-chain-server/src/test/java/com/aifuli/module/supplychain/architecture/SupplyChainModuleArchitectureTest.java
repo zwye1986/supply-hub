@@ -1,6 +1,8 @@
 package com.aifuli.module.supplychain.architecture;
 
 import com.aifuli.module.supplychain.border.instore.dal.mysql.InstoreChannelUserBindingMapper;
+import com.tngtech.archunit.base.DescribedPredicate;
+import com.tngtech.archunit.core.domain.JavaClass;
 import com.tngtech.archunit.core.domain.JavaClasses;
 import com.tngtech.archunit.core.domain.JavaMethod;
 import com.tngtech.archunit.core.importer.ClassFileImporter;
@@ -32,6 +34,35 @@ class SupplyChainModuleArchitectureTest {
             .should().dependOnClassesThat()
             .resideInAnyPackage("..persistence..", "org.springframework..", "org.apache.ibatis..");
 
+    /**
+     * Offer 身份上的人工评分是路由预备输入，引擎不依赖评分服务。
+     * PRD 三策略模型（STABLE/COMPOSITE）经 {@code RoutingCandidate} 不可变快照注入评分，
+     * 该快照类为唯一豁免；其余 routing.domain 类仍不得持有评分字段。
+     * 设计见 {@code docs/superpowers/specs/2026-09-21-offer-fulfillment-score-design.md#7-与路由的边界} 与
+     * {@code docs/superpowers/specs/2026-09-23-order-frontend-alignment-and-routing-prd-model-design.md#54-候选解析与三策略排序}。
+     */
+    static final ArchRule routing_domain_does_not_depend_on_fulfillment_score_service = noClasses()
+            .that().resideInAPackage("..routing.domain..")
+            .should().dependOnClassesThat()
+            .haveSimpleName("OfferFulfillmentScoreService");
+
+    static final ArchRule routing_domain_has_no_fulfillment_score_fields = noFields()
+            .that().areDeclaredInClassesThat(
+                    // PRD 三策略模型：RoutingCandidate 快照为评分字段唯一豁免。
+                    JavaClass.Predicates.resideInAPackage("..routing.domain..")
+                            .and(DescribedPredicate.describe("is not RoutingCandidate snapshot",
+                                    clazz -> !"RoutingCandidate".equals(clazz.getSimpleName()))))
+            .should().haveNameMatching("(?i).*(stability|timeliness).*score.*");
+
+    /**
+     * catalog 应用层不得直接写 Offer 评分；商品侧 Controller 只调用 tradecore.supply 单一写入服务。
+     * 设计见 {@code docs/superpowers/specs/2026-09-21-offer-fulfillment-score-design.md#2-领域不变量}。
+     */
+    static final ArchRule catalog_application_does_not_write_offer_scores = noClasses()
+            .that().resideInAPackage("..tradecore.catalog.application..")
+            .should().dependOnClassesThat()
+            .haveSimpleName("OfferFulfillmentScoreService");
+
     static final ArchRule adapter_does_not_write_orders = noClasses()
             .that().resideInAPackage("..supplieradapter..")
             .should().dependOnClassesThat().resideInAPackage("..border..dal..");
@@ -42,9 +73,12 @@ class SupplyChainModuleArchitectureTest {
             .should().dependOnClassesThat().resideInAnyPackage("..dal..");
 
     /**
-     * 供货命中、标品SKU池供应商过滤、分销商品列表展示禁止依赖 ProductCategoryMapper：
-     * 三码是彼此独立的封闭枚举，不应回退去走类目树祖先链。
-     * 设计见 {@code docs/superpowers/specs/2026-09-07-供应链管理端表单字典与标品标签设计.md#7-测试门禁}。
+     * 供货命中、标品SKU池供应商过滤、分销商品列表展示禁止直接依赖 ProductCategoryMapper：
+     * 类目树数据所有权在 catalog。三码写入期由 {@code ProductClassificationValidationService} 解析类目编码；
+     * 供货命中的归属判断（配置码为 SPU 码祖先或相等，2026-09-23 起取代字符串全等）由 catalog 应用层
+     * {@code ProductCategoryCoverageService} 封装，supply 侧只能经它委托，不得自己回退去走类目树。
+     * 设计见 {@code docs/superpowers/specs/2026-09-07-供应链管理端表单字典与标品标签设计.md#7-测试门禁}（d3）、
+     * {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线}（d34）。
      */
     static final ArchRule supply_matching_does_not_read_category_tree = noClasses()
             .that().haveSimpleName("SupplierCooperativeProductService")
@@ -220,6 +254,21 @@ class SupplyChainModuleArchitectureTest {
     @Test
     void routingIsPure() {
         routing_is_pure.check(importedClasses);
+    }
+
+    @Test
+    void routingDomainDoesNotDependOnFulfillmentScoreService() {
+        routing_domain_does_not_depend_on_fulfillment_score_service.check(importedClasses);
+    }
+
+    @Test
+    void routingDomainHasNoFulfillmentScoreFields() {
+        routing_domain_has_no_fulfillment_score_fields.check(importedClasses);
+    }
+
+    @Test
+    void catalogApplicationDoesNotWriteOfferScores() {
+        catalog_application_does_not_write_offer_scores.check(importedClasses);
     }
 
     @Test

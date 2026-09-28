@@ -356,3 +356,133 @@ databaseChangeLog:
             encoding: UTF-8
             splitStatements: true
             stripComments: false
+  - changeSet:
+      id: 035-generic-batch-pricing
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 035-generic-batch-pricing.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 036-category-product-type-description
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 036-category-product-type-description.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 037-category-type-codes
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 037-category-type-codes.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 038-spu-fulfillment-type
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 038-spu-fulfillment-type.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 039-sku-suggested-sale-price-rule
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 039-sku-suggested-sale-price-rule.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 040-fulfillment-asset-lifecycle-status
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 040-fulfillment-asset-lifecycle-status.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 040-product-classification-category-code
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 040-product-classification-category-code.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 041-sku-inventory
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 041-sku-inventory.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 042-offer-fulfillment-score
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 042-offer-fulfillment-score.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 043-offer-fulfillment-score-default
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 043-offer-fulfillment-score-default.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 044-routing-rule-prd-model
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 044-routing-rule-prd-model.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 045-supplier-sku-daily-quota
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 045-supplier-sku-daily-quota.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 046-business-code-scope
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 046-business-code-scope.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false

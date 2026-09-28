@@ -4,7 +4,7 @@
 
 本文根据 `supplychainhubweb` 已落地的供应链中台页面（`src/views/supplier`、`src/api/supplier`）定义管理端 REST，供前端关掉 mock 后对接。
 
-前端范围仅三块：**供应商、分销商、项目**（含供货配置、合作商品、分销商品、项目商品、分销层级）。新增供应商供货配置、新增分销商的品类/类型/分类下拉改为 system 数据字典，不再用分类树。加价模板 / 订单 / 售后 / 路由页面尚未建设，不在本文。
+前端范围仅三块：**供应商、分销商、项目**（含供货配置、合作商品、分销商品、项目商品、分销层级）。新增供应商供货配置、新增分销商的品类/类型/分类下拉改为 system 数据字典，不再用分类树。加价模板不在本文。`supplychainhubweb` 已有订单/售后/路由规则页面与 mock（`src/views/supplier/order`、`src/api/order`、`src/api/routing`），关掉 mock 后的平台订单只读、路由记录、供应商订单、路由规则 GET 投影分别见 `docs/superpowers/specs/2026-09-12-supply-chain-order-admin-readonly-design.md`、`docs/superpowers/specs/2026-09-21-order-routing-records-admin-design.md`、`docs/superpowers/specs/2026-09-21-supplier-order-admin-readonly-design.md` 与 `docs/superpowers/specs/2026-09-21-routing-rule-admin-readonly-design.md`；路由规则页保存（补丁发布）见 `docs/superpowers/specs/2026-09-21-routing-rule-admin-write-design.md`。金额仍按 a2 用分，不按 mock 的元适配。平台列表不得用 `source=SUPPLIER` 冒充供应商订单聚合。路由规则页不得把 mock 的综合权重、项目/商品类型四级当成已生效配置；可写请求必须带 SKU、履约类型与有序候选。
 
 与 `docs/superpowers/specs/2026-08-28-supply-chain-prd-alignment-design.md` 冲突时：
 
@@ -175,9 +175,15 @@
 
 **对接方式** `integrationModes`：`API` / `H5` / `MANUAL`，多选数组。可空。
 
-**供应价模式**：`FIXED` / `REALTIME` / `DISCOUNT`（已有）。
+**供应价模式** `priceMode`：`FIXED` / `REALTIME` / `DISCOUNT`。管理端「新增供应商品」批量配置与合作商品行下拉统一读取 system 数据字典 `supply_chain_offer_price_mode`；本次只配置字典，不修改前端工程。字典只负责标签、排序与展示颜色，提交值必须是下表三个枚举名；供应链后端继续用 `OfferPriceMode` 做封闭校验，不在请求线程远程调用 system 服务。
 
-**合作商品状态**：`PUBLISHED` 上架、`SUSPENDED` 下架、`RETIRED` 已移除（列表不返回）。新增默认 `PUBLISHED`。编辑已上架单价/模式必须发新 OfferVersion。
+| 字典值 | 页面文案 | 说明 |
+| --- | --- | --- |
+| `FIXED` | 固定值 | 直接填入固定供应价 |
+| `REALTIME` | 实时更新 | 按供应商 API 实时返回价格（点餐/电影票） |
+| `DISCOUNT` | 按供货折扣 | 按销售建议价 × 折扣率计算供应价 |
+
+**合作商品状态**：`PUBLISHED` 上架、`SUSPENDED` 下架、`RETIRED` 已移除（列表不返回）。新增默认 `PUBLISHED`。管理端编辑已上架单价/模式只更新身份列，不写 OfferVersion（避免伪造缺连接器的版本）；商品列表与通用定价按身份列回退读取，见 `docs/superpowers/specs/2026-09-22-effective-supply-price-identity-fallback-design.md`。带连接器的可路由发布仍走既有 `SupplierOfferPublicationService`，那条链路改价必须发新 OfferVersion。
 
 **分销等级** `distributionLevel`：`1` / `2` / `3`（仅组织深度，不是结算价层级）。
 
@@ -220,12 +226,18 @@
 **抬头类型** `titleType`（仅开票子资源）：`ENTERPRISE` / `PERSONAL`。详见开票设计。
 
 非法常量 → `ENUM_NOT_OPEN`（替换原「非空即拒」的时效/结算/对接语义；未知值仍拒绝）。
+`ClosedEnums` 抛出该码时，HTTP `msg` 必须带上枚举类型、实际提交值与允许值列表，例如
+「未知枚举值：SellableCategory 不支持 FOO，允许值：EQUITY、PHYSICAL、MOVIE、JD、DINING、TAKEOUT、SUPERMARKET、HEMA、RTMART、LIFE」。
+错误码目录短文案仍为「未知枚举值」，不得只把短文案返回给调用方。
+SPU / 供货范围写入的 `productClassification` 不走 `ClosedEnums`：类目树 `category_code` 按 d34 落库，未知码为 `CATEGORY_NOT_FOUND`。
 
 ### 4.3 类目树与表单字典
 
 `GET /supply-chain/categories`（树形集合，子节点嵌在 `children`；不要 `/tree`）仍返回已启用类目树，供主数据维护。
 
-新增供应商供货配置、新增分销商、合作商品加购筛选**不读**该接口。可售品类 / 商品类型 / 商品分类为独立封闭枚举，选项来自 system 字典，JSON 为枚举名（`sellableCategory` / `productType` / `productClassification`）。不校验祖先链，不把 `equity` 等 mock 小写码或类目内部 id 当契约。详见
+新增供应商供货配置、新增分销商、合作商品加购筛选**不读**该接口做祖先链校验。可售品类 / 商品类型选项来自 system 字典。
+`productClassification` 写入允许字典枚举名或类目 `categoryCode`（见商品中心 d34）；命中仍按字符串全等。
+不校验祖先链，不把 `equity` 等 mock 小写码或类目内部 id 当契约。详见
 `docs/superpowers/specs/2026-09-07-供应链管理端表单字典与标品标签设计.md`。
 
 `CATEGORY_CHAIN_INVALID` 仅保留给类目树主数据自身的父子关系；供货配置与分销商档案不再抛该码。
@@ -236,13 +248,17 @@
 
 查询：`keyword`、`sellableCategory`、`productType`、`productClassification`、`pageNo`、`pageSize`。
 
+`keyword` 为包含匹配，同时命中 SKU 名称、SKU 编码、SPU 名称、SPU 编码。新增分销商品弹窗的「名称/编号」搜索走该参数；省略或空白不筛选。
+
 附加过滤：
 
 - `supplierCode`：只返回 SPU 三码命中该供应商供货配置、且尚无未退役 Offer 的 SKU。
-- `buyerCode`：只返回该分销商**尚未**关联的平台 SKU（新增分销商品）。
+- `buyerCode`：只返回该分销商**尚未**关联的平台 SKU（新增分销商品）。不按分销商档案上的可售品类或商品类型再收窄；类型 Tab 由调用方传 `productType`。
 - `projectCode`：只返回该项目所属分销商**已有** `BuyerProduct`、且项目目录尚未未退役关联的 SKU（新增项目商品）。缺少 `BuyerProduct` 的标品不得出现。
 
-金额字段：`suggestPriceCents`（L1 结算口径）、`marketPriceCents`（兼容既有 JSON 字段名；C 端建议价，实际取 `sc_platform_sku.suggested_sale_price`，若无则空）。`marketPriceCents` 不得取履约面值 `face_value` 或市场划线价 `market_price`；销售价来源以 09-12 范围对齐 §5 为准。点餐/电影 L1 可为 0。
+金额与展示字段：`suggestPriceCents`（L1 结算口径）、`marketPriceCents`（兼容既有 JSON 字段名；C 端建议价，实际取 `sc_platform_sku.suggested_sale_price`，若无则空）、`supplyPriceCents`（当前最低有效供货价，口径与通用定价最低供货价相同：供应商启用、Offer 已发布；当前版本有效则用版本单价，否则回退身份列，多条取最低；没有有效报价则为空，0 是有效价格，见 `docs/superpowers/specs/2026-09-22-effective-supply-price-identity-fallback-design.md`）、`categoryName`（SPU 主类目名称，归档或缺失则为空）。`categoryName` 只用于弹窗「分类」列展示，不参与筛选，不按类目祖先链过滤。`marketPriceCents` 不得取履约面值 `face_value` 或市场划线价 `market_price`；销售价来源以 09-12 范围对齐 §5 为准。点餐/电影 L1 可为 0。
+
+商品管理聚合列表及新增分销商品选品只返回至少关联一个正常（`ACTIVE`）供应商未退役 Offer 的 SKU；暂停、黑名单、归档供应商及其独占商品不进入结果。新增供应商品选品 `excludeAddedSupplierOffers=true` 是例外，允许尚无任何供应商的 SKU 进入，以保留首个供应商关联闭环。所有场景的供应商展示与最低有效供货价均忽略非正常供应商。
 
 ## 5. 供应商
 
@@ -252,7 +268,7 @@
 
 筛选：`supplierName`、`supplierCode`、`sellableCategories`（多，枚举名）、`supplyModes`（多）、`status`（多，枚举名）、`updatedFrom`、`updatedTo`、`pageNo`、`pageSize`。
 
-名称下拉：同一集合加 `view=simple`，返回 `{ supplierCode, supplierName }[]`（可不分页）。
+名称下拉：同一集合加 `view=simple`，只返回状态为 `ACTIVE`（正常）的 `{ supplierCode, supplierName }[]`（可不分页）。暂停、黑名单、归档供应商不得作为商品列表筛选项。
 
 列表行：`id`、`supplierCode`、`supplierName`、`status`、聚合自供货配置的 `sellableCategories[]` / `productTypes[]` / `productClassifications[]` / `supplyModes[]`（均为枚举名）、`skuCount`（未退役 Offer 数）、`onboardedAt`、`updatedAt`、主联系人 `contactName`/`contactMobile`（原值回显）。
 
@@ -323,19 +339,24 @@
 - `GET /supply-chain/suppliers/{supplierCode}/supply-scopes`
 - `PUT /supply-chain/suppliers/{supplierCode}/supply-scopes` 全量替换
 
-行：`sellableCategory`、`productType`、`productClassification`、`supplyModes[]`、`maxQuantity`、`minQuantity`。三码与模式、数量缺一拦截；`maxQuantity`、`minQuantity` 分别只校验正整数，不建立大小关系。`minQuantity` 是允许最低起订量预留字段，仅存储、回显，不参与当前业务判断。改配置不改已发布 Offer；收窄只阻止新关联。命中规则见字典专文。
+行：`sellableCategory`、`productType`、`productClassification`、`categoryId`、`supplyModes[]`、`maxQuantity`、`minQuantity`。三码与模式、数量缺一拦截；`maxQuantity`、`minQuantity` 分别只校验正整数，不建立大小关系。`minQuantity` 是允许最低起订量预留字段，仅存储、回显，不参与当前业务判断。改配置不改已发布 Offer；收窄只阻止新关联。命中规则见字典专文。
+
+`categoryId` 是查询接口的回显增强字段（2026-09-21 新增，只读）：`productClassification` 为未归档类目编码（`sc_product_category.category_code`）时回填其内部主键，供前端类目树级联组件回显；为封闭枚举名（`ELECTRONICS`/`VIRTUAL_CARD`/`MOVIE_TICKET`）、类目编码已删除或类目已归档时为 `null`（归档即视为不可回显，前端兜底展示编码原样）。批量解析一次查库，不引入 N+1。`PUT` 保存接口不接收该字段，写入口径仍按 `productClassification` 编码提交。
 
 ### 5.5 合作商品
 
 - `GET /supply-chain/suppliers/{supplierCode}/offers` 分页，筛选 `sellableCategory`/`productType`/`productClassification`
-- `POST /supply-chain/suppliers/{supplierCode}/offers` body `{ items: [...] }` 批量新增，默认 `PUBLISHED`
-- `PUT /supply-chain/suppliers/{supplierCode}/offers/{offerNo}` 编辑（上架中改价发新版本）
+- `POST /supply-chain/suppliers/{supplierCode}/offers` body `{ items: [...] }` 批量新增，默认 `PUBLISHED`。未退役的同一 SKU 再提交仍拒绝，不改成更新。新增供应商品选品走 `GET /supply-chain/products/management-page`，并传 `excludeAddedSupplierOffers=true` 与 `supplierCode` 排除未退役供应商品；省略该开关时 `supplierCode` 仍表示只看该供应商已供商品。已退役 SKU 会再次出现。不按供货配置三码收窄，也不改变 `buyerCode` 排除未移除分销商品。`supplierCode` 空白返回 `SUPPLIER_CODE_REQUIRED`，供应商不存在返回 `SUPPLIER_NOT_FOUND`。
+- `PUT /supply-chain/suppliers/{supplierCode}/offers/{offerNo}` 编辑（上架中改价只更新身份列，不写 OfferVersion；列表与定价按身份列回退）
+- `PUT /supply-chain/suppliers/{supplierCode}/fulfillment-scores` 人工录入稳定性/时效评分（可按 SKU 子集）
 - `PATCH /supply-chain/suppliers/{supplierCode}/offers/{offerNo}` `{ "status": "PUBLISHED"|"SUSPENDED" }` 上架/下架
 - `DELETE /supply-chain/suppliers/{supplierCode}/offers/{offerNo}` 逻辑移除（`RETIRED`，列表不再返回）
 
-行字段：平台 SPU/SKU 编码与名称、SPU 三码（`sellableCategory`/`productType`/`productClassification`）、`suggestPriceCents`、`priceMode`、`unitPriceCents`、`discountBp`（10000=100%）、`offerSupplyMode`、`maxQuantity`、`minQuantity`、`status`。`FIXED` 单价>0；`DISCOUNT` 折扣 ∈[1,10000] 且建议价>0；`REALTIME` 禁止填固定价。必须按三码整体唯一命中一条供货配置。
+行字段：平台 SPU/SKU 编码与名称、SPU 三码（`sellableCategory`/`productType`/`productClassification`）、`suggestPriceCents`、`priceMode`（字典 `supply_chain_offer_price_mode`）、`unitPriceCents`、`discountBp`（10000=100%）、`offerSupplyMode`、`maxQuantity`、`minQuantity`、`status`。`FIXED` 单价>0；`DISCOUNT` 折扣 ∈[1,10000] 且建议价>0；`REALTIME` 禁止填固定价。必须按三码整体唯一命中一条供货配置。
 
 SKU 未填供货上限时继承供货配置 `maxQuantity`；未填最低起购量时固定取 1。供货配置 `minQuantity` 是预留字段，不得被合作商品继承。
+
+履约能力评分挂点、批量评分与商品列表弹窗契约见 `docs/superpowers/specs/2026-09-21-offer-fulfillment-score-design.md`。`PUT /supply-chain/suppliers/{supplierCode}/fulfillment-scores` 可只改稳定性或时效性一列，省略的列保持原值；新建合作商品默认 80；改价 `PUT .../offers/{offerNo}` 不碰评分。
 
 ### 5.6 开票信息
 
@@ -366,7 +387,17 @@ SKU 未填供货上限时继承供货配置 `maxQuantity`；未填最低起购�
 
 ### 6.2 列表与档案
 
-`GET /supply-chain/buyers` 筛选：`buyerName`、`buyerCode`、`distributionLevels`、`cooperationModes`、`sellableCategories`、`status`、`updatedFrom`/`updatedTo`。
+`GET /supply-chain/buyers` 筛选：`buyerName`、`buyerCode`、`distributionLevels`、`cooperationModes`、`sellableCategories`、`status`、`updatedFrom`/`updatedTo`。名称筛选是包含匹配。
+
+默认分页（不带 `view`）按组织树返回。根列表只放一级分销商；一级的 `children` 是它的二级分销商，二级的 `children` 是它的三级分销商，三级的 `children` 为空数组。列表行不返回 `parentBuyerCode`。`pageNo`、`pageSize`、`total` 只统计一级；二级和三级挂在对应一级下面，不占分页名额。同一层按 `updatedAt DESC, id DESC` 排序。`distributionLevel` 为空的历史数据按一级参与筛选和挂接。
+
+筛选决定命中节点，不把树拍扁后再过滤：
+
+1. 命中节点必须同时满足全部筛选条件。`cooperationModes`、`sellableCategories` 各自内部是「命中任一」，两个条件同时出现时取交集。
+2. 命中一级时，带上该一级下全部能挂接的二级和三级。
+3. 命中二级或三级时，带回其一级祖先。祖先本身可以不满足筛选条件。`children` 只保留通往命中节点的分支，命中节点的全部可挂接下级仍保留；不在这条分支上的同级不返回。
+4. 无法沿未归档的「一级 → 二级 → 三级」挂接的节点从列表丢掉。上级已归档、上级不存在、等级和上级深度不一致，都算挂不回。三级不能直接挂到一级下面。
+5. `GET /buyers/{buyerCode}/children` 仍是扁平后代列表，口径见 6.1，不随这次列表嵌套改变。
 
 投影（同一集合，不用独立路径）：
 
@@ -375,14 +406,18 @@ SKU 未填供货上限时继承供货配置 `maxQuantity`；未填最低起购�
 
 `GET /supply-chain/buyers/{buyerCode}`、`POST /supply-chain/buyers`、`PUT /supply-chain/buyers/{buyerCode}` 档案字段对齐前端分销商表单：名称、联系人、分销品类/类型（`sellableCategories[]` / `productTypes[]` 枚举名，不是类目 id）、合作模式、类型、择优倾向、结算方式/周期、对接方式、合作开始日、说明、公司/信用代码/法人/地址/银行/证件、期初 `openingBalanceCents`（创建一次，允许 0）。详情中的 `legalPersonMobile`、`bankAccount`、`contacts[].mobile`、`primaryContactMobile` 及证件 fileKey 均按原值回显，不提供 `legalPersonMobileMasked` / `bankAccountMasked` 字段。字典见专文 §3。
 
-分页列表行除基础档案字段外，还返回以下只读聚合字段：
+详情响应中的 `productTypes[]` 为对象数组，字段固定为 `{ id, name }`：按已保存的 `scope_kind=PRODUCT_TYPE` 范围编码关联 `sc_product_type.type_code`，`id` 取商品类型业务编码，`name` 取商品类型名称，不暴露商品类型表内部自增主键。创建/编辑请求的 `productTypes[]` 仍提交商品类型业务编码；列表响应继续返回编码数组，避免改变列表筛选与既有投影契约。
 
-- `productTypes[]`：`sc_buyer_category_scope` 中 `scope_kind=PRODUCT_TYPE` 的商品类型枚举名；`sellableCategories[]` 继续只读取 `scope_kind=SELLABLE`，两者互相独立，禁止相互推导；
-- `projectCount`：该分销商未归档项目数，`ARCHIVED` 项目不计入；
-- `skuCount`：该分销商状态为有效的分销商品数，已移除分销商品不计入；
-- `cooperationTime`：列表展示用合作时间，与档案 `cooperationStartedAt` 取同一 `sc_buyer.cooperation_started_at` 值。
+分页列表行除基础档案字段外，还返回以下只读字段。数量和集合按**本次响应里可见的子树**汇总，不把被筛选掉的同级算进去：
 
-分页聚合必须按当页 Buyer 集合批量读取，禁止为每行追加项目数、SKU 数等 N+1 查询。详情的 `sellableCategories[]` / `productTypes[]` 只返回已经保存的独立范围行；历史记录缺少 `SELLABLE` 行时返回空数组，由前端按新字段重新保存或由有明确业务映射的数据修复任务补齐，后端不得根据商品类型猜测分销品类。
+- `children`：直属下级。一级装二级，二级装三级，三级为空数组；
+- `productTypes[]`：本节点与可见下级的并集，来源仍是 `sc_buyer_category_scope` 中 `scope_kind=PRODUCT_TYPE` 的商品类型编码。`sellableCategories[]` 同样取并集，并且只读取 `scope_kind=SELLABLE`。两类范围互相独立，禁止相互推导。并集保留本节点原有顺序，再按子节点顺序追加未见过的值；
+- `cooperationModes[]`：本节点与可见下级的合作模式并集，顺序规则与品类相同；
+- `projectCount`：本节点未归档项目数，加上 `children` 已汇总的项目数。`ARCHIVED` 项目不计入；
+- `skuCount`：本节点有效分销商品数，加上 `children` 已汇总的商品数。已移除分销商品不计入；
+- `cooperationTime`：列表展示用合作时间，与详情 `cooperationStartedAt` 取同一回显口径，来源是 `sc_buyer.cooperation_started_at`。管理端日期选择器空值常以 Unix 0 提交。`null`、Unix 0、年份 `<=1970` 视为未填：创建回落当前业务时间（Asia/Shanghai），更新忽略该字段以免用空值覆盖已有合作开始时间；列表与详情读取历史脏值时回落到 `created_at`。已填写且年份晚于 1970 的值原样回传。名称、状态、等级、联系人和更新时间不参与汇总，仍是该节点自己的值。
+
+列表先一次读出未归档分销商，在内存中筛选、挂接和分页；合作模式、可售品类、商品类型按这批分销商各查一次。项目数、SKU 数和主联系人只按当前页可见节点批量读取，禁止为每行追加查询。详情的 `sellableCategories[]` / `productTypes[]` 只返回已经保存的独立范围行，不按组织树汇总；历史记录缺少 `SELLABLE` 行时返回空数组，由前端按新字段重新保存或由有明确业务映射的数据修复任务补齐，后端不得根据商品类型猜测分销品类。
 
 由于同一集合接口还兼容 `view=simple` 与 `view=parent-options` 投影，Java 运行时返回类型允许保持 `CommonResult<?>`；但 OpenAPI 的默认 `200` 响应必须显式声明为 `CommonResult<PageResult<BuyerListItem>>` 对应的具体文档模型，不能退化为 `CommonResultObject`。Swagger / Knife4j 的默认分页响应必须能展开 `BuyerListItem`，并展示上述全部列表字段。
 
@@ -414,14 +449,17 @@ Springdoc `components.schemas` 中冲突的通用简单类名。生成契约必�
 
 即 `BuyerProduct` + 该 SKU 的 L2。
 
-- `GET /supply-chain/buyers/{buyerCode}/products` 分页
-- `POST /supply-chain/buyers/{buyerCode}/products` body `{ items: [...] }` 从标品关联；已存在则 `BUYER_PRODUCT_DUPLICATE`
+- `GET /supply-chain/buyers/{buyerCode}/products` 分页。可选查询参数 `productType`（动态商品类型编码，可多选）。兼容单个值；重复键 `productType=A&productType=B` 或逗号拼接 `productType=A,B` 均表示命中任一类型。省略、空白或拆分后无有效编码时不筛选；传入后只返回该分销商未移除、且关联平台 SPU 的 `productType` 落在入参集合内的分销商品。无命中返回空页。筛选不改变按 `updatedAt` 倒序，分页默认仍为 `pageNo=1`、`pageSize=20`。命中字段取列表行同源的平台 SPU，而不是供货配置。
+- 项目新增商品弹窗调用同一分页接口时传可选 `projectCode`。后端先校验项目存在且归属路径中的 `buyerCode`；项目不存在或不属于该分销商均返回 `PROJECT_NOT_FOUND`。只排除**该项目** `sc_project_listing.status=AVAILABLE` 所引用的 `buyer_product_id`，不排除同一分销商其它项目的商品；已移除 listing 对应商品重新可选。排除条件与 `productType` 一起在数据库分页前生效，`total` 为过滤后数量。省略或空白 `projectCode` 保持原有分销商品列表语义及响应字段，不从请求来源或会话推断项目。项目商品详情列表仍走项目商品接口。
+- `POST /supply-chain/buyers/{buyerCode}/products` body `{ items: [...] }` 从标品关联；已存在则 `BUYER_PRODUCT_DUPLICATE`。新增分销商品弹窗的选品列表走 `GET /supply-chain/products/management-page`，并传入 `buyerCode` 排除未移除商品；「全部商品」由调用方把该分销商档案中的商品类型编码放进 `productType`。每行可带可选 `pricing`，字段与 `PUT /buyers/{buyerCode}/products/pricing` 的覆盖组相同。`pricing` 省略时只关联并按商品默认定价初始化；传入时在同一事务内保存分销商通用定价。任一条缺少平台默认定价时整单回滚，返回 `PLATFORM_DEFAULT_PRICING_MISSING`。销售价与服务费仍可标记继承。
 - `PATCH /supply-chain/buyers/{buyerCode}/products/{buyerProductCode}` 改价（写/清 L2 覆盖，body 含 `l2AdjustMode` 等）
 - `DELETE /supply-chain/buyers/{buyerCode}/products/{buyerProductCode}` 逻辑移除（不再出现在列表；已发布项目目录不回放删除，新项目不得再选）
 
-列表列：SPU/SKU、SPU 三码、`suggestPriceCents`（L1）、`pricingRule`（文案：继承L1 / 等于L1 / 自定义公式）、`distPriceCents`（有效 L2；无手工覆盖时等于当前 L1）、`projectPriceCents`（若恰有一个项目 L3 则给出，否则空）、`finalPriceCents`（按 L3>L2>L1 对该行展示，项目价取「任意覆盖」时以 `projectPriceCovered` + `projectNames[]` 说明）、`priceSource`（`L1`/`L2`/`L3`）、`projectPriceCovered`。
+列表列：SPU/SKU、SPU 三码、`marketPriceCents`（平台 SKU 市场划线价/吊牌价）、`suggestedSalePriceCents`（平台 SKU 销售建议价，取 `sc_platform_sku.suggested_sale_price`，0 为有效值）、`suggestPriceCents`（历史 L1 兼容字段，仍只取旧 L1）、`platformBasePriceCents`（项目旧调价模式的 B 端平台基价）、`pricingRule`、`taxIncluded`、`taxRateCode`、`taxRateDisplay`、`distPriceCents`、`projectPriceCents`、`finalPriceCents`、`priceSource`、`projectPriceCovered`。`platformBasePriceCents` 在当前分销商通用定价版本存在时取该版本引用的平台默认定价版本 `distribution_price_cents`，不得与另一个平台版本混读；没有通用版本的历史行取旧 L1。自通用定价启用后，`distPriceCents`、`pricingRule` 及 `finalPriceCents` 的分销商层输入优先取分销商 SKU 当前通用定价版本；仅当前通用版本缺失的历史行回退旧 L1/L2 链。通用版本存在但分销价或平台版本引用缺失时，列表当前分销价留空，无 L3 覆盖时最终价也留空，不回退旧价；旧 `suggestPriceCents` 仍可独立回显历史 L1。`pricingRule` 对通用定价展示“继承商品默认 / 等于市场价 / 自定义公式”，旧链仍兼容“继承L1 / 等于L1 / 自定义公式”。项目覆盖与最终价的详细优先级、税务快照及历史回退规则见 `docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#6-管理端接口`。列表不计算、不返回不含税分销价或税额字段。
 
-`displayThresholdPercent` 可存（利润空间低于该百分比时 C 端隐藏的配置），**本轮不实现 C 端隐藏消费**，只落库。
+项目新增商品弹窗的“销售建议价”列展示 `suggestedSalePriceCents`；调价公式与“等于 L1”的 B 端基数展示 `platformBasePriceCents`，文案标为“平台默认分销价”，不得将 C 端销售建议价或市场价代入结算公式。旧 `suggestPriceCents` JSON 字段保留原义，避免存量调用方静默改价。
+
+`displayThresholdPercent` 可存（利润空间低于该百分比时 C 端隐藏的配置），**本轮不实现 C 端隐藏消费**，只落库。新增时省略则落空；改价时省略则不改该列。传入时必须是 0～100 的整数，否则 `L2_OVERRIDE_INVALID`。
 
 前端未传 `l2AdjustMode` 时默认 `FOLLOW_TEMPLATE`。页面默认选项「按分销价=销售建议价」必须显式传 `EQUAL_L1`，覆盖值取当前 `suggestPriceCents`（L1），禁止用 `marketPriceCents`。
 
@@ -440,24 +478,38 @@ Springdoc `components.schemas` 中冲突的通用简单类名。生成契约必�
 
 `GET /supply-chain/projects?view=simple`：名称/编号下拉。
 
-`GET /supply-chain/projects/{projectCode}`、`POST /supply-chain/projects`、`PUT /supply-chain/projects/{projectCode}`：`projectName`、`buyerCode`、`projectType`、`startDate`、`endDate`、`settlementPartyType`（仅 `DISTRIBUTOR`）、`description`（≤500）。创建允许 `DRAFT` 或 `ACTIVE`（`POST` body 可带 `status`）。`skuCount`、`projectPriceSkuCount` 只读统计。
+普通分页列表每行返回只读 `skuCount` 和 `projectPriceSkuCount`，与项目详情采用同一统计口径：只统计该项目 `status=AVAILABLE` 的项目商品；项目定价覆盖按当前通用定价版本显式覆盖分销价或旧冻结版本 L3 取并集，同一 SKU 只计一次。列表仅对本页项目批量读取商品、定价身份及当前版本，不逐卡调用详情，也不把缺失字段显示成真实的零。
+
+`GET /supply-chain/projects/{projectCode}`、`POST /supply-chain/projects`、`PUT /supply-chain/projects/{projectCode}`：`projectName`、`buyerCode`、`projectType`、`startDate`、`endDate`、`settlementPartyType`（仅 `DISTRIBUTOR`）、`description`（≤500）。创建允许 `DRAFT` 或 `ACTIVE`（`POST` body 可带 `status`）；整档更新 body 可选带 `status`，未传时保持原状态，传入时按第 4.2 节状态机执行迁移，目标状态与当前状态相同时按幂等保存处理。`skuCount`、`projectPriceSkuCount` 只读统计。
 
 `catalogMode` 默认 `MANAGED`，本批页面不展示。`appId`/`appKey` 本批不返回（避免密钥进入管理端列表）。
 
-归属：`DRAFT` 可改 `buyerCode`；`ACTIVE`/`SUSPENDED`/`CLOSED` 改归属 → `PROJECT_BUYER_IMMUTABLE`。
+归属：项目创建后 `buyerCode` 永久不可变，`DRAFT` 也不得改归属；任何状态下显式提交不同分销商均返回 `PROJECT_BUYER_IMMUTABLE`。原草稿态可改归属的例外由[2026-09-27 业务编码规范化设计 §4](./2026-09-27-supply-chain-business-code-design.md#4-归属与不可变性)覆盖。
 
-`PATCH /supply-chain/projects/{projectCode}` `{ "status": "ACTIVE"|"SUSPENDED"|"CLOSED" }` 按第 4.2 节迁移。页面按钮：启动、暂停、恢复、结束。
+`PATCH /supply-chain/projects/{projectCode}` `{ "status": "ACTIVE"|"SUSPENDED"|"CLOSED" }` 按第 4.2 节迁移，作为状态操作的兼容入口；`PUT` 传入 `status` 时执行相同状态机校验。页面按钮：启动、暂停、恢复、结束。
 
 ### 7.2 项目商品
 
 即 `ProjectListing` + L3 覆盖。
 
 - `GET /supply-chain/projects/{projectCode}/products`
+- 项目新增商品待选分页使用 `GET /supply-chain/buyers/{buyerCode}/products?projectCode={projectCode}`；由服务端按项目排除已加入商品并保持当前分销价等列表字段，不在前端用当前页项目商品过滤。
 - `POST /supply-chain/projects/{projectCode}/products` body `{ items: [...] }`：SKU 必须已是所属 Buyer 的未移除分销商品，否则 `PROJECT_SKU_NOT_IN_BUYER_CATALOG`。默认 `l3AdjustMode=FOLLOW_L2`（不写 L3）。批量配置可同时带 L3。
+- 每个 `items[]` 可选带 `pricing`，字段沿用新增分销商品的五组继承/覆盖请求，含 `distributionHideThresholdPercent` 与税务字段；省略时初始化全继承项目通用定价，传入时在新增 listing 的同一供应链事务内保存项目通用定价，任一行定价失败整批回滚。`pricing.distributionInherited=false` 且规则完整时，当前项目通用定价版本的 `distribution_price_cents` 是该 SKU 的项目专属价。旧 `l3AdjustMode` 与行内通用定价不得在同一行同时使用，避免两套 L3 来源冲突。
 - `PATCH /supply-chain/projects/{projectCode}/products/{listingCode}` 改价（写/清 L3，发新 `ProjectListingVersion`）
 - `DELETE /supply-chain/projects/{projectCode}/products/{listingCode}` 逻辑移除（目录项不再可采购；历史订单仍读冻结版本）
 
-新增即对项目可采购（等价上架）。列表金额：`suggestPriceCents`、`distPriceCents`、`projectPriceCents`、`finalPriceCents`、`priceSource`、`projectPriceCovered`。页面「按项目价=销售建议价」对接时显式传 `l3AdjustMode=EQUAL_L1`。
+新增即对项目可采购（等价上架）。列表金额：`suggestPriceCents`（历史 L1 兼容）、`suggestedSalePriceCents`（C 端 SKU 建议价）、`platformBasePriceCents`（B 端项目调价基数）、`distPriceCents`（当前有效分销价）、`projectPriceCents`、`finalPriceCents`、`priceSource`、`projectPriceCovered`。保留 `l3AdjustMode=EQUAL_L1` 请求枚举，但页面文案改为“等于平台默认分销价”；`CUSTOM` 以同一 B 端基数计算。
+
+项目商品当前通用定价版本明确覆盖分销价（`distributionInherited=false`）时，列表 `projectPriceCents` 与 `finalPriceCents` 取该版本的 `distribution_price_cents`，`priceSource=L3`、`projectPriceCovered=true`；若计算结果因依赖缺失为空，金额保持空值，不回退旧冻结价。通用版本全继承时，旧冻结金额字段仍按原语义读取，旧 L3 覆盖仍显示为专属价。`projectPriceSkuCount` 与列表采用同一覆盖判断，对通用覆盖与旧 L3 取并集，每个 listing 只计一次。此处读取版本快照，不重算价格或改写历史订单。
+
+项目商品分页行追加 `projectPricingConfig`：返回该 listing 的 `sc_project_sku_pricing.current_version_id` 所指向版本的 `override_json`，映射为与 `ProjectOverrides` 同字段、同值的强类型响应对象。对象保留分销价、销售价、服务费、利润隐藏、税务五组各自的 `*Inherited` 开关和覆盖规则；税务返回服务端归一化并保存后的元数据。已有综合定价版本且全部继承时返回五组 `*Inherited=true` 的对象；没有当前综合定价版本的历史行返回 `null`，不得以旧 `ProjectListingVersion` 猜测通用规则。只读取当前指针，不按最大版本号选取，也不以 `effective_config_json` 中的继承结果冒充项目覆盖配置；当前指针悬空、版本不属于该定价身份或 JSON 损坏时应报错，不静默降级。先限定项目并分页 listing，再批量读取本页定价身份与当前版本，避免逐行增加查询。此字段只增补查询响应，原有冻结价字段及订单快照语义不变；读取不触发重算、版本发布或外部字典调用。
+
+该 GET 的 OpenAPI/Swagger 响应须提供具体的 `code`、`msg`、`data.total`、`data.list[]` 模型，列表每个字段均有业务说明；`projectPricingConfig` 的实际 Java 响应字段直接使用带注解的强类型模型，不依赖 `@Schema(implementation=...)` 将领域记录伪装为另一种类型。Swagger 必须展开五组继承标记、覆盖规则以及公式、服务费、利润隐藏和税务的子字段，说明 `true` 继承直接上游、`false` 使用该组覆盖。继承组的规则通常为 `null`，但分销价、销售价、服务费和利润隐藏组若提交时同时带有规则，保存记录可能保留该规则；响应须原样回显，而价格计算会忽略该组规则。税务组经请求归一化后，继承时元数据为 `null`。公式说明 `(基数 × percentage / 100) operator operand`、基数和运算符枚举、加减的元与乘除系数单位；服务费说明以商品小计为基数；利润隐藏说明百分数与阈值范围；税务说明是否含税、字典编码与保存时解析的名称。文档专用外层响应模型只描述现有 JSON 契约，不改变接口签名或保存逻辑；契约测试校验实际字段类型、生成的 schema 与序列化 JSON 一致，避免 Knife4j 将泛型分页响应或嵌套配置展示为无具体字段的对象。
+
+`200` 响应须提供可直接查看的完整 JSON 示例，包含响应包装、分页、列表行所有字段和五个非空规则对象的全部子字段；继承形态通过五组字段说明和联调场景解释。示例中的金额单位为分，公式运算值单位遵循各规则说明；旧冻结价字段与新项目综合定价覆盖配置应明确区分。测试环境 Knife4j 4.5.0 对 OpenAPI `content.examples` 中已解析为 JSON 对象的 `value` 不渲染“响应示例”，故该接口将完整示例放在响应 `schema.example`，不用多个 `content.examples`；对象引用字段不标注会生成 `type: null` 的 `nullable=true`，避免 Knife4j 将 `projectPricingConfig` 及规则对象显示成 `null` 类型。以上仅修正文档生成，运行时配置为 `null` 的 JSON 语义不变。契约测试解析示例 JSON，对照实际响应模型的序列化字段集合逐层校验，并断言引用字段不会生成 `type: null`，防止示例遗漏字段或再次空白。
+
+新增、改单条 L3 与旧批量 L3 试算/发布共用价格来源：存在分销商 SKU 当前通用定价版本时，`FOLLOW_L2` 冻结其 `distribution_price_cents`，按该版本的分销价继承标记保留 L1/L2 来源；`EQUAL_L1`/`CUSTOM` 的基数取该分销商版本引用的平台默认定价版本 `distribution_price_cents`。通用版本存在但所需金额为空或被引用的平台版本缺失时失败关闭，不回退旧价；只有分销商通用版本缺失的历史行才沿用旧 L1/L2。项目商品列表的当前分销价使用同一来源，已发布的项目冻结版本与历史订单不得回写。
 
 改 L3 或改分销商 L2 覆盖**不回放**已发布版本；当前指针切换在同一本地事务完成。在途单继续用冻结快照。
 
@@ -484,7 +536,7 @@ O2O / INSTORE 仍 `buyerSettlementAmount = channelPayAmount`，不读三级价�
 
 | 码 | 含义 |
 | --- | --- |
-| `ENUM_NOT_OPEN` | 未知枚举值（替代「时效非空即拒」） |
+| `ENUM_NOT_OPEN` | 未知枚举值（替代「时效非空即拒」）。目录短文案不变；运行时 `msg` 须包含枚举类型、提交值与允许值 |
 | `CATEGORY_CHAIN_INVALID` | 仅类目树主数据父子不合法；供货配置与分销商档案不用此码 |
 | `BUYER_PARENT_INVALID` | 上级/等级不合法或成环 |
 | `BUYER_PRODUCT_DUPLICATE` | 分销商品 SKU 已存在 |
@@ -498,6 +550,7 @@ O2O / INSTORE 仍 `buyerSettlementAmount = channelPayAmount`，不读三级价�
 | `BUYER_OPENING_ALREADY_DONE` | 分销商期初已入账，禁止再改余额字段 |
 | `BUYER_CREDIT_CODE_DUPLICATE` | 公司名称+统一社会信用代码联合重复 |
 | `INVOICE_FIELD_INVALID` | 开票信息字段不完整或与抬头类型冲突 |
+| `SUPPLIER_CODE_REQUIRED` | 排除已添加供应商品时必须指定供应商（`excludeAddedSupplierOffers=true` 但 `supplierCode` 空白） |
 
 原 `SUPPLIER_ENUM_NOT_OPEN` 收敛为 `ENUM_NOT_OPEN` 的别名或停止新抛，实现时只保留一个码。
 

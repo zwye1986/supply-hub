@@ -81,7 +81,8 @@ done
 log "target=${TARGET_SERVICE} commit=${COMMIT_HASH} remote=${REMOTE_HOST} dir=${REMOTE_DIR}"
 
 log "Step 1/6: Maven package (skip tests)"
-mvn -pl "${MVN_PL}" -am package -DskipTests -q
+mvn -pl "${MVN_PL}" -am clean package -DskipTests -q
+
 
 log "Step 2/6: docker buildx amd64"
 for spec in "${SERVICES[@]}"; do

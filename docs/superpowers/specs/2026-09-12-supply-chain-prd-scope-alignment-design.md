@@ -4,7 +4,7 @@
 
 本文把 2026-09-12 对照《供应链中台管理系统一期产品需求文档（PRD）》的架构评审结论，收成**本期实际交付范围**。它裁剪的是「本仓供应链进程接下来做什么 / 明确不做什么」，不是重写 PRD。
 
-**冲突时以本文为准的主题：** 加价模板是否建设、销售价与分销价来源、售后聚合位置与状态机范围、路由节点（谁走路由 / 谁不走）、下单前选源 API、点餐实现责任、运营数据权限。
+**冲突时以本文为准的主题：** 售后聚合位置与状态机范围、路由节点（谁走路由 / 谁不走）、下单前选源 API、点餐实现责任、运营数据权限、**订单基数（禁止拆单）**。通用批量定价、销售价、分销价、服务费和税务归属自 2026-09-15 起以 `docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md` 为准。
 
 其余主题仍沿用既有权威：
 
@@ -14,6 +14,7 @@
 | 开票查询与保存 | `docs/superpowers/specs/2026-09-07-供应链管理端开票信息设计.md` |
 | 商品中心 8.4–8.7 | `docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md` |
 | 运营功能 RBAC（不含数据范围） | `docs/superpowers/specs/2026-09-03-supply-chain-admin-rbac-design.md` |
+| 合作商品履约能力评分（人工挂点） | `docs/superpowers/specs/2026-09-21-offer-fulfillment-score-design.md` |
 | 拆仓后进程形态 | `docs/superpowers/specs/2026-09-07-supply-hub-repo-split-design.md`、仓库 `AGENTS.md` |
 | BuyerOrder / 资金预留 / 受理幂等 / Outbox·Timer / 路由纯计算 | `docs/superpowers/specs/2026-08-07-supply-chain-phase1-detailed-design.md` |
 
@@ -40,9 +41,10 @@ PRD 来源：飞书文档本地导出
 | s9 | 点餐领域模型 = 肯德基/麦当劳券进入平台商品池、多家供应商抢单、**下单后**走标准商品路由。`DINING` 仅作为 `sc_product_type` 字典参与 Tab / 供货范围 / 经营范围。**本仓本期不实现**点餐履约、点餐连接器、点餐专属路由配置。 |
 | s10 | **不做下单前选源 API。** 此前「中台暴露选源、商城下单前调用」整段作废。 |
 | s11 | `sc_scenario_routing_rule` / `sc_scenario_routing_candidate` 继续空表。本期不为闪购、大润发、点餐补场景路由应用服务。 |
-| s12 | 标准商品路由保持现有静态优先级（`candidatePriority` → `supplierCode` → `offerId`，原因码 `SELECTED_BY_STABLE_PRIORITY`）。综合排序、稳定性/时效评分、权重、topN、`PRICE_ASC` 运营配置本期不做。 |
+| s12 | 标准商品路由保持现有静态优先级（`candidatePriority` → `supplierCode` → `offerId`，原因码 `SELECTED_BY_STABLE_PRIORITY`）。综合排序、权重、topN、`PRICE_ASC`、自动学习本期不做。稳定性/时效评分由运营对 SKU×供应商 **人工录入**，挂在 `sc_supplier_offer` 身份列（见 `2026-09-21-offer-fulfillment-score-design.md`）；引擎本期 **不读** 这些分。 |
 | s13 | 运营数据权限 / 多租户数据隔离本期不做。维持 `docs/superpowers/specs/2026-09-03-supply-chain-admin-rbac-design.md` 的 r4「本轮落地 B：功能权限 + 数据全量」，ArchUnit 继续禁止管理端 `@DataPermission`。PRD 11.2 记为已知偏差。 |
 | s14 | 术语双轨：PRD「分销商」= 代码 `Buyer`。代码、表名、日志不改名。 |
+| s15 | **禁止拆单。** 一张 `sc_supply_chain_order` 不得同时（或拆成）多张有效供应商履约订单。CARD 是 `1 总单 + 1 履约请求 + 串行 0..N 次尝试`（同时最多一张活动 B 单）；O2O/INSTORE 是固定商户 `0..1`。2026-09-21 新 PRD 8.11.1 / 8.12.1 的「平台总单 / 供应商子单 1:N」不纳入本期。串行失败降级不是拆单。 |
 
 ## 3. 术语
 
@@ -55,6 +57,8 @@ PRD 来源：飞书文档本地导出
 | 跟模板（页面） | `L2AdjustMode.FOLLOW_TEMPLATE` | **清手工 L2，继承 L1**；无模板可跟 |
 | 下单前路由 | — | 本期无此节点 |
 | 平台售后单 | 规划中的 `border.aftersale` | 挂 `sc_supply_chain_order`；渠道退款 Case 不是它 |
+| 平台总单 / 供应商子单（新 PRD 8.11.1 / 8.12.1） | — | **本期不采用**；见 s15 |
+| 供应商订单（CARD） | `sc_b_order` 串行履约尝试 | 同时最多一张活动尝试，不是并行子单 |
 
 O2O / INSTORE 的 B 端冻结金额继续 `buyerSettlementAmount = channelPayAmount`，不读三级结算价，也不读 `suggested_sale_price`。
 
@@ -65,15 +69,17 @@ O2O / INSTORE 的 B 端冻结金额继续 `buyerSettlementAmount = channelPayAmo
 已有、继续维护：
 
 - 供应商 / 分销商 / 项目档案与管理端 REST（含开票、供货配置、合作商品、分销商品、项目商品）。
+- 合作商品履约能力评分人工挂点：稳定性/时效性写在未退役 Offer 身份列，供应商详情与商品列表弹窗读写同一事实。
 - 商品中心：SPU/SKU、分类树、品牌、动态 `sc_product_type`。
 - 三级结算价数据骨架与手工 L2/L3 覆盖。
 - `FOLLOW_TEMPLATE` 已统一为清手工覆盖并回退 L1，应用层禁止读取历史模板价预留表。
 - 标准商品受理、资金冻结、下单后静态路由（仅卡券/直充等已接入履约类型）。
 - O2O（淘宝闪购）与 INSTORE（大润发）固定商户链路：入口、建单、资金、渠道退款 Case。
-- 平台订单管理端只读列表/类型化详情（虚拟 + O2O/到店安全字段；不接包裹与履约资产），详见 `docs/superpowers/specs/2026-09-12-supply-chain-order-admin-readonly-design.md`。
+- 平台订单管理端只读列表/类型化详情（虚拟 + O2O/到店安全字段；不接包裹与履约资产），详见 `docs/superpowers/specs/2026-09-12-supply-chain-order-admin-readonly-design.md`。CARD 路由记录只读见 `docs/superpowers/specs/2026-09-21-order-routing-records-admin-design.md`。供应商订单只读见 `docs/superpowers/specs/2026-09-21-supplier-order-admin-readonly-design.md`。路由规则页 GET 投影见 `docs/superpowers/specs/2026-09-21-routing-rule-admin-readonly-design.md`。
 
 待建设（本文锁定边界，实施另立变更集）：
 
+- 路由规则页可视化编辑（方案 A：对当前生效标准规则打补丁并立即发布后继版本，不改引擎、不物化四级），见 `docs/superpowers/specs/2026-09-21-routing-rule-admin-write-design.md`。
 - `border.aftersale` 轻量售后头表 + 商品行 + 状态日志 + 管理端列表/详情/审核命令。
 
 ### 4.2 本期明确不做
@@ -81,7 +87,7 @@ O2O / INSTORE 的 B 端冻结金额继续 `buyerSettlementAmount = channelPayAmo
 - 加价模板引擎与所有场景模板页（PRD 8.8–8.10）。
 - 实时报价 API（`BuyerSellingPriceQuoteApi`）、区域/影院/品牌/渠道加价、服务费。
 - 下单前选源 API、路由节点区分管理界面。
-- 路由四级配置组物化、综合排序、运营评分、人工处理队列实体。
+- 路由四级配置组物化、综合排序（用人工分选供）、独立「供应商路由能力配置」模块、人工处理队列实体。
 - 点餐履约与点餐抢单路由落地（模型见 s9，实现不在本仓本期）。
 - 电影快充/慢充 Tab、电影定价模板；电影仍是独立进程，不得并入供应链容器。
 - 京东 VOP、实物发货/物流/退货退款 8 状态里的实物环节。
@@ -91,6 +97,7 @@ O2O / INSTORE 的 B 端冻结金额继续 `buyerSettlementAmount = channelPayAmo
 - yudao `@DataPermission`、按供应商/分销商/项目 code 的数据范围（RBAC 目标 C）。
 - 将 `Buyer` 重命名为 Distributor。
 - O2O/INSTORE 改走标准商品路由。
+- 一张供应链订单拆成多张并行供应商子单（新 PRD 8.11.1 / 8.12.1）。
 
 ## 5. 销售价与分销价（无模板）
 
@@ -177,7 +184,7 @@ PRD 8.6.4.1「下单前路由（点餐/大润发/淘宝闪购）」按 s8–s10 
 
 - 规则表继续 `buyer_id` + `platform_sku_id` + `fulfillment_type` + 数量区间等已有维度。
 - **不要**给 `sc_standard_product_routing_rule` 加品类列去模拟 PRD 四级配置组。
-- **不要**启用或补齐 `PRICE_ASC` / 综合权重。引擎保持 `M1_ORDER`。
+- **不要**启用或补齐 `PRICE_ASC` / 综合权重。引擎保持 `M1_ORDER`。Offer 身份上可以有人工稳定性/时效分，但 `routing.domain` 不得引入分数字段、不得按分排序。
 - 无可用供应商：保持现有失败原因码，不建人工队列实体。
 - `sc_scenario_routing_*`：表结构保留，Java 应用服务本期不写。禁止把 O2O/INSTORE 商户绑定改写成场景路由候选。
 
@@ -198,7 +205,7 @@ PRD 11.2 要求数据权限与多租户隔离。中台 `sc_*` 无 `tenant_id`。
 | --- | --- | --- |
 | `tradecore.catalog` | L1/L2/L3 结算价、SKU 销售建议价 | 不建模板聚合 |
 | `tradecore.pricing` | **不建** | — |
-| `routing.domain` | 保持纯函数静态优先级 | 不读库、不引入评分字段 |
+| `routing.domain` | 保持纯函数静态优先级 | 不读库、不引入评分字段；人工分属于 `tradecore.supply` Offer 身份 |
 | `border.o2o` / `border.instore` | 固定商户履约与渠道退款 Case | 不调用标准路由引擎选供 |
 | `border.aftersale` | 平台售后轻量状态机 | 不访问账户/账本 dal；不建物流表 |
 | `border.fulfillment` | 既有 CARD 履约 | 不把渠道退款 Case 塞进这里冒充平台售后 |
@@ -230,16 +237,20 @@ PRD 11.2 要求数据权限与多租户隔离。中台 `sc_*` 无 `tenant_id`。
 1. 本文 + CONTEXT 词汇（本次）。
 2. `FOLLOW_TEMPLATE` 注释与管理端 Schema 文案与 s4 对齐。
 3. 平台订单管理端只读查询（虚拟 + O2O/到店；已按 `2026-09-12-supply-chain-order-admin-readonly-design.md` 落地）。
+3.1 平台订单路由记录只读（PRD 8.11.6；已按 `2026-09-21-order-routing-records-admin-design.md` 落地 `GET /supply-chain/orders/{orderNo}/routing-records`）。
+3.2 供应商订单只读工作台（PRD 供应商订单 / 8.12 只读裁剪；已按 `2026-09-21-supplier-order-admin-readonly-design.md` 落地 `GET /supply-chain/supplier-orders` 与 `GET /supply-chain/supplier-orders/{bOrderNo}`）。
+3.3 路由规则页 GET 投影（前端 `/supply-chain/routing-rules`；已按 `2026-09-21-routing-rule-admin-readonly-design.md` 落地：只读当前生效标准规则；不改引擎、不物化四级）。
+3.4 路由规则页可视化编辑（方案 A 补丁发布；设计见 `2026-09-21-routing-rule-admin-write-design.md`，实施另立）。
 4. `border.aftersale` 表结构、状态机单测、管理端审核 REST、资金 Port 协同。
 5. 商品/供应商/分销/项目相对 PRD 的剩余交互缺口（仍以 09-02 / 09-11 字段为准），不改分层。
 
-点餐、电影模板、加价引擎、路由评分各自另开设计，禁止搭顺风车改本期表。
+点餐、电影模板、加价引擎、路由引擎消费履约分各自另开设计，禁止搭顺风车改本期表。人工挂点本身见 `docs/superpowers/specs/2026-09-21-offer-fulfillment-score-design.md`。
 
 ## 12. 测试门禁（增量，实施对应变更时）
 
 - `*Test`：L3>L2>无覆盖时回 L1；`FOLLOW_TEMPLATE` 清覆盖后等于 L1；售后非法类型拒绝；`FULFILLING` 禁售后；路由引擎原因码仍为 `SELECTED_BY_STABLE_PRIORITY`。
 - `*ArchitectureTest`：不出现 `tradecore.pricing`；`border.aftersale` 不依赖账户/账本 dal；管理端仍禁止 `@DataPermission`；O2O/INSTORE 应用服务不依赖 `SupplierRoutingEngine` 选供（渠道绑定保持）。
-- 不加「模板命中 / 实时报价 / 四级配置组 / PRICE_ASC」单测作为本期门禁。
+- 不加「模板命中 / 实时报价 / 四级配置组 / PRICE_ASC / 引擎按履约分排序」单测作为本期门禁。人工挂点的读写门禁见履约评分专文。
 
 ## 13. 关键验收（本期）
 

@@ -46,6 +46,9 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerListingMap
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.FulfillmentType;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.QuoteConsumptionContext;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.StandardPricingQuoteService;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.StandardPricingQuoteService.FrozenQuote;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.ListingAvailability;
 import com.aifuli.module.supplychain.tradecore.ledger.application.AccountLedgerWriter;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.CredentialSlotDO;
@@ -53,6 +56,7 @@ import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.InventorySo
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierConnectorDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierConnectorVersionDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierDO;
+import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierSkuDailyQuotaDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierOfferDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierOfferVersionDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.CredentialSlotMapper;
@@ -60,6 +64,7 @@ import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.InventorySourceM
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierConnectorMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierConnectorVersionMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierMapper;
+import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierSkuDailyQuotaMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferVersionMapper;
 import com.aifuli.module.supplychain.tradecore.supply.domain.ConnectorVersionStatus;
@@ -67,8 +72,8 @@ import com.aifuli.module.supplychain.tradecore.supply.domain.InventorySourceStat
 import com.aifuli.module.supplychain.tradecore.supply.domain.OfferStatus;
 import com.aifuli.module.supplychain.tradecore.supply.domain.SupplierStatus;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.builder.SpringApplicationBuilder;
@@ -77,6 +82,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
 import com.aifuli.module.supplychain.testsupport.ProductCenterTestConfiguration;
+import com.aifuli.module.supplychain.testsupport.RoutingPolicyPresetFixture;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.testcontainers.containers.MySQLContainer;
 
@@ -97,6 +103,9 @@ import java.util.concurrent.Future;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PROJECT_NOT_FOUND;
 
 class FulfillmentAcceptanceIntegrationTest {
@@ -109,15 +118,15 @@ class FulfillmentAcceptanceIntegrationTest {
     private static final String EXTERNAL_JDBC_URL = System.getProperty("supply-chain.test.jdbc-url");
     private static final String KEY_BASE64 = Base64.getEncoder().encodeToString(new byte[32]);
 
-    @BeforeAll
-    static void startContainer() {
+    @BeforeEach
+    void startContainer() {
         if (EXTERNAL_JDBC_URL == null) {
             MYSQL.start();
         }
     }
 
-    @AfterAll
-    static void stopContainer() {
+    @AfterEach
+    void stopContainer() {
         if (EXTERNAL_JDBC_URL == null && MYSQL.isRunning()) {
             MYSQL.stop();
         }
@@ -376,31 +385,64 @@ class FulfillmentAcceptanceIntegrationTest {
         }
     }
 
+    @Test
+    void supplierSkuDailyQuotaSerializesConcurrentAcceptanceAndReleasesFailedOrder() throws Exception {
+        try (ConfigurableApplicationContext context = applicationContext()) {
+            Fixture fixture = seed(context);
+            PlatformSkuDO sku = context.getBean(PlatformSkuMapper.class).selectByCode("SKU_001_100");
+            SupplierSkuDailyQuotaMapper quotaMapper = context.getBean(SupplierSkuDailyQuotaMapper.class);
+            LocalDateTime now = context.getBean(com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock.class)
+                    .now();
+            quotaMapper.insert(SupplierSkuDailyQuotaDO.builder()
+                    .supplierId(fixture.supplier().getId()).platformSkuId(sku.getId())
+                    .dailyLimit(1L).version(0L).createdBy(1L).createdAt(now)
+                    .updatedBy(1L).updatedAt(now).build());
+
+            BuyerFulfillmentCommandFacade facade = context.getBean(BuyerFulfillmentCommandFacade.class);
+            List<FulfillmentAcceptanceReceiptRespDTO> concurrent = concurrentlyIndexed(8,
+                    index -> facade.acceptFulfillment(request("C-QUOTA-RACE-" + index, 1L)));
+            assertThat(concurrent).filteredOn(response ->
+                    response.getReceiptStatus() == FulfillmentReceiptStatus.ACCEPTED).hasSize(1);
+            assertThat(concurrent).filteredOn(response ->
+                    response.getReceiptStatus() == FulfillmentReceiptStatus.REJECTED_RETRYABLE)
+                    .hasSize(7).allSatisfy(response -> assertThat(response.getRejectionCode())
+                            .isEqualTo(AcceptanceRejectionCode.NO_ROUTABLE_SUPPLIER.name()));
+
+            JdbcTemplate jdbc = new JdbcTemplate(context.getBean("supplyChainDataSource", DataSource.class));
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_supply_chain_order", Long.class))
+                    .isEqualTo(1L);
+            jdbc.update("UPDATE sc_supply_chain_order SET order_status=?",
+                    SupplyChainOrderStatus.FAILED.getCode());
+            assertThat(facade.acceptFulfillment(request("C-QUOTA-AFTER-FAIL", 1L)).getReceiptStatus())
+                    .isEqualTo(FulfillmentReceiptStatus.ACCEPTED);
+        }
+    }
+
     private Fixture seed(ConfigurableApplicationContext context) {
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC).withNano(0);
         BuyerCommandService buyers = context.getBean(BuyerCommandService.class);
         ProductCatalogCommandService catalog = context.getBean(ProductCatalogCommandService.class);
         buyers.createBuyer(new BuyerCommandService.CreateBuyerCommand(
-                "WUSHENG", "吾盛", "吾盛", null, null,
+                null, "吾盛", "吾盛", null, null,
                 "AIFULI_MALL", "tenant-wusheng", now.minusMinutes(5), 1L));
         catalog.createBrand(new ProductCatalogCommandService.CreateBrandCommand(
-                "CMCC", "中国移动", null, null, 0, 1L));
-        catalog.changeBrandStatus("CMCC", CatalogEntityStatus.ACTIVE, 1L);
+                "BRD_001", "中国移动", null, null, 0, 1L));
+        catalog.changeBrandStatus("BRD_001", CatalogEntityStatus.ACTIVE, 1L);
         catalog.createCategory(new ProductCatalogCommandService.CreateCategoryCommand(
-                FulfillmentType.DIRECT_RECHARGE.code(), "话费直充", null, 0, 1L));
-        catalog.changeCategoryStatus(FulfillmentType.DIRECT_RECHARGE.code(), CatalogEntityStatus.ACTIVE, 1L);
+                "CAT_001", "话费直充", null, 0, 1L));
+        catalog.changeCategoryStatus("CAT_001", CatalogEntityStatus.ACTIVE, 1L);
         catalog.createSpu(new ProductCatalogCommandService.CreateSpuCommand(
-                "TELCO_RECHARGE", "CMCC", FulfillmentType.DIRECT_RECHARGE.code(),
+                "SPU_001", "BRD_001", "CAT_001",
                 "EQUITY", "EQUITY_PRODUCT", "VIRTUAL_CARD",
                 "话费直充", null, null, "中台受理后不可自动退款或撤销", 1L));
-        catalog.changeSpuStatus("TELCO_RECHARGE", CatalogEntityStatus.ACTIVE, 1L);
+        catalog.changeSpuStatus("SPU_001", CatalogEntityStatus.ACTIVE, 1L);
         catalog.createSku(new ProductCatalogCommandService.CreateSkuCommand(
-                "TELCO_100", "TELCO_RECHARGE", "话费直充 100 元", FulfillmentType.DIRECT_RECHARGE.code(),
+                "SKU_001_100", "SPU_001", "话费直充 100 元", FulfillmentType.DIRECT_RECHARGE.code(),
                 10_000L, Money.CURRENCY_CNY, 1L));
-        catalog.changeSkuStatus("TELCO_100", CatalogEntityStatus.ACTIVE, 1L);
+        catalog.changeSkuStatus("SKU_001_100", CatalogEntityStatus.ACTIVE, 1L);
         String listingNo = catalog.createBuyerListing(
                 new ProductCatalogCommandService.CreateBuyerListingCommand(
-                        "WUSHENG", "TELCO_100", "WS-TELCO-100", 1L));
+                        "BYR_001", "SKU_001_100", "WS-TELCO-100", 1L));
         context.getBean(BuyerListingPublicationService.class).publish(
                 new BuyerListingPublicationService.PublishListingCommand(
                         listingNo, 0L, 9_800L, "话费直充 100 元", now.minusMinutes(1), null,
@@ -408,28 +450,34 @@ class FulfillmentAcceptanceIntegrationTest {
         setAvailability(context, ListingAvailability.AVAILABLE, "SUPPLY_READY");
 
         Long buyerId = context.getBean(com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerMapper.class)
-                .selectByBuyerCode("WUSHENG").getId();
+                .selectByBuyerCode("BYR_001").getId();
         insertActiveProject(context.getBean(BuyerProjectMapper.class), PROJECT_A, buyerId, now);
         insertActiveProject(context.getBean(BuyerProjectMapper.class), PROJECT_B, buyerId, now);
         context.getBean(BuyerAccountOpeningService.class).open(
                 new BuyerAccountOpeningService.OpeningBalanceCommand(
-                        "WUSHENG", Money.cny(25_000L), 1L, "evidence://opening",
+                        "BYR_001", Money.cny(25_000L), 1L, "evidence://opening",
                         new byte[32], "M1 受理集成测试期初额",
                         "trace-account", null));
 
-        PlatformSkuDO sku = context.getBean(PlatformSkuMapper.class).selectByCode("TELCO_100");
+        PlatformSkuDO sku = context.getBean(PlatformSkuMapper.class).selectByCode("SKU_001_100");
         SupplierDO supplier = createQnmOffer(context, sku, now);
+        // 044 预置引导策略占用同类型唯一 active 位；受理链路种子发布自有 CARD_PRIMARY 策略，先停用预置。
+        RoutingPolicyPresetFixture.deactivatePresetPolicy(new JdbcTemplate(
+                context.getBean("supplyChainDataSource", DataSource.class)));
         RoutingPolicyPublicationService routing = context.getBean(RoutingPolicyPublicationService.class);
+        // PRD 分销商+商品类型层级：两个项目共用 FIXED 主供应商 QINAMENG。
         RoutingPolicyPublicationService.DraftResult draft = routing.createDraft(
                 new RoutingPolicyPublicationService.CreateDraftCommand(
                         "CARD_PRIMARY", "卡券与直充主路由", "M1 受理路由",
                         now.minusHours(1), now.plusDays(1), List.of(
                         new RoutingPolicyPublicationService.RuleDraft(
-                                "WS_TELCO", "吾盛话费路由", "WUSHENG", "TELCO_100",
-                                FulfillmentType.DIRECT_RECHARGE.code(), 10, List.of(
-                                new RoutingPolicyPublicationService.CandidateDraft(
-                                        "QINAMENG", 10, "UNSUPPORTED", null,
-                                        "UNSUPPORTED", null, "UNSUPPORTED", null)))), 1L));
+                                "WS_TELCO", "吾盛话费路由", "FIXED", "QINAMENG",
+                                "SPECIFIED", List.of("BYR_001"),
+                                "ALL", List.of(),
+                                "SPECIFIED", List.of("EQUITY_PRODUCT"),
+                                "ALL", List.of(),
+                                null, "STABLE", "PRICE", "COMPOSITE",
+                                10, (short) 10, false, List.of())), 1L, 40, 30, 30));
         routing.publish(new RoutingPolicyPublicationService.PublishCommand(
                 draft.policyVersionId(), 0L, "M1 受理主路由", 1L,
                 "trace-routing", null, null));
@@ -475,7 +523,7 @@ class FulfillmentAcceptanceIntegrationTest {
                 .createdBy(1L).createdAt(now).updatedBy(1L).updatedAt(now).build();
         context.getBean(InventorySourceMapper.class).insert(inventory);
         SupplierOfferDO offer = SupplierOfferDO.builder().offerNo("OFR_QNM_TELCO")
-                .offerCode("TELCO_100").supplierId(supplier.getId()).platformSkuId(sku.getId())
+                .offerCode("SKU_001_100").supplierId(supplier.getId()).platformSkuId(sku.getId())
                 .status(OfferStatus.PUBLISHED.getCode()).version(0L)
                 .createdBy(1L).createdAt(now).updatedBy(1L).updatedAt(now).build();
         SupplierOfferMapper offerMapper = context.getBean(SupplierOfferMapper.class);
@@ -502,7 +550,7 @@ class FulfillmentAcceptanceIntegrationTest {
         BuyerListingMapper listingMapper = context.getBean(BuyerListingMapper.class);
         BuyerListingDO listing = listingMapper.selectByBuyerAndSkuCode(
                 context.getBean(com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerMapper.class)
-                        .selectByBuyerCode("WUSHENG").getId(), "WS-TELCO-100");
+                        .selectByBuyerCode("BYR_001").getId(), "WS-TELCO-100");
         BuyerListingAvailabilityMapper mapper = context.getBean(BuyerListingAvailabilityMapper.class);
         BuyerListingAvailabilityDO availability = mapper.selectByListingId(listing.getId());
         availability.setAvailability(value.getCode());
@@ -522,6 +570,7 @@ class FulfillmentAcceptanceIntegrationTest {
         request.setBuyerUserId("13800138000");
         request.setBuyerSkuCode("WS-TELCO-100");
         request.setListingVersion(listingVersion);
+        request.setPricingQuoteToken("quote-" + buyerOrderNo);
         request.setQuantity(1L);
         request.setPaidAt(OffsetDateTime.now(ZoneOffset.UTC));
         request.setTarget(mobileTarget("13800138000"));
@@ -545,6 +594,7 @@ class FulfillmentAcceptanceIntegrationTest {
         target.setBuyerUserId(source.getBuyerUserId());
         target.setBuyerSkuCode(source.getBuyerSkuCode());
         target.setListingVersion(source.getListingVersion());
+        target.setPricingQuoteToken(source.getPricingQuoteToken());
         target.setQuantity(source.getQuantity());
         target.setPaidAt(source.getPaidAt());
         target.setPreviousReceiptVersion(source.getPreviousReceiptVersion());
@@ -639,7 +689,7 @@ class FulfillmentAcceptanceIntegrationTest {
 
     private static void configureDailyLimit(ConfigurableApplicationContext context, long quantity) {
         PlatformSkuMapper mapper = context.getBean(PlatformSkuMapper.class);
-        PlatformSkuDO sku = mapper.selectByCode("TELCO_100");
+        PlatformSkuDO sku = mapper.selectByCode("SKU_001_100");
         sku.setUserLimitEnabled(true);
         sku.setUserLimitPeriod("DAY");
         sku.setUserLimitQuantity(quantity);
@@ -649,7 +699,7 @@ class FulfillmentAcceptanceIntegrationTest {
 
     private static void configurePhoneBindDailyLimit(ConfigurableApplicationContext context, long quantity) {
         PlatformSkuMapper mapper = context.getBean(PlatformSkuMapper.class);
-        PlatformSkuDO sku = mapper.selectByCode("TELCO_100");
+        PlatformSkuDO sku = mapper.selectByCode("SKU_001_100");
         sku.setUserLimitEnabled(false);
         sku.setUserLimitPeriod(null);
         sku.setUserLimitQuantity(null);
@@ -661,7 +711,7 @@ class FulfillmentAcceptanceIntegrationTest {
 
     private static void disablePhoneBindLimit(ConfigurableApplicationContext context) {
         PlatformSkuMapper mapper = context.getBean(PlatformSkuMapper.class);
-        PlatformSkuDO sku = mapper.selectByCode("TELCO_100");
+        PlatformSkuDO sku = mapper.selectByCode("SKU_001_100");
         sku.setPhoneBindLimitEnabled(false);
         sku.setPhoneBindLimitPeriod(null);
         sku.setPhoneBindLimitQuantity(null);
@@ -733,6 +783,26 @@ class FulfillmentAcceptanceIntegrationTest {
         @Bean
         MutableFailureInjector failureInjector() {
             return new MutableFailureInjector();
+        }
+
+        /**
+         * 既有履约集成测试聚焦受理原子性，报价签发/绑定由独立定价测试覆盖；这里冻结与原目录价等价的快照。
+         * 设计见 {@code docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#7-项目报价凭证与标准履约}。
+         */
+        @Bean
+        StandardPricingQuoteService pricingQuoteService() {
+            StandardPricingQuoteService service = mock(StandardPricingQuoteService.class);
+            when(service.requireForFulfillment(any(QuoteConsumptionContext.class)))
+                    .thenAnswer(invocation -> {
+                        QuoteConsumptionContext context = invocation.getArgument(0);
+                        long quantity = context.quantity();
+                        return new FrozenQuote(1L, 1L, 9_800L, 10_000L,
+                                Math.multiplyExact(10_000L, quantity), 0L,
+                                Math.multiplyExact(10_000L, quantity),
+                                "{\"taxIncluded\":false,\"taxRateCode\":\"NON_TAXABLE\",\"taxRateLabel\":\"不征税\"}",
+                                false, null);
+                    });
+            return service;
         }
     }
 

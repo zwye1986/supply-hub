@@ -25,6 +25,12 @@ public final class SupplyChainOrderTypes {
 
     /** 业务阶段：CARD 受理后等待供应商履约结果。 */
     public static final String STAGE_CARD_AWAITING_RESULT = "CARD_AWAITING_RESULT";
+    /** 业务阶段：CARD 履约成功。 */
+    public static final String STAGE_CARD_FULFILLED = "CARD_FULFILLED";
+    /** 业务阶段：CARD 履约失败。 */
+    public static final String STAGE_CARD_FAILED = "CARD_FAILED";
+    /** 业务阶段：CARD 人工处理。 */
+    public static final String STAGE_CARD_MANUAL = "CARD_MANUAL";
     /** 业务阶段：O2O 受理后等待采购商支付。 */
     public static final String STAGE_O2O_AWAITING_PAYMENT = "O2O_AWAITING_PAYMENT";
     /** 业务阶段：O2O 支付已确认，资金已提交。 */

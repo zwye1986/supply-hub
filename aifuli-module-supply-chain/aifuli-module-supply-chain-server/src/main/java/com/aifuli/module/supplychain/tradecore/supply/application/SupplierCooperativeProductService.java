@@ -6,6 +6,7 @@ import com.aifuli.framework.common.pojo.PageParam;
 import com.aifuli.framework.common.pojo.PageResult;
 import com.aifuli.module.supplychain.infrastructure.identity.BusinessNoGenerator;
 import com.aifuli.module.supplychain.infrastructure.identity.BusinessNoPrefixes;
+import com.aifuli.module.supplychain.tradecore.catalog.application.ProductCategoryCoverageService;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSettlementPriceDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSettlementPriceVersionDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuDO;
@@ -15,6 +16,7 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlem
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSpuMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.PricingDependencyChangedEvent;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierOfferDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierSupplyScopeDO;
@@ -22,6 +24,7 @@ import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferVersionMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierSupplyScopeMapper;
+import com.aifuli.module.supplychain.tradecore.supply.domain.OfferFulfillmentScore;
 import com.aifuli.module.supplychain.tradecore.supply.domain.OfferPriceMode;
 import com.aifuli.module.supplychain.tradecore.supply.domain.OfferStatus;
 import com.aifuli.module.supplychain.tradecore.supply.domain.SupplyMode;
@@ -30,6 +33,7 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
@@ -45,8 +49,8 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.SUPPLIER_STATUS_CONFLICT;
 
 /**
- * 合作商品：新增即上架，改价只更新身份列，不写报价版本。
- * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#55-合作商品}。
+ * 合作商品：新增即上架，改价只更新身份列，不写报价版本；新增与改价须发布定价依赖变更事件。
+ * 设计见 {@code docs/superpowers/specs/2026-09-22-effective-supply-price-identity-fallback-design.md}。
  */
 @Slf4j
 @Service
@@ -73,6 +77,12 @@ public class SupplierCooperativeProductService {
     private final PlatformSettlementPriceMapper priceMapper;
     private final PlatformSettlementPriceVersionMapper priceVersionMapper;
     private final BusinessNoGenerator businessNoGenerator;
+    private final ApplicationEventPublisher eventPublisher;
+    /**
+     * 供货配置分类码与 SPU 分类码的归属判定（类目祖先链，归档不断链），树数据所有权仍在 catalog。
+     * 设计见 {@code docs/superpowers/specs/2026-09-07-供应链管理端表单字典与标品标签设计.md#1-已确认决策}（d3）。
+     */
+    private final ProductCategoryCoverageService categoryCoverageService;
 
     /**
      * 批量新增合作商品，状态直接 {@link OfferStatus#PUBLISHED}。供货上限为空时继承命中的供货配置；
@@ -91,10 +101,11 @@ public class SupplierCooperativeProductService {
             throw exception(SUPPLIER_NOT_FOUND);
         }
         List<SupplierSupplyScopeDO> scopes = scopeMapper.selectBySupplierId(supplier.getId());
+        ProductCategoryCoverageService.CoverageResolver coverage = categoryCoverageService.loadResolver();
         LocalDateTime now = databaseClock.now();
         List<String> offerNos = new ArrayList<>();
         for (DraftLine line : lines) {
-            offerNos.add(insertPublished(supplier, scopes, line, operatorId, now));
+            offerNos.add(insertPublished(supplier, scopes, line, operatorId, now, coverage));
         }
         return offerNos;
     }
@@ -129,10 +140,13 @@ public class SupplierCooperativeProductService {
         offer.setUpdatedBy(operatorId);
         offer.setUpdatedAt(databaseClock.now());
         offerMapper.updateById(offer);
+        eventPublisher.publishEvent(new PricingDependencyChangedEvent(offer.getPlatformSkuId()));
     }
 
     /**
      * 改价与供货模式：校验与新增相同，只更新身份列，禁止 {@code offerVersionMapper.insert}。
+     * 身份列单价变化后必须发布定价依赖事件，供列表与通用定价按身份列回退。
+     * 设计见 {@code docs/superpowers/specs/2026-09-22-effective-supply-price-identity-fallback-design.md}。
      */
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public void updateCommercial(String supplierCode, String offerNo, DraftLine line, Long operatorId) {
@@ -144,7 +158,7 @@ public class SupplierCooperativeProductService {
         SupplierOfferDO offer = requireLiveOffer(supplierCode, offerNo);
         SupplierDO supplier = supplierMapper.selectByCode(supplierCode);
         List<SupplierSupplyScopeDO> scopes = scopeMapper.selectBySupplierId(supplier.getId());
-        ResolvedOffer resolved = resolveLine(scopes, line);
+        ResolvedOffer resolved = resolveLine(scopes, line, categoryCoverageService.loadResolver());
         Long existing = offerMapper.selectCount(new LambdaQueryWrapper<SupplierOfferDO>()
                 .eq(SupplierOfferDO::getSupplierId, supplier.getId())
                 .eq(SupplierOfferDO::getPlatformSkuId, resolved.sku().getId())
@@ -164,6 +178,7 @@ public class SupplierCooperativeProductService {
         offer.setUpdatedBy(operatorId);
         offer.setUpdatedAt(databaseClock.now());
         offerMapper.updateById(offer);
+        eventPublisher.publishEvent(new PricingDependencyChangedEvent(offer.getPlatformSkuId()));
     }
 
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
@@ -174,6 +189,9 @@ public class SupplierCooperativeProductService {
         offer.setUpdatedBy(operatorId);
         offer.setUpdatedAt(databaseClock.now());
         offerMapper.updateById(offer);
+        // 已发布版本仍然保留，但 RETIRED 身份不再属于最低有效供货价候选，必须同步生成新价格版本。
+        // 设计见 docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#5-版本继承与可售状态。
+        eventPublisher.publishEvent(new PricingDependencyChangedEvent(offer.getPlatformSkuId()));
     }
 
     /**
@@ -224,8 +242,9 @@ public class SupplierCooperativeProductService {
     }
 
     private String insertPublished(SupplierDO supplier, List<SupplierSupplyScopeDO> scopes, DraftLine line,
-                                   Long operatorId, LocalDateTime now) {
-        ResolvedOffer resolved = resolveLine(scopes, line);
+                                   Long operatorId, LocalDateTime now,
+                                   ProductCategoryCoverageService.CoverageResolver coverage) {
+        ResolvedOffer resolved = resolveLine(scopes, line, coverage);
         Long existing = offerMapper.selectCount(new LambdaQueryWrapper<SupplierOfferDO>()
                 .eq(SupplierOfferDO::getSupplierId, supplier.getId())
                 .eq(SupplierOfferDO::getPlatformSkuId, resolved.sku().getId())
@@ -246,6 +265,8 @@ public class SupplierCooperativeProductService {
                 .offerSupplyMode(resolved.supplyMode().name())
                 .draftMaxQuantity(resolved.maxQuantity())
                 .draftMinQuantity(resolved.minQuantity())
+                .stabilityScore(OfferFulfillmentScore.DEFAULT)
+                .timelinessScore(OfferFulfillmentScore.DEFAULT)
                 .status(OfferStatus.PUBLISHED.getCode())
                 .version(0L)
                 .createdBy(operatorId)
@@ -254,10 +275,12 @@ public class SupplierCooperativeProductService {
                 .updatedAt(now)
                 .build();
         offerMapper.insert(offer);
+        eventPublisher.publishEvent(new PricingDependencyChangedEvent(resolved.sku().getId()));
         return offer.getOfferNo();
     }
 
-    private ResolvedOffer resolveLine(List<SupplierSupplyScopeDO> scopes, DraftLine line) {
+    private ResolvedOffer resolveLine(List<SupplierSupplyScopeDO> scopes, DraftLine line,
+                                      ProductCategoryCoverageService.CoverageResolver coverage) {
         PlatformSkuDO sku = skuMapper.selectByCode(line.platformSkuCode());
         if (sku == null || sku.getStatus() == null
                 || sku.getStatus() != CatalogEntityStatus.ACTIVE.getCode()) {
@@ -268,7 +291,7 @@ public class SupplierCooperativeProductService {
                 || spu.getStatus() != CatalogEntityStatus.ACTIVE.getCode()) {
             throw exception(SUPPLIER_OFFER_OUT_OF_SCOPE);
         }
-        SupplierSupplyScopeDO scope = matchScope(scopes, spu);
+        SupplierSupplyScopeDO scope = matchScope(scopes, spu, coverage);
         OfferPriceMode priceMode = OfferPriceMode.fromCode(line.priceMode());
         SupplyMode supplyMode = SupplyMode.fromCode(line.supplyMode());
         validatePrice(priceMode, line);
@@ -333,7 +356,9 @@ public class SupplierCooperativeProductService {
                 offer.getOfferSupplyMode(),
                 offer.getDraftMaxQuantity(),
                 offer.getDraftMinQuantity(),
-                OfferStatus.fromCode(offer.getStatus()).name());
+                OfferStatus.fromCode(offer.getStatus()).name(),
+                offer.getStabilityScore(),
+                offer.getTimelinessScore());
     }
 
     private Long resolveSuggestPriceCents(Long skuId) {
@@ -352,27 +377,40 @@ public class SupplierCooperativeProductService {
     }
 
     /**
-     * SPU 三码须全部非空且与某条供货配置三码整体相等才命中；0 条或多条命中都判失败。
-     * 设计见 {@code docs/superpowers/specs/2026-09-07-供应链管理端表单字典与标品标签设计.md#42-平台spu}。
+     * 归属命中（2026-09-23 修订，取代三码全等）：SPU 三码须全部非空；{@code sellableCategory}、
+     * {@code productType} 仍字符串全等；{@code productClassification} 由
+     * {@link ProductCategoryCoverageService.CoverageResolver#covers} 判定——两边都是类目码时，
+     * 配置码是 SPU 码祖先（或相等）即命中，枚举名仍只认全等。多条命中取类目层级最深（最具体）的一条；
+     * 树性质下同层不可能双命中，若因脏数据出现同层多命中仍判失败。0 条命中抛
+     * {@code SUPPLIER_OFFER_OUT_OF_SCOPE}。
+     * 设计见 {@code docs/superpowers/specs/2026-09-07-供应链管理端表单字典与标品标签设计.md#1-已确认决策}（d3）。
      */
-    private SupplierSupplyScopeDO matchScope(List<SupplierSupplyScopeDO> scopes, PlatformSpuDO spu) {
+    private SupplierSupplyScopeDO matchScope(List<SupplierSupplyScopeDO> scopes, PlatformSpuDO spu,
+                                             ProductCategoryCoverageService.CoverageResolver coverage) {
         if (spu.getSellableCategory() == null || spu.getProductType() == null
                 || spu.getProductClassification() == null) {
             throw exception(SUPPLIER_OFFER_OUT_OF_SCOPE);
         }
         SupplierSupplyScopeDO matched = null;
+        int matchedDepth = -1;
+        boolean tieAtDeepest = false;
         for (SupplierSupplyScopeDO scope : scopes) {
-            boolean sameTriple = spu.getSellableCategory().equals(scope.getSellableCategory())
-                    && spu.getProductType().equals(scope.getProductType())
-                    && spu.getProductClassification().equals(scope.getProductClassification());
-            if (sameTriple) {
-                if (matched != null) {
-                    throw exception(SUPPLIER_OFFER_OUT_OF_SCOPE);
-                }
+            if (!spu.getSellableCategory().equals(scope.getSellableCategory())
+                    || !spu.getProductType().equals(scope.getProductType())
+                    || !coverage.covers(scope.getProductClassification(), spu.getProductClassification())) {
+                continue;
+            }
+            int depth = coverage.depth(scope.getProductClassification());
+            if (depth > matchedDepth) {
                 matched = scope;
+                matchedDepth = depth;
+                tieAtDeepest = false;
+            } else if (depth == matchedDepth) {
+                // 树性质 + 三元组唯一下同层不可能双命中；出现即数据异常，保持失败语义
+                tieAtDeepest = true;
             }
         }
-        if (matched == null) {
+        if (matched == null || tieAtDeepest) {
             throw exception(SUPPLIER_OFFER_OUT_OF_SCOPE);
         }
         return matched;
@@ -424,12 +462,14 @@ public class SupplierCooperativeProductService {
             @Schema(description = "动态商品类型编码") String productType,
             @Schema(description = "商品分类封闭枚举名") String productClassification,
             @Schema(description = "L1 B端结算单价，CNY分，允许0") Long suggestPriceCents,
-            @Schema(description = "供应价模式：FIXED固定值，REALTIME实时，DISCOUNT折扣") String priceMode,
+            @Schema(description = "供应价模式（字典supply_chain_offer_price_mode）：FIXED固定值，REALTIME实时更新，DISCOUNT按供货折扣") String priceMode,
             @Schema(description = "草稿供应价，CNY分；REALTIME为空") Long unitPriceCents,
             @Schema(description = "折扣基点，10000=100%") Integer discountBp,
             @Schema(description = "该Offer供货模式") String offerSupplyMode,
             @Schema(description = "草稿供货上限") Long maxQuantity,
             @Schema(description = "草稿最低起购量") Long minQuantity,
-            @Schema(description = "生命周期：PUBLISHED已发布，SUSPENDED暂停") String status) {
+            @Schema(description = "生命周期：PUBLISHED已发布，SUSPENDED暂停") String status,
+            @Schema(description = OfferFulfillmentScore.STABILITY_COMMENT) Integer stabilityScore,
+            @Schema(description = OfferFulfillmentScore.TIMELINESS_COMMENT) Integer timelinessScore) {
     }
 }

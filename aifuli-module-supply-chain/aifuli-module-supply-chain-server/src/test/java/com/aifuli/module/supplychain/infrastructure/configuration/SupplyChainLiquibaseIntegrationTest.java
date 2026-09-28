@@ -1,5 +1,6 @@
 package com.aifuli.module.supplychain.infrastructure.configuration;
 
+import com.aifuli.module.supplychain.border.fulfillment.domain.FulfillmentAssetStatus;
 import com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -20,6 +21,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class SupplyChainLiquibaseIntegrationTest {
 
@@ -62,9 +64,16 @@ class SupplyChainLiquibaseIntegrationTest {
                         "sc_supplier_supply_scope_mode", "sc_supplier_integration_mode",
                         "sc_supplier_file_ref", "sc_buyer_contact", "sc_buyer_product",
                         "sc_project_listing", "sc_platform_settlement_price_version",
+                        "sc_platform_sku_pricing", "sc_platform_sku_pricing_version",
+                        "sc_buyer_sku_pricing", "sc_buyer_sku_pricing_version",
+                        "sc_project_sku_pricing", "sc_project_sku_pricing_version",
+                        "sc_standard_pricing_quote",
                         "sc_supplier_settlement_account", "sc_supplier_settlement_ledger",
-                        "sc_supplier_invoice", "sc_buyer_invoice", "sc_product_type")
-                .doesNotContain("sc_inventory_asset", "sc_supply_reservation");
+                        "sc_supplier_invoice", "sc_buyer_invoice", "sc_product_type",
+                        "sc_std_routing_rule", "sc_std_routing_rule_scope", "sc_std_routing_candidate",
+                        "sc_supplier_sku_daily_quota")
+                .doesNotContain("sc_inventory_asset", "sc_supply_reservation",
+                        "sc_standard_product_routing_rule", "sc_standard_product_routing_candidate");
         assertThat(firstStartup.columnNames())
                 .contains("sc_instore_channel_user_binding.source_system",
                         "sc_instore_channel_user_binding.external_tenant_id",
@@ -93,6 +102,7 @@ class SupplyChainLiquibaseIntegrationTest {
                         "sc_platform_spu.delivery_type",
                         "sc_platform_spu.min_quantity",
                         "sc_platform_sku.suggested_sale_price",
+                        "sc_platform_sku.suggested_sale_price_rule_json",
                         "sc_platform_sku.user_limit_enabled",
                         "sc_platform_sku.user_limit_period",
                         "sc_platform_sku.user_limit_quantity",
@@ -100,11 +110,39 @@ class SupplyChainLiquibaseIntegrationTest {
                         "sc_platform_sku.phone_bind_limit_enabled",
                         "sc_platform_sku.phone_bind_limit_period",
                         "sc_platform_sku.phone_bind_limit_quantity",
+                        "sc_platform_sku.sku_inventory",
+                        "sc_supplier_offer.stability_score",
+                        "sc_supplier_offer.timeliness_score",
+                        "sc_supplier_routing_policy.stability_weight",
+                        "sc_supplier_routing_policy.price_weight",
+                        "sc_supplier_routing_policy.timeliness_weight",
+                        "sc_supply_chain_order.project_code_snapshot",
+                        "sc_supply_chain_order.project_name_snapshot",
+                        "sc_std_routing_rule.rule_code",
+                        "sc_std_routing_rule.route_mode",
+                        "sc_std_routing_rule_scope.scope_kind",
+                        "sc_std_routing_candidate.candidate_priority",
+                        "sc_supplier_sku_daily_quota.daily_limit",
                         "sc_platform_sku.main_image_url",
                         "sc_platform_sku.detail_image_urls",
                         "sc_platform_sku.description",
+                        "sc_product_category.product_type",
+                        "sc_product_category.description",
+                        "sc_product_category.type_codes",
                         "sc_fulfillment_acceptance_receipt.project_id",
                         "sc_supply_chain_order.project_id",
+                        "sc_supply_chain_order.pricing_quote_id",
+                        "sc_supply_chain_order.pricing_version_id",
+                        "sc_supply_chain_order.sales_unit_price_cents",
+                        "sc_supply_chain_order.product_subtotal_cents",
+                        "sc_supply_chain_order.service_fee_cents",
+                        "sc_supply_chain_order.user_payable_amount_cents",
+                        "sc_supply_chain_order.refundable_service_fee_cents",
+                        "sc_supply_chain_order.tax_metadata_json",
+                        "sc_platform_sku_pricing_version.effective_config_json",
+                        "sc_buyer_sku_pricing_version.platform_pricing_version_id",
+                        "sc_buyer_sku_pricing_version.override_json",
+                        "sc_buyer_sku_pricing_version.effective_config_json",
                         "sc_supply_chain_order.fulfillment_account_value",
                         "sc_product_category.visible");
         assertThat(firstStartup.projectAuthNonceColumnDefinitions()).containsExactly(
@@ -114,17 +152,27 @@ class SupplyChainLiquibaseIntegrationTest {
                 "expire_at:DATETIME:-:3:NO");
         assertThat(firstStartup.projectAuthNoncePrimaryKeyColumns())
                 .containsExactly("app_id", "nonce");
-        assertThat(firstStartup.changeSetCount()).isEqualTo(35L);
+        assertThat(firstStartup.changeSetCount()).isEqualTo(47L);
         assertThat(firstStartup.uniqueIndexes())
                 .contains("sc_instore_payment_flow.uk_sc_instore_flow_order",
                         "sc_instore_channel_user_binding.uk_sc_instore_user_binding_project",
                         "sc_brand.uk_sc_brand_name",
                         "sc_product_category.uk_sc_category_live_parent_name",
-                        "sc_product_type.uk_sc_product_type_name");
+                        "sc_product_type.uk_sc_product_type_name",
+                        "sc_platform_sku_pricing_version.uk_sc_platform_sku_pricing_version",
+                        "sc_buyer_sku_pricing.uk_sc_buyer_sku_pricing_product",
+                        "sc_project_sku_pricing.uk_sc_project_sku_pricing_listing",
+                        "sc_standard_pricing_quote.uk_sc_standard_quote_token",
+                        "sc_std_routing_rule.uk_sc_std_rule_code",
+                        "sc_std_routing_rule_scope.uk_sc_std_rule_scope",
+                        "sc_std_routing_candidate.uk_sc_std_candidate_supplier",
+                        "sc_supplier_sku_daily_quota.uk_sc_supplier_sku_daily_quota");
         assertThat(firstStartup.indexes())
                 .contains("sc_buyer.idx_sc_buyer_parent_created",
+                        "sc_product_category.idx_sc_category_product_type",
                         "sc_supply_chain_order.idx_sc_order_purchase_limit",
-                        "sc_supply_chain_order.idx_sc_order_phone_bind_limit");
+                        "sc_supply_chain_order.idx_sc_order_phone_bind_limit",
+                        "sc_supply_chain_order.idx_sc_order_supplier_sku_day");
         assertThat(firstStartup.collations()).containsOnly("utf8mb4_0900_ai_ci");
         assertThat(firstStartup.importedKeys()).isEmpty();
         assertThat(firstStartup.duplicateChangeSets()).isEmpty();
@@ -162,14 +210,14 @@ class SupplyChainLiquibaseIntegrationTest {
                         FROM information_schema.COLUMNS
                         WHERE TABLE_SCHEMA = DATABASE()
                           AND TABLE_NAME LIKE 'sc\\_%'
-                        """)).isEqualTo(105L);
+                        """)).isEqualTo(114L);
                 assertThat(queryLong(connection, """
                         SELECT COUNT(*)
                         FROM information_schema.COLUMNS
                         WHERE TABLE_SCHEMA = DATABASE()
                           AND TABLE_NAME LIKE 'sc\\_%'
                           AND DATA_TYPE = 'datetime'
-                        """)).isEqualTo(256L);
+                        """)).isEqualTo(274L);
                 assertThat(queryLong(connection, """
                         SELECT COUNT(*)
                         FROM information_schema.COLUMNS
@@ -194,6 +242,65 @@ class SupplyChainLiquibaseIntegrationTest {
                           AND DATA_TYPE = 'datetime'
                           AND COLUMN_COMMENT NOT LIKE '%Asia/Shanghai%'
                         """)).isZero();
+            }
+        }
+    }
+
+    /**
+     * 040 将 {@code sc_fulfillment_asset.lifecycle_status} 与 {@link FulfillmentAssetStatus} 对齐，允许 50 已过期。
+     */
+    @Test
+    void fulfillmentAssetLifecycleStatusAllowsExpiredAndRejectsUnknown() throws Exception {
+        try (ConfigurableApplicationContext context = applicationContext()) {
+            DataSource dataSource = context.getBean("supplyChainDataSource", DataSource.class);
+            try (Connection connection = dataSource.getConnection()) {
+                List<String> comments = queryStrings(connection, """
+                        SELECT COLUMN_COMMENT
+                        FROM information_schema.COLUMNS
+                        WHERE TABLE_SCHEMA = DATABASE()
+                          AND TABLE_NAME = 'sc_fulfillment_asset'
+                          AND COLUMN_NAME = 'lifecycle_status'
+                        """);
+                assertThat(comments).hasSize(1);
+                assertThat(comments.get(0)).contains("50已过期");
+
+                List<String> checkClauses = queryStrings(connection, """
+                        SELECT CHECK_CLAUSE
+                        FROM information_schema.CHECK_CONSTRAINTS
+                        WHERE CONSTRAINT_SCHEMA = DATABASE()
+                          AND CONSTRAINT_NAME = 'ck_sc_fulfillment_asset_status'
+                        """);
+                assertThat(checkClauses).hasSize(1);
+                assertThat(checkClauses.get(0)).contains("50");
+
+                try (PreparedStatement insertExpired = connection.prepareStatement("""
+                        INSERT INTO sc_fulfillment_asset (
+                            asset_no, fulfillment_request_id, b_order_id, operation_id, supplier_id, buyer_id,
+                            buyer_user_id, sequence_no, unit_quantity, asset_type, encrypted_payload, masked_value,
+                            fingerprint, key_version, lifecycle_status, version, created_at, updated_at)
+                        VALUES ('FA_IT_EXPIRED_50', 1, 1, 1, 1, 1, 'it-user', 1, 1, 'VOUCHER_CODE', ?, '****',
+                            ?, '1', ?, 0, CURRENT_TIMESTAMP(3), CURRENT_TIMESTAMP(3))
+                        """)) {
+                    insertExpired.setBytes(1, new byte[]{1});
+                    insertExpired.setBytes(2, new byte[32]);
+                    insertExpired.setShort(3, FulfillmentAssetStatus.EXPIRED.getCode());
+                    assertThat(insertExpired.executeUpdate()).isEqualTo(1);
+                }
+
+                try (PreparedStatement insertInvalid = connection.prepareStatement("""
+                        INSERT INTO sc_fulfillment_asset (
+                            asset_no, fulfillment_request_id, b_order_id, operation_id, supplier_id, buyer_id,
+                            buyer_user_id, sequence_no, unit_quantity, asset_type, encrypted_payload, masked_value,
+                            fingerprint, key_version, lifecycle_status, version, created_at, updated_at)
+                        VALUES ('FA_IT_INVALID_60', 1, 1, 1, 1, 1, 'it-user', 2, 1, 'VOUCHER_CODE', ?, '****',
+                            ?, '1', 60, 0, CURRENT_TIMESTAMP(3), CURRENT_TIMESTAMP(3))
+                        """)) {
+                    insertInvalid.setBytes(1, new byte[]{2});
+                    byte[] fingerprint = new byte[32];
+                    fingerprint[0] = 2;
+                    insertInvalid.setBytes(2, fingerprint);
+                    assertThatThrownBy(insertInvalid::executeUpdate).isInstanceOf(SQLException.class);
+                }
             }
         }
     }

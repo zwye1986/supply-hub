@@ -5,12 +5,27 @@ import com.aifuli.framework.security.core.LoginUser;
 import com.aifuli.framework.security.core.service.SecurityFrameworkService;
 import com.aifuli.framework.security.core.service.SecurityFrameworkServiceImpl;
 import com.aifuli.module.supplychain.border.order.application.OrderAdminQueryService;
+import com.aifuli.module.supplychain.border.order.application.SupplierOrderAdminQueryService;
+import com.aifuli.module.supplychain.interfaceapi.admin.vo.RoutingRuleSaveReqVO;
+import com.aifuli.module.supplychain.routing.application.RoutingRuleAdminCommandService;
+import com.aifuli.module.supplychain.routing.application.RoutingRuleAdminQueryService;
+import com.aifuli.module.supplychain.routing.application.RoutingRuleAdminQueryService.PriorityView;
+import com.aifuli.module.supplychain.routing.application.RoutingRuleAdminQueryService.RoutingRuleView;
+import com.aifuli.module.supplychain.routing.application.RoutingRuleAdminQueryService.WeightView;
+import com.aifuli.module.supplychain.routing.application.RoutingRuleRouteMode;
+import com.aifuli.module.supplychain.routing.application.RoutingRuleSaveSupport.NormalizedRulePatch;
+import com.aifuli.module.supplychain.routing.application.RoutingRuleScopeMode;
+import com.aifuli.module.supplychain.routing.application.RoutingRuleStatus;
+import com.aifuli.module.supplychain.routing.application.RoutingRuleStrategy;
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerAdminCommandService;
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerAdminQueryService;
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerInvoiceService;
 import com.aifuli.module.supplychain.tradecore.catalog.application.BuyerProductCommandService;
 import com.aifuli.module.supplychain.tradecore.catalog.application.BuyerProductQueryService;
+import com.aifuli.module.supplychain.tradecore.catalog.application.ProductCatalogCommandService;
+import com.aifuli.module.supplychain.tradecore.catalog.application.ProductCatalogQueryService;
 import com.aifuli.module.supplychain.tradecore.catalog.application.PlatformSkuQueryService;
+import com.aifuli.module.supplychain.tradecore.supply.application.OfferFulfillmentScoreService;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierCooperativeProductService;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierInvoiceService;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierProfileCommandService;
@@ -29,6 +44,7 @@ import org.springframework.security.config.annotation.method.configuration.Enabl
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.context.junit.jupiter.SpringJUnitConfig;
 
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -40,12 +56,16 @@ import static com.aifuli.framework.common.pojo.CommonResult.success;
 import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.ADMIN;
 import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.BUYER_QUERY;
 import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.ORDER_QUERY;
+import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.PRODUCT_QUERY;
+import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.PRODUCT_UPDATE;
 import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.SUPPLIER_QUERY;
+import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.SUPPLIER_UPDATE;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -67,11 +87,17 @@ class SupplyChainAdminMethodSecurityContractTest {
     @Resource
     private SupplierAdminController supplierController;
     @Resource
+    private ProductAdminController productController;
+    @Resource
     private BuyerAdminController buyerController;
     @Resource
     private PlatformSkuAdminController platformSkuController;
     @Resource
     private OrderAdminController orderController;
+    @Resource
+    private SupplierOrderAdminController supplierOrderController;
+    @Resource
+    private RoutingRuleAdminController routingRuleController;
 
     @BeforeEach
     void setUp() {
@@ -91,9 +117,12 @@ class SupplyChainAdminMethodSecurityContractTest {
     @Test
     void methodSecurityProxyIsActive() {
         assertThat(AopUtils.isAopProxy(supplierController)).isTrue();
+        assertThat(AopUtils.isAopProxy(productController)).isTrue();
         assertThat(AopUtils.isAopProxy(buyerController)).isTrue();
         assertThat(AopUtils.isAopProxy(platformSkuController)).isTrue();
         assertThat(AopUtils.isAopProxy(orderController)).isTrue();
+        assertThat(AopUtils.isAopProxy(supplierOrderController)).isTrue();
+        assertThat(AopUtils.isAopProxy(routingRuleController)).isTrue();
     }
 
     @Test
@@ -178,6 +207,56 @@ class SupplyChainAdminMethodSecurityContractTest {
     }
 
     @Test
+    void productQueryCanReadSingleSkuPricing() {
+        grant(PRODUCT_QUERY);
+
+        assertThatCode(() -> platformSkuController.getPricing("SKU_1")).doesNotThrowAnyException();
+    }
+
+    @Test
+    void supplierUpdateCanSaveFulfillmentScores() {
+        grant(SUPPLIER_UPDATE);
+
+        assertThatCode(this::saveSupplierFulfillmentScores).doesNotThrowAnyException();
+    }
+
+    @Test
+    void supplierQueryCannotSaveFulfillmentScores() {
+        grant(SUPPLIER_QUERY);
+
+        assertThatThrownBy(this::saveSupplierFulfillmentScores).isInstanceOf(AccessDeniedException.class);
+    }
+
+    @Test
+    void productQueryCanReadSkuFulfillmentScores() {
+        grant(PRODUCT_QUERY);
+
+        assertThatCode(this::getSkuFulfillmentScores).doesNotThrowAnyException();
+    }
+
+    @Test
+    void productQueryCannotSaveSkuFulfillmentScores() {
+        grant(PRODUCT_QUERY);
+
+        assertThatThrownBy(this::saveSkuFulfillmentScores).isInstanceOf(AccessDeniedException.class);
+    }
+
+    @Test
+    void productUpdateCanSaveSkuFulfillmentScores() {
+        grant(PRODUCT_UPDATE);
+
+        assertThatCode(this::saveSkuFulfillmentScores).doesNotThrowAnyException();
+    }
+
+    @Test
+    void buyerQueryCannotReadSingleSkuPricing() {
+        grant(BUYER_QUERY);
+
+        assertThatThrownBy(() -> platformSkuController.getPricing("SKU_1"))
+                .isInstanceOf(AccessDeniedException.class);
+    }
+
+    @Test
     void orderQueryCanReadOrders() {
         grant(ORDER_QUERY);
         assertThatCode(this::queryOrders).doesNotThrowAnyException();
@@ -193,6 +272,96 @@ class SupplyChainAdminMethodSecurityContractTest {
     void wrongPermissionCannotReadOrders() {
         grant(BUYER_QUERY);
         assertThatThrownBy(this::queryOrders).isInstanceOf(AccessDeniedException.class);
+    }
+
+    @Test
+    void adminCanReadRoutingRules() {
+        grant(ADMIN);
+        assertThatCode(() -> routingRuleController.page(null, null, null, null, null, null,
+                null, null, null, 1, 20)).doesNotThrowAnyException();
+        assertThatCode(() -> routingRuleController.get("RR_1")).doesNotThrowAnyException();
+    }
+
+    @Test
+    void adminCanWriteRoutingRules() {
+        grant(ADMIN);
+        assertThatCode(() -> routingRuleController.create(fixedCreateRequest()))
+                .doesNotThrowAnyException();
+        assertThatCode(() -> routingRuleController.update("RR_1", fixedCreateRequest()))
+                .doesNotThrowAnyException();
+        assertThatCode(() -> routingRuleController.delete("RR_1")).doesNotThrowAnyException();
+        RoutingRuleAdminController.ChangeStatusReqVO statusRequest =
+                new RoutingRuleAdminController.ChangeStatusReqVO();
+        statusRequest.setStatus("DISABLED");
+        assertThatCode(() -> routingRuleController.changeStatus("RR_1", statusRequest))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    void wrongPermissionCannotReadRoutingRules() {
+        grant(BUYER_QUERY);
+        assertThatThrownBy(() -> routingRuleController.page(null, null, null, null, null, null,
+                null, null, null, 1, 20)).isInstanceOf(AccessDeniedException.class);
+    }
+
+    @Test
+    void wrongPermissionCannotWriteRoutingRules() {
+        grant(BUYER_QUERY);
+        assertThatThrownBy(() -> routingRuleController.create(fixedCreateRequest()))
+                .isInstanceOf(AccessDeniedException.class);
+        assertThatThrownBy(() -> routingRuleController.update("RR_1", fixedCreateRequest()))
+                .isInstanceOf(AccessDeniedException.class);
+        assertThatThrownBy(() -> routingRuleController.delete("RR_1"))
+                .isInstanceOf(AccessDeniedException.class);
+        RoutingRuleAdminController.ChangeStatusReqVO statusRequest =
+                new RoutingRuleAdminController.ChangeStatusReqVO();
+        statusRequest.setStatus("DISABLED");
+        assertThatThrownBy(() -> routingRuleController.changeStatus("RR_1", statusRequest))
+                .isInstanceOf(AccessDeniedException.class);
+    }
+
+    private static RoutingRuleSaveReqVO fixedCreateRequest() {
+        RoutingRuleSaveReqVO request = new RoutingRuleSaveReqVO();
+        request.setName("话费固定规则");
+        request.setDistributorCodes(List.of("BYR_1"));
+        request.setProjectCodes(List.of("PRJ_1"));
+        request.setProductTypeCodes(List.of("TELCO"));
+        request.setRouteMode("FIXED");
+        request.setPrimarySupplierCode("SPL_A");
+        request.setSupplierMode("SPECIFIED");
+        request.setSupplierCodes(List.of("SPL_A"));
+        request.setStatus("ENABLED");
+        request.setPriorities(List.of(
+                priority("1", "STABLE"), priority("2", "PRICE"), priority("3", "COMPOSITE")));
+        RoutingRuleSaveReqVO.WeightReqVO weights = new RoutingRuleSaveReqVO.WeightReqVO();
+        weights.setStability(40);
+        weights.setPrice(30);
+        weights.setTimeliness(30);
+        request.setWeights(weights);
+        return request;
+    }
+
+    private static RoutingRuleSaveReqVO.PriorityItemReqVO priority(String id, String strategy) {
+        RoutingRuleSaveReqVO.PriorityItemReqVO item = new RoutingRuleSaveReqVO.PriorityItemReqVO();
+        item.setId(id);
+        item.setStrategy(strategy);
+        return item;
+    }
+
+    private static RoutingRuleView sampleRoutingRuleView() {
+        return new RoutingRuleView(
+                "RR_1", "话费固定规则", false,
+                RoutingRuleScopeMode.SPECIFIED, List.of("BYR_1"), List.of("分销商1"),
+                RoutingRuleScopeMode.SPECIFIED, List.of("PRJ_1"), List.of("项目1"),
+                RoutingRuleScopeMode.SPECIFIED, List.of("TELCO"), List.of("话费"),
+                RoutingRuleRouteMode.FIXED, RoutingRuleScopeMode.SPECIFIED,
+                List.of("SPL_A"), List.of("供应商A"), "SPL_A", "供应商A",
+                List.of(
+                        new PriorityView("STABLE", RoutingRuleStrategy.STABLE),
+                        new PriorityView("PRICE", RoutingRuleStrategy.PRICE),
+                        new PriorityView("COMPOSITE", RoutingRuleStrategy.COMPOSITE)),
+                new WeightView(40, 30, 30),
+                RoutingRuleStatus.ENABLED, "1001", LocalDateTime.now());
     }
 
     private void querySuppliers() {
@@ -218,6 +387,34 @@ class SupplyChainAdminMethodSecurityContractTest {
     private void queryOrders() {
         orderController.page(null, null, null, null, null, null, null, null,
                 null, null, 1, 20);
+        orderController.get("SC_1");
+        orderController.getRoutingRecords("SC_1");
+        supplierOrderController.page(null, null, null, null, null, null, null, 1, 20);
+        supplierOrderController.get("BO_1");
+    }
+
+    private void saveSupplierFulfillmentScores() {
+        SupplierAdminController.FulfillmentScoreSaveReqVO request =
+                new SupplierAdminController.FulfillmentScoreSaveReqVO();
+        request.setStabilityScore(80);
+        request.setTimelinessScore(70);
+        supplierController.saveFulfillmentScores("SPL_1", request);
+    }
+
+    private void getSkuFulfillmentScores() {
+        productController.getSkuFulfillmentScores("SKU_1");
+    }
+
+    private void saveSkuFulfillmentScores() {
+        ProductAdminController.SkuFulfillmentScoreSaveReqVO request =
+                new ProductAdminController.SkuFulfillmentScoreSaveReqVO();
+        ProductAdminController.SkuFulfillmentScoreItemReqVO item =
+                new ProductAdminController.SkuFulfillmentScoreItemReqVO();
+        item.setSupplierCode("SPL_1");
+        item.setStabilityScore(80);
+        item.setTimelinessScore(70);
+        request.setItems(List.of(item));
+        productController.saveSkuFulfillmentScores("SKU_1", request);
     }
 
     private static void grant(String... permissions) {
@@ -265,7 +462,16 @@ class SupplyChainAdminMethodSecurityContractTest {
                     mock(SupplierProfileQueryService.class),
                     mock(SupplierSupplyScopeService.class),
                     mock(SupplierCooperativeProductService.class),
-                    mock(SupplierInvoiceService.class));
+                    mock(SupplierInvoiceService.class),
+                    mock(OfferFulfillmentScoreService.class));
+        }
+
+        @Bean
+        ProductAdminController productAdminController() {
+            return new ProductAdminController(
+                    mock(ProductCatalogQueryService.class),
+                    mock(ProductCatalogCommandService.class),
+                    mock(OfferFulfillmentScoreService.class));
         }
 
         @Bean
@@ -275,17 +481,45 @@ class SupplyChainAdminMethodSecurityContractTest {
                     mock(BuyerAdminQueryService.class),
                     mock(BuyerProductCommandService.class),
                     mock(BuyerProductQueryService.class),
+                    mock(com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericBatchPricingService.class),
                     mock(BuyerInvoiceService.class));
         }
 
         @Bean
         PlatformSkuAdminController platformSkuAdminController() {
-            return new PlatformSkuAdminController(mock(PlatformSkuQueryService.class));
+            return new PlatformSkuAdminController(
+                    mock(PlatformSkuQueryService.class),
+                    mock(com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericBatchPricingService.class));
         }
 
         @Bean
         OrderAdminController orderAdminController() {
             return new OrderAdminController(mock(OrderAdminQueryService.class));
+        }
+
+        @Bean
+        SupplierOrderAdminController supplierOrderAdminController() {
+            return new SupplierOrderAdminController(mock(SupplierOrderAdminQueryService.class));
+        }
+
+        @Bean
+        RoutingRuleAdminCommandService routingRuleAdminCommandService() {
+            RoutingRuleAdminCommandService commandService = mock(RoutingRuleAdminCommandService.class);
+            RoutingRuleView view = sampleRoutingRuleView();
+            when(commandService.create(any(NormalizedRulePatch.class), any())).thenReturn(view);
+            when(commandService.update(anyString(), any(NormalizedRulePatch.class), any()))
+                    .thenReturn(view);
+            when(commandService.changeStatus(anyString(), any(RoutingRuleStatus.class), any()))
+                    .thenReturn(view);
+            return commandService;
+        }
+
+        @Bean
+        RoutingRuleAdminController routingRuleAdminController(
+                RoutingRuleAdminCommandService routingRuleAdminCommandService) {
+            return new RoutingRuleAdminController(
+                    routingRuleAdminCommandService,
+                    mock(RoutingRuleAdminQueryService.class));
         }
     }
 }

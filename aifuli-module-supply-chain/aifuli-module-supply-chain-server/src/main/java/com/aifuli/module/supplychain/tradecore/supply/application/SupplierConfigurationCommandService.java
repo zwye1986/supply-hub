@@ -1,5 +1,8 @@
 package com.aifuli.module.supplychain.tradecore.supply.application;
 
+import com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService;
+import com.aifuli.module.supplychain.infrastructure.identity.SystemAssignedBusinessCodeGuard;
+
 import com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock;
 
 import com.aifuli.module.supplychain.infrastructure.identity.BusinessNoGenerator;
@@ -20,6 +23,7 @@ import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierConnecto
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierConnectorVersionMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierMapper;
 import com.aifuli.module.supplychain.tradecore.supply.domain.ConnectorVersionStatus;
+import com.aifuli.module.supplychain.tradecore.supply.domain.CredentialSlotStatus;
 import com.aifuli.module.supplychain.tradecore.supply.domain.SupplierStatus;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -54,16 +58,21 @@ public class SupplierConfigurationCommandService {
     private final AdapterMetadataRegistry metadataRegistry;
     private final ClosedJsonSchemaValidator schemaValidator;
     private final BusinessNoGenerator businessNoGenerator;
+    private final ScopedBusinessCodeService scopedBusinessCodeService;
     private final ObjectMapper objectMapper;
 
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public String createSupplier(CreateSupplierCommand command) {
+        SystemAssignedBusinessCodeGuard.rejectSubmitted(ScopedBusinessCodeService.Kind.SPL,
+                command.supplierCode() != null);
         if (!SUPPLIER_TYPES.contains(command.supplierType())) {
             throw new IllegalArgumentException("Unsupported supplier type: " + command.supplierType());
         }
         LocalDateTime now = now();
         SupplierDO supplier = SupplierDO.builder()
-                .supplierCode(command.supplierCode()).supplierName(command.supplierName())
+                .supplierCode(scopedBusinessCodeService.allocateRoot(ScopedBusinessCodeService.Kind.SPL,
+                        null, command.operatorId()).code())
+                .supplierName(command.supplierName())
                 .shortName(command.shortName()).supplierType(command.supplierType())
                 .legalEntityName(command.legalEntityName()).status(SupplierStatus.ACTIVE.getCode())
                 .version(0L).createdBy(command.operatorId()).createdAt(now)
@@ -186,7 +195,7 @@ public class SupplierConfigurationCommandService {
 
     private CredentialSlotDO requireActiveSlot(String slotNo) {
         CredentialSlotDO slot = credentialSlotMapper.selectByNo(slotNo);
-        if (slot == null || slot.getStatus() != 10) {
+        if (slot == null || slot.getStatus() != CredentialSlotStatus.ACTIVE.getCode()) {
             throw new IllegalArgumentException("Active credential slot does not exist: " + slotNo);
         }
         return slot;

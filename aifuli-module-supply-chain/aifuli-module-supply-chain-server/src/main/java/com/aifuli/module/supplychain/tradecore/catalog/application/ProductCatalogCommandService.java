@@ -1,5 +1,7 @@
 package com.aifuli.module.supplychain.tradecore.catalog.application;
 
+import com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService;
+
 import com.aifuli.module.supplychain.border.fulfillment.application.FulfillmentTargetSchemaRegistry;
 import com.aifuli.module.supplychain.infrastructure.identity.BusinessNoGenerator;
 import com.aifuli.module.supplychain.infrastructure.identity.BusinessNoPrefixes;
@@ -12,12 +14,14 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BrandDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerListingAvailabilityDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerListingDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuDO;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuPricingDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSpuDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProductCategoryDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BrandMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerListingAvailabilityMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerListingMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuPricingMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSpuMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProductCategoryMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.BuyerListingStatus;
@@ -27,19 +31,25 @@ import com.aifuli.module.supplychain.tradecore.catalog.domain.DeliveryType;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.FulfillmentType;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.ListingAvailability;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.PurchaseLimitPeriod;
+import com.aifuli.module.supplychain.tradecore.catalog.domain.SuggestedSalePriceCalculator;
+import com.aifuli.module.supplychain.tradecore.catalog.domain.SuggestedSalePriceRule;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.UnshelveMode;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.PricingDependencyChangedEvent;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.PlatformSkuPricingInitializationEvent;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericPricingCalculator.PricingStatus;
 import com.aifuli.module.supplychain.tradecore.profile.domain.ClosedEnums;
-import com.aifuli.module.supplychain.tradecore.profile.domain.ProductClassification;
 import com.aifuli.module.supplychain.tradecore.profile.domain.SellableCategory;
 import com.aifuli.framework.common.exception.ServiceException;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
@@ -66,6 +76,8 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_SKU_FIELD_INVALID;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_SKU_REQUIRED;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_STATUS_INVALID;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_FULFILLMENT_TYPE_IMMUTABLE;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_SUGGESTED_PRICE_RULE_INVALID;
 
 @Slf4j
 @Service
@@ -73,6 +85,7 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
 public class ProductCatalogCommandService {
 
     private final SupplyChainDatabaseClock databaseClock;
+    private final ApplicationEventPublisher eventPublisher;
 
     private static final String TRANSACTION_MANAGER = "supplyChainTransactionManager";
     private static final String CURRENCY_CNY = "CNY";
@@ -107,13 +120,16 @@ public class ProductCatalogCommandService {
     private final ProductCategoryMapper categoryMapper;
     private final PlatformSpuMapper spuMapper;
     private final PlatformSkuMapper skuMapper;
+    private final PlatformSkuPricingMapper platformSkuPricingMapper;
     private final BuyerMapper buyerMapper;
     private final BuyerListingMapper listingMapper;
     private final BuyerListingAvailabilityMapper availabilityMapper;
     private final BusinessNoGenerator businessNoGenerator;
+    private final ScopedBusinessCodeService scopedBusinessCodeService;
     private final BrandAdminService brandAdminService;
     private final CategoryCommandService categoryCommandService;
     private final ProductTypeValidationService productTypeValidationService;
+    private final ProductClassificationValidationService productClassificationValidationService;
     private final ProductSellabilityService sellabilityService;
     private final ProductDeletionValidator deletionValidator;
     private final FulfillmentTargetSchemaRegistry targetSchemaRegistry;
@@ -129,7 +145,7 @@ public class ProductCatalogCommandService {
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public String createCategory(CreateCategoryCommand command) {
         return categoryCommandService.create(new CategoryCommandService.CreateCommand(command.categoryCode(),
-                command.categoryName(), command.parentCategoryCode(), command.sort(),
+                command.categoryName(), null, null, command.parentCategoryCode(), command.sort(),
                 CategoryVisibility.VISIBLE.getCode(), CatalogEntityStatus.DRAFT.getCode(), command.operatorId()));
     }
 
@@ -145,10 +161,13 @@ public class ProductCatalogCommandService {
         BrandDO brand = requireBrand(command.brandCode());
         Long primaryCategoryId = hasText(command.primaryCategoryCode())
                 ? requireCategory(command.primaryCategoryCode()).getId() : null;
+        String fulfillmentType = hasText(command.fulfillmentType())
+                ? FulfillmentType.fromCode(command.fulfillmentType().trim()).code()
+                : FulfillmentType.DIRECT_RECHARGE.code();
         SaveSpuCommand delegated = new SaveSpuCommand(command.spuCode(), command.spuName(), command.subtitle(),
                 brand.getId(), primaryCategoryId, null, command.sellableCategory(), command.productType(),
                 command.productClassification(), command.coverUrl(), null, command.useInstruction(), null,
-                null, null, null, CatalogEntityStatus.DRAFT.getCode(), List.of(), command.operatorId());
+                null, fulfillmentType, null, null, CatalogEntityStatus.DRAFT.getCode(), List.of(), command.operatorId());
         return insertSpu(delegated).getSpuCode();
     }
 
@@ -165,9 +184,13 @@ public class ProductCatalogCommandService {
             throw exception(PRODUCT_CURRENCY_INVALID);
         }
         PlatformSpuDO spu = requireSpu(command.spuCode());
-        String skuCode = hasText(command.skuCode()) ? command.skuCode().trim()
-                : businessNoGenerator.next(BusinessNoPrefixes.SKU);
-        SaveSkuLine line = new SaveSkuLine(skuCode, command.skuName(), command.fulfillmentType(),
+        String skuCode = scopedBusinessCodeService.allocateChild(ScopedBusinessCodeService.Kind.SKU,
+                spu.getId(), spu.getCodeScopeNo(), command.skuCode(), command.operatorId()).code();
+        String fulfillmentType = spu.getFulfillmentType();
+        if (hasText(command.fulfillmentType()) && !command.fulfillmentType().trim().equals(fulfillmentType)) {
+            throw exception(PRODUCT_SKU_FIELD_INVALID);
+        }
+        SaveSkuLine line = new SaveSkuLine(skuCode, command.skuName(), fulfillmentType,
                 command.faceValue(), null, null, null, null, CatalogEntityStatus.DRAFT.getCode());
         insertSku(spu, skuCode, line, CatalogEntityStatus.DRAFT, command.operatorId(), now());
         return skuCode;
@@ -327,53 +350,70 @@ public class ProductCatalogCommandService {
      */
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public String createProduct(SaveSpuCommand command) {
-        log.info("创建平台商品 spuCode={} spuName={} skuCount={} operatorId={}", command.spuCode(),
-                command.spuName(), command.skus() == null ? 0 : command.skus().size(), command.operatorId());
+        log.info("创建平台商品 spuCode={} spuName={} sellableCategory={} productType={} productClassification={} "
+                        + "skuCount={} operatorId={}",
+                command.spuCode(), command.spuName(), command.sellableCategory(), command.productType(),
+                command.productClassification(), command.skus() == null ? 0 : command.skus().size(),
+                command.operatorId());
         if (command.skus() == null || command.skus().isEmpty()) {
             throw exception(PRODUCT_SKU_REQUIRED);
         }
         PlatformSpuDO spu = insertSpu(command);
         CatalogEntityStatus spuStatus = CatalogEntityStatus.fromCode(spu.getStatus());
         Set<String> requestCodes = new HashSet<>();
+        List<String> defaultPricingInitializationSkuCodes = new ArrayList<>();
         for (SaveSkuLine line : command.skus()) {
-            String skuCode = hasText(line.skuCode()) ? line.skuCode().trim()
-                    : businessNoGenerator.next(BusinessNoPrefixes.SKU);
+            String skuCode = scopedBusinessCodeService.allocateChild(ScopedBusinessCodeService.Kind.SKU,
+                    spu.getId(), spu.getCodeScopeNo(), line.skuCode(), command.operatorId()).code();
             if (!requestCodes.add(skuCode)) {
                 throw exception(PRODUCT_SKU_CODE_DUPLICATE);
             }
-            insertSku(spu, skuCode, line, spuStatus, command.operatorId(), spu.getCreatedAt());
+            if (hasText(line.fulfillmentType()) && !line.fulfillmentType().trim().equals(spu.getFulfillmentType())) {
+                throw exception(PRODUCT_SKU_FIELD_INVALID);
+            }
+            SaveSkuLine inheritedLine = line.withFulfillmentType(spu.getFulfillmentType());
+            insertSku(spu, skuCode, inheritedLine, spuStatus, command.operatorId(), spu.getCreatedAt());
+            defaultPricingInitializationSkuCodes.add(skuCode);
         }
+        eventPublisher.publishEvent(new PlatformSkuPricingInitializationEvent(
+                defaultPricingInitializationSkuCodes, command.operatorId()));
         return spu.getSpuCode();
     }
 
     /**
      * SPU 校验与落库的唯一路径，由复合创建与存量兼容入口共享，确保动态商品类型准入、品牌与类目有效性、
      * 辅助类目、配送模式与限购区间在新旧接口上完全一致。
-     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#45-存量主数据接口治理m1masterdataadmincontroller}（d9）。
+     * {@code productClassification} 先认封闭枚举名，否则按类目树 {@code category_code} 解析并原样落库（d34）。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#45-存量主数据接口治理m1masterdataadmincontroller}（d9）、
+     * {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线}（d34）。
      */
     private PlatformSpuDO insertSpu(SaveSpuCommand command) {
-        String spuCode = hasText(command.spuCode()) ? command.spuCode().trim()
-                : businessNoGenerator.next(BusinessNoPrefixes.SPU);
+        ScopedBusinessCodeService.Allocation allocation = scopedBusinessCodeService.allocateRoot(
+                ScopedBusinessCodeService.Kind.SPU, command.spuCode(), command.operatorId());
+        String spuCode = allocation.code();
         CatalogEntityStatus spuStatus = writableStatus(command.status(), CatalogEntityStatus.ACTIVE);
         boolean activeRequired = spuStatus == CatalogEntityStatus.ACTIVE;
-        BrandDO brand = requireBrandById(command.brandId(), activeRequired);
+        BrandDO brand = resolveBrand(command.brandId(), command.brandCode(), activeRequired);
         ProductCategoryDO primary = requireCategoryById(command.primaryCategoryId(), activeRequired);
         List<Long> secondary = validateSecondaryCategories(command.secondaryCategoryIds(), activeRequired);
         String productType = productTypeValidationService.requireActiveForUpdate(command.productType()).getTypeCode();
         String sellable = ClosedEnums.parseRequired(SellableCategory.class, command.sellableCategory()).name();
-        String classification = ClosedEnums.parseRequired(ProductClassification.class,
-                command.productClassification()).name();
+        String classification = productClassificationValidationService.requireWritable(
+                command.productClassification(), activeRequired, primary == null ? null : primary.getId());
         String deliveryType = DeliveryType.parseOrDefault(command.deliveryType()).code();
+        String fulfillmentType = hasText(command.fulfillmentType())
+                ? FulfillmentType.fromCode(command.fulfillmentType().trim()).code()
+                : inferFulfillmentTypeFromSkus(command.skus());
         validateQuantity(command.minQuantity(), command.maxQuantity());
         LocalDateTime now = now();
         PlatformSpuDO spu = PlatformSpuDO.builder()
-                .spuCode(spuCode).brandId(brand.getId())
+                .spuCode(spuCode).codeScopeNo((short) allocation.number()).brandId(brand.getId())
                 .primaryCategoryId(primary == null ? null : primary.getId())
                 .sellableCategory(sellable).productType(productType).productClassification(classification)
                 .secondaryCategoryIds(secondary).spuName(command.spuName().trim()).subtitle(command.subtitle())
                 .coverUrl(command.coverUrl()).sliderImageUrls(command.sliderImageUrls())
                 .useInstruction(command.useInstruction()).description(command.description())
-                .status(spuStatus.getCode()).deliveryType(deliveryType)
+                .status(spuStatus.getCode()).deliveryType(deliveryType).fulfillmentType(fulfillmentType)
                 .minQuantity(defaultLong(command.minQuantity(), DEFAULT_MIN_QUANTITY))
                 .maxQuantity(defaultLong(command.maxQuantity(), DEFAULT_MAX_QUANTITY))
                 .version(0L).createdBy(command.operatorId()).createdAt(now)
@@ -392,7 +432,7 @@ public class ProductCatalogCommandService {
         }
         PlatformSpuDO spu = requireSpuForUpdate(spuCode);
         CatalogEntityStatus spuStatus = writableStatus(command.status(), CatalogEntityStatus.fromCode(spu.getStatus()));
-        BrandDO brand = requireBrandById(command.brandId(), spuStatus == CatalogEntityStatus.ACTIVE);
+        BrandDO brand = resolveBrand(command.brandId(), command.brandCode(), spuStatus == CatalogEntityStatus.ACTIVE);
         ProductCategoryDO primary = requireCategoryById(command.primaryCategoryId(), spuStatus == CatalogEntityStatus.ACTIVE);
         String productType = productTypeValidationService.requireActiveForUpdate(command.productType()).getTypeCode();
         validateQuantity(command.minQuantity(), command.maxQuantity());
@@ -402,8 +442,9 @@ public class ProductCatalogCommandService {
                 spuStatus == CatalogEntityStatus.ACTIVE));
         spu.setSellableCategory(ClosedEnums.parseRequired(SellableCategory.class, command.sellableCategory()).name());
         spu.setProductType(productType);
-        spu.setProductClassification(ClosedEnums.parseRequired(ProductClassification.class,
-                command.productClassification()).name());
+        spu.setProductClassification(productClassificationValidationService.requireWritable(
+                command.productClassification(), spuStatus == CatalogEntityStatus.ACTIVE,
+                primary == null ? null : primary.getId()));
         spu.setSpuName(command.spuName().trim());
         spu.setSubtitle(command.subtitle());
         spu.setCoverUrl(command.coverUrl());
@@ -411,6 +452,24 @@ public class ProductCatalogCommandService {
         spu.setUseInstruction(command.useInstruction());
         spu.setDescription(command.description());
         spu.setDeliveryType(DeliveryType.parseOrDefault(command.deliveryType()).code());
+        String targetFulfillmentType = hasText(command.fulfillmentType())
+                ? FulfillmentType.fromCode(command.fulfillmentType().trim()).code()
+                : (hasText(spu.getFulfillmentType())
+                        ? spu.getFulfillmentType()
+                        : inferFulfillmentTypeFromSkus(command.skus()));
+        if (spu.getFulfillmentType() != null && !spu.getFulfillmentType().equals(targetFulfillmentType)) {
+            if (spu.getStatus() != CatalogEntityStatus.DRAFT.getCode()) {
+                throw exception(PRODUCT_FULFILLMENT_TYPE_IMMUTABLE);
+            }
+            try {
+                deletionValidator.validateSpu(spu.getId());
+            } catch (Exception ex) {
+                throw exception(PRODUCT_FULFILLMENT_TYPE_IMMUTABLE);
+            }
+            spu.setFulfillmentType(targetFulfillmentType);
+        } else if (spu.getFulfillmentType() == null) {
+            spu.setFulfillmentType(targetFulfillmentType);
+        }
         spu.setMinQuantity(defaultLong(command.minQuantity(), DEFAULT_MIN_QUANTITY));
         spu.setMaxQuantity(defaultLong(command.maxQuantity(), DEFAULT_MAX_QUANTITY));
         spu.setStatus(spuStatus.getCode());
@@ -424,19 +483,41 @@ public class ProductCatalogCommandService {
         Map<String, PlatformSkuDO> byCode = new HashMap<>();
         existing.forEach(sku -> byCode.put(sku.getSkuCode(), sku));
         Set<String> requested = new HashSet<>();
+        Set<String> defaultPricingInitializationSkuCodes = new LinkedHashSet<>();
+        Set<Long> priceDependencyChangedSkuIds = new LinkedHashSet<>();
         LocalDateTime now = now();
         for (SaveSkuLine line : command.skus()) {
-            String code = hasText(line.skuCode()) ? line.skuCode().trim()
-                    : businessNoGenerator.next(BusinessNoPrefixes.SKU);
+            String code = line.skuCode() == null || line.skuCode().isEmpty()
+                    ? scopedBusinessCodeService.allocateChild(ScopedBusinessCodeService.Kind.SKU,
+                    spu.getId(), spu.getCodeScopeNo(), null, command.operatorId()).code()
+                    : line.skuCode();
             if (!requested.add(code)) throw exception(PRODUCT_SKU_CODE_DUPLICATE);
             PlatformSkuDO sku = byCode.get(code);
             CatalogEntityStatus skuStatus = writableStatus(line.status(), spuStatus);
-            SchemaDefinition schema = validateSkuLine(line, skuStatus == CatalogEntityStatus.ACTIVE);
+            if (hasText(line.fulfillmentType()) && !line.fulfillmentType().trim().equals(spu.getFulfillmentType())) {
+                throw exception(PRODUCT_SKU_FIELD_INVALID);
+            }
+            SaveSkuLine inheritedLine = line.withFulfillmentType(spu.getFulfillmentType());
+            SchemaDefinition schema = validateSkuLine(inheritedLine, skuStatus == CatalogEntityStatus.ACTIVE);
             if (sku == null) {
-                insertValidatedSku(spu, code, line, skuStatus, schema, command.operatorId(), now);
+                if (line.skuCode() != null && !line.skuCode().isEmpty()) {
+                    scopedBusinessCodeService.allocateChild(ScopedBusinessCodeService.Kind.SKU,
+                            spu.getId(), spu.getCodeScopeNo(), code, command.operatorId());
+                }
+                insertValidatedSku(spu, code, inheritedLine, skuStatus, schema, command.operatorId(), now);
+                defaultPricingInitializationSkuCodes.add(code);
             } else {
-                applySku(sku, line, skuStatus, schema, command.operatorId(), now);
+                Long previousMarketPrice = sku.getMarketPrice();
+                Long previousSuggestedSalePrice = sku.getSuggestedSalePrice();
+                applySku(sku, inheritedLine, skuStatus, schema, command.operatorId(), now);
                 requireUpdated(skuMapper.updateById(sku));
+                PlatformSkuPricingDO pricing = platformSkuPricingMapper.selectById(sku.getId());
+                if (pricing == null || pricing.getCurrentVersionId() == null) {
+                    defaultPricingInitializationSkuCodes.add(code);
+                } else if (!java.util.Objects.equals(previousMarketPrice, sku.getMarketPrice())
+                        || !java.util.Objects.equals(previousSuggestedSalePrice, sku.getSuggestedSalePrice())) {
+                    priceDependencyChangedSkuIds.add(sku.getId());
+                }
             }
         }
         for (PlatformSkuDO sku : existing) {
@@ -449,6 +530,14 @@ public class ProductCatalogCommandService {
                 }
             }
         }
+        // 复合保存把尚未发布平台定价的 SKU 初始化为系统默认规则；已有版本只在基础价变化时按原规则重算。
+        // 两个集合互斥，确保一个 SKU 在单次保存中最多生成一个平台定价版本。
+        // 设计见 docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#5-版本继承与可售状态。
+        if (!defaultPricingInitializationSkuCodes.isEmpty()) {
+            eventPublisher.publishEvent(new PlatformSkuPricingInitializationEvent(
+                    List.copyOf(defaultPricingInitializationSkuCodes), command.operatorId()));
+        }
+        priceDependencyChangedSkuIds.forEach(id -> eventPublisher.publishEvent(new PricingDependencyChangedEvent(id)));
     }
 
     /**
@@ -487,28 +576,34 @@ public class ProductCatalogCommandService {
         applySkuStatus(skuCode, CatalogEntityStatus.ARCHIVED, operatorId);
     }
 
-    private void insertSku(PlatformSpuDO spu, String skuCode, SaveSkuLine line,
-                           CatalogEntityStatus defaultStatus, Long operatorId, LocalDateTime now) {
+    private PlatformSkuDO insertSku(PlatformSpuDO spu, String skuCode, SaveSkuLine line,
+                                    CatalogEntityStatus defaultStatus, Long operatorId, LocalDateTime now) {
         CatalogEntityStatus status = writableStatus(line.status(), defaultStatus);
         SchemaDefinition schema = validateSkuLine(line, status == CatalogEntityStatus.ACTIVE);
-        insertValidatedSku(spu, skuCode, line, status, schema, operatorId, now);
+        return insertValidatedSku(spu, skuCode, line, status, schema, operatorId, now);
     }
 
-    private void insertValidatedSku(PlatformSpuDO spu, String skuCode, SaveSkuLine line,
-                                    CatalogEntityStatus status, SchemaDefinition schema,
-                                    Long operatorId, LocalDateTime now) {
+    private PlatformSkuDO insertValidatedSku(PlatformSpuDO spu, String skuCode, SaveSkuLine line,
+                                             CatalogEntityStatus status, SchemaDefinition schema,
+                                             Long operatorId, LocalDateTime now) {
+        long marketPrice = defaultLong(line.marketPrice(), DEFAULT_PRICE_FEN);
+        SuggestedSalePriceCalculator.Calculation suggestedPrice = resolveSuggestedSalePrice(line, marketPrice, null);
         PlatformSkuDO sku = PlatformSkuDO.builder().skuCode(skuCode).spuId(spu.getId())
                 .skuName(line.skuName().trim()).mainImageUrl(normalizeOptionalText(line.mainImageUrl()))
                 .detailImageUrls(normalizeDetailImageUrls(line.detailImageUrls()))
                 .description(normalizeOptionalText(line.description())).fulfillmentType(line.fulfillmentType())
-                .faceValue(line.faceValue()).marketPrice(defaultLong(line.marketPrice(), DEFAULT_PRICE_FEN))
-                .suggestedSalePrice(defaultLong(line.suggestedSalePrice(), DEFAULT_PRICE_FEN))
+                .faceValue(line.faceValue()).marketPrice(marketPrice)
+                .suggestedSalePrice(suggestedPrice.suggestedSalePriceCents())
+                .suggestedSalePriceRuleJson(suggestedPrice.normalizedRule())
                 .taxIncluded(Boolean.TRUE.equals(line.taxIncluded())).taxRate(line.taxRate())
                 .minQuantity(defaultLong(line.minQuantity(), DEFAULT_MIN_QUANTITY))
                 .maxQuantity(defaultLong(line.maxQuantity(), DEFAULT_MAX_QUANTITY))
                 .userLimitEnabled(false).userLimitPeriod(null).userLimitQuantity(null)
                 .orderLimitEnabled(Boolean.TRUE.equals(line.orderLimitEnabled()))
                 .phoneBindLimitEnabled(false).phoneBindLimitPeriod(null).phoneBindLimitQuantity(null)
+                // SKU 资料库存：未传时落库 0。不是 InventorySource，本期履约不预占、不扣减。
+                // 设计见 docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线（d38）。
+                .skuInventory(defaultLong(line.skuInventory(), 0L))
                 .currency(CURRENCY_CNY).targetSchemaCode(schema.targetSchemaCode())
                 .targetSchemaVersion(schema.targetSchemaVersion()).resultSchemaCode(schema.resultSchemaCode())
                 .resultSchemaVersion(schema.resultSchemaVersion()).status(status.getCode()).version(0L)
@@ -516,24 +611,38 @@ public class ProductCatalogCommandService {
         applyUserLimit(sku, line, false);
         applyPhoneBindLimit(sku, line, false);
         skuMapper.insert(sku);
+        // 每个新 SKU 必须显式拥有商品默认定价身份；没有有效版本时保持 UNPRICED，禁止用户端展示和下单。
+        // 设计见 docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#5-版本继承与可售状态。
+        platformSkuPricingMapper.insert(PlatformSkuPricingDO.builder()
+                .platformSkuId(sku.getId()).pricingStatus(PricingStatus.UNPRICED.name())
+                .version(0L).createdAt(now).updatedAt(now).build());
+        return sku;
     }
 
     private void applySku(PlatformSkuDO sku, SaveSkuLine line, CatalogEntityStatus status, SchemaDefinition schema,
                           Long operatorId, LocalDateTime now) {
+        long marketPrice = defaultLong(line.marketPrice(), DEFAULT_PRICE_FEN);
+        SuggestedSalePriceCalculator.Calculation suggestedPrice = resolveSuggestedSalePrice(line, marketPrice, sku);
         sku.setSkuName(line.skuName().trim());
         sku.setMainImageUrl(normalizeOptionalText(line.mainImageUrl()));
         sku.setDetailImageUrls(normalizeDetailImageUrls(line.detailImageUrls()));
         sku.setDescription(normalizeOptionalText(line.description()));
         sku.setFulfillmentType(line.fulfillmentType());
         sku.setFaceValue(line.faceValue());
-        sku.setMarketPrice(defaultLong(line.marketPrice(), DEFAULT_PRICE_FEN));
-        sku.setSuggestedSalePrice(defaultLong(line.suggestedSalePrice(), DEFAULT_PRICE_FEN));
+        sku.setMarketPrice(marketPrice);
+        sku.setSuggestedSalePrice(suggestedPrice.suggestedSalePriceCents());
+        sku.setSuggestedSalePriceRuleJson(suggestedPrice.normalizedRule());
         // 兼容尚未携带新增税务字段的旧商品编辑请求：两字段均缺省时保留原值；显式传含税标识时全量替换税务元数据。
         if (line.taxIncluded() != null) {
             sku.setTaxIncluded(line.taxIncluded());
             sku.setTaxRate(line.taxRate());
         } else if (line.taxRate() != null) {
             sku.setTaxRate(line.taxRate());
+        }
+        // 旧调用方未传 skuInventory 时保留原值；显式 0 会覆盖。
+        // 设计见 docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线（d38）。
+        if (line.skuInventory() != null) {
+            sku.setSkuInventory(line.skuInventory());
         }
         sku.setMinQuantity(defaultLong(line.minQuantity(), DEFAULT_MIN_QUANTITY));
         sku.setMaxQuantity(defaultLong(line.maxQuantity(), DEFAULT_MAX_QUANTITY));
@@ -556,7 +665,8 @@ public class ProductCatalogCommandService {
         if (line == null || !hasText(line.skuName()) || !hasText(line.fulfillmentType())
                 || line.faceValue() == null || line.faceValue() < 0
                 || defaultLong(line.marketPrice(), DEFAULT_PRICE_FEN) < 0
-                || defaultLong(line.suggestedSalePrice(), DEFAULT_PRICE_FEN) < 0) {
+                || (line.suggestedSalePrice() != null && line.suggestedSalePrice() < 0)
+                || (line.skuInventory() != null && line.skuInventory() < 0)) {
             throw exception(PRODUCT_SKU_FIELD_INVALID);
         }
         validateSkuDisplayContent(line);
@@ -639,9 +749,8 @@ public class ProductCatalogCommandService {
             return;
         }
         if (!enabled) {
-            if (hasPeriod || hasQuantity) {
-                throw exception(PRODUCT_PURCHASE_LIMIT_CONFIG_INVALID);
-            }
+            // 开关关闭时忽略表单残留的周期/数量，由 applyUserLimit 规范化为 NULL。
+            // 设计见 docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线（d37）。
             return;
         }
         if (!hasPeriod || line.userLimitQuantity() == null || line.userLimitQuantity() <= 0) {
@@ -662,9 +771,8 @@ public class ProductCatalogCommandService {
             return;
         }
         if (!enabled) {
-            if (hasPeriod || hasQuantity) {
-                throw exception(PRODUCT_PURCHASE_LIMIT_CONFIG_INVALID);
-            }
+            // 开关关闭时忽略表单残留的周期/数量，由 applyPhoneBindLimit 规范化为 NULL。
+            // 设计见 docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线（d37）。
             return;
         }
         if (!hasPeriod || line.phoneBindLimitQuantity() == null || line.phoneBindLimitQuantity() <= 0
@@ -696,13 +804,38 @@ public class ProductCatalogCommandService {
         }
     }
 
-    private BrandDO requireBrandById(Long brandId, boolean activeRequired) {
-        BrandDO brand = brandId == null ? null : brandMapper.selectById(brandId);
+    /**
+     * 品牌标识双轨解析与容错。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#413-spusku-复合创建post-supply-chainproductsspus}（d33）。
+     *
+     * <p>解析规则：
+     * 1. 优先使用 {@code brandCode} 查询；
+     * 2. 其次使用 {@code brandId} 主键查询；
+     * 3. 若按 {@code brandId} 未查到，尝试将 {@code brandId} 作为业务编码容错查询（兼容前端将纯数字编码绑定至 ID）；
+     * 4. 查不到或状态无效（已归档/非启用）则抛出 {@link com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants#BRAND_NOT_FOUND}。
+     * </p>
+     */
+    private BrandDO resolveBrand(Long brandId, String brandCode, boolean activeRequired) {
+        BrandDO brand = null;
+        if (hasText(brandCode)) {
+            brand = brandMapper.selectByCode(brandCode.trim());
+        }
+        if (brand == null && brandId != null) {
+            brand = brandMapper.selectById(brandId);
+            if (brand == null) {
+                // 容错兜底：前端可能将全数字 brandCode（如 "1111"）填入 brandId
+                brand = brandMapper.selectByCode(String.valueOf(brandId));
+            }
+        }
         if (brand == null || brand.getStatus() == CatalogEntityStatus.ARCHIVED.getCode()
                 || (activeRequired && brand.getStatus() != CatalogEntityStatus.ACTIVE.getCode())) {
             throw exception(BRAND_NOT_FOUND);
         }
         return brand;
+    }
+
+    private BrandDO requireBrandById(Long brandId, boolean activeRequired) {
+        return resolveBrand(brandId, null, activeRequired);
     }
 
     private ProductCategoryDO requireCategoryById(Long categoryId, boolean activeRequired) {
@@ -735,6 +868,58 @@ public class ProductCatalogCommandService {
 
     private static long defaultLong(Long value, long defaultValue) {
         return value == null ? defaultValue : value;
+    }
+
+    /**
+     * 解析新旧两类请求并生成唯一可信的建议价结果。
+     * 新请求提交规则时服务端重新计算；旧请求只提交变化后的金额时归一成 FIXED。编辑请求两者都省略，或旧
+     * 管理端原样回传未变化市场价与建议价时保留存量规则，避免编辑其它字段把已保存规则重置或降级。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#4112-sku-销售建议价规则写入收口}。
+     */
+    private static SuggestedSalePriceCalculator.Calculation resolveSuggestedSalePrice(
+            SaveSkuLine line, long marketPrice, PlatformSkuDO existing) {
+        SuggestedSalePriceRule requestedRule = line.suggestedSalePriceRule();
+        if (requestedRule == null) {
+            if (line.suggestedSalePrice() != null) {
+                // 未升级的管理端会在编辑其它字段时原样回传金额。市场价与建议价都未变化时保留已保存规则，
+                // 避免一次无关编辑把 CUSTOM/EQUAL_MARKET_PRICE 静默降级成 FIXED。
+                if (existing != null
+                        && line.suggestedSalePrice().equals(existing.getSuggestedSalePrice())
+                        && marketPrice == defaultLong(existing.getMarketPrice(), DEFAULT_PRICE_FEN)) {
+                    return existingSuggestedSalePrice(existing);
+                }
+                requestedRule = SuggestedSalePriceRule.fixed(line.suggestedSalePrice());
+            } else if (existing != null) {
+                return existingSuggestedSalePrice(existing);
+            } else {
+                requestedRule = SuggestedSalePriceRule.fixed(DEFAULT_PRICE_FEN);
+            }
+        }
+        SuggestedSalePriceCalculator.Calculation calculation = calculateSuggestedSalePrice(
+                requestedRule, marketPrice, existing == null ? null : existing.getSuggestedSalePrice());
+        if (line.suggestedSalePrice() != null
+                && line.suggestedSalePrice() != calculation.suggestedSalePriceCents()) {
+            throw exception(PRODUCT_SUGGESTED_PRICE_RULE_INVALID);
+        }
+        return calculation;
+    }
+
+    private static SuggestedSalePriceCalculator.Calculation existingSuggestedSalePrice(PlatformSkuDO existing) {
+        long existingAmount = defaultLong(existing.getSuggestedSalePrice(), DEFAULT_PRICE_FEN);
+        SuggestedSalePriceRule existingRule = existing.getSuggestedSalePriceRuleJson() != null
+                ? existing.getSuggestedSalePriceRuleJson()
+                : SuggestedSalePriceRule.fixed(existingAmount);
+        return new SuggestedSalePriceCalculator.Calculation(existingAmount, existingRule);
+    }
+
+    private static SuggestedSalePriceCalculator.Calculation calculateSuggestedSalePrice(
+            SuggestedSalePriceRule rule, Long marketPrice, Long previousSuggestedSalePrice) {
+        try {
+            return SuggestedSalePriceCalculator.calculate(rule,
+                    defaultLong(marketPrice, DEFAULT_PRICE_FEN), previousSuggestedSalePrice);
+        } catch (RuntimeException invalidRule) {
+            throw exception(PRODUCT_SUGGESTED_PRICE_RULE_INVALID);
+        }
     }
 
     private static void validateTaxMetadata(Boolean taxIncluded, BigDecimal taxRate) {
@@ -869,6 +1054,17 @@ public class ProductCatalogCommandService {
         return value != null && !value.isBlank();
     }
 
+    private static String inferFulfillmentTypeFromSkus(List<SaveSkuLine> skus) {
+        if (skus != null) {
+            for (SaveSkuLine sku : skus) {
+                if (sku != null && hasText(sku.fulfillmentType())) {
+                    return FulfillmentType.fromCode(sku.fulfillmentType().trim()).code();
+                }
+            }
+        }
+        return FulfillmentType.DIRECT_RECHARGE.code();
+    }
+
     public record CreateBrandCommand(String brandCode, String brandName, String englishName,
                                      String logoUrl, Integer sort, Long operatorId) {
     }
@@ -880,7 +1076,14 @@ public class ProductCatalogCommandService {
     public record CreateSpuCommand(String spuCode, String brandCode, String primaryCategoryCode,
                                    String sellableCategory, String productType, String productClassification,
                                    String spuName, String subtitle, String coverUrl,
-                                   String useInstruction, Long operatorId) {
+                                   String useInstruction, String fulfillmentType, Long operatorId) {
+        public CreateSpuCommand(String spuCode, String brandCode, String primaryCategoryCode,
+                                String sellableCategory, String productType, String productClassification,
+                                String spuName, String subtitle, String coverUrl,
+                                String useInstruction, Long operatorId) {
+            this(spuCode, brandCode, primaryCategoryCode, sellableCategory, productType, productClassification,
+                    spuName, subtitle, coverUrl, useInstruction, null, operatorId);
+        }
     }
 
     public record CreateSkuCommand(String skuCode, String spuCode, String skuName,
@@ -892,24 +1095,63 @@ public class ProductCatalogCommandService {
                                             String buyerSkuCode, Long operatorId) {
     }
 
-    public record SaveSpuCommand(String spuCode, String spuName, String subtitle, Long brandId,
+    public record SaveSpuCommand(String spuCode, String spuName, String subtitle, Long brandId, String brandCode,
                                  Long primaryCategoryId, List<Long> secondaryCategoryIds,
                                  String sellableCategory, String productType, String productClassification,
                                  String coverUrl, List<String> sliderImageUrls, String useInstruction,
-                                 String description, String deliveryType, Long minQuantity, Long maxQuantity,
+                                 String description, String deliveryType, String fulfillmentType,
+                                 Long minQuantity, Long maxQuantity,
                                  Short status, List<SaveSkuLine> skus, Long operatorId) {
+        public SaveSpuCommand(String spuCode, String spuName, String subtitle, Long brandId,
+                             Long primaryCategoryId, List<Long> secondaryCategoryIds,
+                             String sellableCategory, String productType, String productClassification,
+                             String coverUrl, List<String> sliderImageUrls, String useInstruction,
+                             String description, String deliveryType, Long minQuantity, Long maxQuantity,
+                             Short status, List<SaveSkuLine> skus, Long operatorId) {
+            this(spuCode, spuName, subtitle, brandId, null, primaryCategoryId, secondaryCategoryIds,
+                    sellableCategory, productType, productClassification, coverUrl, sliderImageUrls,
+                    useInstruction, description, deliveryType,
+                    (skus != null && !skus.isEmpty() && skus.get(0) != null ? skus.get(0).fulfillmentType() : null),
+                    minQuantity, maxQuantity, status, skus, operatorId);
+        }
+
+        public SaveSpuCommand(String spuCode, String spuName, String subtitle, Long brandId,
+                             Long primaryCategoryId, List<Long> secondaryCategoryIds,
+                             String sellableCategory, String productType, String productClassification,
+                             String coverUrl, List<String> sliderImageUrls, String useInstruction,
+                             String description, String deliveryType, String fulfillmentType,
+                             Long minQuantity, Long maxQuantity,
+                             Short status, List<SaveSkuLine> skus, Long operatorId) {
+            this(spuCode, spuName, subtitle, brandId, null, primaryCategoryId, secondaryCategoryIds,
+                    sellableCategory, productType, productClassification, coverUrl, sliderImageUrls,
+                    useInstruction, description, deliveryType, fulfillmentType,
+                    minQuantity, maxQuantity, status, skus, operatorId);
+        }
     }
 
     public record SaveSkuLine(String skuCode, String skuName, String mainImageUrl,
                               List<String> detailImageUrls, String description,
                               String fulfillmentType, Long faceValue,
-                              Long marketPrice, Long suggestedSalePrice, Boolean taxIncluded, BigDecimal taxRate,
+                              Long marketPrice, Long suggestedSalePrice,
+                              SuggestedSalePriceRule suggestedSalePriceRule,
+                              Boolean taxIncluded, BigDecimal taxRate,
                               Long minQuantity, Long maxQuantity,
                               Boolean userLimitEnabled, String userLimitPeriod, Long userLimitQuantity,
                               Boolean orderLimitEnabled,
                               Boolean phoneBindLimitEnabled, String phoneBindLimitPeriod, Long phoneBindLimitQuantity,
+                              Long skuInventory,
                               String targetSchemaCode, Integer targetSchemaVersion,
                               String resultSchemaCode, Integer resultSchemaVersion, Short status) {
+
+        public SaveSkuLine withFulfillmentType(String newFulfillmentType) {
+            return new SaveSkuLine(skuCode, skuName, mainImageUrl, detailImageUrls, description,
+                    newFulfillmentType, faceValue, marketPrice, suggestedSalePrice, suggestedSalePriceRule,
+                    taxIncluded, taxRate, minQuantity, maxQuantity,
+                    userLimitEnabled, userLimitPeriod, userLimitQuantity, orderLimitEnabled,
+                    phoneBindLimitEnabled, phoneBindLimitPeriod, phoneBindLimitQuantity,
+                    skuInventory,
+                    targetSchemaCode, targetSchemaVersion, resultSchemaCode, resultSchemaVersion, status);
+        }
         /**
          * 商品中心复合接口使用的构造器：请求只含业务履约类型，Schema 由应用层注册表派生。
          * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线}（d11）。
@@ -918,8 +1160,19 @@ public class ProductCatalogCommandService {
                            Long marketPrice, Long suggestedSalePrice, Long minQuantity, Long maxQuantity,
                            Short status) {
             this(skuCode, skuName, null, null, null, fulfillmentType, faceValue, marketPrice, suggestedSalePrice,
-                    false, null, minQuantity, maxQuantity, null, null, null, null, null, null, null,
-                    null, null, null, null, status);
+                    null, false, null, minQuantity, maxQuantity, null, null, null, null, null, null, null,
+                    null, null, null, null, null, status);
+        }
+
+        /** 商品中心复合接口携带销售建议价规则的精简构造器。 */
+        public SaveSkuLine(String skuCode, String skuName, String fulfillmentType, Long faceValue,
+                           Long marketPrice, Long suggestedSalePrice,
+                           SuggestedSalePriceRule suggestedSalePriceRule,
+                           Long minQuantity, Long maxQuantity, Short status) {
+            this(skuCode, skuName, null, null, null, fulfillmentType, faceValue, marketPrice, suggestedSalePrice,
+                    suggestedSalePriceRule, false, null, minQuantity, maxQuantity,
+                    null, null, null, null, null, null, null,
+                    null, null, null, null, null, status);
         }
 
         /** 商品中心复合接口携带税务展示元数据的构造器，Schema 仍由应用层注册表派生。 */
@@ -927,8 +1180,8 @@ public class ProductCatalogCommandService {
                            Long marketPrice, Long suggestedSalePrice, Boolean taxIncluded, BigDecimal taxRate,
                            Long minQuantity, Long maxQuantity, Short status) {
             this(skuCode, skuName, null, null, null, fulfillmentType, faceValue, marketPrice, suggestedSalePrice,
-                    taxIncluded, taxRate, minQuantity, maxQuantity, null, null, null, null, null, null, null,
-                    null, null, null, null, status);
+                    null, taxIncluded, taxRate, minQuantity, maxQuantity, null, null, null, null, null, null, null,
+                    null, null, null, null, null, status);
         }
 
         /** 商品中心复合接口携带 SKU 限购配置，内部 Schema 仍由应用层注册表派生。 */
@@ -938,8 +1191,8 @@ public class ProductCatalogCommandService {
                            String userLimitPeriod, Long userLimitQuantity, Boolean orderLimitEnabled,
                            Short status) {
             this(skuCode, skuName, null, null, null, fulfillmentType, faceValue, marketPrice, suggestedSalePrice,
-                    taxIncluded, taxRate, minQuantity, maxQuantity, userLimitEnabled, userLimitPeriod,
-                    userLimitQuantity, orderLimitEnabled, null, null, null, null, null, null, null, status);
+                    null, taxIncluded, taxRate, minQuantity, maxQuantity, userLimitEnabled, userLimitPeriod,
+                    userLimitQuantity, orderLimitEnabled, null, null, null, null, null, null, null, null, status);
         }
 
         /** 商品中心复合接口携带每人、每订单与绑定手机号限购配置，内部 Schema 仍由应用层注册表派生。 */
@@ -950,9 +1203,9 @@ public class ProductCatalogCommandService {
                            Boolean phoneBindLimitEnabled, String phoneBindLimitPeriod, Long phoneBindLimitQuantity,
                            Short status) {
             this(skuCode, skuName, null, null, null, fulfillmentType, faceValue, marketPrice, suggestedSalePrice,
-                    taxIncluded, taxRate, minQuantity, maxQuantity, userLimitEnabled, userLimitPeriod,
+                    null, taxIncluded, taxRate, minQuantity, maxQuantity, userLimitEnabled, userLimitPeriod,
                     userLimitQuantity, orderLimitEnabled, phoneBindLimitEnabled, phoneBindLimitPeriod,
-                    phoneBindLimitQuantity, null, null, null, null, status);
+                    phoneBindLimitQuantity, null, null, null, null, null, status);
         }
 
         /** 保留已有显式 Schema 调用方的构造契约，税务元数据缺省为不含税且税率未配置。 */
@@ -961,8 +1214,8 @@ public class ProductCatalogCommandService {
                            String targetSchemaCode, Integer targetSchemaVersion,
                            String resultSchemaCode, Integer resultSchemaVersion, Short status) {
             this(skuCode, skuName, null, null, null, fulfillmentType, faceValue, marketPrice, suggestedSalePrice,
-                    false, null, minQuantity, maxQuantity, null, null, null, null, null, null, null,
-                    targetSchemaCode, targetSchemaVersion, resultSchemaCode, resultSchemaVersion, status);
+                    null, false, null, minQuantity, maxQuantity, null, null, null, null, null, null, null,
+                    null, targetSchemaCode, targetSchemaVersion, resultSchemaCode, resultSchemaVersion, status);
         }
 
         /** 保留税务字段引入前显式 Schema 的完整构造契约。 */
@@ -971,8 +1224,8 @@ public class ProductCatalogCommandService {
                            Long minQuantity, Long maxQuantity, String targetSchemaCode, Integer targetSchemaVersion,
                            String resultSchemaCode, Integer resultSchemaVersion, Short status) {
             this(skuCode, skuName, null, null, null, fulfillmentType, faceValue, marketPrice, suggestedSalePrice,
-                    taxIncluded, taxRate, minQuantity, maxQuantity, null, null, null, null, null, null, null,
-                    targetSchemaCode, targetSchemaVersion, resultSchemaCode, resultSchemaVersion, status);
+                    null, taxIncluded, taxRate, minQuantity, maxQuantity, null, null, null, null, null, null, null,
+                    null, targetSchemaCode, targetSchemaVersion, resultSchemaCode, resultSchemaVersion, status);
         }
 
         /** 商品中心复合接口携带 SKU 展示资料与完整限购配置，内部 Schema 仍由应用层注册表派生。 */
@@ -984,10 +1237,46 @@ public class ProductCatalogCommandService {
                            Boolean orderLimitEnabled, Boolean phoneBindLimitEnabled,
                            String phoneBindLimitPeriod, Long phoneBindLimitQuantity, Short status) {
             this(skuCode, skuName, mainImageUrl, detailImageUrls, description, fulfillmentType, faceValue,
-                    marketPrice, suggestedSalePrice, taxIncluded, taxRate, minQuantity, maxQuantity,
+                    marketPrice, suggestedSalePrice, null, taxIncluded, taxRate, minQuantity, maxQuantity,
                     userLimitEnabled, userLimitPeriod, userLimitQuantity, orderLimitEnabled,
                     phoneBindLimitEnabled, phoneBindLimitPeriod, phoneBindLimitQuantity,
-                    null, null, null, null, status);
+                    null, null, null, null, null, status);
+        }
+
+        /** 复合接口携带销售建议价规则、展示资料与完整限购配置，内部 Schema 仍由应用层注册表派生。 */
+        public SaveSkuLine(String skuCode, String skuName, String mainImageUrl,
+                           List<String> detailImageUrls, String description,
+                           String fulfillmentType, Long faceValue, Long marketPrice, Long suggestedSalePrice,
+                           SuggestedSalePriceRule suggestedSalePriceRule,
+                           Boolean taxIncluded, BigDecimal taxRate, Long minQuantity, Long maxQuantity,
+                           Boolean userLimitEnabled, String userLimitPeriod, Long userLimitQuantity,
+                           Boolean orderLimitEnabled, Boolean phoneBindLimitEnabled,
+                           String phoneBindLimitPeriod, Long phoneBindLimitQuantity, Short status) {
+            this(skuCode, skuName, mainImageUrl, detailImageUrls, description, fulfillmentType, faceValue,
+                    marketPrice, suggestedSalePrice, suggestedSalePriceRule, taxIncluded, taxRate,
+                    minQuantity, maxQuantity, userLimitEnabled, userLimitPeriod, userLimitQuantity,
+                    orderLimitEnabled, phoneBindLimitEnabled, phoneBindLimitPeriod, phoneBindLimitQuantity,
+                    null, null, null, null, null, status);
+        }
+
+        /**
+         * 复合接口携带销售建议价规则、展示资料、完整限购配置与 SKU 库存，内部 Schema 仍由应用层注册表派生。
+         * 由 {@link ProductAdminController#toSkuLine} 调用。
+         */
+        public SaveSkuLine(String skuCode, String skuName, String mainImageUrl,
+                           List<String> detailImageUrls, String description,
+                           String fulfillmentType, Long faceValue, Long marketPrice, Long suggestedSalePrice,
+                           SuggestedSalePriceRule suggestedSalePriceRule,
+                           Boolean taxIncluded, BigDecimal taxRate, Long minQuantity, Long maxQuantity,
+                           Boolean userLimitEnabled, String userLimitPeriod, Long userLimitQuantity,
+                           Boolean orderLimitEnabled, Boolean phoneBindLimitEnabled,
+                           String phoneBindLimitPeriod, Long phoneBindLimitQuantity,
+                           Long skuInventory, Short status) {
+            this(skuCode, skuName, mainImageUrl, detailImageUrls, description, fulfillmentType, faceValue,
+                    marketPrice, suggestedSalePrice, suggestedSalePriceRule, taxIncluded, taxRate,
+                    minQuantity, maxQuantity, userLimitEnabled, userLimitPeriod, userLimitQuantity,
+                    orderLimitEnabled, phoneBindLimitEnabled, phoneBindLimitPeriod, phoneBindLimitQuantity,
+                    skuInventory, null, null, null, null, status);
         }
     }
 
@@ -1004,4 +1293,5 @@ public class ProductCatalogCommandService {
     public record SkuTaxMetadataBatchCommand(List<String> skuCodes, Boolean taxIncluded,
                                               BigDecimal taxRate, Long operatorId) {
     }
+
 }

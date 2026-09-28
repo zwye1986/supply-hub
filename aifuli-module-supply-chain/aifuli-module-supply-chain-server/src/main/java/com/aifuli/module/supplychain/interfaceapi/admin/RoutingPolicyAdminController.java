@@ -3,10 +3,12 @@ package com.aifuli.module.supplychain.interfaceapi.admin;
 import com.aifuli.framework.common.pojo.CommonResult;
 import com.aifuli.framework.common.util.monitor.TracerUtils;
 import com.aifuli.module.supplychain.routing.application.RoutingPolicyPublicationService;
+import com.aifuli.module.supplychain.routing.application.RoutingRuleSaveSupport;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
@@ -31,6 +33,11 @@ import static com.aifuli.framework.common.pojo.CommonResult.success;
 import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.ADMIN_EXPRESSION;
 import static com.aifuli.framework.security.core.util.SecurityFrameworkUtils.getLoginUserId;
 
+/**
+ * 管理端路由策略草稿/发布入口（PRD 四级范围模型）。
+ * <p>规则草稿结构与 docs/superpowers/specs/2026-09-23-order-frontend-alignment-and-routing-prd-model-design.md#52 一致；
+ * 常规规则维护请优先使用 /supply-chain/routing-rules 的补丁发布写入口。</p>
+ */
 @Tag(name = "管理后台 - 供应链供应商路由策略")
 @RestController
 @RequestMapping("/supply-chain/routing-policies")
@@ -46,21 +53,37 @@ public class RoutingPolicyAdminController {
     public CommonResult<RoutingPolicyPublicationService.DraftResult> createDraft(
             @Valid @RequestBody CreateDraftReqVO request) {
         List<RoutingPolicyPublicationService.RuleDraft> rules = request.getRules().stream()
-                .map(rule -> new RoutingPolicyPublicationService.RuleDraft(
-                        rule.getRuleCode(), rule.getRuleName(), rule.getBuyerCode(),
-                        rule.getPlatformSkuCode(), rule.getFulfillmentType(), rule.getRulePriority(),
-                        rule.getCandidates().stream().map(candidate ->
-                                new RoutingPolicyPublicationService.CandidateDraft(
-                                        candidate.getSupplierCode(), candidate.getCandidatePriority(),
-                                        candidate.getInventoryCheckMode(), candidate.getInventoryMaxAgeSeconds(),
-                                        candidate.getBalanceCheckMode(), candidate.getBalanceMaxAgeSeconds(),
-                                        candidate.getHealthCheckMode(), candidate.getHealthMaxAgeSeconds()))
-                                .toList()))
+                .map(RoutingPolicyAdminController::toRuleDraft)
                 .toList();
         return success(publicationService.createDraft(
                 new RoutingPolicyPublicationService.CreateDraftCommand(
                         request.getPolicyCode(), request.getPolicyName(), request.getVersionName(),
-                        request.getValidFrom(), request.getValidTo(), rules, getLoginUserId())));
+                        request.getValidFrom(), request.getValidTo(), rules, getLoginUserId(),
+                        request.getWeights() == null ? RoutingRuleSaveSupport.DEFAULT_WEIGHT_STABILITY
+                                : request.getWeights().getStability(),
+                        request.getWeights() == null ? RoutingRuleSaveSupport.DEFAULT_WEIGHT_PRICE
+                                : request.getWeights().getPrice(),
+                        request.getWeights() == null ? RoutingRuleSaveSupport.DEFAULT_WEIGHT_TIMELINESS
+                                : request.getWeights().getTimeliness())));
+    }
+
+    private static RoutingPolicyPublicationService.RuleDraft toRuleDraft(RuleReqVO rule) {
+        return new RoutingPolicyPublicationService.RuleDraft(
+                rule.getRuleCode(), rule.getRuleName(), rule.getRouteMode(), rule.getPrimarySupplierCode(),
+                rule.getDistributorMode(), rule.getDistributorCodes(),
+                rule.getProjectMode(), rule.getProjectCodes(),
+                rule.getProductTypeMode(), rule.getProductTypeCodes(),
+                rule.getSupplierMode(), rule.getSupplierCodes(),
+                rule.getMaxSupplyPriceCents(),
+                rule.getStrategyPriority1(), rule.getStrategyPriority2(), rule.getStrategyPriority3(),
+                rule.getRulePriority(), rule.getStatus(), rule.isProtectedRule(),
+                rule.getCandidates().stream().map(candidate ->
+                        new RoutingPolicyPublicationService.CandidateDraft(
+                                candidate.getSupplierCode(), candidate.getCandidatePriority(),
+                                candidate.getInventoryCheckMode(), candidate.getInventoryMaxAgeSeconds(),
+                                candidate.getBalanceCheckMode(), candidate.getBalanceMaxAgeSeconds(),
+                                candidate.getHealthCheckMode(), candidate.getHealthMaxAgeSeconds()))
+                        .toList());
     }
 
     @PostMapping("/versions/{versionId}/publish")
@@ -85,6 +108,7 @@ public class RoutingPolicyAdminController {
         @NotBlank @Size(max = 128) private String versionName;
         @NotNull private LocalDateTime validFrom;
         private LocalDateTime validTo;
+        @Valid private WeightReqVO weights;
         @Valid @NotEmpty private List<RuleReqVO> rules;
     }
 
@@ -92,11 +116,23 @@ public class RoutingPolicyAdminController {
     public static class RuleReqVO {
         @NotBlank @Size(max = 64) private String ruleCode;
         @NotBlank @Size(max = 128) private String ruleName;
-        @NotBlank @Size(max = 32) private String buyerCode;
-        @NotBlank @Size(max = 32) private String platformSkuCode;
-        @NotBlank @Pattern(regexp = "DIRECT_RECHARGE|VOUCHER_CODE|CARD_CODE_SECRET|VOUCHER_URL|ACCOUNT_BOUND_BENEFIT")
-        private String fulfillmentType;
+        @NotBlank @Pattern(regexp = "AUTO|FIXED") private String routeMode;
+        @Size(max = 32) private String primarySupplierCode;
+        @NotBlank @Pattern(regexp = "ALL|SPECIFIED") private String distributorMode;
+        private List<String> distributorCodes;
+        @NotBlank @Pattern(regexp = "ALL|SPECIFIED") private String projectMode;
+        private List<String> projectCodes;
+        @NotBlank @Pattern(regexp = "ALL|SPECIFIED") private String productTypeMode;
+        private List<String> productTypeCodes;
+        @NotBlank @Pattern(regexp = "ALL|SPECIFIED") private String supplierMode;
+        private List<String> supplierCodes;
+        private Long maxSupplyPriceCents;
+        @NotBlank @Pattern(regexp = "STABLE|PRICE|COMPOSITE") private String strategyPriority1;
+        @NotBlank @Pattern(regexp = "STABLE|PRICE|COMPOSITE") private String strategyPriority2;
+        @NotBlank @Pattern(regexp = "STABLE|PRICE|COMPOSITE") private String strategyPriority3;
         @Min(0) private int rulePriority;
+        @Min(10) @Max(20) private short status;
+        private boolean protectedRule;
         @Valid @NotEmpty private List<CandidateReqVO> candidates;
     }
 
@@ -110,6 +146,13 @@ public class RoutingPolicyAdminController {
         private Integer balanceMaxAgeSeconds;
         @NotBlank @Pattern(regexp = "REQUIRED|OPTIONAL|UNSUPPORTED") private String healthCheckMode;
         private Integer healthMaxAgeSeconds;
+    }
+
+    @Data
+    public static class WeightReqVO {
+        @Min(0) @Max(100) private int stability;
+        @Min(0) @Max(100) private int price;
+        @Min(0) @Max(100) private int timeliness;
     }
 
     @Data

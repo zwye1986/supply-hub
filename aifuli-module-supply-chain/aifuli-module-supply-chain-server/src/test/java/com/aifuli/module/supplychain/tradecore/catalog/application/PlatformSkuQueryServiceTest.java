@@ -13,13 +13,23 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSk
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSpuDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceVersionMapper;
+import com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSpuMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
+import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierDO;
+import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierOfferDO;
+import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierOfferVersionDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferMapper;
+import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferVersionMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierSupplyScopeMapper;
+import com.aifuli.module.supplychain.tradecore.supply.domain.OfferStatus;
+import com.aifuli.module.supplychain.tradecore.supply.domain.SupplierStatus;
+import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
+import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -27,6 +37,7 @@ import org.mockito.ArgumentMatchers;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -47,14 +58,22 @@ class PlatformSkuQueryServiceTest {
     private final BuyerProductMapper buyerProductMapper = mock(BuyerProductMapper.class);
     private final BuyerProjectMapper buyerProjectMapper = mock(BuyerProjectMapper.class);
     private final ProjectListingMapper projectListingMapper = mock(ProjectListingMapper.class);
+    private final SupplierMapper supplierMapper = mock(SupplierMapper.class);
+    private final SupplierOfferMapper offerMapper = mock(SupplierOfferMapper.class);
+    private final SupplierOfferVersionMapper offerVersionMapper = mock(SupplierOfferVersionMapper.class);
+    private final CategoryQueryService categoryQueryService = mock(CategoryQueryService.class);
+    private final SupplyChainDatabaseClock databaseClock = mock(SupplyChainDatabaseClock.class);
     private PlatformSkuQueryService service;
 
     @BeforeEach
     void setUp() {
+        TableInfoHelper.initTableInfo(new MapperBuilderAssistant(new MybatisConfiguration(), ""), PlatformSkuDO.class);
+        when(databaseClock.now()).thenReturn(LocalDateTime.of(2026, 9, 22, 11, 0));
         service = new PlatformSkuQueryService(
                 skuMapper, spuMapper, priceMapper, versionMapper,
-                mock(SupplierMapper.class), mock(SupplierSupplyScopeMapper.class),
-                mock(SupplierOfferMapper.class), mock(BuyerMapper.class),
+                supplierMapper, mock(SupplierSupplyScopeMapper.class),
+                offerMapper, offerVersionMapper, categoryQueryService, databaseClock,
+                mock(BuyerMapper.class),
                 buyerProductMapper, buyerProjectMapper, projectListingMapper);
     }
 
@@ -155,5 +174,99 @@ class PlatformSkuQueryServiceTest {
                         null, null, null, null, null, null, "PRJ_1", 1, 20));
         assertThat(empty.getList()).isEmpty();
         assertThat(empty.getTotal()).isZero();
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void keywordMatchesSpuCodeAsWellAsName() {
+        PlatformSpuDO spu = PlatformSpuDO.builder()
+                .id(8L).spuCode("SPU_IQY").spuName("爱奇艺黄金会员")
+                .status(CatalogEntityStatus.ACTIVE.getCode()).build();
+        PlatformSkuDO sku = PlatformSkuDO.builder()
+                .id(11L).skuCode("IQY-GOLD-M").spuId(8L).skuName("月卡")
+                .status(CatalogEntityStatus.ACTIVE.getCode())
+                .createdAt(LocalDateTime.of(2026, 9, 22, 10, 0)).build();
+        when(spuMapper.selectList(any())).thenReturn(List.of(spu));
+        ArgumentCaptor<LambdaQueryWrapper<PlatformSkuDO>> wrapperCaptor =
+                ArgumentCaptor.forClass(LambdaQueryWrapper.class);
+        when(skuMapper.selectPage(any(PageParam.class), wrapperCaptor.capture()))
+                .thenReturn(new PageResult<>(List.of(sku), 1L));
+
+        PageResult<PlatformSkuQueryService.SkuListItem> page = service.page(
+                new PlatformSkuQueryService.SkuPageQuery(
+                        "SPU_IQY", null, null, null, null, null, null, 1, 10));
+
+        assertThat(page.getList()).extracting(PlatformSkuQueryService.SkuListItem::skuCode)
+                .containsExactly("IQY-GOLD-M");
+        assertThat(wrapperCaptor.getValue().getSqlSegment()).contains("sku_code");
+        assertThat(wrapperCaptor.getValue().getSqlSegment()).contains("IN");
+    }
+
+    @Test
+    void projectsCategoryNameAndLowestEffectiveSupplyPrice() {
+        PlatformSpuDO spu = PlatformSpuDO.builder()
+                .id(8L).spuCode("SPU_IQY").spuName("爱奇艺黄金会员")
+                .primaryCategoryId(3L)
+                .status(CatalogEntityStatus.ACTIVE.getCode()).build();
+        PlatformSkuDO sku = PlatformSkuDO.builder()
+                .id(11L).skuCode("IQY-GOLD-M").spuId(8L).skuName("月卡")
+                .suggestedSalePrice(3_000L)
+                .status(CatalogEntityStatus.ACTIVE.getCode())
+                .createdAt(LocalDateTime.of(2026, 9, 22, 10, 0)).build();
+        when(spuMapper.selectList(any())).thenReturn(List.of(spu));
+        when(skuMapper.selectPage(any(PageParam.class), any()))
+                .thenReturn(new PageResult<>(List.of(sku), 1L));
+        when(categoryQueryService.resolveCategoryNamesByIds(any())).thenReturn(Map.of(3L, "权益商品"));
+        when(offerMapper.selectList(any())).thenReturn(List.of(
+                SupplierOfferDO.builder().id(1L).platformSkuId(11L).supplierId(4L).currentVersionId(21L)
+                        .status(OfferStatus.PUBLISHED.getCode()).build(),
+                SupplierOfferDO.builder().id(2L).platformSkuId(11L).supplierId(5L).currentVersionId(22L)
+                        .status(OfferStatus.PUBLISHED.getCode()).build()));
+        when(offerVersionMapper.selectList(any())).thenReturn(List.of(
+                SupplierOfferVersionDO.builder().id(21L).supplierSettlementUnitPrice(1_800L)
+                        .validFrom(LocalDateTime.of(2026, 9, 1, 0, 0)).build(),
+                SupplierOfferVersionDO.builder().id(22L).supplierSettlementUnitPrice(2_200L)
+                        .validFrom(LocalDateTime.of(2026, 9, 1, 0, 0))
+                        .validTo(LocalDateTime.of(2026, 9, 1, 0, 0)).build()));
+        when(supplierMapper.selectList(any())).thenReturn(List.of(
+                SupplierDO.builder().id(4L).status(SupplierStatus.ACTIVE.getCode()).build(),
+                SupplierDO.builder().id(5L).status(SupplierStatus.ACTIVE.getCode()).build()));
+
+        PlatformSkuQueryService.SkuListItem row = service.page(
+                new PlatformSkuQueryService.SkuPageQuery(
+                        null, null, null, null, null, null, null, 1, 10))
+                .getList().getFirst();
+
+        assertThat(row.categoryName()).isEqualTo("权益商品");
+        assertThat(row.marketPriceCents()).isEqualTo(3_000L);
+        assertThat(row.supplyPriceCents()).isEqualTo(1_800L);
+    }
+
+    @Test
+    void projectsFixedIdentitySupplyPriceWhenOfferHasNoVersion() {
+        PlatformSpuDO spu = PlatformSpuDO.builder()
+                .id(8L).spuCode("SPU_IQY").spuName("爱奇艺黄金会员")
+                .status(CatalogEntityStatus.ACTIVE.getCode()).build();
+        PlatformSkuDO sku = PlatformSkuDO.builder()
+                .id(11L).skuCode("IQY-GOLD-M").spuId(8L).skuName("月卡")
+                .suggestedSalePrice(9_800L)
+                .status(CatalogEntityStatus.ACTIVE.getCode())
+                .createdAt(LocalDateTime.of(2026, 9, 22, 10, 0)).build();
+        when(spuMapper.selectList(any())).thenReturn(List.of(spu));
+        when(skuMapper.selectPage(any(PageParam.class), any()))
+                .thenReturn(new PageResult<>(List.of(sku), 1L));
+        when(offerMapper.selectList(any())).thenReturn(List.of(
+                SupplierOfferDO.builder().id(1L).platformSkuId(11L).supplierId(4L)
+                        .status(OfferStatus.PUBLISHED.getCode())
+                        .priceMode("FIXED").draftUnitPrice(20_000L).build()));
+        when(supplierMapper.selectList(any())).thenReturn(List.of(
+                SupplierDO.builder().id(4L).status(SupplierStatus.ACTIVE.getCode()).build()));
+
+        PlatformSkuQueryService.SkuListItem row = service.page(
+                new PlatformSkuQueryService.SkuPageQuery(
+                        null, null, null, null, null, null, null, 1, 10))
+                .getList().getFirst();
+
+        assertThat(row.supplyPriceCents()).isEqualTo(20_000L);
     }
 }

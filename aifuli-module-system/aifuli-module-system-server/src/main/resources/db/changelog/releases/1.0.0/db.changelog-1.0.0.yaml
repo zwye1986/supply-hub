@@ -65,3 +65,69 @@ databaseChangeLog:
             encoding: UTF-8
             splitStatements: true
             stripComments: false
+  - changeSet:
+      id: 007-product-type-and-category-status-dictionaries
+      author: supply-chain
+      runInTransaction: true
+      changes:
+        - sqlFile:
+            path: 007-product-type-and-category-status-dictionaries.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 008-sku-purchase-limit-period-dictionary
+      author: supply-chain
+      runInTransaction: true
+      changes:
+        - sqlFile:
+            path: 008-sku-purchase-limit-period-dictionary.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 009-supply-chain-tax-rate-dictionary
+      author: supply-chain
+      runInTransaction: true
+      changes:
+        - sqlFile:
+            path: 009-supply-chain-tax-rate-dictionary.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 010-suggested-sale-price-mode-dictionary
+      author: supply-chain
+      runInTransaction: true
+      changes:
+        - sqlFile:
+            path: 010-suggested-sale-price-mode-dictionary.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 011-suggested-sale-price-operator-dictionary
+      author: supply-chain
+      runInTransaction: true
+      changes:
+        - sqlFile:
+            path: 011-suggested-sale-price-operator-dictionary.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 012-offer-price-mode-dictionary
+      author: supply-chain
+      runInTransaction: true
+      changes:
+        - sqlFile:
+            path: 012-offer-price-mode-dictionary.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false

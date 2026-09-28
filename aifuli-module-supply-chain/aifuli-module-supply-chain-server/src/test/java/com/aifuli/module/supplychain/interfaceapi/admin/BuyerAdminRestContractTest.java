@@ -4,6 +4,8 @@ import com.aifuli.module.supplychain.interfaceapi.admin.BuyerAdminController.Buy
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerAdminQueryService.BuyerChildItem;
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerAdminQueryService.BuyerDetail;
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerAdminQueryService.BuyerListItem;
+import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerAdminQueryService.ProductTypeItem;
+import com.aifuli.module.supplychain.tradecore.catalog.application.BuyerProductQueryService.BuyerProductListItem;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.swagger.v3.core.converter.ModelConverters;
 import io.swagger.v3.oas.annotations.Operation;
@@ -92,7 +94,20 @@ class BuyerAdminRestContractTest {
                 .collect(Collectors.toSet());
 
         assertThat(propertyNames).contains(
-                "sellableCategories", "productTypes", "projectCount", "skuCount", "cooperationTime");
+                "sellableCategories", "productTypes", "projectCount", "skuCount", "cooperationTime", "children");
+    }
+
+    /** 项目选品新增销售建议价与 B 端基价时，旧 L1 字段仍留在 JSON 契约中。 */
+    @Test
+    void productPageKeepsLegacyPriceAndExposesSeparateSaleAndPlatformBasePrices() {
+        ObjectMapper mapper = new ObjectMapper();
+        Set<String> propertyNames = mapper.getSerializationConfig()
+                .introspect(mapper.constructType(BuyerProductListItem.class))
+                .findProperties().stream().map(property -> property.getName())
+                .collect(Collectors.toSet());
+
+        assertThat(propertyNames).contains("suggestPriceCents", "suggestedSalePriceCents",
+                "platformBasePriceCents", "distPriceCents");
     }
 
     @Test
@@ -124,6 +139,18 @@ class BuyerAdminRestContractTest {
     }
 
     @Test
+    void detailProductTypesExposeIdAndName() {
+        ObjectMapper mapper = new ObjectMapper();
+        Set<String> propertyNames = mapper.getSerializationConfig()
+                .introspect(mapper.constructType(ProductTypeItem.class))
+                .findProperties().stream()
+                .map(property -> property.getName())
+                .collect(Collectors.toSet());
+
+        assertThat(propertyNames).containsExactlyInAnyOrder("id", "name");
+    }
+
+    @Test
     @SuppressWarnings("rawtypes")
     void pageDocumentsConcreteBuyerListResponseForSwagger() {
         Method pageMethod = Arrays.stream(BuyerAdminController.class.getDeclaredMethods())
@@ -143,12 +170,14 @@ class BuyerAdminRestContractTest {
         Schema<?> itemSchema = referencedSchema(schemas, pageSchema.getProperties().get("list").getItems());
 
         assertThat(itemSchema.getProperties()).containsKeys(
-                "productTypes", "projectCount", "skuCount", "cooperationTime");
-        assertThat(itemSchema.getProperties().get("productTypes").getDescription()).isEqualTo("商品类型");
-        assertThat(itemSchema.getProperties().get("projectCount").getDescription()).isEqualTo("未归档关联项目数");
-        assertThat(itemSchema.getProperties().get("skuCount").getDescription()).isEqualTo("有效分销SKU商品数");
+                "productTypes", "projectCount", "skuCount", "cooperationTime", "children");
+        assertThat(itemSchema.getProperties().get("productTypes").getDescription()).isEqualTo("本级及可见下级商品类型并集");
+        assertThat(itemSchema.getProperties().get("projectCount").getDescription()).isEqualTo("本级及可见下级未归档项目数合计");
+        assertThat(itemSchema.getProperties().get("skuCount").getDescription()).isEqualTo("本级及可见下级有效分销商品数合计");
+        assertThat(itemSchema.getProperties().get("children").getDescription())
+                .isEqualTo("直属下级。一级包含二级，二级包含三级，三级为空列表");
         assertThat(itemSchema.getProperties().get("cooperationTime").getDescription())
-                .isEqualTo("合作时间，取档案合作开始时间，Asia/Shanghai");
+                .isEqualTo("合作时间，取档案合作开始时间；未填或年份不晚于1970时回落创建时间，Asia/Shanghai");
     }
 
     @SuppressWarnings("rawtypes")

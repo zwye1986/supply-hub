@@ -14,11 +14,11 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerCatalogCha
 import com.aifuli.module.supplychain.tradecore.catalog.dal.read.BuyerCatalogReadMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.BuyerListingStatus;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.ListingAvailability;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericPricingCalculator.PricingStatus;
 import com.aifuli.module.supplychain.tradecore.catalog.readmodel.BuyerCatalogReadRow;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
-import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
@@ -36,11 +36,12 @@ public class BuyerCatalogQueryService {
     public PageResult<BuyerCatalogItemRespDTO> pageCatalog(BuyerCatalogPageReqDTO request) {
         BuyerResolver.BuyerSnapshot buyer = resolve(request.getSourceSystem(), request.getExternalTenantId());
         boolean availableOnly = Boolean.TRUE.equals(request.getAvailableOnly());
+        String saleablePricingStatus = PricingStatus.READY.name();
         long offset = (long) (request.getPageNo() - 1) * request.getPageSize();
         List<BuyerCatalogReadRow> rows = readMapper.selectPage(buyer.id(), request.getBuyerSkuCode(),
-                request.getFulfillmentType(), availableOnly, offset, request.getPageSize());
+                request.getFulfillmentType(), availableOnly, saleablePricingStatus, offset, request.getPageSize());
         long total = readMapper.countPage(buyer.id(), request.getBuyerSkuCode(),
-                request.getFulfillmentType(), availableOnly);
+                request.getFulfillmentType(), availableOnly, saleablePricingStatus);
         return new PageResult<>(rows.stream().map(this::toItem).toList(), total);
     }
 
@@ -73,6 +74,20 @@ public class BuyerCatalogQueryService {
         return buyerResolver.resolve(sourceSystem, externalTenantId, databaseClock.now());
     }
 
+    /**
+     * 无定价身份行时保持历史供给投影（通常为 UNKNOWN）；已有身份且非 READY 时覆盖为不可用。
+     * 设计见 {@code docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#1-范围与不变量}。
+     */
+    private static String resolveAvailabilityStatus(BuyerCatalogReadRow row) {
+        String availability = row.getAvailability() == null
+                ? ListingAvailability.UNKNOWN.name()
+                : ListingAvailability.fromCode(row.getAvailability()).name();
+        if (row.getPricingStatus() != null && !PricingStatus.READY.name().equals(row.getPricingStatus())) {
+            return ListingAvailability.UNAVAILABLE.name();
+        }
+        return availability;
+    }
+
     private BuyerCatalogItemRespDTO toItem(BuyerCatalogReadRow row) {
         BuyerCatalogItemRespDTO response = new BuyerCatalogItemRespDTO();
         response.setBuyerSkuCode(row.getBuyerSkuCode());
@@ -88,9 +103,7 @@ public class BuyerCatalogQueryService {
         response.setBuyerSettlementUnitPrice(row.getBuyerSettlementUnitPrice());
         response.setCurrency(row.getCurrency());
         response.setListingStatus(BuyerListingStatus.fromCode(row.getListingStatus()).name());
-        response.setAvailabilityStatus(row.getAvailability() == null
-                ? ListingAvailability.UNKNOWN.name()
-                : ListingAvailability.fromCode(row.getAvailability()).name());
+        response.setAvailabilityStatus(resolveAvailabilityStatus(row));
         response.setAvailabilityVersion(row.getAvailabilityVersion() == null ? 0L : row.getAvailabilityVersion());
         response.setUpdatedAt(databaseClock.toInstant(row.getUpdatedAt()).atOffset(ZoneOffset.UTC));
         return response;

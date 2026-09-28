@@ -46,6 +46,11 @@ import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminP
 import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.PRODUCT_TYPE_DELETE_EXPRESSION;
 import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.PRODUCT_TYPE_UPDATE_STATUS_EXPRESSION;
 import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.ORDER_QUERY_EXPRESSION;
+import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.ROUTING_RULE_CREATE_EXPRESSION;
+import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.ROUTING_RULE_DELETE_EXPRESSION;
+import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.ROUTING_RULE_QUERY_EXPRESSION;
+import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.ROUTING_RULE_UPDATE_EXPRESSION;
+import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.ROUTING_RULE_UPDATE_STATUS_EXPRESSION;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -75,7 +80,8 @@ class SupplyChainAdminPermissionContractTest {
                 Map.entry("createDrafts", SUPPLIER_UPDATE_EXPRESSION),
                 Map.entry("retire", SUPPLIER_DELETE_EXPRESSION),
                 Map.entry("getInvoice", SUPPLIER_QUERY_EXPRESSION),
-                Map.entry("saveInvoice", SUPPLIER_UPDATE_EXPRESSION)));
+                Map.entry("saveInvoice", SUPPLIER_UPDATE_EXPRESSION),
+                Map.entry("saveFulfillmentScores", SUPPLIER_UPDATE_EXPRESSION)));
     }
 
     @Test
@@ -124,7 +130,11 @@ class SupplyChainAdminPermissionContractTest {
                 Map.entry("update", CATEGORY_UPDATE_EXPRESSION),
                 Map.entry("status", CATEGORY_UPDATE_STATUS_EXPRESSION),
                 Map.entry("delete", CATEGORY_DELETE_EXPRESSION)));
-        assertMethodPermissions(PlatformSkuAdminController.class, Map.of("page", PLATFORM_SKU_QUERY_EXPRESSION));
+        assertMethodPermissions(PlatformSkuAdminController.class, Map.of(
+                "page", PLATFORM_SKU_QUERY_EXPRESSION,
+                "getPricing", PRODUCT_QUERY_EXPRESSION,
+                "previewPricing", PLATFORM_SKU_QUERY_EXPRESSION,
+                "savePricing", PRODUCT_UPDATE_EXPRESSION));
     }
 
     @Test
@@ -140,7 +150,9 @@ class SupplyChainAdminPermissionContractTest {
                 Map.entry("batchUpdateSkuTaxMetadata", PRODUCT_UPDATE_EXPRESSION),
                 Map.entry("changeSkuStatus", PRODUCT_UPDATE_STATUS_EXPRESSION),
                 Map.entry("deleteSpu", PRODUCT_DELETE_EXPRESSION),
-                Map.entry("deleteSku", PRODUCT_DELETE_EXPRESSION)));
+                Map.entry("deleteSku", PRODUCT_DELETE_EXPRESSION),
+                Map.entry("getSkuFulfillmentScores", PRODUCT_QUERY_EXPRESSION),
+                Map.entry("saveSkuFulfillmentScores", PRODUCT_UPDATE_EXPRESSION)));
         assertMethodPermissions(BrandAdminController.class, Map.ofEntries(
                 Map.entry("page", BRAND_QUERY_EXPRESSION), Map.entry("detail", BRAND_QUERY_EXPRESSION),
                 Map.entry("create", BRAND_CREATE_EXPRESSION), Map.entry("update", BRAND_UPDATE_EXPRESSION),
@@ -154,6 +166,10 @@ class SupplyChainAdminPermissionContractTest {
     @Test
     void orderReadMethodsUseOrderQueryPermissionWithAdminFallback() {
         assertMethodPermissions(OrderAdminController.class, Map.of(
+                "page", ORDER_QUERY_EXPRESSION,
+                "get", ORDER_QUERY_EXPRESSION,
+                "getRoutingRecords", ORDER_QUERY_EXPRESSION));
+        assertMethodPermissions(SupplierOrderAdminController.class, Map.of(
                 "page", ORDER_QUERY_EXPRESSION,
                 "get", ORDER_QUERY_EXPRESSION));
         assertThat(ORDER_QUERY_EXPRESSION).contains("supply-chain:admin", "supply-chain:order:query");
@@ -169,6 +185,20 @@ class SupplyChainAdminPermissionContractTest {
                 .isEqualTo(ADMIN_EXPRESSION);
         assertThat(M1MasterDataAdminController.class.getAnnotation(PreAuthorize.class).value())
                 .isEqualTo(ADMIN_EXPRESSION);
+    }
+
+    /**
+     * 路由规则控制器按设计改为方法级细权限（PRD 四级范围模型，设计 §6）。
+     */
+    @Test
+    void routingRuleMethodsUseTheirDeclaredActions() {
+        assertMethodPermissions(RoutingRuleAdminController.class, Map.of(
+                "page", ROUTING_RULE_QUERY_EXPRESSION,
+                "get", ROUTING_RULE_QUERY_EXPRESSION,
+                "create", ROUTING_RULE_CREATE_EXPRESSION,
+                "update", ROUTING_RULE_UPDATE_EXPRESSION,
+                "delete", ROUTING_RULE_DELETE_EXPRESSION,
+                "changeStatus", ROUTING_RULE_UPDATE_STATUS_EXPRESSION));
     }
 
     private static void assertMethodPermissions(Class<?> controller, Map<String, String> expected) {

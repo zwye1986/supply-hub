@@ -20,6 +20,12 @@ public class SupplierRoutingPolicyDO {
     private String routingType;
     private Short status;
     private Short activeFlag;
+    /** 综合排序稳定性评分权重%；三权（稳定/价格/时效）之和恒为100。 */
+    private Integer stabilityWeight;
+    /** 综合排序价格权重%。 */
+    private Integer priceWeight;
+    /** 综合排序时效评分权重%。 */
+    private Integer timelinessWeight;
     @Version
     private Long version;
     private Long createdBy;

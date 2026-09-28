@@ -38,6 +38,18 @@ public class SupplyChainOrderSummaryRespDTO implements Serializable {
             example = "9800")
     private Long buyerSettlementAmount;
 
+    @Schema(description = "冻结的商品销售单价，单位CNY分")
+    private Long salesUnitPriceCents;
+
+    @Schema(description = "冻结的商品小计，单位CNY分")
+    private Long productSubtotalCents;
+
+    @Schema(description = "冻结的平台服务费，单位CNY分")
+    private Long serviceFeeCents;
+
+    @Schema(description = "冻结的用户应付总额，单位CNY分")
+    private Long userPayableAmountCents;
+
     @Schema(description = "币种，一期固定 CNY", requiredMode = Schema.RequiredMode.REQUIRED, example = "CNY")
     private String currency;
 

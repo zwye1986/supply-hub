@@ -23,5 +23,7 @@ public class BuyerCatalogReadRow {
     private String currency;
     private Short availability;
     private Long availabilityVersion;
+    /** 分销商SKU定价状态；无身份行时为空，目录保持历史 UNKNOWN */
+    private String pricingStatus;
     private LocalDateTime updatedAt;
 }

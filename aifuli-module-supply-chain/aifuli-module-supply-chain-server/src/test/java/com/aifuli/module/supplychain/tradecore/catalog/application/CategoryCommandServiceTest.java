@@ -5,10 +5,12 @@ import com.aifuli.module.supplychain.infrastructure.identity.BusinessNoGenerator
 import com.aifuli.module.supplychain.infrastructure.identity.BusinessNoPrefixes;
 import com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProductCategoryDO;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProductTypeDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSpuMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProductCategoryMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.dao.DuplicateKeyException;
 
 import java.time.LocalDateTime;
@@ -35,10 +37,149 @@ class CategoryCommandServiceTest {
     private final ProductCategoryMapper categoryMapper = mock(ProductCategoryMapper.class);
     private final PlatformSpuMapper spuMapper = mock(PlatformSpuMapper.class);
     private final BusinessNoGenerator generator = mock(BusinessNoGenerator.class);
+    private final com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService scopedBusinessCodeService =
+            mock(com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService.class);
     private final SupplyChainDatabaseClock clock = mock(SupplyChainDatabaseClock.class);
+    private final ProductTypeValidationService productTypeValidationService = mock(ProductTypeValidationService.class);
 
     private final CategoryCommandService service = new CategoryCommandService(
-            categoryMapper, spuMapper, generator, clock);
+            categoryMapper, spuMapper, generator,
+            scopedBusinessCodeService,
+            clock, productTypeValidationService);
+
+    @org.junit.jupiter.api.BeforeEach
+    void setUpCodes() {
+        when(scopedBusinessCodeService.allocateCategoryNodeNo(
+                org.mockito.ArgumentMatchers.nullable(Long.class))).thenReturn(1);
+        when(scopedBusinessCodeService.allocateRoot(any(),
+                org.mockito.ArgumentMatchers.nullable(String.class),
+                org.mockito.ArgumentMatchers.nullable(Long.class))).thenAnswer(inv ->
+                new com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService.Allocation(
+                        generator.next(BusinessNoPrefixes.CAT), 1));
+    }
+
+    @Test
+    void createPersistsValidatedProductTypeAndDescription() {
+        LocalDateTime now = LocalDateTime.of(2026, 9, 16, 10, 0);
+        when(generator.next(BusinessNoPrefixes.CAT)).thenReturn("CAT_001");
+        when(clock.now()).thenReturn(now);
+        when(categoryMapper.selectCount(any())).thenReturn(0L);
+        when(productTypeValidationService.requireActiveForUpdate(" equity_product "))
+                .thenReturn(ProductTypeDO.builder().typeCode("EQUITY_PRODUCT").build());
+        when(categoryMapper.insert(any(ProductCategoryDO.class))).thenReturn(1);
+
+        service.create(new CategoryCommandService.CreateCommand(
+                null, "权益卡券", " equity_product ", "  分类说明  ", null, 0, (short) 1,
+                CatalogEntityStatus.ACTIVE.getCode(), 1L));
+
+        ArgumentCaptor<ProductCategoryDO> captor = ArgumentCaptor.forClass(ProductCategoryDO.class);
+        verify(categoryMapper).insert(captor.capture());
+        assertThat(captor.getValue().getProductType()).isEqualTo("EQUITY_PRODUCT");
+        assertThat(captor.getValue().getTypeCodes()).containsExactly("EQUITY_PRODUCT");
+        assertThat(captor.getValue().getDescription()).isEqualTo("分类说明");
+    }
+
+    @Test
+    void createPersistsMultipleTypeCodesAndRemark() {
+        LocalDateTime now = LocalDateTime.of(2026, 9, 16, 10, 0);
+        when(generator.next(BusinessNoPrefixes.CAT)).thenReturn("CAT_002");
+        when(clock.now()).thenReturn(now);
+        when(categoryMapper.selectCount(any())).thenReturn(0L);
+        when(productTypeValidationService.requireActiveForUpdate("EQUITY_PRODUCT"))
+                .thenReturn(ProductTypeDO.builder().typeCode("EQUITY_PRODUCT").build());
+        when(productTypeValidationService.requireActiveForUpdate("MOVIE"))
+                .thenReturn(ProductTypeDO.builder().typeCode("MOVIE").build());
+        when(productTypeValidationService.requireActiveForUpdate("DINING"))
+                .thenReturn(ProductTypeDO.builder().typeCode("DINING").build());
+        when(categoryMapper.insert(any(ProductCategoryDO.class))).thenReturn(1);
+
+        service.create(new CategoryCommandService.CreateCommand(
+                null, "多类型分类", null, List.of("EQUITY_PRODUCT", "MOVIE", "DINING"), "多类型说明", null, 0, (short) 1,
+                CatalogEntityStatus.ACTIVE.getCode(), 1L));
+
+        ArgumentCaptor<ProductCategoryDO> captor = ArgumentCaptor.forClass(ProductCategoryDO.class);
+        verify(categoryMapper, org.mockito.Mockito.atLeastOnce()).insert(captor.capture());
+        ProductCategoryDO last = captor.getAllValues().get(captor.getAllValues().size() - 1);
+        assertThat(last.getProductType()).isEqualTo("EQUITY_PRODUCT");
+        assertThat(last.getTypeCodes()).containsExactly("EQUITY_PRODUCT", "MOVIE", "DINING");
+        assertThat(last.getDescription()).isEqualTo("多类型说明");
+    }
+
+    @Test
+    void updatePersistsMultipleTypeCodes() {
+        ProductCategoryDO child = ProductCategoryDO.builder()
+                .id(20L)
+                .categoryCode("CAT_CHILD")
+                .status(CatalogEntityStatus.ACTIVE.getCode())
+                .parentId(10L)
+                .categoryLevel((short) 2)
+                .sort(5)
+                .visible((short) 1)
+                .build();
+        when(categoryMapper.selectByCodeForUpdate("CAT_CHILD")).thenReturn(child);
+        when(categoryMapper.selectCount(any())).thenReturn(0L);
+        when(categoryMapper.updateById(any(ProductCategoryDO.class))).thenReturn(1);
+        when(clock.now()).thenReturn(LocalDateTime.now());
+        when(productTypeValidationService.requireActiveForUpdate("MOVIE"))
+                .thenReturn(ProductTypeDO.builder().typeCode("MOVIE").build());
+        when(productTypeValidationService.requireActiveForUpdate("DINING"))
+                .thenReturn(ProductTypeDO.builder().typeCode("DINING").build());
+
+        service.update("CAT_CHILD", new CategoryCommandService.UpdateCommand(
+                "更新多类型", null, List.of("MOVIE", "DINING"), "更新说明", null, null, null, 1L));
+
+        assertThat(child.getProductType()).isEqualTo("MOVIE");
+        assertThat(child.getTypeCodes()).containsExactly("MOVIE", "DINING");
+        assertThat(child.getDescription()).isEqualTo("更新说明");
+    }
+
+    @Test
+    void createFiltersDuplicatesInTypeCodes() {
+        LocalDateTime now = LocalDateTime.of(2026, 9, 16, 10, 0);
+        when(generator.next(BusinessNoPrefixes.CAT)).thenReturn("CAT_003");
+        when(clock.now()).thenReturn(now);
+        when(categoryMapper.selectCount(any())).thenReturn(0L);
+        when(productTypeValidationService.requireActiveForUpdate("EQUITY_PRODUCT"))
+                .thenReturn(ProductTypeDO.builder().typeCode("EQUITY_PRODUCT").build());
+        when(productTypeValidationService.requireActiveForUpdate("MOVIE"))
+                .thenReturn(ProductTypeDO.builder().typeCode("MOVIE").build());
+        when(categoryMapper.insert(any(ProductCategoryDO.class))).thenReturn(1);
+
+        service.create(new CategoryCommandService.CreateCommand(
+                null, "去重分类", null, List.of("EQUITY_PRODUCT", "EQUITY_PRODUCT", "MOVIE"), "去重说明", null, 0, (short) 1,
+                CatalogEntityStatus.ACTIVE.getCode(), 1L));
+
+        ArgumentCaptor<ProductCategoryDO> captor = ArgumentCaptor.forClass(ProductCategoryDO.class);
+        verify(categoryMapper, org.mockito.Mockito.atLeastOnce()).insert(captor.capture());
+        ProductCategoryDO last = captor.getAllValues().get(captor.getAllValues().size() - 1);
+        assertThat(last.getProductType()).isEqualTo("EQUITY_PRODUCT");
+        assertThat(last.getTypeCodes()).containsExactly("EQUITY_PRODUCT", "MOVIE");
+    }
+
+    @Test
+    void updateClearsDescriptionWhenBlank() {
+        ProductCategoryDO child = ProductCategoryDO.builder()
+                .id(20L)
+                .categoryCode("CAT_CHILD")
+                .status(CatalogEntityStatus.ACTIVE.getCode())
+                .parentId(10L)
+                .categoryLevel((short) 2)
+                .description("原有旧说明")
+                .productType("EQUITY_PRODUCT")
+                .typeCodes(List.of("EQUITY_PRODUCT"))
+                .build();
+        when(categoryMapper.selectByCodeForUpdate("CAT_CHILD")).thenReturn(child);
+        when(categoryMapper.selectCount(any())).thenReturn(0L);
+        when(categoryMapper.updateById(any(ProductCategoryDO.class))).thenReturn(1);
+        when(clock.now()).thenReturn(LocalDateTime.now());
+
+        service.update("CAT_CHILD", new CategoryCommandService.UpdateCommand(
+                "清空说明分类", null, null, "   ", null, null, null, 1L));
+
+        assertThat(child.getDescription()).isNull();
+        assertThat(child.getProductType()).isEqualTo("EQUITY_PRODUCT");
+        assertThat(child.getTypeCodes()).containsExactly("EQUITY_PRODUCT");
+    }
 
     @Test
     void createCalculatesLevelAndRejectsDuplicateNameUnderSameParent() {
@@ -47,7 +188,8 @@ class CategoryCommandServiceTest {
         when(categoryMapper.insert(any(ProductCategoryDO.class))).thenThrow(new DuplicateKeyException("duplicate"));
 
         CategoryCommandService.CreateCommand cmd = new CategoryCommandService.CreateCommand(
-                null, "重复分类", null, 0, (short) 1, CatalogEntityStatus.ACTIVE.getCode(), 1L);
+                null, "重复分类", null, null, null, 0, (short) 1,
+                CatalogEntityStatus.ACTIVE.getCode(), 1L);
 
         assertThatThrownBy(() -> service.create(cmd))
                 .isInstanceOf(ServiceException.class)
@@ -66,12 +208,12 @@ class CategoryCommandServiceTest {
         when(categoryMapper.selectByCodeForUpdate("CAT_SELF")).thenReturn(self);
 
         CategoryCommandService.UpdateCommand cmd = new CategoryCommandService.UpdateCommand(
-                "新名称", "CAT_SELF", 0, (short) 1, 1L);
+                "新名称", null, null, "CAT_SELF", 0, (short) 1, 1L);
 
         assertThatThrownBy(() -> service.update("CAT_SELF", cmd))
                 .isInstanceOf(ServiceException.class)
                 .extracting(ex -> ((ServiceException) ex).getCode())
-                .isEqualTo(CATEGORY_PARENT_INVALID.getCode());
+                .isEqualTo(com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.CATEGORY_PARENT_IMMUTABLE.getCode());
     }
 
     /**
@@ -95,7 +237,7 @@ class CategoryCommandServiceTest {
         when(clock.now()).thenReturn(LocalDateTime.now());
 
         service.update("CAT_CHILD", new CategoryCommandService.UpdateCommand(
-                "仅改名", null, null, null, 1L));
+                "仅改名", null, null, null, null, null, 1L));
 
         assertThat(child.getParentId()).isEqualTo(10L);
         assertThat(child.getCategoryLevel()).isEqualTo((short) 3);
@@ -103,9 +245,9 @@ class CategoryCommandServiceTest {
         verify(categoryMapper, never()).selectList(any());
     }
 
-    /** 显式传空字符串表示挂到根，此时才重算层级。 */
+    /** 显式传空字符串请求挂到根，必须拒绝。 */
     @Test
-    void updateWithBlankParentCodeMovesCategoryToRoot() {
+    void updateWithBlankParentCodeRejectsMoveToRoot() {
         ProductCategoryDO child = ProductCategoryDO.builder()
                 .id(20L)
                 .categoryCode("CAT_CHILD")
@@ -121,11 +263,12 @@ class CategoryCommandServiceTest {
         when(categoryMapper.updateById(any(ProductCategoryDO.class))).thenReturn(1);
         when(clock.now()).thenReturn(LocalDateTime.now());
 
-        service.update("CAT_CHILD", new CategoryCommandService.UpdateCommand(
-                "挂到根", "", null, null, 1L));
-
-        assertThat(child.getParentId()).isNull();
-        assertThat(child.getCategoryLevel()).isEqualTo((short) 1);
+        assertThatThrownBy(() -> service.update("CAT_CHILD", new CategoryCommandService.UpdateCommand(
+                "挂到根", null, null, "", null, null, 1L)))
+                .isInstanceOf(ServiceException.class)
+                .extracting(ex -> ((ServiceException) ex).getCode())
+                .isEqualTo(com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.CATEGORY_PARENT_IMMUTABLE.getCode());
+        assertThat(child.getParentId()).isEqualTo(10L);
     }
 
     /** 应用层预检先于唯一索引给出业务错误码。 */
@@ -142,7 +285,7 @@ class CategoryCommandServiceTest {
         when(categoryMapper.selectCount(any())).thenReturn(1L);
 
         CategoryCommandService.UpdateCommand cmd = new CategoryCommandService.UpdateCommand(
-                "已存在的名称", null, null, null, 1L);
+                "已存在的名称", null, null, null, null, null, 1L);
 
         assertThatThrownBy(() -> service.update("CAT_CHILD", cmd))
                 .isInstanceOf(ServiceException.class)

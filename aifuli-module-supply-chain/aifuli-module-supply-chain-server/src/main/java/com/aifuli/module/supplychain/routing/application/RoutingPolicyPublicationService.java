@@ -3,21 +3,25 @@ package com.aifuli.module.supplychain.routing.application;
 import com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock;
 
 import com.aifuli.module.supplychain.infrastructure.outbox.OutboxEventRepository;
-import com.aifuli.module.supplychain.routing.dal.dataobject.StandardProductRoutingCandidateDO;
-import com.aifuli.module.supplychain.routing.dal.dataobject.StandardProductRoutingRuleDO;
+import com.aifuli.module.supplychain.routing.dal.dataobject.StdRoutingCandidateDO;
+import com.aifuli.module.supplychain.routing.dal.dataobject.StdRoutingRuleDO;
+import com.aifuli.module.supplychain.routing.dal.dataobject.StdRoutingRuleScopeDO;
 import com.aifuli.module.supplychain.routing.dal.dataobject.SupplierRoutingPolicyDO;
 import com.aifuli.module.supplychain.routing.dal.dataobject.SupplierRoutingPolicyVersionDO;
-import com.aifuli.module.supplychain.routing.dal.mysql.StandardProductRoutingCandidateMapper;
-import com.aifuli.module.supplychain.routing.dal.mysql.StandardProductRoutingRuleMapper;
+import com.aifuli.module.supplychain.routing.dal.mysql.StdRoutingCandidateMapper;
+import com.aifuli.module.supplychain.routing.dal.mysql.StdRoutingRuleMapper;
+import com.aifuli.module.supplychain.routing.dal.mysql.StdRoutingRuleScopeMapper;
 import com.aifuli.module.supplychain.routing.dal.mysql.SupplierRoutingPolicyMapper;
 import com.aifuli.module.supplychain.routing.dal.mysql.SupplierRoutingPolicyVersionMapper;
+import com.aifuli.module.supplychain.routing.domain.RoutingStrategy;
 import com.aifuli.module.supplychain.routing.domain.RoutingType;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerDO;
+import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerProjectDO;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerMapper;
+import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerProjectMapper;
 import com.aifuli.module.supplychain.tradecore.buyer.domain.BuyerStatus;
-import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuDO;
-import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
-import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProductTypeDO;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProductTypeMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierMapper;
 import com.aifuli.module.supplychain.tradecore.supply.domain.SupplierStatus;
@@ -36,7 +40,13 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Set;
 
-/** 标准商品路由策略的草稿创建和不可变版本发布入口。 */
+/**
+ * 标准商品路由策略的草稿创建和不可变版本发布入口（PRD 四级范围模型）。
+ *
+ * <p>规则携带分销商/项目/商品类型三级范围明细与供应商候选；全局综合权重挂策略身份行，
+ * 任一保存携带 COMPOSITE 时同步更新并全规则生效。
+ * 设计见 {@code docs/superpowers/specs/2026-09-23-order-frontend-alignment-and-routing-prd-model-design.md#52 与 #55}。</p>
+ */
 @Service
 @RequiredArgsConstructor
 public class RoutingPolicyPublicationService {
@@ -50,14 +60,20 @@ public class RoutingPolicyPublicationService {
     private static final short POLICY_ARCHIVED = 90;
     private static final short VERSION_DRAFT = 0;
     private static final short VERSION_PUBLISHED = 10;
+    private static final short RULE_ENABLED = 10;
+    private static final short RULE_DISABLED = 20;
     private static final Set<String> CHECK_MODES = Set.of("REQUIRED", "OPTIONAL", "UNSUPPORTED");
+    private static final Set<String> SCOPE_MODES = Set.of("ALL", "SPECIFIED");
+    private static final Set<String> ROUTE_MODES = Set.of("AUTO", "FIXED");
 
     private final SupplierRoutingPolicyMapper policyMapper;
     private final SupplierRoutingPolicyVersionMapper versionMapper;
-    private final StandardProductRoutingRuleMapper ruleMapper;
-    private final StandardProductRoutingCandidateMapper candidateMapper;
+    private final StdRoutingRuleMapper ruleMapper;
+    private final StdRoutingRuleScopeMapper scopeMapper;
+    private final StdRoutingCandidateMapper candidateMapper;
     private final BuyerMapper buyerMapper;
-    private final PlatformSkuMapper skuMapper;
+    private final BuyerProjectMapper projectMapper;
+    private final ProductTypeMapper productTypeMapper;
     private final SupplierMapper supplierMapper;
     private final OutboxEventRepository outboxRepository;
 
@@ -70,6 +86,8 @@ public class RoutingPolicyPublicationService {
             policy = SupplierRoutingPolicyDO.builder()
                     .policyCode(command.policyCode()).policyName(command.policyName())
                     .routingType(ROUTING_TYPE).status(POLICY_INACTIVE).activeFlag(null).version(0L)
+                    .stabilityWeight(command.stabilityWeight()).priceWeight(command.priceWeight())
+                    .timelinessWeight(command.timelinessWeight())
                     .createdBy(command.operatorId()).createdAt(now)
                     .updatedBy(command.operatorId()).updatedAt(now).build();
             policyMapper.insert(policy);
@@ -79,6 +97,15 @@ public class RoutingPolicyPublicationService {
             }
             if (!policy.getPolicyName().equals(command.policyName())) {
                 throw new IllegalArgumentException("Routing policy name cannot be changed through a version draft");
+            }
+            // 全局综合权重随版本演进同步到策略身份行（前端语义：权重在所有规则中保持一致）。
+            policy.setStabilityWeight(command.stabilityWeight());
+            policy.setPriceWeight(command.priceWeight());
+            policy.setTimelinessWeight(command.timelinessWeight());
+            policy.setUpdatedBy(command.operatorId());
+            policy.setUpdatedAt(now);
+            if (policyMapper.updateById(policy) != 1) {
+                throw new IllegalStateException("Routing policy weight sync lost optimistic lock");
             }
         }
 
@@ -94,32 +121,118 @@ public class RoutingPolicyPublicationService {
         versionMapper.insert(version);
 
         for (ResolvedRule resolved : resolvedRules) {
-            StandardProductRoutingRuleDO rule = StandardProductRoutingRuleDO.builder()
-                    .policyVersionId(version.getId()).ruleCode(resolved.draft().ruleCode())
-                    .ruleName(resolved.draft().ruleName()).buyerId(resolved.buyer().getId())
-                    .platformSkuId(resolved.sku().getId())
-                    .fulfillmentType(resolved.draft().fulfillmentType())
-                    .rulePriority(resolved.draft().rulePriority()).version(0L)
+            RuleDraft draft = resolved.draft();
+            StdRoutingRuleDO rule = StdRoutingRuleDO.builder()
+                    .policyVersionId(version.getId()).ruleCode(draft.ruleCode())
+                    .ruleName(draft.ruleName()).routeMode(draft.routeMode())
+                    .primarySupplierId(resolved.primarySupplier() == null ? null : resolved.primarySupplier().getId())
+                    .distributorMode(draft.distributorMode())
+                    .projectMode(draft.projectMode())
+                    .productTypeMode(draft.productTypeMode())
+                    .supplierMode(draft.supplierMode())
+                    .maxSupplyPriceCents(draft.maxSupplyPriceCents())
+                    .strategyPriority1(draft.strategy1()).strategyPriority2(draft.strategy2())
+                    .strategyPriority3(draft.strategy3())
+                    .rulePriority(draft.rulePriority()).status(draft.status())
+                    .protectedRule(draft.protectedRule()).version(0L)
                     .createdBy(command.operatorId()).createdAt(now)
                     .updatedBy(command.operatorId()).updatedAt(now).build();
             ruleMapper.insert(rule);
+            insertScopes(rule.getId(), draft, command.operatorId(), now);
             for (ResolvedCandidate candidate : resolved.candidates()) {
-                CandidateDraft draft = candidate.draft();
-                candidateMapper.insert(StandardProductRoutingCandidateDO.builder()
+                CandidateDraft candidateDraft = candidate.draft();
+                candidateMapper.insert(StdRoutingCandidateDO.builder()
                         .ruleId(rule.getId()).supplierId(candidate.supplier().getId())
-                        .candidatePriority(draft.candidatePriority())
-                        .inventoryCheckMode(draft.inventoryCheckMode())
-                        .inventoryMaxAgeSeconds(draft.inventoryMaxAgeSeconds())
-                        .balanceCheckMode(draft.balanceCheckMode())
-                        .balanceMaxAgeSeconds(draft.balanceMaxAgeSeconds())
-                        .healthCheckMode(draft.healthCheckMode())
-                        .healthMaxAgeSeconds(draft.healthMaxAgeSeconds())
+                        .candidatePriority(candidateDraft.candidatePriority())
+                        .inventoryCheckMode(candidateDraft.inventoryCheckMode())
+                        .inventoryMaxAgeSeconds(candidateDraft.inventoryMaxAgeSeconds())
+                        .balanceCheckMode(candidateDraft.balanceCheckMode())
+                        .balanceMaxAgeSeconds(candidateDraft.balanceMaxAgeSeconds())
+                        .healthCheckMode(candidateDraft.healthCheckMode())
+                        .healthMaxAgeSeconds(candidateDraft.healthMaxAgeSeconds())
                         .version(0L).createdBy(command.operatorId()).createdAt(now)
                         .updatedBy(command.operatorId()).updatedAt(now).build());
             }
         }
         return new DraftResult(policy.getId(), version.getId(), versionNo,
                 HexFormat.of().formatHex(digest));
+    }
+
+    private void insertScopes(Long ruleId, RuleDraft draft, Long operatorId, LocalDateTime now) {
+        insertScopeLines(ruleId, "DISTRIBUTOR", draft.distributorCodes(), operatorId, now);
+        insertScopeLines(ruleId, "PROJECT", draft.projectCodes(), operatorId, now);
+        insertScopeLines(ruleId, "PRODUCT_TYPE", draft.productTypeCodes(), operatorId, now);
+    }
+
+    private void insertScopeLines(Long ruleId, String kind, List<String> codes, Long operatorId, LocalDateTime now) {
+        for (String code : codes) {
+            scopeMapper.insert(StdRoutingRuleScopeDO.builder()
+                    .ruleId(ruleId).scopeKind(kind).scopeCode(code).createdAt(now).build());
+        }
+    }
+
+    /**
+     * 关闭旧生效版本的 valid_to，再以完整规则集 createDraft + publish（同一事务）。
+     * 不得改写已发布版本内的规则/范围/候选行；仅 UPDATE 旧版本区间终点。
+     * 设计见 {@code docs/superpowers/specs/2026-09-23-order-frontend-alignment-and-routing-prd-model-design.md#55}。
+     */
+    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
+    public SuccessorPublishResult publishSuccessorStandardProductRules(SuccessorPublishCommand command) {
+        validateSuccessorCommand(command);
+        SupplierRoutingPolicyVersionDO closing = null;
+        if (command.closeVersionId() != null) {
+            closing = versionMapper.selectByIdForUpdate(command.closeVersionId());
+            if (closing == null || closing.getStatus() != VERSION_PUBLISHED
+                    || closing.getVersion() != command.closeExpectedVersion()) {
+                throw new IllegalStateException("Routing policy version cannot be closed for successor publish");
+            }
+            if (!command.effectiveAt().isAfter(closing.getValidFrom())) {
+                throw new IllegalStateException(
+                        "Routing policy version effective interval cannot close at or before valid_from");
+            }
+        }
+
+        SupplierRoutingPolicyDO policy = policyMapper.selectByCodeForUpdate(command.policyCode());
+        if (policy == null) {
+            if (closing != null) {
+                throw new IllegalStateException(
+                        "Closing routing policy version does not belong to policy code " + command.policyCode());
+            }
+            LocalDateTime stamp = now();
+            policy = SupplierRoutingPolicyDO.builder()
+                    .policyCode(command.policyCode()).policyName(command.policyName())
+                    .routingType(ROUTING_TYPE).status(POLICY_INACTIVE).activeFlag(null).version(0L)
+                    .stabilityWeight(command.stabilityWeight()).priceWeight(command.priceWeight())
+                    .timelinessWeight(command.timelinessWeight())
+                    .createdBy(command.operatorId()).createdAt(stamp)
+                    .updatedBy(command.operatorId()).updatedAt(stamp).build();
+            policyMapper.insert(policy);
+        }
+        if (closing != null && !closing.getPolicyId().equals(policy.getId())) {
+            throw new IllegalStateException(
+                    "Closing routing policy version does not belong to policy code " + command.policyCode());
+        }
+        if (closing != null) {
+            LocalDateTime stamp = now();
+            closing.setValidTo(command.effectiveAt());
+            closing.setUpdatedBy(command.operatorId());
+            closing.setUpdatedAt(stamp);
+            if (versionMapper.updateById(closing) != 1) {
+                throw new IllegalStateException("Routing policy version close lost optimistic lock");
+            }
+        }
+
+        DraftResult draft = createDraft(new CreateDraftCommand(
+                command.policyCode(), command.policyName(),
+                "规则页保存 " + command.effectiveAt(),
+                command.effectiveAt(), null, command.rules(), command.operatorId(),
+                command.stabilityWeight(), command.priceWeight(), command.timelinessWeight()));
+        // createDraft 插入时乐观锁 version 固定为 0；本方法经 this 自调用，与外层同一事务。
+        PublishResult published = publish(new PublishCommand(
+                draft.policyVersionId(), 0L, "管理端路由规则页保存",
+                command.operatorId(), command.traceId(), null, null));
+        return new SuccessorPublishResult(published.policyCode(), published.policyVersionId(),
+                published.versionNo());
     }
 
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
@@ -174,75 +287,200 @@ public class RoutingPolicyPublicationService {
     }
 
     private List<ResolvedRule> resolveAndValidateRules(List<RuleDraft> rules) {
-        Set<String> matchKeys = new HashSet<>();
         Set<String> ruleCodes = new HashSet<>();
+        Set<String> enabledScopeKeys = new HashSet<>();
+        Set<String> enabledNames = new HashSet<>();
         List<ResolvedRule> result = new ArrayList<>();
         for (RuleDraft rule : rules) {
-            if (isBlank(rule.ruleCode()) || isBlank(rule.ruleName()) || isBlank(rule.buyerCode())
-                    || isBlank(rule.platformSkuCode()) || isBlank(rule.fulfillmentType())
-                    || rule.rulePriority() < 0 || rule.candidates() == null || rule.candidates().isEmpty()
-                    || !ruleCodes.add(rule.ruleCode())) {
-                throw new IllegalArgumentException("Routing rule is incomplete, duplicated, or has no candidates");
+            validateRuleStructure(rule, ruleCodes);
+            if (rule.status() == RULE_ENABLED) {
+                if (!enabledScopeKeys.add(scopeKey(rule))) {
+                    throw new IllegalArgumentException("Overlapping routing rule scope: " + rule.ruleCode());
+                }
+                if (!enabledNames.add(rule.ruleName())) {
+                    throw new IllegalArgumentException("Duplicated routing rule name: " + rule.ruleName());
+                }
             }
-            BuyerDO buyer = buyerMapper.selectByBuyerCode(rule.buyerCode());
-            PlatformSkuDO sku = skuMapper.selectByCode(rule.platformSkuCode());
-            if (buyer == null || buyer.getStatus() != BuyerStatus.ACTIVE.getCode()
-                    || sku == null || sku.getStatus() != CatalogEntityStatus.ACTIVE.getCode()
-                    || !rule.fulfillmentType().equals(sku.getFulfillmentType())) {
-                throw new IllegalArgumentException("Routing rule buyer or platform SKU is not active and exact");
+            List<SupplierDO> scopeSuppliers = new ArrayList<>();
+            for (String supplierCode : rule.supplierCodes()) {
+                scopeSuppliers.add(requireActiveStandardSupplier(supplierCode));
             }
-            String matchKey = buyer.getId() + ":" + sku.getId() + ":" + rule.fulfillmentType();
-            if (!matchKeys.add(matchKey)) {
-                throw new IllegalArgumentException("Overlapping exact routing rule: " + matchKey);
+            SupplierDO primary = rule.primarySupplierCode() == null ? null
+                    : requireActiveStandardSupplier(rule.primarySupplierCode());
+            for (String buyerCode : rule.distributorCodes()) {
+                requireActiveBuyer(buyerCode);
             }
-            Set<String> supplierCodes = new HashSet<>();
+            for (String projectCode : rule.projectCodes()) {
+                requireProject(projectCode);
+            }
+            for (String typeCode : rule.productTypeCodes()) {
+                requireProductType(typeCode);
+            }
             List<ResolvedCandidate> candidates = new ArrayList<>();
+            Set<String> supplierCodes = new HashSet<>();
             for (CandidateDraft candidate : rule.candidates()) {
                 validateCandidate(candidate);
                 if (!supplierCodes.add(candidate.supplierCode())) {
                     throw new IllegalArgumentException("Duplicate supplier in routing rule: "
                             + candidate.supplierCode());
                 }
-                SupplierDO supplier = supplierMapper.selectByCode(candidate.supplierCode());
-                if (supplier == null || supplier.getStatus() != SupplierStatus.ACTIVE.getCode()
-                        || !"STANDARD_SUPPLIER".equals(supplier.getSupplierType())) {
-                    throw new IllegalArgumentException("Active standard supplier does not exist: "
-                            + candidate.supplierCode());
-                }
-                candidates.add(new ResolvedCandidate(candidate, supplier));
+                candidates.add(new ResolvedCandidate(candidate,
+                        requireActiveStandardSupplier(candidate.supplierCode())));
             }
-            result.add(new ResolvedRule(rule, buyer, sku, List.copyOf(candidates)));
+            result.add(new ResolvedRule(rule, primary, List.copyOf(candidates), List.copyOf(scopeSuppliers)));
         }
         return List.copyOf(result);
     }
 
+    private void validateRuleStructure(RuleDraft rule, Set<String> ruleCodes) {
+        if (isBlank(rule.ruleCode()) || isBlank(rule.ruleName()) || !ROUTE_MODES.contains(rule.routeMode())
+                || !SCOPE_MODES.contains(rule.distributorMode())
+                || !SCOPE_MODES.contains(rule.projectMode())
+                || !SCOPE_MODES.contains(rule.productTypeMode())
+                || !SCOPE_MODES.contains(rule.supplierMode())
+                || rule.rulePriority() < 0 || rule.status() != RULE_ENABLED && rule.status() != RULE_DISABLED
+                || !ruleCodes.add(rule.ruleCode())) {
+            throw new IllegalArgumentException("Routing rule is incomplete or duplicated: " + rule.ruleCode());
+        }
+        RoutingRuleScopeTier.require(rule.distributorMode(), rule.projectMode(),
+                rule.productTypeMode(), rule.supplierMode());
+        if (isBlank(rule.strategy1()) || isBlank(rule.strategy2()) || isBlank(rule.strategy3())
+                || !isValidStrategyPermutation(rule.strategy1(), rule.strategy2(), rule.strategy3())) {
+            throw new IllegalArgumentException("Routing rule strategies must be a permutation: " + rule.ruleCode());
+        }
+        if ("SPECIFIED".equals(rule.distributorMode()) && rule.distributorCodes().isEmpty()) {
+            throw new IllegalArgumentException("Routing rule distributor scope is empty: " + rule.ruleCode());
+        }
+        if ("SPECIFIED".equals(rule.projectMode()) && rule.projectCodes().isEmpty()) {
+            throw new IllegalArgumentException("Routing rule project scope is empty: " + rule.ruleCode());
+        }
+        if ("SPECIFIED".equals(rule.productTypeMode()) && rule.productTypeCodes().isEmpty()) {
+            throw new IllegalArgumentException("Routing rule product type scope is empty: " + rule.ruleCode());
+        }
+        if ("FIXED".equals(rule.routeMode())) {
+            if (isBlank(rule.primarySupplierCode())) {
+                throw new IllegalArgumentException("Fixed routing rule lacks primary supplier: " + rule.ruleCode());
+            }
+            if (!rule.supplierCodes().isEmpty()) {
+                throw new IllegalArgumentException("Fixed routing rule must not carry candidates: " + rule.ruleCode());
+            }
+        } else if ("SPECIFIED".equals(rule.supplierMode()) && rule.supplierCodes().size() < 2) {
+            throw new IllegalArgumentException("Auto specified routing rule needs at least 2 suppliers: "
+                    + rule.ruleCode());
+        }
+        if ((rule.maxSupplyPriceCents() != null && rule.maxSupplyPriceCents() <= 0)) {
+            throw new IllegalArgumentException("Routing rule max supply price must be positive: " + rule.ruleCode());
+        }
+    }
+
+    private static boolean isValidStrategyPermutation(String first, String second, String third) {
+        try {
+            RoutingStrategy.valueOf(first);
+            RoutingStrategy.valueOf(second);
+            RoutingStrategy.valueOf(third);
+        } catch (IllegalArgumentException exception) {
+            return false;
+        }
+        return Set.of(first, second, third).size() == 3;
+    }
+
+    private static String scopeKey(RuleDraft rule) {
+        return rule.distributorMode() + ":" + String.join(",", rule.distributorCodes())
+                + "|" + rule.projectMode() + ":" + String.join(",", rule.projectCodes())
+                + "|" + rule.productTypeMode() + ":" + String.join(",", rule.productTypeCodes())
+                + "|" + rule.supplierMode() + ":" + String.join(",", rule.supplierCodes());
+    }
+
     private void requirePublishableReferences(Long versionId) {
-        List<StandardProductRoutingRuleDO> rules = ruleMapper.selectByPolicyVersionId(versionId);
+        List<StdRoutingRuleDO> rules = ruleMapper.selectByPolicyVersionId(versionId);
         if (rules.isEmpty()) {
             throw new IllegalStateException("Published routing version must contain a rule");
         }
-        Set<String> matchKeys = new HashSet<>();
-        for (StandardProductRoutingRuleDO rule : rules) {
-            BuyerDO buyer = buyerMapper.selectById(rule.getBuyerId());
-            PlatformSkuDO sku = skuMapper.selectById(rule.getPlatformSkuId());
-            if (buyer == null || buyer.getStatus() != BuyerStatus.ACTIVE.getCode()
-                    || sku == null || sku.getStatus() != CatalogEntityStatus.ACTIVE.getCode()
-                    || !rule.getFulfillmentType().equals(sku.getFulfillmentType())
-                    || !matchKeys.add(rule.getBuyerId() + ":" + rule.getPlatformSkuId()
-                    + ":" + rule.getFulfillmentType())) {
-                throw new IllegalStateException("Routing draft contains inactive or overlapping exact rules");
+        Set<String> enabledScopeKeys = new HashSet<>();
+        for (StdRoutingRuleDO rule : rules) {
+            List<StdRoutingRuleScopeDO> scopes = scopeMapper.selectByRuleIds(List.of(rule.getId()));
+            List<StdRoutingCandidateDO> candidates = candidateMapper.selectByRuleId(rule.getId());
+            // 候选行仅 AUTO+SPECIFIED 必需；FIXED 由主供应商单候选表达（设计 §5.5 候选集构造）。
+            if ("AUTO".equals(rule.getRouteMode())
+                    && "SPECIFIED".equals(rule.getSupplierMode()) && candidates.isEmpty()) {
+                throw new IllegalStateException("Published routing rule must contain ordered candidates: "
+                        + rule.getRuleCode());
             }
-            List<StandardProductRoutingCandidateDO> candidates = candidateMapper.selectByRuleId(rule.getId());
-            if (candidates.isEmpty()) {
-                throw new IllegalStateException("Published routing rule must contain candidates");
+            if (rule.getStatus() == RULE_ENABLED && !enabledScopeKeys.add(scopeKey(rule, scopes, candidates))) {
+                throw new IllegalStateException("Published routing version contains overlapping enabled rules");
             }
-            for (StandardProductRoutingCandidateDO candidate : candidates) {
-                SupplierDO supplier = supplierMapper.selectById(candidate.getSupplierId());
-                if (supplier == null || supplier.getStatus() != SupplierStatus.ACTIVE.getCode()
-                        || !"STANDARD_SUPPLIER".equals(supplier.getSupplierType())) {
-                    throw new IllegalStateException("Routing candidate supplier is not active");
+            for (StdRoutingRuleScopeDO scope : scopes) {
+                switch (scope.getScopeKind()) {
+                    case "DISTRIBUTOR" -> requireActiveBuyerByIdRef(scope.getScopeCode());
+                    case "PROJECT" -> requireProject(scope.getScopeCode());
+                    case "PRODUCT_TYPE" -> requireProductType(scope.getScopeCode());
+                    default -> throw new IllegalStateException("Unknown routing scope kind: "
+                            + scope.getScopeKind());
                 }
             }
+            if (rule.getPrimarySupplierId() != null) {
+                requireActiveSupplierById(rule.getPrimarySupplierId());
+            }
+            for (StdRoutingCandidateDO candidate : candidates) {
+                requireActiveSupplierById(candidate.getSupplierId());
+            }
+        }
+    }
+
+    private static String scopeKey(StdRoutingRuleDO rule, List<StdRoutingRuleScopeDO> scopes,
+                                   List<StdRoutingCandidateDO> candidates) {
+        return rule.getDistributorMode() + ":" + scopeCodes(scopes, "DISTRIBUTOR")
+                + "|" + rule.getProjectMode() + ":" + scopeCodes(scopes, "PROJECT")
+                + "|" + rule.getProductTypeMode() + ":" + scopeCodes(scopes, "PRODUCT_TYPE")
+                + "|" + rule.getSupplierMode() + ":" + candidates.size();
+    }
+
+    private static String scopeCodes(List<StdRoutingRuleScopeDO> scopes, String kind) {
+        List<String> codes = scopes.stream()
+                .filter(scope -> kind.equals(scope.getScopeKind()))
+                .map(StdRoutingRuleScopeDO::getScopeCode).sorted().toList();
+        return String.join(",", codes);
+    }
+
+    private void requireActiveBuyer(String buyerCode) {
+        BuyerDO buyer = buyerMapper.selectByBuyerCode(buyerCode);
+        if (buyer == null || buyer.getStatus() != BuyerStatus.ACTIVE.getCode()) {
+            throw new IllegalArgumentException("Active buyer does not exist: " + buyerCode);
+        }
+    }
+
+    private void requireActiveBuyerByIdRef(String buyerCode) {
+        requireActiveBuyer(buyerCode);
+    }
+
+    private void requireProject(String projectCode) {
+        BuyerProjectDO project = projectMapper.selectByProjectCode(projectCode);
+        if (project == null) {
+            throw new IllegalArgumentException("Project does not exist: " + projectCode);
+        }
+    }
+
+    private void requireProductType(String typeCode) {
+        ProductTypeDO type = productTypeMapper.selectByCode(typeCode);
+        if (type == null) {
+            throw new IllegalArgumentException("Product type does not exist: " + typeCode);
+        }
+    }
+
+    private SupplierDO requireActiveStandardSupplier(String supplierCode) {
+        SupplierDO supplier = supplierMapper.selectByCode(supplierCode);
+        if (supplier == null || supplier.getStatus() != SupplierStatus.ACTIVE.getCode()
+                || !"STANDARD_SUPPLIER".equals(supplier.getSupplierType())) {
+            throw new IllegalArgumentException("Active standard supplier does not exist: " + supplierCode);
+        }
+        return supplier;
+    }
+
+    private void requireActiveSupplierById(Long supplierId) {
+        SupplierDO supplier = supplierMapper.selectById(supplierId);
+        if (supplier == null || supplier.getStatus() != SupplierStatus.ACTIVE.getCode()
+                || !"STANDARD_SUPPLIER".equals(supplier.getSupplierType())) {
+            throw new IllegalArgumentException("Active standard supplier does not exist: id=" + supplierId);
         }
     }
 
@@ -264,8 +502,21 @@ public class RoutingPolicyPublicationService {
         if (isBlank(command.policyCode()) || isBlank(command.policyName())
                 || isBlank(command.versionName()) || command.validFrom() == null
                 || (command.validTo() != null && !command.validTo().isAfter(command.validFrom()))
-                || command.operatorId() == null || command.rules() == null || command.rules().isEmpty()) {
+                || command.operatorId() == null || command.rules() == null || command.rules().isEmpty()
+                || command.stabilityWeight() + command.priceWeight() + command.timelinessWeight()
+                        != RoutingRuleSaveSupport.WEIGHT_SUM) {
             throw new IllegalArgumentException("Routing policy draft command is incomplete");
+        }
+    }
+
+    private static void validateSuccessorCommand(SuccessorPublishCommand command) {
+        if (command == null || isBlank(command.policyCode()) || isBlank(command.policyName())
+                || command.operatorId() == null || isBlank(command.traceId())
+                || command.rules() == null || command.rules().isEmpty()
+                || command.effectiveAt() == null || command.closeExpectedVersion() < 0
+                || command.stabilityWeight() + command.priceWeight() + command.timelinessWeight()
+                        != RoutingRuleSaveSupport.WEIGHT_SUM) {
+            throw new IllegalArgumentException("Routing policy successor publish command is incomplete");
         }
     }
 
@@ -289,14 +540,28 @@ public class RoutingPolicyPublicationService {
     private static byte[] digest(CreateDraftCommand command, List<ResolvedRule> resolvedRules) {
         StringBuilder canonical = new StringBuilder()
                 .append(command.policyCode()).append('\u001f').append(command.versionName()).append('\u001f')
-                .append(command.validFrom()).append('\u001f').append(command.validTo()).append('\u001e');
+                .append(command.validFrom()).append('\u001f').append(command.validTo()).append('\u001f')
+                .append(command.stabilityWeight()).append('\u001f').append(command.priceWeight())
+                .append('\u001f').append(command.timelinessWeight()).append('\u001e');
         resolvedRules.stream().sorted(Comparator.comparing(item -> item.draft().ruleCode()))
                 .forEach(rule -> {
                     RuleDraft draft = rule.draft();
                     canonical.append(draft.ruleCode()).append('\u001f').append(draft.ruleName()).append('\u001f')
-                            .append(draft.buyerCode()).append('\u001f').append(draft.platformSkuCode()).append('\u001f')
-                            .append(draft.fulfillmentType()).append('\u001f').append(draft.rulePriority())
-                            .append('\u001e');
+                            .append(draft.routeMode()).append('\u001f')
+                            .append(draft.primarySupplierCode()).append('\u001f')
+                            .append(draft.distributorMode()).append('\u001f')
+                            .append(String.join(",", draft.distributorCodes())).append('\u001f')
+                            .append(draft.projectMode()).append('\u001f')
+                            .append(String.join(",", draft.projectCodes())).append('\u001f')
+                            .append(draft.productTypeMode()).append('\u001f')
+                            .append(String.join(",", draft.productTypeCodes())).append('\u001f')
+                            .append(draft.supplierMode()).append('\u001f')
+                            .append(String.join(",", draft.supplierCodes())).append('\u001f')
+                            .append(draft.maxSupplyPriceCents()).append('\u001f')
+                            .append(draft.strategy1()).append('\u001f').append(draft.strategy2())
+                            .append('\u001f').append(draft.strategy3()).append('\u001f')
+                            .append(draft.rulePriority()).append('\u001f').append(draft.status())
+                            .append('\u001f').append(draft.protectedRule()).append('\u001e');
                     rule.candidates().stream()
                             .sorted(Comparator.comparing(item -> item.supplier().getSupplierCode()))
                             .forEach(candidate -> appendCandidate(canonical, candidate));
@@ -329,17 +594,32 @@ public class RoutingPolicyPublicationService {
 
     public record CreateDraftCommand(String policyCode, String policyName, String versionName,
                                      LocalDateTime validFrom, LocalDateTime validTo,
-                                     List<RuleDraft> rules, Long operatorId) {
+                                     List<RuleDraft> rules, Long operatorId,
+                                     int stabilityWeight, int priceWeight, int timelinessWeight) {
         public CreateDraftCommand {
             rules = rules == null ? null : List.copyOf(rules);
         }
     }
 
-    public record RuleDraft(String ruleCode, String ruleName, String buyerCode,
-                            String platformSkuCode, String fulfillmentType, int rulePriority,
+    /**
+     * PRD 四级范围规则草稿。supplierCodes 为 AUTO+SPECIFIED 的有序候选；
+     * FIXED 时 primarySupplierCode 必填且 supplierCodes 为空。
+     */
+    public record RuleDraft(String ruleCode, String ruleName, String routeMode, String primarySupplierCode,
+                            String distributorMode, List<String> distributorCodes,
+                            String projectMode, List<String> projectCodes,
+                            String productTypeMode, List<String> productTypeCodes,
+                            String supplierMode, List<String> supplierCodes,
+                            Long maxSupplyPriceCents,
+                            String strategy1, String strategy2, String strategy3,
+                            int rulePriority, short status, boolean protectedRule,
                             List<CandidateDraft> candidates) {
         public RuleDraft {
-            candidates = candidates == null ? null : List.copyOf(candidates);
+            distributorCodes = distributorCodes == null ? List.of() : List.copyOf(distributorCodes);
+            projectCodes = projectCodes == null ? List.of() : List.copyOf(projectCodes);
+            productTypeCodes = productTypeCodes == null ? List.of() : List.copyOf(productTypeCodes);
+            supplierCodes = supplierCodes == null ? List.of() : List.copyOf(supplierCodes);
+            candidates = candidates == null ? List.of() : List.copyOf(candidates);
         }
     }
 
@@ -362,12 +642,31 @@ public class RoutingPolicyPublicationService {
                                 long policyAggregateVersion, String configDigestHex) {
     }
 
+    /** 后继发布结果：新生效版本身份。 */
+    public record SuccessorPublishResult(String policyCode, Long policyVersionId, int versionNo) {
+    }
+
+    /**
+     * 后继发布命令：rules 为完整规则集；closeVersionId 为空表示无生效版本可关（引导首发）；
+     * 三权为全局综合权重，随本次保存同步到策略身份行。
+     */
+    public record SuccessorPublishCommand(String policyCode, String policyName,
+                                          Long operatorId, String traceId,
+                                          List<RuleDraft> rules,
+                                          Long closeVersionId, long closeExpectedVersion,
+                                          LocalDateTime effectiveAt,
+                                          int stabilityWeight, int priceWeight, int timelinessWeight) {
+        public SuccessorPublishCommand {
+            rules = rules == null ? null : List.copyOf(rules);
+        }
+    }
+
     public record PolicyPublishedPayload(String policyCode, Long policyVersionId,
                                          int versionNo, String configDigestHex) {
     }
 
-    private record ResolvedRule(RuleDraft draft, BuyerDO buyer, PlatformSkuDO sku,
-                                List<ResolvedCandidate> candidates) {
+    private record ResolvedRule(RuleDraft draft, SupplierDO primarySupplier,
+                                List<ResolvedCandidate> candidates, List<SupplierDO> scopeSuppliers) {
     }
 
     private record ResolvedCandidate(CandidateDraft draft, SupplierDO supplier) {
