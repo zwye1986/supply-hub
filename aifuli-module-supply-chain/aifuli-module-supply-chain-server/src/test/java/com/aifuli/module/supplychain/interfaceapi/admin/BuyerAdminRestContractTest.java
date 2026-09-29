@@ -35,6 +35,16 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class BuyerAdminRestContractTest {
 
+    /** 项目选品搜索框与类目下拉均由服务端分页接口接收。 */
+    @Test
+    void buyerProductPageAcceptsKeywordAndCategoryCode() {
+        Method method = Arrays.stream(BuyerAdminController.class.getDeclaredMethods())
+                .filter(candidate -> candidate.getName().equals("pageProducts"))
+                .findFirst().orElseThrow();
+        assertThat(Arrays.stream(method.getParameters()).map(parameter -> parameter.getName()).toList())
+                .contains("keyword", "categoryCode");
+    }
+
     private static final Set<String> FORBIDDEN_FRAGMENTS =
             Set.of("create", "page", "get", "status", "batch", "projects");
     private static final List<String> ALLOWED_PREFIXES = List.of(

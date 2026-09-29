@@ -241,6 +241,7 @@ public class BuyerAdminController {
                     + "重复键或逗号拼接表示命中任一类型。省略或空白不筛选，无命中返回空页。"
                     + "传 projectCode 时排除该项目已加入且未移除的分销商品，过滤在分页前生效；"
                     + "项目不存在或不属于当前分销商时返回 PROJECT_NOT_FOUND。"
+                    + "keyword 匹配 SPU/SKU 名称或编码；categoryCode 匹配 SPU 主类目及下级类目。"
                     + "金额单位 CNY 分；pricingRule 为继承L1/等于L1/自定义公式。")
     public CommonResult<PageResult<BuyerProductListItem>> pageProducts(
             @PathVariable String buyerCode,
@@ -249,9 +250,14 @@ public class BuyerAdminController {
             @RequestParam(required = false) List<String> productType,
             @Parameter(description = "可选项目编码；仅排除该项目未移除的项目商品")
             @RequestParam(required = false) String projectCode,
+            @Parameter(description = "商品名称或编号；匹配 SPU/SKU 名称及编码，空白不筛选")
+            @RequestParam(required = false) String keyword,
+            @Parameter(description = "商品主类目编码；匹配该类目及其全部下级类目，空白不筛选")
+            @RequestParam(required = false) String categoryCode,
             @Parameter(description = "页码，从 1 开始") @RequestParam(required = false) Integer pageNo,
             @Parameter(description = "每页条数") @RequestParam(required = false) Integer pageSize) {
-        return success(productQueryService.page(buyerCode, productType, projectCode, pageNo, pageSize));
+        return success(productQueryService.page(buyerCode, productType, projectCode,
+                keyword, categoryCode, pageNo, pageSize));
     }
 
     @PostMapping("/{buyerCode}/products")

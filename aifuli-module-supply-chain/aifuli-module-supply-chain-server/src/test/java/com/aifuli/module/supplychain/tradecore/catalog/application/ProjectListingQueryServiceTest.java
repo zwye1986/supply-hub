@@ -9,10 +9,16 @@ import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerProjectMappe
 import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.ProjectListingMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.application.ProjectListingPriceSource.PriceBasis;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuDO;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSpuDO;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProductCategoryDO;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProductTypeDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProjectListingVersionDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProjectSkuPricingDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProjectSkuPricingVersionDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSpuMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProductCategoryMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProductTypeMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProjectListingVersionMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProjectSkuPricingMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProjectSkuPricingVersionMapper;
@@ -53,10 +59,14 @@ class ProjectListingQueryServiceTest {
         ProjectSkuPricingVersionMapper projectPricingVersionMapper = mock(ProjectSkuPricingVersionMapper.class);
         BuyerProductMapper productMapper = mock(BuyerProductMapper.class);
         PlatformSkuMapper skuMapper = mock(PlatformSkuMapper.class);
+        PlatformSpuMapper spuMapper = mock(PlatformSpuMapper.class);
+        ProductTypeMapper productTypeMapper = mock(ProductTypeMapper.class);
+        ProductCategoryMapper categoryMapper = mock(ProductCategoryMapper.class);
         ProjectListingPriceSource priceSource = mock(ProjectListingPriceSource.class);
         ProjectListingQueryService service = new ProjectListingQueryService(projectMapper, listingMapper,
                 versionMapper, projectPricingMapper, projectPricingVersionMapper,
-                productMapper, skuMapper, priceSource, new ObjectMapper());
+                productMapper, skuMapper, spuMapper, productTypeMapper, categoryMapper,
+                priceSource, new ObjectMapper());
         when(projectMapper.selectByProjectCode("PRJ_1")).thenReturn(BuyerProjectDO.builder().id(1L).build());
         ProjectListingDO listing = ProjectListingDO.builder().id(2L).listingCode("PLT_1")
                 .buyerProductId(3L).currentVersionId(4L).build();
@@ -65,7 +75,14 @@ class ProjectListingQueryServiceTest {
         when(projectPricingMapper.selectList(any())).thenReturn(List.of());
         when(productMapper.selectById(3L)).thenReturn(BuyerProductDO.builder().id(3L).platformSkuId(5L).build());
         when(skuMapper.selectById(5L)).thenReturn(PlatformSkuDO.builder().id(5L).skuCode("SKU_1")
-                .suggestedSalePrice(7_800L).build());
+                .spuId(6L).marketPrice(49_000L).suggestedSalePrice(7_800L).build());
+        when(spuMapper.selectBatchIds(any())).thenReturn(List.of(PlatformSpuDO.builder().id(6L)
+                .spuCode("SPU_1").spuName("会员卡").productType("equity_product")
+                .productClassification("VIRTUAL_CARD").primaryCategoryId(7L).build()));
+        when(productTypeMapper.selectList(any())).thenReturn(List.of(ProductTypeDO.builder()
+                .typeCode("equity_product").typeName("虚拟权益商品").build()));
+        when(categoryMapper.selectBatchIds(any())).thenReturn(List.of(ProductCategoryDO.builder()
+                .id(7L).categoryName("会员权益").build()));
         when(priceSource.resolve(any())).thenReturn(new PriceBasis(9_000L, 9_800L, PriceSource.L2, true));
         when(priceSource.legacyPlatformPrice(5L)).thenReturn(null);
         when(versionMapper.selectById(4L)).thenReturn(ProjectListingVersionDO.builder()
@@ -76,10 +93,47 @@ class ProjectListingQueryServiceTest {
 
         assertThat(row.suggestPriceCents()).isNull();
         assertThat(row.suggestedSalePriceCents()).isEqualTo(7_800L);
+        assertThat(new ObjectMapper().valueToTree(row).path("marketPriceCents").longValue()).isEqualTo(49_000L);
+        assertThat(row.spuCode()).isEqualTo("SPU_1");
+        assertThat(row.spuName()).isEqualTo("会员卡");
+        assertThat(row.productType()).isEqualTo("equity_product");
+        assertThat(row.productTypeName()).isEqualTo("虚拟权益商品");
+        assertThat(row.productClassification()).isEqualTo("VIRTUAL_CARD");
+        assertThat(row.categoryName()).isEqualTo("会员权益");
         assertThat(row.platformBasePriceCents()).isEqualTo(9_000L);
         assertThat(row.distPriceCents()).isEqualTo(9_800L);
         assertThat(row.finalPriceCents()).isEqualTo(8_800L);
         assertThat(row.projectPricingConfig()).isNull();
+    }
+
+    /** 市场价 0 分必须保留；缺失类型及主类目时展示字段为空，不影响 SKU 行返回。 */
+    @Test
+    void zeroMarketPriceAndMissingDisplayMetadataRemainReadable() {
+        BuyerProjectMapper projectMapper = mock(BuyerProjectMapper.class);
+        ProjectListingMapper listingMapper = mock(ProjectListingMapper.class);
+        BuyerProductMapper productMapper = mock(BuyerProductMapper.class);
+        PlatformSkuMapper skuMapper = mock(PlatformSkuMapper.class);
+        PlatformSpuMapper spuMapper = mock(PlatformSpuMapper.class);
+        ProjectListingQueryService service = new ProjectListingQueryService(projectMapper, listingMapper,
+                mock(ProjectListingVersionMapper.class), mock(ProjectSkuPricingMapper.class),
+                mock(ProjectSkuPricingVersionMapper.class), productMapper, skuMapper, spuMapper,
+                mock(ProductTypeMapper.class), mock(ProductCategoryMapper.class),
+                mock(ProjectListingPriceSource.class), new ObjectMapper());
+        when(projectMapper.selectByProjectCode("PRJ_1")).thenReturn(BuyerProjectDO.builder().id(1L).build());
+        when(listingMapper.selectPage(any(PageParam.class), any())).thenReturn(
+                new com.aifuli.framework.common.pojo.PageResult<>(List.of(
+                        ProjectListingDO.builder().id(2L).buyerProductId(3L).build()), 1L));
+        when(productMapper.selectById(3L)).thenReturn(BuyerProductDO.builder().platformSkuId(5L).build());
+        when(skuMapper.selectById(5L)).thenReturn(PlatformSkuDO.builder().spuId(6L).marketPrice(0L).build());
+        when(spuMapper.selectBatchIds(any())).thenReturn(List.of(PlatformSpuDO.builder()
+                .id(6L).spuCode("SPU_1").spuName("会员卡").build()));
+
+        var row = service.page("PRJ_1", 1, 20).getList().getFirst();
+
+        assertThat(row.marketPriceCents()).isZero();
+        assertThat(row.spuName()).isEqualTo("会员卡");
+        assertThat(row.productTypeName()).isNull();
+        assertThat(row.categoryName()).isNull();
     }
 
     /** 当前综合定价规则与旧冻结价分开返回；全继承及各组覆盖均按保存版本原值回显。 */
@@ -94,6 +148,7 @@ class ProjectListingQueryServiceTest {
         ProjectListingQueryService service = new ProjectListingQueryService(projectMapper, listingMapper,
                 listingVersionMapper, projectPricingMapper, projectPricingVersionMapper,
                 mock(BuyerProductMapper.class), mock(PlatformSkuMapper.class),
+                mock(PlatformSpuMapper.class), mock(ProductTypeMapper.class), mock(ProductCategoryMapper.class),
                 mock(ProjectListingPriceSource.class), objectMapper);
         when(projectMapper.selectByProjectCode("PRJ_1")).thenReturn(BuyerProjectDO.builder().id(1L).build());
         ProjectListingDO configured = ProjectListingDO.builder().id(2L).listingCode("PLT_1").build();
@@ -139,6 +194,7 @@ class ProjectListingQueryServiceTest {
         ProjectListingQueryService service = new ProjectListingQueryService(projectMapper, listingMapper,
                 listingVersionMapper, projectPricingMapper, projectPricingVersionMapper,
                 mock(BuyerProductMapper.class), mock(PlatformSkuMapper.class),
+                mock(PlatformSpuMapper.class), mock(ProductTypeMapper.class), mock(ProductCategoryMapper.class),
                 mock(ProjectListingPriceSource.class), objectMapper);
         when(projectMapper.selectByProjectCode("PRJ_1")).thenReturn(BuyerProjectDO.builder().id(1L).build());
         when(listingMapper.selectPage(any(PageParam.class), any())).thenReturn(
@@ -173,6 +229,7 @@ class ProjectListingQueryServiceTest {
         ProjectListingQueryService service = new ProjectListingQueryService(projectMapper, listingMapper,
                 mock(ProjectListingVersionMapper.class), projectPricingMapper, projectPricingVersionMapper,
                 mock(BuyerProductMapper.class), mock(PlatformSkuMapper.class),
+                mock(PlatformSpuMapper.class), mock(ProductTypeMapper.class), mock(ProductCategoryMapper.class),
                 mock(ProjectListingPriceSource.class), new ObjectMapper());
         when(projectMapper.selectByProjectCode("PRJ_1")).thenReturn(BuyerProjectDO.builder().id(1L).build());
         when(listingMapper.selectPage(any(PageParam.class), any())).thenReturn(

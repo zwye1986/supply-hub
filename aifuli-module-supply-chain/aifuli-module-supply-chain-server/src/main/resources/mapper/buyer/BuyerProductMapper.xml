@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerProductMapper">
+    <!-- 多表筛选先于分页和 count；设计见 docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#63-分销商品。 -->
+    <sql id="projectSelectionProducts">
+        SELECT product.*
+        FROM sc_buyer_product product
+        JOIN sc_platform_sku sku ON sku.id = product.platform_sku_id
+        JOIN sc_platform_spu spu ON spu.id = sku.spu_id
+        WHERE product.buyer_id = #{buyerId}
+          AND product.status = #{activeStatus}
+        <if test="productTypes != null and productTypes.size() > 0">
+          AND spu.product_type IN
+          <foreach collection="productTypes" item="productType" open="(" separator="," close=")">
+              #{productType}
+          </foreach>
+        </if>
+        <if test="keyword != null">
+          AND (spu.spu_name LIKE CONCAT('%', #{keyword}, '%') ESCAPE '!'
+               OR spu.spu_code LIKE CONCAT('%', #{keyword}, '%') ESCAPE '!'
+               OR sku.sku_name LIKE CONCAT('%', #{keyword}, '%') ESCAPE '!'
+               OR sku.sku_code LIKE CONCAT('%', #{keyword}, '%') ESCAPE '!')
+        </if>
+        <if test="categoryIds != null">
+          AND spu.primary_category_id IN
+          <foreach collection="categoryIds" item="categoryId" open="(" separator="," close=")">
+              #{categoryId}
+          </foreach>
+        </if>
+        <if test="projectId != null">
+          AND NOT EXISTS (
+              SELECT 1 FROM sc_project_listing listing
+              WHERE listing.project_id = #{projectId}
+                AND listing.buyer_product_id = product.id
+                AND listing.status = #{availableStatus}
+          )
+        </if>
+        ORDER BY product.updated_at DESC
+    </sql>
+    <select id="selectPageForProjectSelection" resultType="com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerProductDO">
+        <include refid="projectSelectionProducts" />
+    </select>
+    <select id="selectAllForProjectSelection" resultType="com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerProductDO">
+        <include refid="projectSelectionProducts" />
+    </select>
+</mapper>

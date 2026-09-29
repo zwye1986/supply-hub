@@ -100,6 +100,22 @@ public class ProductCategoryCoverageService {
         }
 
         /**
+         * 选品筛选使用 SPU 主类目：返回指定类目及全部后代的内部 ID，含归档类目以保留历史 SPU 归属。
+         * 未知类目返回空集合；祖先遍历复用 {@link #covers(String, String)} 的环检测。
+         * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#63-分销商品}。
+         */
+        public List<Long> descendantIdsOf(String categoryCode) {
+            if (!byCode.containsKey(categoryCode)) {
+                return List.of();
+            }
+            return byId.values().stream()
+                    .filter(category -> covers(categoryCode, category.getCategoryCode()))
+                    .map(ProductCategoryDO::getId)
+                    .sorted()
+                    .toList();
+        }
+
+        /**
          * 命中最具体优先的比较依据：类目码返回其层级（L3 &gt; L2 &gt; L1）；
          * 封闭枚举名或未知码返回 0（它们只可能全等命中，彼此不存在祖孙关系）。
          */

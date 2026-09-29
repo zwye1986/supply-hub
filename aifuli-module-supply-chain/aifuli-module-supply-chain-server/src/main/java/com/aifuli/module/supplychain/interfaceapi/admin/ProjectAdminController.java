@@ -96,6 +96,13 @@ public class ProjectAdminController {
                   "listingCode": "PLT_01M1ZEGA2965H3D93AV7HKNHEN",
                   "platformSkuCode": "SKU_01M1ZEGA2965H3D93AV7HKNHEN",
                   "skuName": "月卡",
+                  "spuCode": "SPU_01M1ZEGA2965H3D93AV7HKNHEN",
+                  "spuName": "会员卡",
+                  "productType": "EQUITY_PRODUCT",
+                  "productTypeName": "虚拟权益商品",
+                  "productClassification": "VIRTUAL_CARD",
+                  "categoryName": "会员权益",
+                  "marketPriceCents": 49000,
                   "suggestPriceCents": 10000,
                   "suggestedSalePriceCents": 12000,
                   "platformBasePriceCents": 9000,
@@ -222,7 +229,8 @@ public class ProjectAdminController {
     @GetMapping("/{projectCode}/products")
     @PreAuthorize(PROJECT_QUERY_EXPRESSION)
     @Operation(summary = "分页查询项目商品",
-            description = "只返回未移除行。projectPricingConfig 为当前项目综合定价版本保存的五组覆盖配置；"
+            description = "只返回未移除行。SPU、类型与分类取平台商品主数据，marketPriceCents 取 SKU 市场划线价；"
+                    + "projectPricingConfig 为当前项目综合定价版本保存的五组覆盖配置；"
                     + "finalPriceCents 为旧冻结版本单价，distPriceCents 为当前有效 L2。金额单位 CNY 分。",
             responses = @ApiResponse(responseCode = "200", description = "项目商品分页响应",
                     content = @Content(mediaType = "application/json",
@@ -231,8 +239,10 @@ public class ProjectAdminController {
     public CommonResult<PageResult<ProjectListingListItem>> pageProducts(
             @Parameter(description = "采购项目全局永久编码") @PathVariable String projectCode,
             @Parameter(description = "页码，从 1 开始") @RequestParam(required = false) Integer pageNo,
-            @Parameter(description = "每页条数") @RequestParam(required = false) Integer pageSize) {
-        return success(listingQueryService.page(projectCode, pageNo, pageSize));
+            @Parameter(description = "每页条数") @RequestParam(required = false) Integer pageSize,
+            @Parameter(description = "商品类型编码，可重复传参或逗号拼接；省略时不筛选")
+            @RequestParam(required = false) List<String> productType) {
+        return success(listingQueryService.page(projectCode, productType, pageNo, pageSize));
     }
 
     /**
