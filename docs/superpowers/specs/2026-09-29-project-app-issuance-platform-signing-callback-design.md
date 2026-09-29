@@ -63,7 +63,7 @@ lowercaseHex(SHA-256(bodyBytes))
 
 项目回调配置采用不可变版本 sc_project_callback_config_version，sc_buyer_project 仅保存当前版本 ID。PUT /supply-chain/projects/{projectCode}/callback 创建新版本，包含 HTTPS URL、启用标记、操作人和时间。启用要求项目应用可用、平台签名 CURRENT 存在。保存时校验出口白名单；发送前再次核对主机与**实际连接目的 IP**，由受控 HTTP 客户端或出口代理固定已校验的解析结果，禁止私网/回环地址及跨白名单重定向，避免检查后再次解析造成绕过。地址变更或停用不覆盖旧版本。
 
-标准商品受理后、每次对项目可见的订单汇总变化，在同一订单事务内生成 ORDER_SUMMARY_CHANGED 信封和 Outbox；履约终态额外生成 FULFILLMENT_RESULT。Outbox event_id 与信封 eventId 一致，event_type 使用信封稳定类型；按订单聚合版本有序。旧 BUYER_ORDER_SUMMARY_CHANGED 普通 Map 仅作迁移兼容，不得直接反序列化为新信封。BuyerEventEnvelope 增 projectCode/appId；启用回调的项目两者必填。事件创建时将当前回调配置版本写入现有 target_config_version_id，重试始终使用冻结 URL。项目后续改址不改变在途事件的目标；若运营要停止这些事件，应显式转人工处理并留审计。
+标准商品受理后、每次对项目可见的订单汇总变化，在同一订单事务内生成 ORDER_SUMMARY_CHANGED 信封和 Outbox；履约终态额外生成 FULFILLMENT_RESULT。Outbox event_id 与信封 eventId 一致，event_type 使用信封稳定类型；按订单聚合版本有序。旧 BUYER_ORDER_SUMMARY_CHANGED 普通 Map 仅作迁移兼容，不得直接反序列化为新信封。现有聚合唯一键为 `(aggregate_type, aggregate_id, aggregate_version, event_type)`；旧 Map 的 `BUYER_ORDER_SUMMARY_CHANGED` 与新信封的 `ORDER_SUMMARY_CHANGED` 是两个不同的 event_type，因此同一订单、同一 detailVersion 可并存，实施时不得为“统一名称”把新类型改回旧类型。BuyerEventEnvelope 增 projectCode/appId；启用回调的项目两者必填。事件创建时将当前回调配置版本写入数据库已有的 `sc_outbox_event.target_config_version_id`，重试始终使用冻结 URL。项目后续改址不改变在途事件的目标；若运营要停止这些事件，应显式转人工处理并留审计。
 
 ORDER_SUMMARY_CHANGED 的 data 使用现有 OrderSummaryChangedEventData：orderNo、buyerOrderNo、orderType、公共主状态、售后状态、businessStage、detailVersion、供应商展示快照和 updatedAt 均取同一事务中刚更新的订单事实。FULFILLMENT_RESULT 的 data 使用现有 FulfillmentResultEventData：请求号、请求与已交付数量、标准履约状态、完成时间取履约请求和订单事实；assetAvailable 仅表示是否存在可授权查询的资产，assetReference 只给查询引用，正文绝不包含卡号、卡密或成本。数据库 Asia/Shanghai 的 LocalDateTime 转为对外 OffsetDateTime 时必须带明确时区。旧 CARD 订单的 projectId/projectCodeSnapshot 可为空，这类订单只保留原本地事件，不产生项目 HTTP 目标，不能凭采购商猜测项目。
 
@@ -126,7 +126,7 @@ CREATE TABLE sc_platform_signing_key (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='平台事件签名公钥版本';
 ~~~
 
-迁移建表后插入 sc_platform_signing_control(id=1)。Outbox 既有 target_config_version_id 保存冻结的回调版本；事件正文不保存回调 URL 或私钥。
+迁移建表后插入 sc_platform_signing_control(id=1)。`sc_outbox_event.target_config_version_id` 已由 `009-buyer-integration.sql` 增加（`008-timer-inbox-outbox.sql` 的初始建表语句尚无此列），本次迁移不得重复 `ADD COLUMN`；其既有 COMMENT 为“创建事件时固化的目标配置版本内部主键”，在项目 HTTP 回调事件中逻辑引用 `sc_project_callback_config_version.id`。当前 `OutboxEventDO` 尚无对应 Java 字段，实施时须新增 `targetConfigVersionId` 并扩展 `appendBuyerEvent` 的持久化映射，确保写入及读取冻结版本 ID。事件正文不保存回调 URL 或私钥。
 
 ## 7. 管理端配套和安全边界
 
@@ -137,7 +137,7 @@ supplychainhubweb 项目详情增加应用凭证、回调地址和通知记录�
 ## 8. 测试与联调门禁
 
 - *Test：发码与轮换状态机、按 operationCode 的能力校验、公私钥匹配、多次连续轮换、时间戳篡改、公钥保留、回调目标校验。
-- *IntegrationTest：真实 MySQL/Liquibase 下并发发码与切换、CURRENT/GRACE 并行验签、受理及履约终态事件生产、冻结 URL 重试、HTTP 成功/失败/死信、未配置项目日志分支。
+- *IntegrationTest：真实 MySQL/Liquibase 下并发发码与切换、CURRENT/GRACE 并行验签、受理及履约终态事件生产、`target_config_version_id` 持久化与冻结 URL 重试、相同订单/聚合版本的旧 Map 与新信封共存、HTTP 成功/失败/死信、未配置项目日志分支。
 - *ContractTest：BuyerEventEnvelope 新字段与旧消费者兼容、事件类型和字段、公开公钥接口、逐字节签名验签；旧 Map 事件不被误解析。
 - *ArchitectureTest：管理接口 @PreAuthorize、认证包不反向依赖 tradecore、供应链仅访问 sc_*、公开端点在服务内实际匿名可达。
 - 将联调前置条件、签名样例、轮换与失败排障写入 docs/集成测试.md；完成后端和管理端配套后再做真实标准订单闭环联调。

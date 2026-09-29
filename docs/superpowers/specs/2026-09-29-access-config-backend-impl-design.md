@@ -130,7 +130,7 @@ sign(envelope, bodyBytes, selectedCurrentKey):
 
 ### 5.1 从订单事务生产信封
 
-新增 OutboxEventRepository.appendBuyerEvent：先生成 eventId，组装 BuyerEventEnvelope，再将同一 eventId 与版本化 payload 原子写入 Outbox。新信封 payloadVersion=2，Outbox eventType 与信封 eventType 均为 ORDER_SUMMARY_CHANGED 或 FULFILLMENT_RESULT，targetType=LOCAL，targetName=buyer-event-rpc。订单受理后与 SupplierOrderLifecycle 每次项目可见的汇总变化写 ORDER_SUMMARY_CHANGED；履约终态另写 FULFILLMENT_RESULT。聚合版本取订单 detailVersion，不能固定写 1；同版本的两个不同事件类型由现有唯一键允许。重复状态机调用不得重复产生同聚合版本事件。
+新增 OutboxEventRepository.appendBuyerEvent：先生成 eventId，组装 BuyerEventEnvelope，再将同一 eventId 与版本化 payload 原子写入 Outbox。新信封 payloadVersion=2，Outbox eventType 与信封 eventType 均为 ORDER_SUMMARY_CHANGED 或 FULFILLMENT_RESULT，targetType=LOCAL，targetName=buyer-event-rpc。订单受理后与 SupplierOrderLifecycle 每次项目可见的汇总变化写 ORDER_SUMMARY_CHANGED；履约终态另写 FULFILLMENT_RESULT。新旧采购商事件沿用 `aggregateType=BUYER_ORDER`、`aggregateId=orderNo`，聚合版本取订单 detailVersion，不能固定写 1；现有唯一键 `(aggregate_type, aggregate_id, aggregate_version, event_type)` 允许同版本不同事件类型。旧 Map 类型 `BUYER_ORDER_SUMMARY_CHANGED` 与新信封类型 `ORDER_SUMMARY_CHANGED` 必须保持区分，即使聚合版本相同也不撞唯一键；重复状态机调用不得重复产生同聚合版本、同类型事件。`target_config_version_id` 已由 `009-buyer-integration.sql` 增加，实施时新增 `OutboxEventDO.targetConfigVersionId` 及仓储写入/读取映射，不重复建列。
 
 ~~~text
 onOrderStateChanged(order, project, now):
@@ -207,7 +207,7 @@ SupplierCallbackController.handle(connectorNo, callbackPath, raw):
     return callbackConvergence.accept(bOrder, frozenVersion, fact)
 ~~~
 
-Controller 仅依赖应用服务和协议入口 Facade，不直连 DAL。resolveForExistingOrder 可读取 PUBLISHED 或当前时间早于 callback_accept_until 的 RETIRED 版本，且只用于已创建的 BOrder；新下单仍要求当前发布版本。ConnectorPublicationService 退役前检查不存在非终态引用，并按供应商合同的 callback_retention_seconds 计算所有既有订单的验收截止；该值未知时拒绝退役。QNM 使用冻结 CredentialSlot 的秘密引用和 QnmSignUtils。标准协议从冻结 adapter_config_json 加载 inboundVerify；PublishedConnectorConfigurationResolver 需返回验证用的受控配置视图，当前返回值没有 adapterConfigJson，不能按现有 record 直接取该节点。标准协议严格校验 keyVersion、messageType、connectorNo、callbackPath、eventId、时间戳与 body SHA-256，规范串见供应商概要设计 §3.2。
+Controller 仅依赖应用服务和协议入口 Facade，不直连 DAL。`findBySupplierAndBillno` 只查已持久化的 `(supplier_id, billno)`；建单时 `sc_b_order.billno NOT NULL` 且由 `FulfillmentAcceptanceLifecycle` 生成，出站请求必须直接使用该值。实施时移除 `FulfillmentOperationExecuteHandler` 的空 billno 改发 BOrderNo 兜底，发现缺失则失败并告警；不增加静默 BOrderNo 回查。历史/导入数据若破坏约束，应审计修复其单号关联。resolveForExistingOrder 可读取 PUBLISHED 或当前时间早于 callback_accept_until 的 RETIRED 版本，且只用于已创建的 BOrder；新下单仍要求当前发布版本。ConnectorPublicationService 退役前检查不存在非终态引用，并按供应商合同的 callback_retention_seconds 计算所有既有订单的验收截止；该值未知时拒绝退役。QNM 使用冻结 CredentialSlot 的秘密引用和 QnmSignUtils。标准协议从冻结 adapter_config_json 加载 inboundVerify；PublishedConnectorConfigurationResolver 需返回验证用的受控配置视图，当前返回值没有 adapterConfigJson，不能按现有 record 直接取该节点。标准协议严格校验 keyVersion、messageType、connectorNo、callbackPath、eventId、时间戳与 body SHA-256，规范串见供应商概要设计 §3.2。
 
 FulfillmentOperationExecuteHandler 生成 notifyurl 时增加固定前缀与 connectorNo；上线前清点已发给供应商的旧 notifyurl。仍有在途订单的旧路径需要受限兼容路由，并使用同一冻结版本解析与验签流程；无 notifyurl 的历史订单继续查单恢复。契约测试覆盖新旧路径，兼容路由到验收截止后再下线。
 
@@ -254,7 +254,8 @@ createRemoteObserved(supplierCode, skuCode, queryConnectorNo,
     connector = require connector by supplier + queryConnectorNo
     published = resolver.resolve(connector.currentVersionId)
     require published implements QUERY_INVENTORY and query port registered
-    require 60 <= refreshSec, 60 <= ttlSec, bounded upper limits
+    require 60 <= refreshSec <= maxBackoffSeconds (default 3600)
+    require 60 <= ttlSec, bounded ttl upper limit
     insert InventorySource(type=REMOTE_OBSERVED, queryConnectorId=connector.id,
                            refreshIntervalSeconds=refreshSec, snapshotTtlSeconds=ttlSec,
                            nextRefreshAt=now, status=DRAFT)
@@ -282,10 +283,10 @@ InventorySnapshotRefreshScanner.tick():
         refreshOne(claim)                         // 数据库事务外 HTTP 查询
 
 refreshOne(claim):
-    config = resolver.resolveCurrent(claim.source.queryConnectorId)
-    queryPort = registry.require(config.adapterType)
     started = monotonicClock
     try:
+        config = resolver.resolveCurrent(claim.source.queryConnectorId)
+        queryPort = registry.require(config.adapterType)
         result = queryPort.queryInventory(config, claim.source.externalSourceCode)
         receivedAt = supplyChainDatabaseClock.now()
         normalized = normalize(result)            // qty 0 -> UNAVAILABLE，矛盾值拒绝
@@ -301,11 +302,20 @@ refreshOne(claim):
                              validUntil=receivedAt+source.snapshotTtlSeconds,
                              status=normalized.status, quantity=normalized.quantity,
                              rawDigest=digest)
-    advance source.nextRefreshAt and release lease
+    if normalized.status == ERROR:
+        source.consecutiveErrorCount = min(30, source.consecutiveErrorCount + 1)
+        delaySeconds = min(maxBackoffSeconds,
+                           saturatingMultiply(source.refreshIntervalSeconds,
+                                              2 ^ source.consecutiveErrorCount))
+    else:
+        source.consecutiveErrorCount = 0
+        delaySeconds = source.refreshIntervalSeconds
+    source.nextRefreshAt = receivedAt + delaySeconds
+    release lease
     log query request/response digest and elapsedMs without credentials
 ~~~
 
-任务扫描与工作池可参照 TimerEngineLifecycle，但必须有持久化租约，不能仅实现 SmartLifecycle 就声称多实例安全。认领 SQL 属于 Lambda 难以表达的锁/批次场景，可用 XML；调用超时和租约/续租配置要能覆盖最慢合法查询。失联后由租约到期恢复，旧执行者不得写迟到快照。调度仍受连接器 rateLimit/concurrencyLimit 约束。ERROR 快照可在 TTL 内显示 ERROR，但路由语义是 UNKNOWN，不能覆盖更晚的成功快照。
+任务扫描与工作池可参照 TimerEngineLifecycle，但必须有持久化租约，不能仅实现 SmartLifecycle 就声称多实例安全。认领 SQL 属于 Lambda 难以表达的锁/批次场景，可用 XML；调用超时和租约/续租配置要能覆盖最慢合法查询。失联后由租约到期恢复，旧执行者不得写迟到快照。调度仍受连接器 rateLimit/concurrencyLimit 约束。`consecutive_error_count` 与快照、`next_refresh_at` 在同一持锁短事务更新；成功时归零，失败（包括查询、解析、响应归一化错误）时递增，最大计数 30，首次失败等待 2 倍基础周期，之后指数增长至配置上限。服务配置 `aifuli.supply-chain.inventory.refresh.max-backoff-seconds` 默认 3600，且不得小于 60；来源创建、修改和进程启动时校验所有启用来源满足 `60 <= refresh_interval_seconds <= max_backoff_seconds`，保证失败调度不会比正常周期更频繁；乘法须饱和计算，避免溢出。租约失效或 fencing_token 不匹配时不写快照、不增加失败次数。ERROR 快照可在 TTL 内显示 ERROR，但路由语义是 UNKNOWN，不能覆盖更晚的成功快照。
 
 ## 8. F 路由读取快照
 
