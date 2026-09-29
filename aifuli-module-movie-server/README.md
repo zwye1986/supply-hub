@@ -8,7 +8,7 @@
 
 ## 本地配置
 
-默认启用 `local`，关闭 Nacos 配置与注册。先准备独立 MySQL 库 `aifuli_movie`、MongoDB 库 `aifuli_movie` 和 Redis，再配置以下环境变量：
+默认启用 `local`，从 Nacos 命名空间 `aifuli-supplyhub-local`、分组 `DEFAULT_GROUP` 加载 `movie-server-local.yaml` 并注册服务。业务配置统一维护在 Nacos，仓库模板为 `script/deploy/movie/movie-server-local.yaml`；先将模板中的 `movie`、`xxl` 节点合并到对应配置，保留已有环境连接和账号启停状态，再启动服务。`application.yaml` 只保留基础配置，以下环境变量用于基础设施默认值；远端已有同名属性时以最终生效配置为准：
 
 | 环境变量 | 用途与默认值 |
 | --- | --- |
@@ -27,8 +27,10 @@ Liquibase 默认关闭，先按 [数据库初始化说明](../sql/mysql/movie/RE
 
 设置 `SPRING_PROFILES_ACTIVE=dev` 后启用 Nacos，并通过 `MOVIE_NACOS_SERVER_ADDR`、`MOVIE_NACOS_NAMESPACE`、
 `MOVIE_NACOS_GROUP`、`MOVIE_NACOS_USERNAME`、`MOVIE_NACOS_PASSWORD` 指定配置中心与注册中心。
-数据标识为 `movie-server-dev.yaml`；缺少专属配置时使用基础配置中的 `MOVIE_*` 环境变量。
-此骨架尚未提供 test/prod 配置，部署前按环境补齐独立连接与发布配置。
+数据标识为 `movie-server-dev.yaml`，业务节点可复用 `script/deploy/movie/movie-server-test.yaml` 中的 `movie`、`xxl` 配置。
+`test` 环境使用命名空间 `aifuli-supplyhub-test`、分组 `test`、数据标识 `movie-server-test.yaml`，模板位于 `script/deploy/movie/`。尚未提供 prod 配置，部署前按环境补齐独立连接与发布配置。
+
+供应商账号和 XXL-JOB 执行器参数来自 Nacos；`movie.supply.accounts` 就是供应商接入账号列表，用于配置渠道、账号启停、接口地址及凭证环境变量引用。列表按整份替换，新增账号应填写完整元信息。Nacos 导入仍为 optional，缺少远端业务配置时账号列表为空、执行器默认关闭。账号和执行器参数按发布后重启验收，只有统一停售提前量支持下次查询动态生效。五类任务的启停和执行时间全部在 XXL-JOB 调度中心管理，Nacos 不配置同步总开关或分类开关。
 
 ## 数据与后续实现
 
@@ -49,21 +51,21 @@ TODO（[详细设计](../docs/电影子系统与中台履约详细设计.md)第 
 1. 在独立电影 MySQL 库执行既有 Liquibase 六表迁移；MongoDB 必须是支持事务的副本集或分片集群，新环境依次执行 `sql/mysql/movie/mongodb/001-cinema-schedule-indexes.js` 和 `002-query-time-sale-policy.js`。前者预建集合，后者移除旧停售 TTL 并建立动态查询索引。应用只读检查前提，不执行 DDL，也不降级到非事务写入。
 2. MySQL 显式使用 Hikari，默认池容量 12，可用 `MOVIE_MYSQL_POOL_SIZE` 调整，建议不少于 10。持锁连接结束时物理淘汰；连接获取 10 秒、锁语句 5 秒、驱动 socket 10 秒，禁用 autoReconnect。环境 JDBC URL 不得重新开启自动重连。
 3. 设置 `MOVIE_JC_BASE_URL`、`MOVIE_JC_APP_KEY`、`MOVIE_JC_APP_SECRET` 与对应 `MOVIE_JY_*`；URL 包含完整 HTTP/HTTPS 协议。凭证不写入仓库。
-4. 首次部署设置 `MOVIE_JC_ENABLED=true`、`MOVIE_JY_ENABLED=true`，保持 `MOVIE_SUPPLY_SYNC_ENABLED=false`，通过 IDE 调用 `MovieSupplySyncService.synchronizeMasterData()` 完成城市→待映→热映→影院初始化，再调用 `synchronizeSchedules()`。初始化失败或锁忙应先排障重跑，不能靠定时任务的时间间隔保证依赖已完成。
-5. 初始化成功后配置 `MOVIE_XXL_JOB_ADMIN_ADDRESSES` 与 `MOVIE_XXL_JOB_ACCESS_TOKEN`（与调度中心一致），设置 `MOVIE_SUPPLY_SYNC_ENABLED=true`，重启电影服务注册 Handler。执行器启用默认跟随总开关，可通过 `MOVIE_XXL_JOB_ENABLED` 单独关闭；各任务子开关默认 true。调度中心执行器 AppName 填 `movie-server`，与应用配置保持一致。
+4. 首次部署在 Nacos 完整账号列表中启用已配齐的 JC/JY 账号（也可保留模板占位符并设置 `MOVIE_JC_ENABLED=true`、`MOVIE_JY_ENABLED=true`），保持 XXL-JOB 调度中心的五类任务处于停止状态，重启后通过 IDE 调用 `MovieSupplySyncService.synchronizeMasterData()` 完成城市→待映→热映→影院初始化，再调用 `synchronizeSchedules()`。初始化失败或锁忙应先排障重跑，不能靠定时任务的时间间隔保证依赖已完成。
+5. 配置 `MOVIE_XXL_JOB_ADMIN_ADDRESSES` 与 `MOVIE_XXL_JOB_ACCESS_TOKEN`（与调度中心一致），启用执行器 `xxl.job.enabled=true`（或保留模板占位符并设置 `MOVIE_XXL_JOB_ENABLED=true`），重启电影服务即注册全部五个 Handler。执行器 AppName 填 `movie-server`，与应用配置保持一致。注册不自动触发任务，初始化成功后再到调度中心启动周期任务。
 6. 在 XXL-JOB 任务管理中创建以下五个 BEAN 任务，**执行时间由使用者自行配置**，代码不提供默认计划。执行参数留空。每个 Handler 只建立一个任务，建议路由 FIRST、阻塞策略“丢弃后续调度”、失败重试 0、超时 0、调度过期“不补偿”。调度中心 JVM 使用 `Asia/Shanghai` 时区；确认初始化完成后再启动任务。
 
-| 任务类 | JobHandler | 开关环境变量 |
-| --- | --- | --- |
-| `MovieCitySyncJob` | `movieCitySyncJob` | `MOVIE_CITY_SYNC_ENABLED` |
-| `MovieCinemaSyncJob` | `movieCinemaSyncJob` | `MOVIE_CINEMA_SYNC_ENABLED` |
-| `MovieHotFilmSyncJob` | `movieHotFilmSyncJob` | `MOVIE_HOT_FILM_SYNC_ENABLED` |
-| `MovieSoonFilmSyncJob` | `movieSoonFilmSyncJob` | `MOVIE_SOON_FILM_SYNC_ENABLED` |
-| `MovieScheduleSyncJob` | `movieScheduleSyncJob` | `MOVIE_SCHEDULE_SYNC_ENABLED` |
+| 任务类 | JobHandler |
+| --- | --- |
+| `MovieCitySyncJob` | `movieCitySyncJob` |
+| `MovieCinemaSyncJob` | `movieCinemaSyncJob` |
+| `MovieHotFilmSyncJob` | `movieHotFilmSyncJob` |
+| `MovieSoonFilmSyncJob` | `movieSoonFilmSyncJob` |
+| `MovieScheduleSyncJob` | `movieScheduleSyncJob` |
 
 执行器 AppName 可通过 `MOVIE_XXL_JOB_APPNAME` 覆盖；监听端口默认 `19191`，可用 `MOVIE_XXL_JOB_PORT` 修改，同机多实例须各用独立端口。`MOVIE_XXL_JOB_IP` 用于指定调度中心可达的注册 IP，留空时自动识别。调度中心须能访问该执行器端口，电影实例须能访问调度中心地址；执行器不走电影 HTTP 安全链，部署时仅向调度中心开放并配置通信令牌。日志路径及保留天数分别通过 `MOVIE_XXL_JOB_LOG_PATH`、`MOVIE_XXL_JOB_LOG_RETENTION_DAYS` 配置，默认用户目录下 `logs/xxl-job/movie-server`、30 天。
 
-应用仅保留 `movie.supply.sync.enabled` 和 `city/cinema/hot-film/soon-film/schedule.enabled`，开关变更需要重启；XXL-JOB 执行计划修改无需重启电影服务。原 `MOVIE_*_SYNC_CRON`、`MOVIE_SCHEDULE_SYNC_DELAY`、`MOVIE_SCHEDULE_SYNC_INITIAL_DELAY` 与应用中的 cron/zone/delay/initial-delay 配置全部移除、不再生效，排期不再由应用实现“完成后等待”的计划。升级时停止全部旧 Spring 调度实例，再启用新任务，防止混跑。
+五类 Job 和执行边界不设条件开关，XXL-JOB 执行器启动时统一注册全部 Handler。`movie.supply.sync` 及原 `MOVIE_*_SYNC_ENABLED` 已删除、不再生效。任务启停、Cron 和手工触发统一在调度中心操作，无需重启电影服务。原应用 cron/zone/delay/initial-delay 配置不再生效，排期不再由应用实现“完成后等待”的计划。升级时停止旧 Spring 调度实例，避免混跑。
 
 五类任务由 XXL-JOB 分别执行，CITY/CINEMA/FILM/SCHEDULE 互斥边界不变，热映与待映共享 FILM 锁。锁忙或业务失败会回传调度失败，累计 `movie.supply.sync.task.failures`，日志仅输出安全因果链摘要；可在调度中心单独重跑失败任务。每轮内部账号和影院仍串行请求，任务触发间隔不代表全国排期刷新耗时。
 
@@ -96,7 +98,7 @@ JC `disableFlag` 仅影响特惠基础成本，快票选项原样保留；本阶
 `MOVIE_LX_APP_ID`、`MOVIE_LX_APP_SECRET`；`MOVIE_LX_BASE_URL` 默认 `https://api.yinglexing.com`。
 `MOVIE_LX_CONFIG_VERSION` 默认 `v1`，`MOVIE_LX_MIN_REQUEST_INTERVAL` 默认 `1100ms`，具体配额需联调确认。
 LX 默认关闭，无凭证时不影响 JC/JY；Nacos 若覆盖了 `movie.supply.accounts` 列表，须在同一列表中显式追加
-完整账号列表中的 `lx-default` 账号，Spring 配置列表不会自动合并。
+`script/deploy/movie/movie-server-{local,test}.yaml` 中的 `lx-default` 账号，Spring 配置列表不会自动合并。
 
 城市同步先 JC、LX 后 JY；影院每账号每轮请求一次全国列表；排期请求使用影院专资编码。
 LX 成本使用含税 `price`，`nax_price/nax_price_st` 仅是参考价；散场按开场加影片时长推算。
@@ -114,7 +116,7 @@ movie:
 运行环境必须启用 Nacos 配置及刷新。该值从 Spring Environment 每次在售查询读取一次，发布刷新后无需重启，
 下一次查询立即生效；例如改为 `30m`，三渠道均按开场前 30 分钟过滤对外结果。
 允许 `0m`，负值或非法时长使查询失败，不影响采集；debug 日志 `stopSellBeforeStart` 可核对查询策略。
-在当前生效配置中设置 `movie.supply.stop-sell-before-start=45m`，Nacos 动态刷新需运行环境已启用配置中心。
+模板直接在 Nacos 设置停售提前量初值 `45m`；修改对应属性即可动态生效。`MOVIE_STOP_SELL_BEFORE_START` 占位符已从主配置移除。
 
 上游返回的有效排期全部入库，不因已停售而跳过；平台停售时间只在查询结果中动态计算。
 禁用的城市、影院、映射或影片仍采集，通过 `supplyEnabled=false` 标记在查询时隐藏。

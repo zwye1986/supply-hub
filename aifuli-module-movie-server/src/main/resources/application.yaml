@@ -3,6 +3,10 @@ spring:
     name: movie-server
   profiles:
     active: ${SPRING_PROFILES_ACTIVE:local}
+  config:
+    import:
+      - optional:classpath:application-${spring.profiles.active}.yaml
+      - optional:nacos:${spring.application.name}-${spring.profiles.active}.yaml
   main:
     allow-circular-references: false
     allow-bean-definition-overriding: false
@@ -70,3 +74,7 @@ aifuli:
   tenant:
     # 电影供给为平台数据；同时不引入商城租户 starter。
     enable: false
+
+# 供应商账号与 XXL-JOB 执行器连接配置由 Nacos 管理；任务启停和执行时间由 XXL-JOB 管理。
+# 发布模板：script/deploy/movie/movie-server-{local,test}.yaml
+# 设计：docs/superpowers/specs/2026-09-16-movie-supply-schedule-design.md#配置归属调整2026-09-28

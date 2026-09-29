@@ -4,7 +4,6 @@ import com.xxl.job.core.context.XxlJobHelper;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 import java.sql.SQLException;
@@ -16,7 +15,6 @@ import java.util.List;
  * 设计：docs/superpowers/specs/2026-09-16-movie-supply-schedule-design.md#5-同步调度与恢复
  */
 @Component
-@ConditionalOnProperty(prefix = "movie.supply.sync", name = "enabled", havingValue = "true")
 @RequiredArgsConstructor
 @Slf4j
 public class MovieSyncJobExecutor {

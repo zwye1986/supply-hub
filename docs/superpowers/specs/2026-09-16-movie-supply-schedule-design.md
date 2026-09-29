@@ -10,6 +10,16 @@
 
 ## 2. 接入账号与协议
 
+### 配置归属调整（2026-09-28）
+
+`application.yaml` 仅保留基础启动、安全、基础设施默认值及配置导入；`movie.supply` 和 `xxl.job` 统一放在当前环境的 Nacos 配置 `movie-server-${spring.profiles.active}.yaml`。本地 `local` 也启用 Nacos 配置与服务注册，命名空间为 `aifuli-supplyhub-local`、分组为 `DEFAULT_GROUP`；`test` 使用 `aifuli-supplyhub-test`、分组为 `test`；`dev` 沿用环境变量指定连接位置。
+
+仓库中的发布模板为 `script/deploy/movie/movie-server-local.yaml` 和 `movie-server-test.yaml`，提供三渠道账号与 XXL-JOB 执行器配置；dev 可复用模板中的 `movie`、`xxl` 节点。三个账号默认关闭；发布模板时保留目标环境已有配置，禁止将示例开关覆盖到已启用账号。账号列表按整份替换，不跨配置源逐项合并；账号参数中的超时、JC 订单类型和空绑定列表复用 `MovieSupplyProperties` 默认值，不重复配置。
+
+渠道账号的启停、版本、地址、限流与执行器连接参数由 Nacos 维护，密钥仍由进程环境变量读取，Nacos 只保存凭证环境变量名。保留已有模板的显式 `stop-sell-before-start=45m`；账号与执行器的 `MOVIE_*` 占位符随配置迁至 Nacos，需要直接在 Nacos 管理时可改为明确值。Nacos 导入维持 optional 语义：远端业务配置缺失时账号列表为空，执行器默认关闭，基础连接仍按本地默认值；不能将进程可启动误认为已完成同步配置。
+
+五类任务没有业务总开关或分类开关，启停及执行时间全部由 XXL-JOB 调度中心管理。账号及执行器配置按发布后重启验收，不承诺热切换；只有 `stop-sell-before-start` 继续支持刷新后下次查询生效。此次仅调整电影进程配置归属与 local 接入方式，不改安全策略、事务、RPC 注册、数据库结构或供应链依赖，不触发供应链架构规则变更；静态检查之外的 Nacos 加载及调度验证见 `docs/集成测试.md` 的“电影配置迁移到 Nacos 验收（2026-09-28）”。
+
 2026-09-28 新增影乐星 `LX/lx`，协议、全国影院采集与排期差异以第 8 节为准；前文 JC/JY 的 `success=true` 要求不适用于 LX。
 
 配置命名空间 `movie.supply`，账号按稳定 `accountRef` 标识，包含渠道枚举 JC/JY、配置版本、启停、URL、连接/读取超时以及环境变量形式的应用标识和密钥引用。账号可记录项目/采购商绑定引用；当前任务只采集供给，不执行账号路由。不同账号的排期独立保存；主数据 Mapping 使用供应商范围 ID，与既有六表契约保持一致。禁止复制参考仓库中的凭证或关闭 TLS 校验。
@@ -52,7 +62,9 @@ HTTP 必须同时验证状态码、`success=true` 和数据结构；缺字段或
 
 ### XXL-JOB 迁移（2026-09-20）
 
-五类 Job 改为 XXL-JOB BEAN Handler，复用 `aifuli-spring-boot-starter-job`，Handler 名依次为 `movieCitySyncJob`、`movieCinemaSyncJob`、`movieHotFilmSyncJob`、`movieSoonFilmSyncJob`、`movieScheduleSyncJob`。移除电影专属 Spring 调度器和 `@Scheduled`；保留 `movie.supply.sync.enabled` 与各任务 enabled，开关控制 Handler Bean 注册，修改后重启生效。`xxl.job.enabled` 默认跟随同步总开关，执行器默认 AppName 为 `movie-server`，地址、令牌、端口、注册 IP 与日志路径通过环境变量配置。
+五类 Job 改为 XXL-JOB BEAN Handler，复用 `aifuli-spring-boot-starter-job`，Handler 名依次为 `movieCitySyncJob`、`movieCinemaSyncJob`、`movieHotFilmSyncJob`、`movieSoonFilmSyncJob`、`movieScheduleSyncJob`。移除电影专属 Spring 调度器和 `@Scheduled`。2026-09-28 简化注册：五类 Job 和执行边界均为普通 Spring Bean，不设置任务注册条件；XXL-JOB 执行器启动时统一发现并注册全部 Handler。删除 `movie.supply.sync` 总开关、分类开关及对应环境变量，旧值不再影响注册；任务启停、执行时间和手工触发完全由调度中心管理。
+
+只保留共享 starter 的执行器基础设施开关 `xxl.job.enabled`，模板使用 `${MOVIE_XXL_JOB_ENABLED:false}`，与任何业务开关无关。执行器默认 AppName 为 `movie-server`，地址、令牌、端口、注册 IP 与日志路径沿用原配置。开启执行器仅注册 Handler，不自动创建或启动调度中心任务；首次初始化完成前保持调度中心任务停止。每轮筛选 Nacos `movie.supply.accounts` 中启用的账号，不参与 Handler 注册。
 
 调度计划统一由 XXL-JOB 管理；五类任务的执行时间均由使用者在任务管理中自行配置，代码不预设周期；调度中心 JVM 使用 Asia/Shanghai。排期不再提供应用内 fixedDelay 语义。删除应用中的 cron、zone、delay、initial-delay 配置，不再由应用启动自动触发。每个 Handler 只配置一个任务，路由选 FIRST，阻塞策略选丢弃后续调度，失败重试次数为 0、超时为 0、过期策略不补偿；单轮串行外呼及既有类别锁不变。
 

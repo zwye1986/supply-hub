@@ -1,11 +1,18 @@
-# 本地开发直接连接 application.yaml 中由 MOVIE_* 环境变量指定的基础设施。
-# 设计：docs/电影子系统与中台履约详细设计.md#51-工程初始化落地约定2026-09-07
+# 本地开发从 Nacos 加载 movie-server-local.yaml，业务配置模板见 script/deploy/movie。
+# 设计：docs/superpowers/specs/2026-09-16-movie-supply-schedule-design.md#配置归属调整2026-09-28
 spring:
   cloud:
     nacos:
+      server-addr: 47.117.130.100:8848 # Nacos 服务器地址
+      username: nacos # Nacos 账号
+      password: "!2026NacosAdmin@Qhf." # Nacos 密码，! 开头必须使用引号避免 YAML 解析为 tag
       config:
-        enabled: false
+        enabled: true
+        namespace: aifuli-supplyhub-local
+        group: DEFAULT_GROUP
         import-check:
           enabled: false
       discovery:
-        enabled: false
+        enabled: true
+        namespace: aifuli-supplyhub-local
+        group: DEFAULT_GROUP

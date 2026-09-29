@@ -1,0 +1,105 @@
+# ==============================================================================
+# 电影子系统本地开发环境配置 (Data ID: movie-server-local.yaml)
+# Nacos 命名空间: aifuli-supplyhub-local, 分组: DEFAULT_GROUP
+# ==============================================================================
+spring:
+  cloud:
+    nacos:
+      discovery:
+        enabled: true
+      config:
+        enabled: true
+
+  # 数据源配置：与其他服务一致（统一接入 aifuli-mall-test_hub）
+  datasource:
+    url: jdbc:mysql://rm-uf6a1xqsgrw4y17gl.mysql.rds.aliyuncs.com:3306/aifuli-mall-test_hub?useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&nullCatalogMeansCurrent=true&rewriteBatchedStatements=true
+    username: aliyundbtest
+    password: Cxb200918!QHF
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    type: com.zaxxer.hikari.HikariDataSource
+    hikari:
+      maximum-pool-size: 12
+      connection-timeout: 10000
+      validation-timeout: 3000
+      data-source-properties:
+        autoReconnect: false
+        connectTimeout: 5000
+        socketTimeout: 10000
+    dynamic:
+      primary: master
+      datasource:
+        master:
+          url: jdbc:mysql://rm-uf6a1xqsgrw4y17gl.mysql.rds.aliyuncs.com:3306/aifuli-mall-test_hub?useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&nullCatalogMeansCurrent=true&rewriteBatchedStatements=true
+          username: aliyundbtest
+          password: Cxb200918!QHF
+
+  # MongoDB 配置：47.117.130.100 (root / cxb123123)
+  data:
+    mongodb:
+      uri: mongodb://root:cxb123123@47.117.130.100:27017/aifuli_movie?authSource=admin
+      auto-index-creation: false
+    # Redis 配置：与其他服务测试环境一致
+    redis:
+      host: 47.100.11.188
+      port: 6379
+      database: 0
+      password: 'AdultMan18'
+
+server:
+  port: 58191
+
+management:
+  endpoints:
+    web:
+      base-path: /actuator
+      exposure:
+        include: '*'
+
+# XXL-JOB 执行器启用即注册全部 Handler；任务启停和执行时间只在调度中心管理。
+# 启用前配置调度中心地址和双方一致的令牌。
+xxl:
+  job:
+    enabled: ${MOVIE_XXL_JOB_ENABLED:false}
+    admin:
+      addresses: ${MOVIE_XXL_JOB_ADMIN_ADDRESSES:}
+    access-token: ${MOVIE_XXL_JOB_ACCESS_TOKEN:}
+    executor:
+      appname: ${MOVIE_XXL_JOB_APPNAME:${spring.application.name}}
+      ip: ${MOVIE_XXL_JOB_IP:}
+      port: ${MOVIE_XXL_JOB_PORT:19191}
+      logpath: ${MOVIE_XXL_JOB_LOG_PATH:${user.home}/logs/xxl-job/${spring.application.name}}
+      logretentiondays: ${MOVIE_XXL_JOB_LOG_RETENTION_DAYS:30}
+
+# 独立电影供给同步，先完成显式 MySQL 迁移和 MongoDB 索引部署再开启。
+# 设计：docs/superpowers/specs/2026-09-16-movie-supply-schedule-design.md
+movie:
+  supply:
+    # 三渠道统一停售提前量；Nacos 刷新后下次查询生效，不影响采集入库。
+    stop-sell-before-start: 45m
+    max-pages: ${MOVIE_SUPPLY_MAX_PAGES:1000}
+    # 列表整体替换；超时、JC 订单类型和空绑定列表沿用 MovieSupplyProperties 默认值。
+    accounts:
+      - account-ref: jc-default
+        channel: JC
+        enabled: ${MOVIE_JC_ENABLED:false}
+        config-version: ${MOVIE_JC_CONFIG_VERSION:v1}
+        base-url: ${MOVIE_JC_BASE_URL:}
+        # 这里只声明环境变量名称，明文凭证不会绑定到配置对象。
+        app-key-env: MOVIE_JC_APP_KEY
+        app-secret-env: MOVIE_JC_APP_SECRET
+      - account-ref: jy-default
+        channel: JY
+        enabled: ${MOVIE_JY_ENABLED:false}
+        config-version: ${MOVIE_JY_CONFIG_VERSION:v1}
+        base-url: ${MOVIE_JY_BASE_URL:}
+        app-key-env: MOVIE_JY_APP_KEY
+        app-secret-env: MOVIE_JY_APP_SECRET
+      - account-ref: lx-default
+        channel: LX
+        enabled: ${MOVIE_LX_ENABLED:false}
+        config-version: ${MOVIE_LX_CONFIG_VERSION:v1}
+        base-url: ${MOVIE_LX_BASE_URL:https://api.yinglexing.com}
+        # LX 的应用标识为 app_id，配置中仍只保存环境变量名称。
+        app-key-env: MOVIE_LX_APP_ID
+        app-secret-env: MOVIE_LX_APP_SECRET
+        min-request-interval: ${MOVIE_LX_MIN_REQUEST_INTERVAL:1100ms}
