@@ -111,7 +111,7 @@ public class JyMovieSupplyClient implements MovieSupplyClient {
                     }
                     return new Schedule(required(row, "show_id"), required(row, "film_id"), text(row, "film_code"),
                             text(row, "hallCode"), required(row, "hall_name"), text(row, "version_type"),
-                            instant(row, "show_time"), instant(row, "close_time"), instant(row, "stop_sell_time"),
+                            instant(row, "show_time"), instant(row, "close_time"),
                             money(row, "net_price"), money(row, "settle_price"), null, areaPrices(row), null, null);
                 }).toList();
     }

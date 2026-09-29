@@ -10,6 +10,8 @@
 
 ## 2. 接入账号与协议
 
+2026-09-28 新增影乐星 `LX/lx`，协议、全国影院采集与排期差异以第 8 节为准；前文 JC/JY 的 `success=true` 要求不适用于 LX。
+
 配置命名空间 `movie.supply`，账号按稳定 `accountRef` 标识，包含渠道枚举 JC/JY、配置版本、启停、URL、连接/读取超时以及环境变量形式的应用标识和密钥引用。账号可记录项目/采购商绑定引用；当前任务只采集供给，不执行账号路由。不同账号的排期独立保存；主数据 Mapping 使用供应商范围 ID，与既有六表契约保持一致。禁止复制参考仓库中的凭证或关闭 TLS 校验。
 
 协议优先依据用户提供的佳意、今晨 API Markdown，旧 `qihaofu/qihaofuAdmin` SDK 用于补充线协议参考；冲突见第 7.5 节，未对生产供应商发起请求：
@@ -42,9 +44,9 @@ HTTP 必须同时验证状态码、`success=true` 和数据结构；缺字段或
 
 所有已知价格用 BigDecimal 验证非负并精确约束两位小数，明确写为 Decimal128；JY 成本取 settle_price，JC 基础成本取 minSettlementPrice，禁止用 minSalePrice 冒充采购成本。JC `disableFlag` 仅表示特惠购票不可用，原样保留标记；特惠不可用时基础成本置空，但保留快票选项与顶层快票价格，不据此误删整场供给。JY 分区价由适配器解析专有分隔格式；JC 按已知字段白名单转换，取消字段名包含 price/fee 等泛化推断。未知字符串/标识保留，不用于报价。原始引用不对 C 端暴露。
 
-以账号+影院为完整快照刷新范围。外呼前取得刷新 revision，完整解析及映射后，将版本条件更新、批量 upsert、差集清理纳入单个 Mongo 事务。失败不会留下部分提交的场次；提交结果未知上抛后由新轮次重新拉取，不承诺 MySQL/MongoDB 分布式原子事务。真正成功的空响应会清除此账号该影院的排期。过期、标准数据禁用及影院 Mapping 禁用的场次不入下一轮快照。保留 createTime，刷新 updateTime；token 差集清理避免超大 `$nin` 参数。拓扑、失锁在途窗口及迁移要求见第 7.2 节。
+以账号+影院为完整快照刷新范围。外呼前取得刷新 revision，完整解析及映射后，将版本条件更新、批量 upsert、差集清理纳入单个 Mongo 事务。失败不会留下部分提交的场次；提交结果未知上抛后由新轮次重新拉取，不承诺 MySQL/MongoDB 分布式原子事务。真正成功的空响应会清除此账号该影院的排期。上游返回的有效排期均入库，停售及供给禁用只在对外查询过滤，具体见第 8.3 节。保留 createTime，刷新 updateTime；token 差集清理避免超大 `$nin` 参数。拓扑、失锁在途窗口及迁移要求见第 7.2 节。
 
-TTL 索引仍为 `{stopSellTime:1}, expireAfterSeconds:0`，只做容量回收。所有在售读取显式加入 `stopSellTime > now`，且必须指定账号引用，避免混用不同账号价格。部署脚本增加账号+影院刷新索引；应用不自动创建索引或修改数据库结构。
+当前规则见第 8.3 节：取消停售 TTL，上游有效排期不因停售或禁用而拒绝入库；在售查询使用 `showTime > now + 动态提前量` 和供给启用标记。部署脚本移除旧 TTL 并补充账号+showTime 索引，应用不自动修改数据库结构。
 
 ## 5. 同步调度与恢复
 
@@ -126,3 +128,36 @@ MySQL GET_LOCK 是会话锁，连接池 close 只是归还代理。取得结果�
 6. 当前成功 code 分别 JC=1、JY=200，除了 success=true 还核对业务码，避免互相矛盾的 envelope 被接受。JY 按文档 current/total 分页，current 若返回须匹配请求。
 
 尚存冲突：JC 城市/影片/排期示例为单对象、旧 SDK 为数组；签名空格描述为 %20、旧 Java SDK 为 %2B；排期文档未列 stopPurchase。暂保持现有数组与 Java SDK 兼容规则，缺停售字段仍失败，禁止从“临场35分钟”自行推断全部购票方式的停售时间。城市同名绑定、账号间主数据命名空间、影片状态冲突/回退仍没有正式规则，已再次提出问题。JY 明确快慢票账号/场次不能混用，排期的账号隔离是必要约束，但不能据此证明三类主数据 ID 也必然共享或必然不同。
+
+## 8. LX 影乐星渠道接入
+
+### 8.1 范围与协议
+
+依据 `docs/影乐星开放平台接口文档.md` 第 1、3 章，在现有五类只读同步流程中增加 `MovieChannel.LX`，持久化编码为 `lx`。锁座、出票、查单、退款、回调尚无现有实现，本次不扩展交易契约。继续只在独立电影进程内访问电影库，不新增 RPC、事务管理器、安全入口或供应链依赖，不触发供应链架构测试变更范围。
+
+复用 `movie.supply.accounts`，`app-key-env` 在 LX 表示 `app_id` 的环境变量名，示例使用 `MOVIE_LX_APP_ID`、`MOVIE_LX_APP_SECRET`；地址默认 `https://api.yinglexing.com`，账号默认关闭。POST UTF-8 表单包含 `app_id`、秒级 `time`；排除 `sign` 与 null 值，键名按 ASCII 升序，以未 URL 编码的 `key=value` 用 `&` 拼接，追加 `&app_secret=密钥`，取 UTF-8 MD5 大写；最终传输时才编码表单。所有请求带 `Accept-Encoding: gzip`，复用现有按响应头解压能力、账号限流、超时和脱敏汇总日志。
+
+LX 只接受 HTTP 2xx、`code=200` 且 `data` 非 null 的响应，不要求不存在于文档的 `success` 字段；JC/JY 的成功判断和签名保持各自协议。业务失败、结构错误不得降级为空供给。
+
+### 8.2 主数据与全国影院
+
+- 城市：`/openapi/getCityList`，`city_id` 为渠道 ID，`region_code` 为标准码，`region_name/pin_yin` 为名称与首字母；无热门标记，保留空值。不按区县或城市名称猜标准编码。
+- 影片：`/openapi/getFilmList`，`status_type=1/2` 分别用于热映/待映；`id` 与 `film_code` 分别落渠道 ID 与专资编码，缺专资编码沿用现有未映射报告与人工 Mapping 恢复；`name/pic/duration/publish_date/director/cast/intro/film_types/grade` 映射对应采集字段。
+- 影院：`/openapi/getCinemaList` 是全国全量接口，没有城市过滤参数。供给端口增加全国影院能力，默认关闭以保持 JC/JY 按城市调用与隔离失败；LX 每账号每轮只请求全国列表一次，逐条复用 `syncCinema` 解析 LX 城市映射并写入主数据，缺映射仍逐条汇总失败。禁止在每个城市循环中重复拉全国列表。
+- `cinema_id/standard_id/city_id` 分别为渠道影院 ID、专资编码、渠道城市 ID；`county` 为区县名称，`address/longitude/latitude` 原样采集，无联系电话则留空；`fast_cancel` 只是预估售后能力，本次不当作履约承诺或影院可售状态。
+- 全国列表先验证结构与重复影院 ID，再允许写入。城市同步顺序为 JC、LX、JY，先采集提供标准码的渠道，最后复用 JY 唯一同名匹配。
+- 现有 channel 列为 varchar，无渠道枚举约束，直接容纳 `lx`，不修改已发布 DDL；DO 注释仍与原 DDL 一致。
+
+### 8.3 排期映射与统一动态停售规则
+
+`/openapi/getPlanList` 按 `standard_id` 请求，校验响应 `standard_id` 和 `cinema_id` 均归属请求影院；`film_id/film_code/show_id/hall_name/show_version_type/show_time` 映射现有字段。影厅 ID 未提供，保留空值。`original_price` 为网售原价，落 `netPrice`；`price` 为含税结算成本，落 `minSettlementPrice`，不得用 `nax_price/nax_price_st` 替代。
+
+`schedule_area` 支持数组以及文档类型声明的 JSON 数组字符串；空值/空串视为无分区，非空非法结构、重复或缺失 area、缺必要金额均失败。分区金额白名单为 `original_price/price/nax_price/nax_price_st`，保持原字段名并转换 Decimal128；区 ID 保留原始类型。沿用完整影院快照、失败保留旧快照及账号隔离；停售与历史 TTL 按本节新规则调整。
+
+2026-09-28 用户纠正：上游返回的有效排期全部入库，停售只影响对外输出。本节取代前文入库过滤、落库停售阈值和停售 TTL 规则。JC、JY、LX 统一默认开场前 45 分钟停售，配置 `movie.supply.stop-sell-before-start`（Duration，默认 `45m`，启动初值可用 `MOVIE_STOP_SELL_BEFORE_START`）；每次在售查询从 Spring Environment 读取一次。Nacos 刷新后下一次查询立即使用新值，无需重新同步或修改存量文档。负值、空值和非法时长使查询明确失败，不能影响采集；`0m` 表示开场时停售。
+
+渠道适配器不再读取 JC `stopPurchase` 和 JY `stop_sell_time`，只提供真实开场和散场时间。入库不读取停售配置，不根据当前时间、平台停售或主数据禁用而丢弃上游有效场次；禁用条件归并为 `supplyEnabled` 快照标记，查询过滤该标记，以保留既有禁用不可售语义。协议错误、重复 ID、金额错误、映射冲突仍失败保留旧快照，不将无效数据伪造为有效排期。JC/JY 保留各自散场字段；LX 使用正整数 `duration` 推算散场。
+
+影院排期、同场次、城市在映影片三个查询统一使用 `showTime > now + 当前提前量`（严格大于，临界点停售），保留账号、配置版本、schemaVersion 隔离和 `supplyEnabled != false` 条件（兼容原版本无此字段的已入库可售数据）。返回排期时按同一次查询的提前量计算 `stopSellTime`，不信任旧文档中的停售值，不回写数据库。
+
+停止按停售时间物理删除排期，不新增未经确认的历史保留期限。新增显式 Mongo 迁移 `002-query-time-sale-policy.js`：移除单字段 stopSellTime TTL，添加基于 showTime 的三类账号查询索引；旧普通索引保留以避免不必要变更。应用采集前只读检查旧 TTL 是否已移除，不执行 DDL。新建环境先执行 001 再执行 002，已有环境停止旧实例后执行 002；历史已被 TTL 删除的场次需首次重新拉取恢复，之后动态阈值变更无需重采。新写入不保存 stopSellTime，并在 upsert 中 unset 遗留字段；仍沿用完整供应商快照的撤场清理，不承诺永久历史归档。

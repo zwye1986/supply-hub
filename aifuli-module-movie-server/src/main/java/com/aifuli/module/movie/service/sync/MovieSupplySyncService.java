@@ -12,7 +12,6 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.bson.Document;
 import org.springframework.stereotype.Service;
-import java.time.Clock;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
@@ -35,7 +34,7 @@ public class MovieSupplySyncService {
     private static final Set<String> JC_DELIVERY_OPTIONS = Set.of("8", "15", "30");
     /** 账号及分页配置。 */
     private final MovieSupplyProperties properties;
-    /** 显式的两渠道供给端口，按渠道枚举选择。 */
+    /** 已注册的供给端口，按渠道枚举精确选择。 */
     private final List<MovieSupplyClient> clients;
     /** MySQL 主数据事务服务。 */
     private final MovieMasterDataService masterData;
@@ -44,8 +43,6 @@ public class MovieSupplySyncService {
     private final CinemaScheduleRepository schedules;
     /** 跨实例同步互斥锁。 */
     private final MovieSyncLock syncLock;
-    /** 统一过期时钟。 */
-    private final Clock movieSupplyClock;
 
     /** 启动即校验启用账号元信息，凭证只在外呼时读取，日志不输出配置对象。 */
     @PostConstruct
@@ -76,7 +73,7 @@ public class MovieSupplySyncService {
         }
     }
 
-    /** 仅 JC 使用 deliverMinutes，要求档位有效且不重复，JY 不受该私有参数约束。 */
+    /** 仅 JC 使用 deliverMinutes，要求档位有效且不重复，其它渠道不受该私有参数约束。 */
     private static boolean validDeliveryOptions(Account account) {
         if (account.getChannel() != MovieChannel.JC) {
             return true;
@@ -104,7 +101,7 @@ public class MovieSupplySyncService {
         log.info("电影主数据手工初始化完成");
     }
 
-    /** 只同步城市及映射；先拉全部 JC 城市，随后处理 JY 的唯一同名匹配。 */
+    /** 先同步 JC/LX 提供标准编码的城市，再处理 JY 的唯一同名匹配。 */
     public void synchronizeCities() {
         List<Account> accounts = enabledAccounts();
         log.info("电影城市同步开始 accounts={}", accounts.size());
@@ -163,7 +160,7 @@ public class MovieSupplySyncService {
         });
     }
 
-    /** 只按已映射城市同步影院，前置城市不存在时报告缺失，不隐式触发城市同步。 */
+    /** 按渠道能力拉取城市或全国影院，入库依赖已有城市映射，不隐式触发城市同步。 */
     public void synchronizeCinemas() {
         List<Account> accounts = enabledAccounts();
         log.info("电影影院同步开始 accounts={}", accounts.size());
@@ -174,6 +171,20 @@ public class MovieSupplySyncService {
             SyncSummary summary = new SyncSummary("cinema");
             for (Account account : accounts) {
                 guard.run();
+                // LX 只有全国影院接口，每账号每轮拉取一次；缺城市映射仍按单影院报告。
+                MovieSupplyClient supplyClient = client(account);
+                if (supplyClient.supportsAllCinemas()) {
+                    try {
+                        for (Cinema cinema : supplyClient.allCinemas(account)) {
+                            guard.run();
+                            summary.run(account, "cinema:" + cinema.supplierId(),
+                                    () -> masterData.syncCinema(account.getChannel(), cinema));
+                        }
+                    } catch (RuntimeException exception) {
+                        summary.failure(account, "all-cinemas", exception);
+                    }
+                    continue;
+                }
                 List<MovieCityMappingDO> cities = masterData.cities(account.getChannel());
                 if (cities.isEmpty()) {
                     summary.failure(account, "cities", new MissingMovieMappingException("影院同步前请先初始化渠道城市映射"));
@@ -221,7 +232,8 @@ public class MovieSupplySyncService {
                     }
                     for (MovieCinemaMappingDO mapping : page) {
                         guard.run();
-                        summary.run(account, "schedule:" + mapping.getSupplierCinemaId(), () -> syncCinemaSchedule(account, mapping, guard));
+                        summary.run(account, "schedule:" + mapping.getSupplierCinemaId(),
+                                () -> syncCinemaSchedule(account, mapping, guard));
                         afterId = mapping.getId();
                     }
                 }
@@ -235,12 +247,9 @@ public class MovieSupplySyncService {
         CinemaScheduleRepository.Refresh refresh = schedules.beginRefresh(account, mapping.getSupplierCinemaId(), guard);
         MovieCinemaDO cinema = masterData.cinema(mapping);
         MovieCityDO city = masterData.city(cinema.getStandardCityId());
-        if (!Integer.valueOf(ENABLED).equals(mapping.getStatus()) || !Integer.valueOf(ENABLED).equals(cinema.getStatus())
-                || !Integer.valueOf(ENABLED).equals(city.getStatus())) {
-            guard.run();
-            schedules.replace(account, mapping.getSupplierCinemaId(), List.of(), refresh, guard);
-            return;
-        }
+        // 禁用不阻止采集，转换为查询阶段使用的供给状态快照。
+        boolean cinemaEnabled = Integer.valueOf(ENABLED).equals(mapping.getStatus())
+                && Integer.valueOf(ENABLED).equals(cinema.getStatus()) && Integer.valueOf(ENABLED).equals(city.getStatus());
         List<Schedule> source = client(account).schedules(account, mapping.getSupplierCinemaId(), cinema.getCinemaCode());
         List<Document> snapshot = new ArrayList<>();
         Map<String, MovieFilmDO> films = new HashMap<>();
@@ -249,9 +258,6 @@ public class MovieSupplySyncService {
             if (!showIds.add(schedule.showId())) {
                 throw new IllegalStateException("供应商排期响应存在重复 showId");
             }
-            if (!schedule.stopSellTime().isAfter(movieSupplyClock.instant())) {
-                continue;
-            }
             MovieFilmDO film = films.computeIfAbsent(schedule.supplierFilmId(), id -> {
                 guard.run();
                 return masterData.resolveFilm(account.getChannel(), id, schedule.filmCode());
@@ -259,19 +265,22 @@ public class MovieSupplySyncService {
             if (schedule.filmCode() != null && !schedule.filmCode().equals(film.getFilmCode())) {
                 throw new IllegalStateException("同一供应商影片在排期内对应多个专资编码");
             }
-            if (!Integer.valueOf(ENABLED).equals(film.getStatus())) {
-                continue;
-            }
-            snapshot.add(documents.create(account, mapping.getSupplierCinemaId(), schedule, city, cinema, film));
+            // 全量接收有效场次；停售仅影响查询输出，不影响入库。
+            snapshot.add(documents.create(account, mapping.getSupplierCinemaId(), schedule, city, cinema, film)
+                    .append("supplyEnabled", cinemaEnabled && Integer.valueOf(ENABLED).equals(film.getStatus())));
         }
         guard.run();
         schedules.replace(account, mapping.getSupplierCinemaId(), snapshot, refresh, guard);
     }
 
-    /** 城市源先 JC 后 JY，账号内部顺序稳定；仅处理明确启用的账号。 */
+    /** 标准码来源先 JC 后 LX，再处理 JY 同名绑定；账号内部顺序稳定。 */
     private List<Account> enabledAccounts() {
         return properties.getAccounts().stream().filter(Account::isEnabled)
-                .sorted(Comparator.comparingInt((Account account) -> account.getChannel() == MovieChannel.JC ? 0 : 1)
+                .sorted(Comparator.comparingInt((Account account) -> switch (account.getChannel()) {
+                    case JC -> 0;
+                    case LX -> 1;
+                    case JY -> 2;
+                })
                         .thenComparing(Account::getAccountRef)).toList();
     }
 

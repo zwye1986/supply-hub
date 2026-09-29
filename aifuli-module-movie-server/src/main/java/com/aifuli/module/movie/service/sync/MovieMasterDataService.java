@@ -63,7 +63,7 @@ public class MovieMasterDataService {
             }
             standard = candidates.getFirst();
         }
-        // 标准编码来自 JC 时可刷新名称；JY 只刷新自身映射，避免反向覆盖城市标准名称。
+        // JC/LX 提供标准编码时可刷新名称；JY 只刷新自身映射，避免反向覆盖标准名称。
         if (source.code() != null) {
             MovieCityDO update = new MovieCityDO();
             update.setId(standard.getId());
@@ -221,7 +221,7 @@ public class MovieMasterDataService {
                 .orderByAsc(MovieCinemaMappingDO::getId).last("LIMIT 200"));
     }
 
-    /** 解析标准影院，禁用状态由采集编排决定撤下该账号快照。 */
+    /** 解析标准影院，禁用状态由编排记录为供给标记，查询隐藏但不阻止采集。 */
     public MovieCinemaDO cinema(MovieCinemaMappingDO mapping) {
         return require(cinemaMapper.selectById(mapping.getStandardCinemaId()), "影院映射悬空", mapping.getSupplierCinemaId());
     }

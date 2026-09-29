@@ -3,7 +3,7 @@
 独立启动类：`com.aifuli.module.movie.MovieServerApplication`。默认服务名 `movie-server`，默认端口 `58191`。
 模块只扫描 `com.aifuli.module.movie`，不加入商城聚合应用；平台主数据没有商城 `tenant_id`。
 
-已实现六张主数据/Mapping 表的 DO 与 Mapper、JC/JY 主数据与排期同步、多账号配置、MongoDB 快照写入和在售查询。安全配置仅开放 `/actuator/health`，其余请求拒绝访问。
+已实现六张主数据/Mapping 表的 DO 与 Mapper、JC/JY/LX 主数据与排期同步、多账号配置、MongoDB 快照写入和在售查询。安全配置仅开放 `/actuator/health`，其余请求拒绝访问。
 业务 RPC、实时验座报价与出票流程尚未实现。
 
 ## 本地配置
@@ -46,7 +46,7 @@ TODO（[详细设计](../docs/电影子系统与中台履约详细设计.md)第 
 
 实现说明见 [供给底座详细设计](../docs/superpowers/specs/2026-09-16-movie-supply-schedule-design.md)，证据和待确认项见 [审查记录](../docs/superpowers/specs/2026-09-17-movie-supply-review.md)，联调以 `docs/集成测试.md` 的「电影供给审查重构验收（2026-09-17）」为准。
 
-1. 在独立电影 MySQL 库执行既有 Liquibase 六表迁移；MongoDB 必须是支持事务的副本集或分片集群，再执行 `sql/mysql/movie/mongodb/001-cinema-schedule-indexes.js`。脚本预建 `cinema_schedule` 与 `cinema_schedule_refresh` 集合。应用轮次检查前提，不执行 DDL，也不降级到非事务写入。
+1. 在独立电影 MySQL 库执行既有 Liquibase 六表迁移；MongoDB 必须是支持事务的副本集或分片集群，新环境依次执行 `sql/mysql/movie/mongodb/001-cinema-schedule-indexes.js` 和 `002-query-time-sale-policy.js`。前者预建集合，后者移除旧停售 TTL 并建立动态查询索引。应用只读检查前提，不执行 DDL，也不降级到非事务写入。
 2. MySQL 显式使用 Hikari，默认池容量 12，可用 `MOVIE_MYSQL_POOL_SIZE` 调整，建议不少于 10。持锁连接结束时物理淘汰；连接获取 10 秒、锁语句 5 秒、驱动 socket 10 秒，禁用 autoReconnect。环境 JDBC URL 不得重新开启自动重连。
 3. 设置 `MOVIE_JC_BASE_URL`、`MOVIE_JC_APP_KEY`、`MOVIE_JC_APP_SECRET` 与对应 `MOVIE_JY_*`；URL 包含完整 HTTP/HTTPS 协议。凭证不写入仓库。
 4. 首次部署设置 `MOVIE_JC_ENABLED=true`、`MOVIE_JY_ENABLED=true`，保持 `MOVIE_SUPPLY_SYNC_ENABLED=false`，通过 IDE 调用 `MovieSupplySyncService.synchronizeMasterData()` 完成城市→待映→热映→影院初始化，再调用 `synchronizeSchedules()`。初始化失败或锁忙应先排障重跑，不能靠定时任务的时间间隔保证依赖已完成。
@@ -72,7 +72,7 @@ JC API 明确 filmId 是专资编码；未取得 ID 的待映记录逐条报告�
 重复同步按唯一键更新，不重复建档；供应商列表中暂时缺失的主数据不自动删除或禁用，以避免短暂缺项影响另一渠道。
 
 同一供应商多个账号时，在 `movie.supply.accounts` 中增加独立 `account-ref`、`config-version`、应用凭证环境变量引用及 `binding-refs`。
-MySQL 映射当前仍按渠道原始 ID 共享，其跨账号命名空间前提尚待确认，不宣称所有账号/环境均可安全共享。JY 文档明确快慢票账号及场次不通用，MongoDB 必须按账号隔离；查询要求显式账号及当前配置版本。账号引用一旦投入使用保持稳定，修改后旧排期由 TTL 回收。
+MySQL 映射当前仍按渠道原始 ID 共享，其跨账号命名空间前提尚待确认，不宣称所有账号/环境均可安全共享。JY 文档明确快慢票账号及场次不通用，MongoDB 必须按账号隔离；查询要求显式账号及当前配置版本。账号引用一旦投入使用保持稳定；变更引用后的旧账号数据需另行安排清理，不再通过停售 TTL 回收。
 更换凭证时同步更新 `config-version`，避免旧配置的成本被查询复用。
 
 内部单类入口为 `synchronizeCities()`、`synchronizeCinemas()`、`synchronizeHotFilms()`、`synchronizeSoonFilms()`、`synchronizeSchedules()`；全量主数据入口 `synchronizeMasterData()` 仅供手工初始化，均受数据类别锁保护。未开放手工 HTTP 触发接口。
@@ -86,6 +86,41 @@ JC `disableFlag` 仅影响特惠基础成本，快票选项原样保留；本阶
 - JC 影院支持文档的 `data.data[]` 和旧数组响应，每页固定 1000 条；JY 分区价按 `area:…,price:…,settle_price:…;…` 解析，不能当 JSON。JY 影厅读取 hallCode，相对海报按文档 CDN 补齐。
 - JC 启用 gzip 并显式解压。账号级请求起始间隔默认 1100ms，由 `MOVIE_JC_MIN_REQUEST_INTERVAL`、`MOVIE_JY_MIN_REQUEST_INTERVAL` 配置；该默认覆盖 JC 最低 60rpm 等级。只有确认供应商配额后才调小；进程内间隔不等于集群全局配额。
 - JY 建议主数据每日、排期每小时刷新，生产排期并发不超过 30、测试不超过 15；本实现同类请求串行，可按合同调整独立任务计划。JC 在最低配额下，一万影院单账号仅起始间隔下界约 183 分钟，不能保证全国十分钟新鲜度。
-- v2 排期键包含渠道、账号、原始影院和 showId，查询排除旧格式；旧键由对应影院成功事务清理或 TTL 回收。升级时停止全部旧调度实例、部署集合和索引、确认副本集 URI，再刷新 v2 数据；未完成刷新前可能查不到旧供给，不允许新旧版本混跑。
-- JC 城市/影片/排期示例形态、空格签名与 stopPurchase 来源仍有文档/旧 SDK 冲突：当前保留原数组/Java SDK 兼容路径，缺停售字段失败保留旧数据，不推算停售时间。上线前须取得脱敏响应完成验收。
+- v2 排期键包含渠道、账号、原始影院和 showId，查询排除旧格式；同范围旧键由对应影院成功事务清理。升级时停止全部旧调度实例、部署集合和索引、确认副本集 URI，再刷新 v2 数据；未完成刷新前可能查不到旧供给，不允许新旧版本混跑。
+- JC 城市/影片/排期示例形态、空格签名仍有文档/旧 SDK 冲突：当前保留原数组/Java SDK 兼容路径。三渠道停售改为以下统一平台策略，不再依赖 JC stopPurchase 或 JY stop_sell_time。
 - 本次只做静态验证，未运行构建、电影单测、数据库迁移或真实供应商调用。完整待执行故障注入清单见集成测试文档。
+
+## LX 影乐星与动态停售配置
+
+影乐星接入现有城市、热映、待映、影院和排期任务。设置 `MOVIE_LX_ENABLED=true`，在电影进程环境中设置
+`MOVIE_LX_APP_ID`、`MOVIE_LX_APP_SECRET`；`MOVIE_LX_BASE_URL` 默认 `https://api.yinglexing.com`。
+`MOVIE_LX_CONFIG_VERSION` 默认 `v1`，`MOVIE_LX_MIN_REQUEST_INTERVAL` 默认 `1100ms`，具体配额需联调确认。
+LX 默认关闭，无凭证时不影响 JC/JY；Nacos 若覆盖了 `movie.supply.accounts` 列表，须在同一列表中显式追加
+完整账号列表中的 `lx-default` 账号，Spring 配置列表不会自动合并。
+
+城市同步先 JC、LX 后 JY；影院每账号每轮请求一次全国列表；排期请求使用影院专资编码。
+LX 成本使用含税 `price`，`nax_price/nax_price_st` 仅是参考价；散场按开场加影片时长推算。
+现有锁座、出票、订单查询、退款和回调尚未实现，本次接入范围为供给同步。
+
+三渠道统一提前 45 分钟停售。在当前环境导入的 Nacos 数据标识 `movie-server-${spring.profiles.active}.yaml`
+中发布以下配置（示例只列需合并的节点，不应替换整份配置）：
+
+```yaml
+movie:
+  supply:
+    stop-sell-before-start: 45m
+```
+
+运行环境必须启用 Nacos 配置及刷新。该值从 Spring Environment 每次在售查询读取一次，发布刷新后无需重启，
+下一次查询立即生效；例如改为 `30m`，三渠道均按开场前 30 分钟过滤对外结果。
+允许 `0m`，负值或非法时长使查询失败，不影响采集；debug 日志 `stopSellBeforeStart` 可核对查询策略。
+在当前生效配置中设置 `movie.supply.stop-sell-before-start=45m`，Nacos 动态刷新需运行环境已启用配置中心。
+
+上游返回的有效排期全部入库，不因已停售而跳过；平台停售时间只在查询结果中动态计算。
+禁用的城市、影院、映射或影片仍采集，通过 `supplyEnabled=false` 标记在查询时隐藏。
+三类查询统一按 `showTime > 当前时间 + 提前量` 过滤，配置变化直接影响已存排期，无需重新同步。
+
+升级前停止旧实例，在独立电影库执行 `sql/mysql/movie/mongodb/002-query-time-sale-policy.js`，
+移除旧 stopSellTime TTL 并补充 showTime 查询索引；新环境依次执行 001、002，之后不要单独重跑 001 恢复旧 TTL。
+脚本不删除排期；历史已被旧 TTL 删除的数据需首次重采恢复。新版本不按停售自动清理，
+仍保留完整供应商快照撤场清理。详细步骤见 `docs/集成测试.md` 的「LX 影乐星与统一停售验收」。

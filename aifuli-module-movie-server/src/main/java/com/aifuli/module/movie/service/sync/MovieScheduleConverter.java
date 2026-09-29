@@ -47,14 +47,16 @@ public class MovieScheduleConverter {
             "settlementPrice_8", "settlementPrice_15", "settlementPrice_30");
     /** JY 分区价由适配器按专有分隔格式展开；不把 JC 字段规则套在 JY 上。 */
     private static final Set<String> JY_MONEY_FIELDS = Set.of("price", "settle_price");
+    /** LX 原价、含税成本和不含税参考价分别保存，不混淆价格口径。 */
+    private static final Set<String> LX_MONEY_FIELDS = Set.of("original_price", "price", "nax_price", "nax_price_st");
     /** 解析供应商嵌套 JSON 字符串的映射器。 */
     private final ObjectMapper objectMapper;
 
-    /** 创建不含审计时间的业务快照，审计时间由仓库 upsert 原子维护。 */
+    /** 保存上游业务快照；平台停售时间仅在查询时计算，不固化到文档。 */
     public Document create(Account account, String supplierCinemaId, Schedule source,
                            MovieCityDO city, MovieCinemaDO cinema, MovieFilmDO film) {
-        if (source.closeTime().isBefore(source.showTime()) || source.stopSellTime().isAfter(source.showTime())) {
-            throw new IllegalArgumentException("供应商排期的开场、散场或停售时间顺序异常");
+        if (source.closeTime().isBefore(source.showTime())) {
+            throw new IllegalArgumentException("供应商排期的开场、散场时间顺序异常");
         }
         String hall = Normalizer.normalize(source.hallName(), Normalizer.Form.NFKC)
                 .replaceAll("[\\p{P}\\p{S}\\p{Z}\\s]", "");
@@ -67,7 +69,11 @@ public class MovieScheduleConverter {
                 supplierCinemaId, source.showId());
         BigDecimal cost = account.getChannel() == MovieChannel.JC
                 && Integer.valueOf(JC_SPECIAL_DISABLED).equals(source.disableFlag()) ? null : source.minSettlementPrice();
-        Set<String> moneyFields = account.getChannel() == MovieChannel.JC ? JC_MONEY_FIELDS : JY_MONEY_FIELDS;
+        Set<String> moneyFields = switch (account.getChannel()) {
+            case JC -> JC_MONEY_FIELDS;
+            case JY -> JY_MONEY_FIELDS;
+            case LX -> LX_MONEY_FIELDS;
+        };
         return new Document("_id", id)
                 .append("schemaVersion", CinemaScheduleDocument.SCHEMA_VERSION)
                 .append("channel", account.getChannel().code())
@@ -82,7 +88,7 @@ public class MovieScheduleConverter {
                 .append("hallName", source.hallName()).append("versionType", source.versionType())
                 .append("showDate", source.showTime().atZone(SupplierJson.ZONE).toLocalDate().toString())
                 .append("showTime", Date.from(source.showTime())).append("closeTime", Date.from(source.closeTime()))
-                .append("stopSellTime", Date.from(source.stopSellTime())).append("netPrice", amount(source.netPrice()))
+                .append("netPrice", amount(source.netPrice()))
                 .append("minSettlementPrice", cost == null ? null : amount(cost)).append("disableFlag", source.disableFlag())
                 .append("areas", structured(source.areas(), "areas", moneyFields))
                 .append("priceOption", structured(source.priceOption(), "priceOption", moneyFields))

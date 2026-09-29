@@ -5,7 +5,9 @@ public enum MovieChannel {
     /** 今晨供应商。 */
     JC("jc"),
     /** 佳意供应商。 */
-    JY("jy");
+    JY("jy"),
+    /** 影乐星供应商。 */
+    LX("lx");
 
     /** 数据库中的渠道编码。 */
     private final String code;

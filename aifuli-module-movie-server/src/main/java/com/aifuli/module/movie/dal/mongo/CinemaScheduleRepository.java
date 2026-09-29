@@ -2,6 +2,7 @@ package com.aifuli.module.movie.dal.mongo;
 
 import com.aifuli.module.movie.dal.dataobject.mongo.CinemaScheduleDocument;
 import com.aifuli.module.movie.framework.supply.MovieSupplyProperties.Account;
+import com.aifuli.module.movie.framework.supply.MovieSalePolicy;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.ReadConcern;
 import com.mongodb.ReadPreference;
@@ -21,6 +22,7 @@ import org.bson.Document;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.stereotype.Repository;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Date;
@@ -31,8 +33,8 @@ import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 /**
- * 账号影院快照仓库，完整写入成功才撤销旧场次；TTL 清理延迟不影响停售过滤。
- * 设计：docs/superpowers/specs/2026-09-16-movie-supply-schedule-design.md#4-排期文档与一致性
+ * 账号影院快照仓库，完整写入成功才撤销旧场次；停售只在查询时动态过滤。
+ * 设计：docs/superpowers/specs/2026-09-16-movie-supply-schedule-design.md#83-排期映射与统一动态停售规则
  */
 @Slf4j
 @Repository
@@ -46,6 +48,8 @@ public class CinemaScheduleRepository {
     private final MongoClient mongoClient;
     /** 统一时间来源，不依赖本地默认时区。 */
     private final Clock movieSupplyClock;
+    /** 动态停售提前量，仅在读取供给时使用，不能影响采集入库。 */
+    private final MovieSalePolicy salePolicy;
 
     /** 轮次前只读检查部署前提，防止逐院外呼后才发现事务不可用或隐式建集合。 */
     public void verifyStorage() {
@@ -56,6 +60,13 @@ public class CinemaScheduleRepository {
         if (!mongoTemplate.collectionExists(CinemaScheduleDocument.COLLECTION)
                 || !mongoTemplate.collectionExists(CinemaScheduleDocument.REFRESH_COLLECTION)) {
             throw new IllegalStateException("请先部署电影排期集合与刷新版本集合");
+        }
+        // 旧 TTL 会物理删除已停售但仍由上游返回的场次，必须先由部署迁移移除。
+        for (Document index : mongoTemplate.getCollection(CinemaScheduleDocument.COLLECTION).listIndexes()) {
+            Document keys = index.get("key", Document.class);
+            if (keys != null && keys.containsKey("stopSellTime") && index.containsKey("expireAfterSeconds")) {
+                throw new IllegalStateException("请先执行 002-query-time-sale-policy.js 移除排期停售 TTL");
+            }
         }
     }
 
@@ -128,8 +139,12 @@ public class CinemaScheduleRepository {
         for (Document source : documents) {
             Document fields = new Document(source);
             Object id = fields.remove("_id");
+            // 写入边界拒绝固化停售策略，兼容调用方传入带旧字段的文档。
+            fields.remove("stopSellTime");
             fields.append("refreshToken", token).append("updateTime", now);
             writes.add(new UpdateOneModel<>(new Document("_id", id), new Document("$set", fields)
+                    // 删除旧版本固化的停售时间，防止未来读者误用过期策略；不删除场次本身。
+                    .append("$unset", new Document("stopSellTime", ""))
                     .append("$setOnInsert", new Document("createTime", now)), new UpdateOptions().upsert(true)));
             if (writes.size() >= WRITE_BATCH_SIZE) {
                 guard.run();
@@ -148,31 +163,52 @@ public class CinemaScheduleRepository {
 
     /** 按明确账号、影院和放映日期查询在售排期，旧配置版本不能参与新报价。 */
     public List<Document> findOnSale(Account account, String cinemaCode, LocalDate showDate) {
-        return onSaleCollection()
-                .find(onSale(account).append("cinemaCode", cinemaCode).append("showDate", showDate.toString()))
-                .sort(new Document("showTime", 1).append("_id", 1)).into(new ArrayList<>());
+        log.debug("查询影院在售排期 account={}, cinemaCode={}, showDate={}", account.getAccountRef(), cinemaCode, showDate);
+        SaleQuery query = onSale(account);
+        return withStopSellTime(onSaleCollection()
+                .find(query.filter().append("cinemaCode", cinemaCode).append("showDate", showDate.toString()))
+                .sort(new Document("showTime", 1).append("_id", 1)).into(new ArrayList<>()), query.leadTime());
     }
 
     /** 同场次查询仍要求账号隔离，不能直接混合不同账号的供货价格。 */
     public List<Document> findOnSaleGroup(Account account, String showGroupId) {
-        return onSaleCollection()
-                .find(onSale(account).append("showGroupId", showGroupId)).into(new ArrayList<>());
+        log.debug("查询同场次在售排期 account={}, showGroupId={}", account.getAccountRef(), showGroupId);
+        SaleQuery query = onSale(account);
+        return withStopSellTime(onSaleCollection()
+                .find(query.filter().append("showGroupId", showGroupId)).into(new ArrayList<>()), query.leadTime());
     }
 
-    /** 在售城市影片从未停售排期派生，TTL 异步清理不会导致已停售影片被展示。 */
+    /** 在售城市影片从动态过滤后的排期派生，所有场次停售后影片不再输出。 */
     public List<String> findOnSaleFilmCodes(Account account, String cityCode) {
+        log.debug("查询城市在售影片 account={}, cityCode={}", account.getAccountRef(), cityCode);
         return onSaleCollection()
-                .distinct("filmCode", onSale(account).append("cityCode", cityCode), String.class).into(new ArrayList<>());
+                .distinct("filmCode", onSale(account).filter().append("cityCode", cityCode), String.class).into(new ArrayList<>());
     }
 
     /** 统一在售条件，禁用账号直接拒绝查询。 */
-    private Document onSale(Account account) {
+    private SaleQuery onSale(Account account) {
         if (!account.isEnabled()) {
             throw new IllegalArgumentException("电影账号已禁用");
         }
-        return scope(account).append("configVersion", account.getConfigVersion())
+        Duration leadTime = salePolicy.snapshot();
+        log.debug("电影供给查询停售策略 account={}, stopSellBeforeStart={}", account.getAccountRef(), leadTime);
+        Document filter = scope(account).append("configVersion", account.getConfigVersion())
                 .append("schemaVersion", CinemaScheduleDocument.SCHEMA_VERSION)
-                .append("stopSellTime", new Document("$gt", Date.from(movieSupplyClock.instant())));
+                .append("supplyEnabled", new Document("$ne", false))
+                .append("showTime", new Document("$gt", Date.from(movieSupplyClock.instant().plus(leadTime))));
+        return new SaleQuery(filter, leadTime);
+    }
+
+    /** 单次查询的过滤条件与策略快照，避免 Nacos 刷新造成过滤和输出不一致。 */
+    private record SaleQuery(Document filter, Duration leadTime) {
+    }
+
+    /** 返回当前策略计算的停售时间，仅修改查询结果对象，不回写 MongoDB。 */
+    private List<Document> withStopSellTime(List<Document> documents, Duration leadTime) {
+        for (Document document : documents) {
+            document.put("stopSellTime", Date.from(document.getDate("showTime").toInstant().minus(leadTime)));
+        }
+        return documents;
     }
 
     /** 账号引用与渠道共同限定数据所有权。 */

@@ -47,6 +47,18 @@ liquibase --search-path=sql/mysql/movie --changelog-file=movie-db.changelog-mast
 
 ## MongoDB 索引
 
+**当前部署要求（2026-09-28，优先于下方历史说明）**：停售只在查询时动态过滤，不再按停售时间执行 TTL 删除。
+新建环境依次执行 `mongodb/001-cinema-schedule-indexes.js`、`mongodb/002-query-time-sale-policy.js`；
+已有环境停止旧实例后执行 002。该脚本可重复执行，只移除 stopSellTime TTL 并增加三个 showTime 查询索引，
+不删除文档。应用采集前会检查旧 TTL 已移除。后续不要单独重跑 001，否则会恢复旧 TTL。
+
+```powershell
+mongosh $env:MOVIE_MONGODB_URI --file sql/mysql/movie/mongodb/002-query-time-sale-policy.js
+```
+
+查询条件为 `showTime > now + 动态停售提前量`，不读取历史 stopSellTime；数据在供应商完整快照撤场时清理。
+旧 TTL 已删除的数据只能重新采集恢复，迁移本身不会恢复已删除数据。以下 TTL 描述仅为旧版本记录。
+
 在仓库根目录使用 `mongosh`，连接 URI 必须选中独立电影库，例如 `aifuli_movie`；凭证通过环境变量注入：
 
 ```powershell

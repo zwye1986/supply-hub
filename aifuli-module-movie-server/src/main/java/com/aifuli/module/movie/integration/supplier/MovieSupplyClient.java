@@ -15,6 +15,14 @@ public interface MovieSupplyClient {
     List<Film> films(Account account, boolean presell);
     /** 完整拉取渠道城市下影院。 */
     List<Cinema> cinemas(Account account, String supplierCityId);
+    /** 是否提供全国影院接口；默认保持 JC/JY 按城市同步与故障隔离。 */
+    default boolean supportsAllCinemas() {
+        return false;
+    }
+    /** 全国影院只应每账号每轮拉取一次；未声明能力的渠道禁止误调用。 */
+    default List<Cinema> allCinemas(Account account) {
+        throw new UnsupportedOperationException("当前电影渠道不提供全国影院接口");
+    }
     /** 完整拉取账号影院排期，标准编码与渠道 ID 均明确传递。 */
     List<Schedule> schedules(Account account, String supplierCinemaId, String cinemaCode);
 }

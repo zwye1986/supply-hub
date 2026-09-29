@@ -36,7 +36,7 @@ import com.fasterxml.jackson.core.StreamReadFeature;
 import java.util.stream.Collectors;
 
 /**
- * JC/JY 只读 HTTP 通道，按 qihaofu 的私有签名规则实现，保留正常 TLS 校验。
+ * JC/JY/LX 只读 HTTP 通道，各渠道独立签名与成功判定，保留正常 TLS 校验。
  * 设计：docs/superpowers/specs/2026-09-16-movie-supply-schedule-design.md#2-接入账号与协议
  */
 @Slf4j
@@ -47,9 +47,11 @@ public class MovieSupplierHttpClient {
     private static final String FORM = "application/x-www-form-urlencoded; charset=UTF-8";
     /** JSON 响应类型。 */
     private static final String JSON = "application/json";
-    /** 两渠道 API 文档的成功业务码，必须与 success 同时成立。 */
+    /** JC/JY API 文档的成功业务码，必须与 success 同时成立。 */
     private static final String JC_SUCCESS_CODE = "1";
     private static final String JY_SUCCESS_CODE = "200";
+    /** LX 成功信封只要求业务码，不存在 JC/JY 的 success 字段。 */
+    private static final String LX_SUCCESS_CODE = "200";
     /** Jackson 仅解析协议树，金额由适配器直接读取十进制文本。 */
     private final ObjectMapper objectMapper;
     /** 请求时间戳使用统一时钟。 */
@@ -64,7 +66,7 @@ public class MovieSupplierHttpClient {
      * @param account 明确指定的采集账号，不按请求结果自动换账号
      * @param path 固定供应商接口路径
      * @param parameters 不含凭证的业务参数
-     * @return 已验证 success 的 data 节点，空数组与失败严格区分
+     * @return 已按渠道验证成功信封的 data 节点，空数组与失败严格区分
      */
     public JsonNode request(Account account, String path, Map<String, String> parameters) {
         long started = System.nanoTime();
@@ -88,7 +90,21 @@ public class MovieSupplierHttpClient {
                 signed.put("sign", jcSignature(signed, secret));
                 request = HttpRequest.newBuilder(URI.create(endpoint + "?" + form(signed)))
                         .header("Content-Type", FORM).header("Accept-Encoding", "gzip").GET();
-            } else {
+            } else if (account.getChannel() == MovieChannel.LX) {
+                // LX 秒级时间戳及业务参数先按原文签名，发送时再做 UTF-8 表单编码。
+                TreeMap<String, String> signed = new TreeMap<>();
+                parameters.forEach((name, value) -> {
+                    if (value != null && !"sign".equals(name)) {
+                        signed.put(name, value);
+                    }
+                });
+                signed.put("app_id", key);
+                signed.put("time", Long.toString(movieSupplyClock.instant().getEpochSecond()));
+                signed.put("sign", lxSignature(signed, secret));
+                request = HttpRequest.newBuilder(URI.create(endpoint)).header("Content-Type", FORM)
+                        .header("Accept-Encoding", "gzip")
+                        .POST(HttpRequest.BodyPublishers.ofString(form(signed), StandardCharsets.UTF_8));
+            } else if (account.getChannel() == MovieChannel.JY) {
                 TreeMap<String, String> headers = new TreeMap<>();
                 headers.put("X-Ca-Key", key);
                 headers.put("X-Ca-Nonce", UUID.randomUUID().toString());
@@ -105,6 +121,8 @@ public class MovieSupplierHttpClient {
                         .header("X-Ca-Signature-Headers", String.join(",", headers.keySet()))
                         .POST(HttpRequest.BodyPublishers.ofString(form(parameters), StandardCharsets.UTF_8));
                 headers.forEach(request::header);
+            } else {
+                throw new MovieSupplierException("未支持的电影供应商渠道");
             }
             request.header("Accept", JSON).timeout(account.getRequestTimeout());
             HttpClient client = clients.computeIfAbsent(account.getConnectTimeout(), timeout ->
@@ -122,8 +140,14 @@ public class MovieSupplierHttpClient {
             // 错误码只允许短标识，防止上游把敏感报文塞进 code 后进入日志。
             String code = envelope.path("code").asText("");
             outcome = code.matches("[A-Za-z0-9_-]{0,32}") ? "CODE_" + code : "INVALID_CODE";
-            String expectedCode = account.getChannel() == MovieChannel.JC ? JC_SUCCESS_CODE : JY_SUCCESS_CODE;
-            if (!envelope.path("success").isBoolean() || !envelope.path("success").booleanValue() || !expectedCode.equals(code)) {
+            String expectedCode = switch (account.getChannel()) {
+                case JC -> JC_SUCCESS_CODE;
+                case JY -> JY_SUCCESS_CODE;
+                case LX -> LX_SUCCESS_CODE;
+            };
+            boolean success = account.getChannel() == MovieChannel.LX
+                    || (envelope.path("success").isBoolean() && envelope.path("success").booleanValue());
+            if (!success || !expectedCode.equals(code)) {
                 throw new MovieSupplierException("供应商返回失败：" + outcome);
             }
             JsonNode data = envelope.get("data");
@@ -161,6 +185,22 @@ public class MovieSupplierHttpClient {
             Mac mac = Mac.getInstance("HmacSHA256");
             mac.init(new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
             return Base64.getEncoder().encodeToString(mac.doFinal(canonical.getBytes(StandardCharsets.UTF_8)));
+        } catch (GeneralSecurityException exception) {
+            throw new IllegalStateException("JVM 不支持供应商签名算法", exception);
+        }
+    }
+
+    /**
+     * LX 原文参数排序后追加 app_secret，排除 sign/null；空串仍参与签名。
+     * 设计：docs/superpowers/specs/2026-09-16-movie-supply-schedule-design.md#81-范围与协议
+     */
+    static String lxSignature(Map<String, String> parameters, String secret) {
+        String canonical = new TreeMap<>(parameters).entrySet().stream()
+                .filter(entry -> !"sign".equals(entry.getKey()) && entry.getValue() != null)
+                .map(entry -> entry.getKey() + "=" + entry.getValue()).collect(Collectors.joining("&"));
+        try {
+            return HexFormat.of().withUpperCase().formatHex(MessageDigest.getInstance("MD5")
+                    .digest((canonical + "&app_secret=" + secret).getBytes(StandardCharsets.UTF_8)));
         } catch (GeneralSecurityException exception) {
             throw new IllegalStateException("JVM 不支持供应商签名算法", exception);
         }

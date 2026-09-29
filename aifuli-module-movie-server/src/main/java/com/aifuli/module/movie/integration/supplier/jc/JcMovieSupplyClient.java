@@ -120,7 +120,7 @@ public class JcMovieSupplyClient implements MovieSupplyClient {
                     }
                     result.add(new Schedule(required(row, "showId"), filmId, filmId,
                             text(row, "hallId"), required(row, "hallName"), text(row, "version"),
-                            instant(row, "startTime"), instant(row, "endTime"), instant(row, "stopPurchase"),
+                            instant(row, "startTime"), instant(row, "endTime"),
                             money(row, "showPrice"), Integer.valueOf(SPECIAL_DISABLED).equals(disableFlag)
                                     || text(row, "minSettlementPrice") == null ? null : money(row, "minSettlementPrice"),
                             disableFlag, row.get("areas"), row.get("priceOption"), quickPrices));

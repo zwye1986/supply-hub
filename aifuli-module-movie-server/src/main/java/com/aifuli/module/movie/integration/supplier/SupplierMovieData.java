@@ -61,7 +61,8 @@ public final class SupplierMovieData {
     }
 
     /**
-     * 排期：全部时间已转为 UTC Instant；JC disableFlag 只描述特惠购票，不代表快票失效。
+     * 排期：全部时间已转为 UTC Instant；停售在对外查询时计算，不影响采集入库。
+     * JC disableFlag 只描述特惠购票，不代表快票失效。
      * areas/priceOption 保留供应商原始结构，领域转换层只转换协议明确的金额字段。
      * @param showId 供应商原始排期ID
      * @param supplierFilmId 供应商原始影片ID
@@ -71,7 +72,6 @@ public final class SupplierMovieData {
      * @param versionType 语言制式
      * @param showTime 开场时间
      * @param closeTime 散场时间
-     * @param stopSellTime 停售时间，MongoDB TTL 自动回收字段
      * @param netPrice 电影标准人民币基准价 (元)
      * @param minSettlementPrice 本渠道该场次起步结算成本 (元)
      * @param disableFlag JC 特惠购票禁用标记，不代表快票失效
@@ -81,7 +81,7 @@ public final class SupplierMovieData {
      */
     public record Schedule(String showId, String supplierFilmId, String filmCode, String hallId,
                            String hallName, String versionType, Instant showTime, Instant closeTime,
-                           Instant stopSellTime, BigDecimal netPrice, BigDecimal minSettlementPrice,
+                           BigDecimal netPrice, BigDecimal minSettlementPrice,
                            Integer disableFlag, JsonNode areas, JsonNode priceOption, JsonNode quickPrices) {
     }
 }
