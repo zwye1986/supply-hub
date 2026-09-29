@@ -1,10 +1,17 @@
 spring:
   cloud:
     nacos:
+      server-addr: 47.117.130.100:8848 # Nacos 服务器地址
+      username: nacos # Nacos 账号
+      password: "!2026NacosAdmin@Qhf." # Nacos 密码，! 开头必须使用引号避免 YAML 解析为 tag
       discovery:
-        enabled: false
+        enabled: false # 本地开发如需向 Nacos 注册服务请开启为 true
+        namespace: aifuli-supplyhub-local # 命名空间。这里使用 aifuli-supplyhub-local 开发环境
+        group: DEFAULT_GROUP
       config:
-        enabled: false
+        enabled: false # 本地开发如需从 Nacos 获取配置请开启为 true
+        namespace: aifuli-supplyhub-local # 命名空间。这里使用 aifuli-supplyhub-local 开发环境
+        group: DEFAULT_GROUP
     # discovery 关闭时，Feign 按服务名静态指向本机中台
     openfeign:
       client:
