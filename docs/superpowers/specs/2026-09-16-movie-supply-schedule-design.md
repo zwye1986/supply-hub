@@ -10,15 +10,29 @@
 
 ## 2. 接入账号与协议
 
+### test 环境 XXL-JOB 接入（2026-09-29）
+
+测试调度任务配置补充：执行器 ID `22` 的中文名称由使用者改为“供应链电影子系统数据同步”，AppName 仍为 `movie-server`。在该执行器下为 `movieCitySyncJob`、`movieCinemaSyncJob`、`movieHotFilmSyncJob`、`movieSoonFilmSyncJob`、`movieScheduleSyncJob` 各创建一个 BEAN 任务，Cron 统一为 `0 0 3 * * ?`（调度中心时区每天 03:00，部署时应使用 Asia/Shanghai）。测试环境以手动触发为主，新建任务保持停止状态，保留每日计划供后续启用。任务参数留空、路由 FIRST、阻塞 DISCARD_LATER、过期 DO_NOTHING、失败重试 0、超时 0，不配置子任务。首次初始化仍按既有顺序执行；五任务同一 Cron 不保证执行先后，热映与待映共享 FILM 锁，手动执行需等上一任务完成。
+
+电影测试环境在 Nacos `aifuli-supplyhub-test / test / movie-server-test.yaml` 显式启用 `xxl.job.enabled=true`，调度中心使用 `http://47.117.130.100:9090/xxl-job-admin`。执行器 AppName 为 `movie-server`，采用自动注册，监听端口为 `19191`；注册 IP 使用 Nacos 当前健康电影实例的内网地址 `172.19.64.105`，调度中心已有同网段执行器。实例迁移时须同步核对注册 IP 与调度中心到执行器的网络连通性。
+
+通信令牌与该调度中心现有测试执行器保持一致，仅发布到目标 Nacos；后台管理员账号密码仅用于登录管理，不写入应用配置。仓库模板保留令牌环境变量占位符。执行器日志保存在 `${user.home}/logs/xxl-job/${spring.application.name}`，保留 30 天。
+
+发布前备份远端原文，仅合并 XXL-JOB 节点，保留数据库、供应商及其他业务配置；发布后重新读取并核对。调度中心登记执行器不创建、启动或触发采集任务。电影执行器没有热重建机制，发布后须重启电影进程再验收自动注册和端口可达性。此次仅修改电影进程配置，不修改公共 starter、供应链启动、RPC、安全、事务或依赖边界，不触发供应链架构规则变更；验证记录见 `docs/集成测试.md#电影-test-环境-xxl-job-接入2026-09-29`。
+
 ### 数据库账号与渠道选择落地（2026-09-29）
 
 本节覆盖下方历史过渡方案。本次按已入库数据接入，不新增表或字段：`adapter_config_json` 的封闭字段为 `appId/channel/accountRef/minRequestIntervalMs`，JC 另含 `deliverMinutes`；明确将 appId 映射到 JC partnerCode、JY X-Ca-Key、LX app_id，merchant_account 保持原语义。适配类型为 MOVIE_JC_V1/MOVIE_JY_V1/MOVIE_LX_V1。
 
 电影每轮从动态 Environment 读取逗号分隔的 `movie.supply.enabled-channels`（如 `JC,JY,LX`）；缺省或空串代表全部不采集，未知渠道/重复渠道报错。渠道在该轮固定，更新在下轮生效。旧 accounts 配置不再消费。
 
+测试环境排障补充：`enabled-channels` 必须直接位于 `movie.supply` 下，不能放在历史 `movie.supply.sync` 节点内；后者不是当前渠道选择键，会使已部署新代码读到空渠道并记录 `accounts=0`。修正配置层级时保留使用者当前所选渠道（本次为 LX），不扩大采集范围。渠道生效后继续校验中台配置 RPC 的共享令牌、HTTPS 和账号发布前置条件，不能把空轮次成功等同于完成供给同步。
+
 电影显式注册 MovieSupplierConfigApi，通过 GET `/rpc-api/supply-chain/movie-supplier-config/accounts?channels=JC,JY` 读取账号；中台只查本库供应商、连接器、当前版本和凭证槽，采用只读 REPEATABLE_READ 事务。必须满足主体启用、连接器启用、current_version_id归属正确且版本已发布、凭证槽启用；配置不完整或渠道无可用账号明确失败，不回退Nacos、不替换旧排期。非所选渠道不解析凭证。同一轮只读一次，固定 accountRef 和 `v{version_no}`，保持现有Mongo引用。
 
 接口只面向电影服务，使用独立的共享令牌头 `X-Movie-Config-Token`，两端配置 `movie.supply.config-token`，至少32字符；默认空值拒绝调用，不复用供应商密钥。接口默认要求HTTPS（`movie.supply.config-require-https=true`）；仅受控本地联调可显式关闭，生产需端到端TLS或可信终止代理。关闭访问报文日志、Feign报文日志并返回no-store，DTO不生成包含密钥的toString。电影入站安全链不变，供应链仅精确放行该RPC的登录前置要求，方法鉴权仍必须通过。
+
+测试环境共享令牌部署（2026-09-29）：按使用者要求，使用密码学安全随机源生成 32 字符令牌，将相同值显式发布到 Nacos `aifuli-supplyhub-test / test` 下的 `movie-server-test.yaml` 和 `supply-chain-server-test.yaml`，属性路径均为 `movie.supply.config-token`。真实令牌不写入仓库模板或文档；仅合并该属性，保留渠道选择、其他凭证和 HTTPS 策略。发布前备份，发布后确认两端值相等、长度为 32、其他配置未变。两端当前代码通过 Environment 读取令牌，配置刷新后的下一次调用使用新值；此项验证不替代部署版本、HTTPS 和供应商账号解析的完整联调。
 
 凭证仍由现有ENV Provider在中台解析，返回应用标识与密钥给电影内存签名；不将秘密写入电影数据库、排期或Nacos账号列表。这不等于数据库已存密钥明文。当前仅供给采集支持每轮快照，不承诺ENV历史秘密恢复；后续订单版本冻结仍待总体设计实现。
 

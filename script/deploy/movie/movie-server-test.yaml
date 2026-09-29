@@ -60,16 +60,17 @@ management:
         include: '*'
 
 # XXL-JOB 执行器启用即注册全部 Handler；任务启停和执行时间只在调度中心管理。
-# 启用前配置调度中心地址和双方一致的令牌。
+# test 接入：docs/superpowers/specs/2026-09-16-movie-supply-schedule-design.md#test-环境-xxl-job-接入2026-09-29
+# 通信令牌由环境变量注入，或保留目标 Nacos 中已配置的令牌；不使用后台登录密码。
 xxl:
   job:
-    enabled: ${MOVIE_XXL_JOB_ENABLED:false}
+    enabled: ${MOVIE_XXL_JOB_ENABLED:true}
     admin:
-      addresses: ${MOVIE_XXL_JOB_ADMIN_ADDRESSES:}
+      addresses: ${MOVIE_XXL_JOB_ADMIN_ADDRESSES:http://47.117.130.100:9090/xxl-job-admin}
     access-token: ${MOVIE_XXL_JOB_ACCESS_TOKEN:}
     executor:
       appname: ${MOVIE_XXL_JOB_APPNAME:${spring.application.name}}
-      ip: ${MOVIE_XXL_JOB_IP:}
+      ip: ${MOVIE_XXL_JOB_IP:172.19.64.105}
       port: ${MOVIE_XXL_JOB_PORT:19191}
       logpath: ${MOVIE_XXL_JOB_LOG_PATH:${user.home}/logs/xxl-job/${spring.application.name}}
       logretentiondays: ${MOVIE_XXL_JOB_LOG_RETENTION_DAYS:30}
