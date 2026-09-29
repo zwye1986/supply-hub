@@ -23,7 +23,7 @@ import static com.aifuli.framework.common.exception.util.ServiceExceptionUtil.ex
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BUYER_AUTH_INVALID;
 
 /**
- * 项目应用凭证服务：按应用、项目、凭证、INSTORE 能力、解密的固定顺序完成认证。
+ * 项目应用凭证服务：按应用、项目、凭证、解密的固定顺序完成身份认证；操作能力另行授权。
  *
  * <p>任一步缺失、状态或窗口不符、解密失败均统一抛 {@code BUYER_AUTH_INVALID}，避免暴露
  * 内部阶段；appKey 明文不落日志、不进缓存。详见
@@ -84,7 +84,7 @@ public class ProjectAppCredentialService {
      *
      * <p>该入口属于高频安全路径，入口和拒绝阶段仅记 debug；日志不包含 appKey、masterKey
      * 或 secretRef，避免攻击流量制造日志风暴。设计见
-     * {@code docs/superpowers/specs/2026-08-23-project-app-auth-design.md#62-projectappcredentialservice应用服务}。</p>
+     * {@code docs/superpowers/specs/2026-09-29-access-config-backend-impl-design.md#3-a-项目应用发码}。</p>
      *
      * @param appId 项目全局唯一稳定应用标识
      * @param keyVersion 调用方携带的密钥版本号
@@ -116,12 +116,6 @@ public class ProjectAppCredentialService {
             throw authInvalid(appId, keyVersion, "凭证已到失效时间");
         }
 
-        ProjectCapabilityDO capability =
-                capabilityMapper.selectByProjectIdAndCode(project.getId(), CAPABILITY_INSTORE);
-        if (capability == null || !ProjectAuthStatus.ENABLED.matches(capability.getStatus())) {
-            throw authInvalid(appId, keyVersion, "项目未启用INSTORE能力");
-        }
-
         String appKey;
         try {
             appKey = secretResolver.resolveAppKey(appId, keyVersion, credential.getSecretRef());
@@ -134,6 +128,18 @@ public class ProjectAppCredentialService {
             throw authInvalid(appId, keyVersion, "resolver返回空appKey");
         }
         return new AuthenticatedApp(project.getId(), project.getBuyerId(), appId, keyVersion, appKey);
+    }
+
+    /**
+     * 在签名通过后按服务端注册操作的能力编码授权；编码不由请求方自由指定。
+     * 设计见 {@code docs/superpowers/specs/2026-09-29-access-config-backend-impl-design.md#3-a-项目应用发码}。
+     */
+    public void requireCapability(Long projectId, String capabilityCode) {
+        ProjectCapabilityDO capability = capabilityMapper.selectByProjectIdAndCode(projectId, capabilityCode);
+        if (capability == null || !ProjectAuthStatus.ENABLED.matches(capability.getStatus())) {
+            log.debug("[project-auth] 项目操作能力拒绝 projectId={}, capabilityCode={}", projectId, capabilityCode);
+            throw exception(BUYER_AUTH_INVALID);
+        }
     }
 
     /** 已认证应用快照：appKey accessor 仅供验签读取，禁止默认序列化或进入日志。 */

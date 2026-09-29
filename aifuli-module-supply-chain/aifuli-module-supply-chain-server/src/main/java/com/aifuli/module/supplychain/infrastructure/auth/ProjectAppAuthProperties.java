@@ -4,6 +4,8 @@ import lombok.Data;
 import lombok.ToString;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
+import java.time.Duration;
+
 /**
  * 项目应用统一认证配置。
  *
@@ -38,4 +40,7 @@ public class ProjectAppAuthProperties {
 
     /** 入站验签允许缓存的请求体上限，单位：字节；不得超过 1 MiB 硬上限。 */
     private int maxRequestBodyBytes = HARD_MAX_REQUEST_BODY_BYTES;
+
+    /** 轮换时旧 CURRENT 凭证的过渡有效期，默认 24 小时。 */
+    private Duration graceWindow = Duration.ofHours(24);
 }

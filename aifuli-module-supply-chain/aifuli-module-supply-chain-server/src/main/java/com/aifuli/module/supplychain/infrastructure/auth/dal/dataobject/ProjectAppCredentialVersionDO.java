@@ -1,7 +1,9 @@
 package com.aifuli.module.supplychain.infrastructure.auth.dal.dataobject;
 
 import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.FieldStrategy;
 import com.baomidou.mybatisplus.annotation.TableId;
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Data;
 import lombok.ToString;
@@ -34,4 +36,11 @@ public class ProjectAppCredentialVersionDO {
     private LocalDateTime validFrom;
     /** 密钥失效时间，Asia/Shanghai */
     private LocalDateTime validTo;
+    /** 管理页可见的脱敏凭证提示 */
+    private String maskedHint;
+    /** 活动轮换位：CURRENT当前，GRACE过渡，非活动版本为NULL */
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
+    private String activeSlot;
+    /** 创建时间，Asia/Shanghai */
+    private LocalDateTime createdAt;
 }

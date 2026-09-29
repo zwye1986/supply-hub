@@ -198,6 +198,10 @@ public interface SupplyChainErrorCodeConstants {
     ErrorCode BUSINESS_CODE_MANUAL_NOT_ALLOWED = error(1_050_001_144, "{}编号由系统生成，请勿手填");
     ErrorCode BUSINESS_CODE_PERMANENT_EXISTS = error(1_050_001_145, "永久编码已存在：{}");
     ErrorCode BUSINESS_CODE_LEGACY_PARENT_OCCUPIED = error(1_050_001_146, "旧父对象占用父段：{}");
+    ErrorCode PROJECT_APP_ALREADY_ENABLED = error(1_050_001_147, "项目应用已开通");
+    ErrorCode PROJECT_APP_NOT_ENABLED = error(1_050_001_148, "项目应用未开通或不可用");
+    ErrorCode PROJECT_APP_CONFIRMATION_REQUIRED = error(1_050_001_149, "吊销项目应用凭证须确认并填写原因");
+    ErrorCode PROJECT_APP_CREDENTIAL_STATE_INVALID = error(1_050_001_150, "项目应用凭证状态异常");
 
     /** 订单详情不可用只作为成功响应中的详情标记，不作为 CommonResult 失败码。 */
     String DETAIL_UNAVAILABLE = "DETAIL_UNAVAILABLE";
@@ -348,7 +352,11 @@ public interface SupplyChainErrorCodeConstants {
             entry(BUSINESS_CODE_PARENT_MISMATCH, RetryDirective.DO_NOT_RETRY),
             entry(BUSINESS_CODE_MANUAL_NOT_ALLOWED, RetryDirective.DO_NOT_RETRY),
             entry(BUSINESS_CODE_PERMANENT_EXISTS, RetryDirective.DO_NOT_RETRY),
-            entry(BUSINESS_CODE_LEGACY_PARENT_OCCUPIED, RetryDirective.DO_NOT_RETRY));
+            entry(BUSINESS_CODE_LEGACY_PARENT_OCCUPIED, RetryDirective.DO_NOT_RETRY),
+            entry(PROJECT_APP_ALREADY_ENABLED, RetryDirective.DO_NOT_RETRY),
+            entry(PROJECT_APP_NOT_ENABLED, RetryDirective.RETRY_SAME_KEY_AFTER_CONDITION_CHANGE),
+            entry(PROJECT_APP_CONFIRMATION_REQUIRED, RetryDirective.DO_NOT_RETRY),
+            entry(PROJECT_APP_CREDENTIAL_STATE_INVALID, RetryDirective.DO_NOT_RETRY));
 
     static RetryDirective retryDirective(int errorCode) {
         return RETRY_DIRECTIVES.getOrDefault(errorCode, RetryDirective.DO_NOT_RETRY);

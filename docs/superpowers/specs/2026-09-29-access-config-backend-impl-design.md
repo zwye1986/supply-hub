@@ -17,7 +17,7 @@
 | E 库存查询 | tradecore.supply 的来源管理/快照 Mapper；infrastructure.job 的刷新扫描与认领；supplieradapter 的查询端口 | SupplierConfigurationAdminController、ConnectorPublicationService、SupplierOfferPublicationService |
 | F 路由快照 | routing.application 的来源快照读取器 | SupplierRoutingApplicationService、路由规则发布校验 |
 
-Liquibase 新增平台密钥、控制行、回调配置版本、连接器回调保留字段和库存来源列；准确 DDL 见两份概要设计。**不新增 sc_project_event_delivery**，Outbox 是项目通知唯一的重试和状态事实。所有新 DATETIME(3) 注释与持久化值使用 Asia/Shanghai；对外事件时间为带时区 ISO 8601。
+Liquibase 新增项目凭证操作审计、平台密钥、控制行、回调配置版本、连接器回调保留字段和库存来源列；准确 DDL 见两份概要设计。**不新增 sc_project_event_delivery**，Outbox 是项目通知唯一的重试和状态事实。所有新 DATETIME(3) 注释与持久化值使用 Asia/Shanghai；对外事件时间为带时区 ISO 8601。
 
 ## 3. A 项目应用发码
 
@@ -53,6 +53,7 @@ enable(projectCode, operatorId):
     insert ProjectApplication(projectId, appId, ENABLED)
     insert CredentialVersion(applicationId, 1, seal(...), maskedHint,
                              CURRENT, activeSlot=CURRENT, validFrom=databaseNow)
+    append CredentialAudit(ENABLE, applicationId, keyVersion=1, operatorId, now)
     return oneTimeCredential(appId, 1, material.appKey)
 
 rotate(projectCode, operatorId):
@@ -62,16 +63,18 @@ rotate(projectCode, operatorId):
     update old CURRENT to GRACE, activeSlot=GRACE, validTo=now+graceWindow
     newVersion = max(keyVersion)+1
     insert new CURRENT with activeSlot=CURRENT
+    append CredentialAudit(ROTATE, applicationId, keyVersion=newVersion, operatorId, now)
     return new oneTimeCredential
 
 revoke(projectCode, confirmed, reason, operatorId):
     require confirmed && nonblank(reason)
     lock app; set CURRENT/GRACE to REVOKED and activeSlot=null
+    append CredentialAudit(REVOKE, applicationId, reason, operatorId, now)
     publish disabled callback config version for future events
     leave historical appId and credential audit intact
 ~~~
 
-凭证表已有 masked_hint 和 active_slot；补全 ProjectAppCredentialVersionDO 字段及 Mapper 方法，不加重复 DDL。唯一键保护并发，锁顺序固定为 project → application → credential。认证端在读取凭证后按注册 operationCode 所需能力检查：STANDARD_PRODUCT、O2O、INSTORE 各自独立；不要在 authenticate 内无条件要求 INSTORE。为现有到店购接口保留 INSTORE 行为并加回归测试。
+凭证表已有 masked_hint 和 active_slot；补全 ProjectAppCredentialVersionDO 字段及 Mapper 方法，不加重复 DDL。唯一键保护并发，锁顺序固定为 project → application → credential。现有 `ProjectAuthOperations` 只登记 INSTORE 操作；为每个登记操作显式声明所需项目能力，先保持既有 10 个操作的 INSTORE 授权行为。认证服务只负责应用/项目/凭证及解密，过滤器在签名通过后按注册操作的能力检查，不再在 `authenticate` 内无条件要求 INSTORE。新增标准商品项目 HMAC 操作须先明确其 HTTP 契约、登记路径及能力映射；现有 `BuyerFulfillmentCommandApi` RPC 不会仅因发码而自动受此过滤器保护。
 
 ## 4. B 平台签名密钥
 

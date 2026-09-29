@@ -60,6 +60,7 @@ aifuli:
       enabled: ${AIFULI_SUPPLY_CHAIN_AUTH_ENABLED:true}
       timestamp-skew-minutes: ${AIFULI_SUPPLY_CHAIN_AUTH_TIMESTAMP_SKEW_MINUTES:5}
       nonce-retention-hours: ${AIFULI_SUPPLY_CHAIN_AUTH_NONCE_RETENTION_HOURS:1}
+      grace-window: ${AIFULI_SUPPLY_CHAIN_AUTH_GRACE_WINDOW:PT24H}
       nonce-cleanup-interval: ${AIFULI_SUPPLY_CHAIN_AUTH_NONCE_CLEANUP_INTERVAL:PT1H}
       max-request-body-bytes: ${AIFULI_SUPPLY_CHAIN_AUTH_MAX_REQUEST_BODY_BYTES:1048576}
     openapi:

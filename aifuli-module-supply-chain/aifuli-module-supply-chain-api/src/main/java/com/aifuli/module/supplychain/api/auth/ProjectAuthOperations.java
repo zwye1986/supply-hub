@@ -31,9 +31,15 @@ public final class ProjectAuthOperations {
         BUYER_USER_ID
     }
 
-    /** 受保护操作定义：operationCode、精确方法与路径、scope 要求、契约版本。 */
+    /** 受保护操作定义：operationCode、精确方法与路径、scope、契约版本及项目能力。 */
     public record Operation(String operationCode, String httpMethod, String path,
-                            ScopeType scopeType, String contractVersion) {
+                            ScopeType scopeType, String contractVersion, String requiredCapability) {
+
+        /** 保留旧五参数构造契约；既有操作均属于 INSTORE。 */
+        public Operation(String operationCode, String httpMethod, String path,
+                         ScopeType scopeType, String contractVersion) {
+            this(operationCode, httpMethod, path, scopeType, contractVersion, CAPABILITY_INSTORE);
+        }
     }
 
     /** 受保护路径前缀：过滤器注册与安全放行配置共用。 */
@@ -45,6 +51,7 @@ public final class ProjectAuthOperations {
 
     /** 当前契约版本；多传输形态出现时随规范化器一并升级。 */
     private static final String CONTRACT_VERSION = "1.0.0";
+    private static final String CAPABILITY_INSTORE = "INSTORE";
 
     /** INSTORE 四组 API 全部 10 个受保护操作。 */
     public static final List<Operation> OPERATIONS = List.of(
@@ -76,7 +83,7 @@ public final class ProjectAuthOperations {
     }
 
     private static Operation operation(String operationCode, String path, ScopeType scopeType) {
-        return new Operation(operationCode, "POST", path, scopeType, CONTRACT_VERSION);
+        return new Operation(operationCode, "POST", path, scopeType, CONTRACT_VERSION, CAPABILITY_INSTORE);
     }
 
     /**

@@ -57,6 +57,7 @@ class ProjectAppAuthConfigurationTest {
                 .run(context -> {
                     assertThat(context).hasNotFailed();
                     assertThat(context).hasSingleBean(AppKeySecretResolver.class);
+                    assertThat(context).hasSingleBean(AppKeySecretIssuer.class);
                     assertThat(context).hasSingleBean(FilterRegistrationBean.class);
                 });
     }

@@ -113,6 +113,7 @@ class ProjectAppAuthFilterTest {
         });
 
         verify(credentialService).authenticate(APP_ID, 1);
+        verify(credentialService).requireCapability(11L, "INSTORE");
         verify(nonceStore).ensureUnique(APP_ID, "nonce-filter-test");
         assertThat(ProjectAuthContextHolder.get()).isNull();
         assertThat(response.getContentAsByteArray()).isEmpty();

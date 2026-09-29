@@ -9,6 +9,7 @@ import com.aifuli.module.supplychain.api.instore.dto.ConfirmPaymentReqDTO;
 import com.aifuli.module.supplychain.api.instore.dto.CreatePaymentOrderReqDTO;
 import com.aifuli.module.supplychain.api.instore.dto.HomeEntryReqDTO;
 import com.aifuli.module.supplychain.api.instore.dto.ResolveInstoreMemberReqDTO;
+import com.aifuli.module.supplychain.tradecore.buyer.application.ProjectAppCredentialAdminService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterAll;
@@ -83,6 +84,8 @@ class ProjectAppAuthFlowIntegrationTest {
     private static final int PAUSED_STATUS = 20;
 
     private static final String APP_ID = "project-auth-flow-it";
+    private static final long ISSUANCE_PROJECT_ID = 9_310_002L;
+    private static final String ISSUANCE_PROJECT_CODE = "PROJECT_APP_ISSUANCE_IT";
     private static final String APP_KEY = "project-auth-flow-app-key";
     private static final String CHANNEL_CODE = "RT_MART";
     /** 数字外观且超出 long 表示范围，必须作为不透明字符串原样进入 BuyerContext。 */
@@ -148,6 +151,49 @@ class ProjectAppAuthFlowIntegrationTest {
     @AfterAll
     static void stopDatabaseAndServer() {
         cleanupResources();
+    }
+
+    /** 真实 MySQL 唯一活动槽与审计表共同验证开通→轮换→吊销，密钥由生产发码器生成。 */
+    @Test
+    void projectCredentialLifecyclePersistsVersionSlotsAndAudit() {
+        jdbc.update("""
+                INSERT INTO sc_buyer_project(
+                    id, project_code, project_name, buyer_id, catalog_mode,
+                    status, version, created_at, updated_at)
+                VALUES (?, ?, '项目发码联调', ?, 'MANAGED', 10, 0, NOW(3), NOW(3))
+                """, ISSUANCE_PROJECT_ID, ISSUANCE_PROJECT_CODE, BUYER_ID);
+        ProjectAppCredentialAdminService admin = server.getBean(ProjectAppCredentialAdminService.class);
+
+        var issued = admin.enable(ISSUANCE_PROJECT_CODE, 99L);
+        assertThat(issued.keyVersion()).isEqualTo(1);
+        assertThat(issued.appKey()).hasSize(43);
+        String storedSecretRef = jdbc.queryForObject("""
+                SELECT c.secret_ref FROM sc_project_app_credential_version c
+                JOIN sc_project_application a ON a.id = c.application_id
+                WHERE a.project_id = ? AND c.key_version = 1
+                """, String.class, ISSUANCE_PROJECT_ID);
+        assertThat(storedSecretRef).doesNotContain(issued.appKey());
+        assertThat(LocalEnvelopeAppKeyCodec.decrypt(MASTER_KEY, issued.appId(), 1, storedSecretRef))
+                .isEqualTo(issued.appKey());
+
+        var rotated = admin.rotate(ISSUANCE_PROJECT_CODE, 99L);
+        assertThat(rotated.appId()).isEqualTo(issued.appId());
+        assertThat(rotated.keyVersion()).isEqualTo(2);
+        assertThat(jdbc.queryForObject("""
+                SELECT COUNT(*) FROM sc_project_app_credential_version c
+                JOIN sc_project_application a ON a.id = c.application_id
+                WHERE a.project_id = ? AND c.active_slot IN ('CURRENT', 'GRACE')
+                """, Integer.class, ISSUANCE_PROJECT_ID)).isEqualTo(2);
+
+        admin.revoke(ISSUANCE_PROJECT_CODE, true, "联调吊销", 99L);
+        assertThat(jdbc.queryForObject("""
+                SELECT COUNT(*) FROM sc_project_app_credential_version c
+                JOIN sc_project_application a ON a.id = c.application_id
+                WHERE a.project_id = ? AND c.active_slot IS NOT NULL
+                """, Integer.class, ISSUANCE_PROJECT_ID)).isZero();
+        assertThat(jdbc.queryForObject(
+                "SELECT COUNT(*) FROM sc_project_app_credential_audit WHERE project_id = ?",
+                Integer.class, ISSUANCE_PROJECT_ID)).isEqualTo(3);
     }
 
     /** ChannelContext：合法命令必须越过认证与 Adapter，到达未配置渠道用户绑定的业务分支。 */

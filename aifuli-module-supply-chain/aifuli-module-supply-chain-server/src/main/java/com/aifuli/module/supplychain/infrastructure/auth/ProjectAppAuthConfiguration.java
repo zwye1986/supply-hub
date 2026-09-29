@@ -47,6 +47,28 @@ public class ProjectAppAuthConfiguration {
     }
 
     /**
+     * 默认发码端仅与本地信封解析器配对；KMS/自定义解析器须同时提供自定义发码 SPI。
+     * 未配对时开通和轮换失败关闭，已有认证流量不受发码装配影响。
+     * 设计见 docs/superpowers/specs/2026-09-29-access-config-backend-impl-design.md#31-发码材料与安全生命周期。
+     */
+    @Bean
+    @ConditionalOnMissingBean(AppKeySecretIssuer.class)
+    public AppKeySecretIssuer appKeySecretIssuer(AppKeySecretResolver resolver,
+                                                 ProjectAppAuthProperties properties) {
+        if (!(resolver instanceof LocalEnvelopeAppKeySecretResolver) || !properties.isEnabled()) {
+            return (appId, keyVersion) -> {
+                throw new IllegalStateException("项目应用发码端与密钥解析器未配对");
+            };
+        }
+        byte[] decodedMasterKey = decodeMasterKey(properties);
+        try {
+            return new LocalEnvelopeAppKeySecretIssuer(decodedMasterKey);
+        } finally {
+            Arrays.fill(decodedMasterKey, (byte) 0);
+        }
+    }
+
+    /**
      * 注册入站验签过滤器；构造器会在容器启动期校验 body 硬上限与 timestamp skew，配置错误失败关闭。
      * enabled=false 时本 Bean 不存在，供本地调试显式关闭认证。
      */

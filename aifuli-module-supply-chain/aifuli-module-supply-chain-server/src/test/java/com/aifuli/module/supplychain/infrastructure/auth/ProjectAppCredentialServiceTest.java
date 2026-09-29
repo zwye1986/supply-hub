@@ -38,8 +38,8 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * 凭证链单测：application → project → credential（CURRENT/GRACE/窗口）→ INSTORE 能力 → 解密。
- * 详见 docs/superpowers/specs/2026-08-23-project-app-auth-design.md#62-projectappcredentialservice应用服务。
+ * 凭证链与按操作能力授权单测。
+ * 详见 docs/superpowers/specs/2026-09-29-access-config-backend-impl-design.md#3-a-项目应用发码。
  */
 @ExtendWith(MockitoExtension.class)
 class ProjectAppCredentialServiceTest {
@@ -98,6 +98,16 @@ class ProjectAppCredentialServiceTest {
         stubFullChain(ProjectAppCredentialStatus.GRACE);
 
         assertThat(service.authenticate(APP_ID, 1).appKey()).isEqualTo(APP_KEY_SENTINEL);
+    }
+
+    @Test
+    void authenticateDoesNotRequireInstoreBeforeOperationAuthorization() {
+        stubUpToCredential(ProjectAppCredentialStatus.CURRENT);
+        when(secretResolver.resolveAppKey(APP_ID, 1, SECRET_REF_SENTINEL)).thenReturn(APP_KEY_SENTINEL);
+
+        assertThat(service.authenticate(APP_ID, 1).appKey()).isEqualTo(APP_KEY_SENTINEL);
+        verify(capabilityMapper, never()).selectByProjectIdAndCode(20L,
+                ProjectAppCredentialService.CAPABILITY_INSTORE);
     }
 
     @Test
@@ -205,29 +215,39 @@ class ProjectAppCredentialServiceTest {
     }
 
     @Test
-    void authenticateRejectsMissingCapabilityBeforeDecrypting() {
-        stubUpToCredential(ProjectAppCredentialStatus.CURRENT);
+    void operationAuthorizationRejectsMissingCapability() {
         when(capabilityMapper.selectByProjectIdAndCode(20L, ProjectAppCredentialService.CAPABILITY_INSTORE))
                 .thenReturn(null);
 
-        assertAuthInvalid();
+        ServiceException failure = catchThrowableOfType(
+                () -> service.requireCapability(20L, ProjectAppCredentialService.CAPABILITY_INSTORE),
+                ServiceException.class);
+        assertThat(failure.getCode()).isEqualTo(BUYER_AUTH_INVALID.getCode());
         verify(secretResolver, never()).resolveAppKey(APP_ID, 1, SECRET_REF_SENTINEL);
     }
 
     @Test
-    void authenticateRejectsDisabledCapability() {
-        stubUpToCredential(ProjectAppCredentialStatus.CURRENT);
+    void operationAuthorizationRejectsDisabledCapability() {
         when(capabilityMapper.selectByProjectIdAndCode(20L, ProjectAppCredentialService.CAPABILITY_INSTORE))
                 .thenReturn(capability((short) 20));
 
-        assertAuthInvalid();
+        ServiceException failure = catchThrowableOfType(
+                () -> service.requireCapability(20L, ProjectAppCredentialService.CAPABILITY_INSTORE),
+                ServiceException.class);
+        assertThat(failure.getCode()).isEqualTo(BUYER_AUTH_INVALID.getCode());
+    }
+
+    @Test
+    void operationAuthorizationAcceptsEnabledCapability() {
+        when(capabilityMapper.selectByProjectIdAndCode(20L, ProjectAppCredentialService.CAPABILITY_INSTORE))
+                .thenReturn(capability((short) 10));
+
+        service.requireCapability(20L, ProjectAppCredentialService.CAPABILITY_INSTORE);
     }
 
     @Test
     void authenticateMapsDecryptFailureAndPreservesCause() {
         stubUpToCredential(ProjectAppCredentialStatus.CURRENT);
-        when(capabilityMapper.selectByProjectIdAndCode(20L, ProjectAppCredentialService.CAPABILITY_INSTORE))
-                .thenReturn(capability((short) 10));
         IllegalArgumentException resolverFailure = new IllegalArgumentException("secret_ref 解密失败");
         when(secretResolver.resolveAppKey(APP_ID, 1, SECRET_REF_SENTINEL)).thenThrow(resolverFailure);
 
@@ -286,8 +306,6 @@ class ProjectAppCredentialServiceTest {
 
     private void stubCredentialAndCapability(ProjectAppCredentialVersionDO credential) {
         stubCredential(credential);
-        when(capabilityMapper.selectByProjectIdAndCode(20L, ProjectAppCredentialService.CAPABILITY_INSTORE))
-                .thenReturn(capability((short) 10));
     }
 
     private void stubApplicationAndProject() {
