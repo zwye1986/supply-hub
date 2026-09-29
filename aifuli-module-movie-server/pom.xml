@@ -16,6 +16,12 @@
     <description>独立电影专业子系统，管理电影供给并执行中台指定的供应商操作</description>
 
     <dependencies>
+        <!-- 电影只依赖中台公开配置契约，不引入中台server或DAL。 -->
+        <dependency>
+            <groupId>com.aifuli</groupId>
+            <artifactId>aifuli-module-supply-chain-api</artifactId>
+            <version>${revision}</version>
+        </dependency>
         <!-- 电影同步任务复用仓库 XXL-JOB 执行器，独立注册到调度中心。 -->
         <dependency>
             <groupId>com.aifuli</groupId>

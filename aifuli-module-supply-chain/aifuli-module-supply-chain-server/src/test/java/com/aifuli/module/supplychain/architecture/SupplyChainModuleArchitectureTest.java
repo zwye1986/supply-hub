@@ -34,6 +34,12 @@ class SupplyChainModuleArchitectureTest {
             .should().dependOnClassesThat()
             .resideInAnyPackage("..persistence..", "org.springframework..", "org.apache.ibatis..");
 
+    /** 电影配置公开契约不得反向依赖中台DAL或服务实现。 */
+    static final ArchRule movie_config_api_is_independent = noClasses()
+            .that().resideInAPackage("..api.movie..")
+            .should().dependOnClassesThat()
+            .resideInAnyPackage("..dal..", "..tradecore..", "..interfaceapi..");
+
     /**
      * Offer 身份上的人工评分是路由预备输入，引擎不依赖评分服务。
      * PRD 三策略模型（STABLE/COMPOSITE）经 {@code RoutingCandidate} 不可变快照注入评分，
@@ -254,6 +260,11 @@ class SupplyChainModuleArchitectureTest {
     @Test
     void routingIsPure() {
         routing_is_pure.check(importedClasses);
+    }
+
+    @Test
+    void movieConfigApiIsIndependent() {
+        movie_config_api_is_independent.check(importedClasses);
     }
 
     @Test

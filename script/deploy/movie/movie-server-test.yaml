@@ -81,29 +81,7 @@ movie:
     # 三渠道统一停售提前量；Nacos 刷新后下次查询生效，不影响采集入库。
     stop-sell-before-start: 45m
     max-pages: ${MOVIE_SUPPLY_MAX_PAGES:1000}
-    # 列表整体替换；超时、JC 订单类型和空绑定列表沿用 MovieSupplyProperties 默认值。
-    accounts:
-      - account-ref: jc-default
-        channel: JC
-        enabled: ${MOVIE_JC_ENABLED:false}
-        config-version: ${MOVIE_JC_CONFIG_VERSION:v1}
-        base-url: ${MOVIE_JC_BASE_URL:}
-        # 这里只声明环境变量名称，明文凭证不会绑定到配置对象。
-        app-key-env: MOVIE_JC_APP_KEY
-        app-secret-env: MOVIE_JC_APP_SECRET
-      - account-ref: jy-default
-        channel: JY
-        enabled: ${MOVIE_JY_ENABLED:false}
-        config-version: ${MOVIE_JY_CONFIG_VERSION:v1}
-        base-url: ${MOVIE_JY_BASE_URL:}
-        app-key-env: MOVIE_JY_APP_KEY
-        app-secret-env: MOVIE_JY_APP_SECRET
-      - account-ref: lx-default
-        channel: LX
-        enabled: ${MOVIE_LX_ENABLED:false}
-        config-version: ${MOVIE_LX_CONFIG_VERSION:v1}
-        base-url: ${MOVIE_LX_BASE_URL:https://api.yinglexing.com}
-        # LX 的应用标识为 app_id，配置中仍只保存环境变量名称。
-        app-key-env: MOVIE_LX_APP_ID
-        app-secret-env: MOVIE_LX_APP_SECRET
-        min-request-interval: ${MOVIE_LX_MIN_REQUEST_INTERVAL:1100ms}
+    # 逗号分隔渠道，清空字符串关闭全部采集；Nacos刷新后下一轮生效。
+    enabled-channels: "JC,JY,LX"
+    # 两端配置相同的独立服务令牌，至少32字符，不使用供应商密钥。
+    config-token: ${MOVIE_CONFIG_RPC_TOKEN:}

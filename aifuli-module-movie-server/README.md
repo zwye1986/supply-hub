@@ -10,9 +10,32 @@
 
 2026-09-29 已确认：供应商账号、应用 ID、密钥、接口地址及配置版本统一由中台后台管理，复用中台连接器和凭证槽；电影服务通过受控内部接口获取指定账号版本，继续负责签名、同步及后续履约，不直接读中台数据库。详见 [电影总体设计第 2.3 节](../docs/电影子系统与中台履约详细设计.md#23-供应商接入配置与现有-qihaofu-兼容边界)。
 
-**这是待实现设计。**当前代码仍使用下文的 Nacos `movie.supply.accounts` 和电影进程环境变量；内部配置接口、应用 ID 字段映射和历史凭证版本解析尚未完成。迁移和联调通过后才移除电影侧账号列表及供应商凭证环境变量，本次未修改代码或部署配置。任务仍由 XXL-JOB 统一管理，不增加任务配置开关。
+当前供给同步通过中台 MovieSupplierConfigApi 读取现有四表的已启用账号和当前已发布配置，应用标识来自 adapter_config_json.appId，签名密钥由中台ENV凭证解析器提供；电影不再读取旧Nacos账号列表或本进程供应商密钥。历史订单凭证恢复仍未实现。Nacos的movie.supply.enabled-channels决定采集渠道，任务启停仍由XXL-JOB管理。
 
 ## 本地配置
+
+电影Nacos合并以下配置，修改enabled-channels后下一轮同步生效；空字符串表示全部不采集，未知或重复渠道会使任务报错。
+
+```yaml
+movie:
+  supply:
+    enabled-channels: "JC,JY,LX"
+    config-token: ${MOVIE_CONFIG_RPC_TOKEN:}
+spring:
+  cloud:
+    openfeign:
+      client:
+        config:
+          movieSupplierConfig:
+            # HTTPS直连可指定url；不填写则按supply-chain-server服务发现。
+            # url: https://填写中台受控服务地址
+            connectTimeout: 5000
+            readTimeout: 10000
+```
+
+两端MOVIE_CONFIG_RPC_TOKEN配置相同的32至512字符随机服务令牌，不是供应商密钥。中台Nacos合并 `script/deploy/movie/supply-chain-movie-config.yaml`；默认要求HTTPS，生产使用受控TLS连接。仅受控本地HTTP联调时，在中台显式设 `movie.supply.config-require-https=false`，电影通过服务发现或 `spring.cloud.openfeign.client.config.movieSupplierConfig.url` 指向对应中台实例。令牌或传输条件不满足会拒绝配置请求。
+
+中台供应商密钥来自 `sc_credential_slot.secret_ref` 指定的环境属性：本次模板使用MOVIE_JC_APP_SECRET、MOVIE_JY_APP_SECRET、MOVIE_LX_APP_SECRET。密钥不在电影环境中解析，也不是数据库明文密码。当前版本必须status=10并由连接器current_version_id指向，启动不自动改数据。
 
 默认启用 `local`，从 Nacos 命名空间 `aifuli-supplyhub-local`、分组 `DEFAULT_GROUP` 加载 `movie-server-local.yaml` 并注册服务。业务配置统一维护在 Nacos，仓库模板为 `script/deploy/movie/movie-server-local.yaml`；先将模板中的 `movie`、`xxl` 节点合并到对应配置，保留已有环境连接和账号启停状态，再启动服务。`application.yaml` 只保留基础配置，以下环境变量用于基础设施默认值；远端已有同名属性时以最终生效配置为准：
 
@@ -36,7 +59,7 @@ Liquibase 默认关闭，先按 [数据库初始化说明](../sql/mysql/movie/RE
 数据标识为 `movie-server-dev.yaml`，业务节点可复用 `script/deploy/movie/movie-server-test.yaml` 中的 `movie`、`xxl` 配置。
 `test` 环境使用命名空间 `aifuli-supplyhub-test`、分组 `test`、数据标识 `movie-server-test.yaml`，模板位于 `script/deploy/movie/`。尚未提供 prod 配置，部署前按环境补齐独立连接与发布配置。
 
-供应商账号和 XXL-JOB 执行器参数来自 Nacos；`movie.supply.accounts` 就是供应商接入账号列表，用于配置渠道、账号启停、接口地址及凭证环境变量引用。列表按整份替换，新增账号应填写完整元信息。Nacos 导入仍为 optional，缺少远端业务配置时账号列表为空、执行器默认关闭。账号和执行器参数按发布后重启验收，只有统一停售提前量支持下次查询动态生效。五类任务的启停和执行时间全部在 XXL-JOB 调度中心管理，Nacos 不配置同步总开关或分类开关。
+Nacos管理渠道选择、内部RPC令牌和XXL-JOB执行器参数，供应商账号由中台数据库提供。旧movie.supply.accounts不再消费。缺少enabled-channels时不采集；执行器启用规则不变。渠道选择在下一轮同步生效，停售提前量在下一次查询生效，五类任务的启停与时间仍由XXL-JOB调度中心管理。
 
 ## 数据与后续实现
 
@@ -44,7 +67,7 @@ SQL 唯一源目录为 `sql/mysql/movie/`，构建资源规则仅收录电影变
 应用不开启自动建表或 MongoDB 自动建索引；正式迁移由独立发布流程执行。
 六张表通过独立 MyBatis Plus Mapper 查询，采用 Lambda 条件和影院主键游标分页，不需要分页插件；不继承租户或逻辑删除基类。
 
-TODO（[详细设计](../docs/电影子系统与中台履约详细设计.md)第 2.3、3.2、3.4、4.2、4.4 节）：先复用中台账号配置表并补齐应用 ID、绑定、秘密版本和受控查询接口，电影服务接入该接口，不在电影库新增凭证管理表；报价和操作记录另按订单设计补齐 DDL，再实现实时验座、报价提交、幂等履约与系统间鉴权。当前供给采集仍使用进程配置和环境变量凭证，未切换到目标架构。
+TODO（[详细设计](../docs/电影子系统与中台履约详细设计.md)第 2.3、3.2、3.4、4.2、4.4 节）：先复用中台账号配置表并补齐应用 ID、绑定、秘密版本和受控查询接口，电影服务接入该接口，不在电影库新增凭证管理表；报价和操作记录另按订单设计补齐 DDL，再实现实时验座、报价提交、幂等履约与系统间鉴权。供给采集已接入中台配置RPC；项目绑定和历史秘密恢复尚未实现。
 外部 API 在实际消费时显式注册，不能扫描全部 Feign 接口。
 
 人工验收与排障步骤见 [集成测试记录](../docs/集成测试.md#电影子系统工程初始化验收2026-09-07)。
@@ -55,8 +78,8 @@ TODO（[详细设计](../docs/电影子系统与中台履约详细设计.md)第 
 
 1. 在独立电影 MySQL 库执行既有 Liquibase 六表迁移；MongoDB 必须是支持事务的副本集或分片集群，新环境依次执行 `sql/mysql/movie/mongodb/001-cinema-schedule-indexes.js` 和 `002-query-time-sale-policy.js`。前者预建集合，后者移除旧停售 TTL 并建立动态查询索引。应用只读检查前提，不执行 DDL，也不降级到非事务写入。
 2. MySQL 显式使用 Hikari，默认池容量 12，可用 `MOVIE_MYSQL_POOL_SIZE` 调整，建议不少于 10。持锁连接结束时物理淘汰；连接获取 10 秒、锁语句 5 秒、驱动 socket 10 秒，禁用 autoReconnect。环境 JDBC URL 不得重新开启自动重连。
-3. 设置 `MOVIE_JC_BASE_URL`、`MOVIE_JC_APP_KEY`、`MOVIE_JC_APP_SECRET` 与对应 `MOVIE_JY_*`；URL 包含完整 HTTP/HTTPS 协议。凭证不写入仓库。
-4. 首次部署在 Nacos 完整账号列表中启用已配齐的 JC/JY 账号（也可保留模板占位符并设置 `MOVIE_JC_ENABLED=true`、`MOVIE_JY_ENABLED=true`），保持 XXL-JOB 调度中心的五类任务处于停止状态，重启后通过 IDE 调用 `MovieSupplySyncService.synchronizeMasterData()` 完成城市→待映→热映→影院初始化，再调用 `synchronizeSchedules()`。初始化失败或锁忙应先排障重跑，不能靠定时任务的时间间隔保证依赖已完成。
+3. 核对中台已入库三家配置：JSON内appId/channel/accountRef与适配类型一致，地址从base_url读取；在中台进程配置凭证槽env:引用的密钥。核对并执行script/deploy/movie/activate-movie-suppliers.sql，设置当前已发布版本。
+4. 首次部署在电影Nacos设置movie.supply.enabled-channels，例如JC,JY；配齐下方RPC连接与令牌，保持XXL-JOB调度中心的五类任务停止，重启后通过IDE调用 `MovieSupplySyncService.synchronizeMasterData()` 完成城市→待映→热映→影院初始化，再调用 `synchronizeSchedules()`。初始化失败或锁忙应先排障重跑，不能靠定时任务的时间间隔保证依赖已完成。
 5. 配置 `MOVIE_XXL_JOB_ADMIN_ADDRESSES` 与 `MOVIE_XXL_JOB_ACCESS_TOKEN`（与调度中心一致），启用执行器 `xxl.job.enabled=true`（或保留模板占位符并设置 `MOVIE_XXL_JOB_ENABLED=true`），重启电影服务即注册全部五个 Handler。执行器 AppName 填 `movie-server`，与应用配置保持一致。注册不自动触发任务，初始化成功后再到调度中心启动周期任务。
 6. 在 XXL-JOB 任务管理中创建以下五个 BEAN 任务，**执行时间由使用者自行配置**，代码不提供默认计划。执行参数留空。每个 Handler 只建立一个任务，建议路由 FIRST、阻塞策略“丢弃后续调度”、失败重试 0、超时 0、调度过期“不补偿”。调度中心 JVM 使用 `Asia/Shanghai` 时区；确认初始化完成后再启动任务。
 
@@ -78,7 +101,7 @@ TODO（[详细设计](../docs/电影子系统与中台履约详细设计.md)第 
 JC API 明确 filmId 是专资编码；未取得 ID 的待映记录逐条报告缺失，其它有效记录可继续同步。JC 影院只接受 standardId 或已有明确 Mapping，删除 cinemaId 的八位数字回退。JY 的 film_id 与 film_code、cinema_id 与 cinema_code 独立保存。
 重复同步按唯一键更新，不重复建档；供应商列表中暂时缺失的主数据不自动删除或禁用，以避免短暂缺项影响另一渠道。
 
-同一供应商多个账号时，在 `movie.supply.accounts` 中增加独立 `account-ref`、`config-version`、应用凭证环境变量引用及 `binding-refs`。
+同一供应商多个账号时，在中台新增连接器及配置版本，JSON内accountRef必须与connector_code一致且全局唯一；不要改变已有jc-default/jy-default/lx-default引用。
 MySQL 映射当前仍按渠道原始 ID 共享，其跨账号命名空间前提尚待确认，不宣称所有账号/环境均可安全共享。JY 文档明确快慢票账号及场次不通用，MongoDB 必须按账号隔离；查询要求显式账号及当前配置版本。账号引用一旦投入使用保持稳定；变更引用后的旧账号数据需另行安排清理，不再通过停售 TTL 回收。
 更换凭证时同步更新 `config-version`，避免旧配置的成本被查询复用。
 
@@ -91,7 +114,7 @@ JC `disableFlag` 仅影响特惠基础成本，快票选项原样保留；本阶
 ## 协议、容量及升级注意事项
 
 - JC 影院支持文档的 `data.data[]` 和旧数组响应，每页固定 1000 条；JY 分区价按 `area:…,price:…,settle_price:…;…` 解析，不能当 JSON。JY 影厅读取 hallCode，相对海报按文档 CDN 补齐。
-- JC 启用 gzip 并显式解压。账号级请求起始间隔默认 1100ms，由 `MOVIE_JC_MIN_REQUEST_INTERVAL`、`MOVIE_JY_MIN_REQUEST_INTERVAL` 配置；该默认覆盖 JC 最低 60rpm 等级。只有确认供应商配额后才调小；进程内间隔不等于集群全局配额。
+- JC 启用 gzip 并显式解压。账号级请求起始间隔默认 1100ms，由中台配置JSON的minRequestIntervalMs配置；该默认覆盖 JC 最低 60rpm 等级。只有确认供应商配额后才调小；进程内间隔不等于集群全局配额。
 - JY 建议主数据每日、排期每小时刷新，生产排期并发不超过 30、测试不超过 15；本实现同类请求串行，可按合同调整独立任务计划。JC 在最低配额下，一万影院单账号仅起始间隔下界约 183 分钟，不能保证全国十分钟新鲜度。
 - v2 排期键包含渠道、账号、原始影院和 showId，查询排除旧格式；同范围旧键由对应影院成功事务清理。升级时停止全部旧调度实例、部署集合和索引、确认副本集 URI，再刷新 v2 数据；未完成刷新前可能查不到旧供给，不允许新旧版本混跑。
 - JC 城市/影片/排期示例形态、空格签名仍有文档/旧 SDK 冲突：当前保留原数组/Java SDK 兼容路径。三渠道停售改为以下统一平台策略，不再依赖 JC stopPurchase 或 JY stop_sell_time。
@@ -99,11 +122,7 @@ JC `disableFlag` 仅影响特惠基础成本，快票选项原样保留；本阶
 
 ## LX 影乐星与动态停售配置
 
-影乐星接入现有城市、热映、待映、影院和排期任务。设置 `MOVIE_LX_ENABLED=true`，在电影进程环境中设置
-`MOVIE_LX_APP_ID`、`MOVIE_LX_APP_SECRET`；`MOVIE_LX_BASE_URL` 默认 `https://api.yinglexing.com`。
-`MOVIE_LX_CONFIG_VERSION` 默认 `v1`，`MOVIE_LX_MIN_REQUEST_INTERVAL` 默认 `1100ms`，具体配额需联调确认。
-LX 默认关闭，无凭证时不影响 JC/JY；Nacos 若覆盖了 `movie.supply.accounts` 列表，须在同一列表中显式追加
-`script/deploy/movie/movie-server-{local,test}.yaml` 中的 `lx-default` 账号，Spring 配置列表不会自动合并。
+影乐星接入现有五类任务。在电影Nacos的movie.supply.enabled-channels中加入LX，中台必须存在启用且已发布的LX连接器。应用ID读取配置JSON的appId，密钥由中台凭证槽解析，地址读取base_url；旧MOVIE_LX_ENABLED及电影accounts列表不再生效。
 
 城市同步先 JC、LX 后 JY；影院每账号每轮请求一次全国列表；排期请求使用影院专资编码。
 LX 成本使用含税 `price`，`nax_price/nax_price_st` 仅是参考价；散场按开场加影片时长推算。

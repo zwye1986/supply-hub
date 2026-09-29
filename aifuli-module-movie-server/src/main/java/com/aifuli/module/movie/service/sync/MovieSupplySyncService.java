@@ -32,8 +32,10 @@ import static com.aifuli.module.movie.enums.MovieDataStatus.ENABLED;
 public class MovieSupplySyncService {
     /** JC 文档 §4.7 支持的订单类型，不能接受任意分钟数字。 */
     private static final Set<String> JC_DELIVERY_OPTIONS = Set.of("8", "15", "30");
-    /** 账号及分页配置。 */
+    /** 分页防护配置，账号不再由此配置绑定。 */
     private final MovieSupplyProperties properties;
+    /** 每轮从中台获取所选渠道的账号和凭证快照。 */
+    private final MovieSupplierAccountProvider accountProvider;
     /** 已注册的供给端口，按渠道枚举精确选择。 */
     private final List<MovieSupplyClient> clients;
     /** MySQL 主数据事务服务。 */
@@ -44,14 +46,18 @@ public class MovieSupplySyncService {
     /** 跨实例同步互斥锁。 */
     private final MovieSyncLock syncLock;
 
-    /** 启动即校验启用账号元信息，凭证只在外呼时读取，日志不输出配置对象。 */
+    /** 启动只校验全局参数；账号在任务开始时读取，不让启动触发跨服务采集。 */
     @PostConstruct
     public void validateConfiguration() {
         if (properties.getMaxPages() < 1 || properties.getMaxPages() > 10000) {
             throw new IllegalArgumentException("movie.supply.max-pages 必须介于 1 和 10000");
         }
+    }
+
+    /** 每轮校验中台快照，不打印含密钥的账号对象。 */
+    private void validateAccounts(List<Account> accounts) {
         Set<String> refs = new HashSet<>();
-        for (Account account : properties.getAccounts()) {
+        for (Account account : accounts) {
             if (account.getAccountRef() == null || !account.getAccountRef().matches("[A-Za-z0-9_-]{1,64}")
                     || !refs.add(account.getAccountRef())) {
                 throw new IllegalArgumentException("电影账号引用缺失、重复或包含不允许字符");
@@ -61,7 +67,8 @@ public class MovieSupplySyncService {
             }
             if (account.getChannel() == null || account.getConfigVersion() == null || account.getConfigVersion().isBlank()
                     || account.getBaseUrl() == null || account.getBaseUrl().isBlank()
-                    || account.getAppKeyEnv() == null || account.getAppSecretEnv() == null
+                    || account.getAppId() == null || account.getAppId().isBlank()
+                    || account.getAppSecret() == null || account.getAppSecret().isBlank()
                     || account.getConnectTimeout() == null || account.getConnectTimeout().isNegative() || account.getConnectTimeout().isZero()
                     || account.getRequestTimeout() == null || account.getRequestTimeout().isNegative() || account.getRequestTimeout().isZero()
                     || account.getMinRequestInterval() == null || account.getMinRequestInterval().isNegative()
@@ -275,7 +282,9 @@ public class MovieSupplySyncService {
 
     /** 标准码来源先 JC 后 LX，再处理 JY 同名绑定；账号内部顺序稳定。 */
     private List<Account> enabledAccounts() {
-        return properties.getAccounts().stream().filter(Account::isEnabled)
+        List<Account> accounts = accountProvider.accounts();
+        validateAccounts(accounts);
+        return accounts.stream().filter(Account::isEnabled)
                 .sorted(Comparator.comparingInt((Account account) -> switch (account.getChannel()) {
                     case JC -> 0;
                     case LX -> 1;

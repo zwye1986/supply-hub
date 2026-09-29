@@ -75,8 +75,8 @@ public class MovieSupplierHttpClient {
                 account.getAccountRef(), account.getChannel(), path, parameters);
         try {
             gates.computeIfAbsent(account.getAccountRef(), ignored -> new RequestGate()).await(account.getMinRequestInterval());
-            String key = credential(account.getAppKeyEnv());
-            String secret = credential(account.getAppSecretEnv());
+            String key = credential(account.getAppId());
+            String secret = credential(account.getAppSecret());
             URI base = URI.create(account.getBaseUrl());
             if (base.getHost() == null || base.getUserInfo() != null || base.getQuery() != null
                     || base.getFragment() != null || !("https".equals(base.getScheme()) || "http".equals(base.getScheme()))) {
@@ -206,14 +206,10 @@ public class MovieSupplierHttpClient {
         }
     }
 
-    /** 从环境密钥引用取值，异常禁止携带实际凭证。 */
-    private static String credential(String variable) {
-        if (variable == null || !variable.matches("[A-Za-z_][A-Za-z0-9_]*")) {
-            throw new MovieSupplierException("供应商凭证环境变量引用无效");
-        }
-        String value = System.getenv(variable);
+    /** 使用本轮中台返回的凭证，不重新读取环境变量或切换配置版本。 */
+    private static String credential(String value) {
         if (value == null || value.isBlank()) {
-            throw new MovieSupplierException("供应商凭证环境变量未配置：" + variable);
+            throw new MovieSupplierException("中台返回的电影供应商凭证为空");
         }
         return value;
     }

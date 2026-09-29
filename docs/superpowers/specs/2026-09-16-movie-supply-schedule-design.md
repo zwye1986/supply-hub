@@ -10,6 +10,20 @@
 
 ## 2. 接入账号与协议
 
+### 数据库账号与渠道选择落地（2026-09-29）
+
+本节覆盖下方历史过渡方案。本次按已入库数据接入，不新增表或字段：`adapter_config_json` 的封闭字段为 `appId/channel/accountRef/minRequestIntervalMs`，JC 另含 `deliverMinutes`；明确将 appId 映射到 JC partnerCode、JY X-Ca-Key、LX app_id，merchant_account 保持原语义。适配类型为 MOVIE_JC_V1/MOVIE_JY_V1/MOVIE_LX_V1。
+
+电影每轮从动态 Environment 读取逗号分隔的 `movie.supply.enabled-channels`（如 `JC,JY,LX`）；缺省或空串代表全部不采集，未知渠道/重复渠道报错。渠道在该轮固定，更新在下轮生效。旧 accounts 配置不再消费。
+
+电影显式注册 MovieSupplierConfigApi，通过 GET `/rpc-api/supply-chain/movie-supplier-config/accounts?channels=JC,JY` 读取账号；中台只查本库供应商、连接器、当前版本和凭证槽，采用只读 REPEATABLE_READ 事务。必须满足主体启用、连接器启用、current_version_id归属正确且版本已发布、凭证槽启用；配置不完整或渠道无可用账号明确失败，不回退Nacos、不替换旧排期。非所选渠道不解析凭证。同一轮只读一次，固定 accountRef 和 `v{version_no}`，保持现有Mongo引用。
+
+接口只面向电影服务，使用独立的共享令牌头 `X-Movie-Config-Token`，两端配置 `movie.supply.config-token`，至少32字符；默认空值拒绝调用，不复用供应商密钥。接口默认要求HTTPS（`movie.supply.config-require-https=true`）；仅受控本地联调可显式关闭，生产需端到端TLS或可信终止代理。关闭访问报文日志、Feign报文日志并返回no-store，DTO不生成包含密钥的toString。电影入站安全链不变，供应链仅精确放行该RPC的登录前置要求，方法鉴权仍必须通过。
+
+凭证仍由现有ENV Provider在中台解析，返回应用标识与密钥给电影内存签名；不将秘密写入电影数据库、排期或Nacos账号列表。这不等于数据库已存密钥明文。当前仅供给采集支持每轮快照，不承诺ENV历史秘密恢复；后续订单版本冻结仍待总体设计实现。
+
+本次不扩展管理端发布流程，已确认的初始化数据通过 `script/deploy/movie/activate-movie-suppliers.sql` 显式指向v1并设为已发布；不伪造validation_status=10或历史审计。读取时独立校验JSON类型、账号归属、超时、URL、协议参数与凭证。SQL仅准备不自动执行。运行态验证与测试边界维护在 `docs/集成测试.md`。
+
 ### 中台统一管理目标（2026-09-29，待实现）
 
 供应商账号、应用 ID、密钥、接口地址、账号启停、超时、限流及配置版本统一由中台管理；电影服务通过受控内部接口获取指定账号及版本并继续执行协议签名和采集。具体配置表、应用 ID 字段缺口、接口安全、版本冻结及迁移顺序，以 [电影总体设计第 2.3 节](../../电影子系统与中台履约详细设计.md#23-供应商接入配置与现有-qihaofu-兼容边界) 为准。

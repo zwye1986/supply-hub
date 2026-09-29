@@ -10,19 +10,17 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 电影供给采集配置；只保存密钥环境变量名称，不承载明文凭证。
+ * 电影分页防护配置；账号由中台RPC提供，不再绑定Nacos账号列表。
  * 设计：docs/superpowers/specs/2026-09-16-movie-supply-schedule-design.md#2-接入账号与协议
  */
 @Getter
 @Setter
 @ConfigurationProperties("movie.supply")
 public class MovieSupplyProperties {
-    /** 同步账号列表，同一供应商允许多个账号。 */
-    private List<Account> accounts = new ArrayList<>();
     /** 单接口最大页数，防止上游忽略分页参数导致无限请求。 */
     private int maxPages = 1000;
 
-    /** 接入账号元信息；禁止添加会打印凭证的 toString。 */
+    /** 单轮中台账号快照；不参与配置绑定，禁止添加会打印凭证的toString或持久化整个对象。 */
     @Getter
     @Setter
     public static class Account {
@@ -36,10 +34,10 @@ public class MovieSupplyProperties {
         private String configVersion;
         /** 供应商服务根地址，必须显式包含 http/https。 */
         private String baseUrl;
-        /** 应用标识所在的环境变量名。 */
-        private String appKeyEnv;
-        /** 应用密钥所在的环境变量名。 */
-        private String appSecretEnv;
+        /** 中台JSON中的应用标识，直接参与当前渠道签名。 */
+        private String appId;
+        /** 中台解析的签名密钥，只保留在本轮处理内存中。 */
+        private String appSecret;
         /** 网络连接超时。 */
         private Duration connectTimeout = Duration.ofSeconds(5);
         /** 单请求超时。 */
