@@ -10,7 +10,19 @@
 
 ## 2. 接入账号与协议
 
+### 中台统一管理目标（2026-09-29，待实现）
+
+供应商账号、应用 ID、密钥、接口地址、账号启停、超时、限流及配置版本统一由中台管理；电影服务通过受控内部接口获取指定账号及版本并继续执行协议签名和采集。具体配置表、应用 ID 字段缺口、接口安全、版本冻结及迁移顺序，以 [电影总体设计第 2.3 节](../../电影子系统与中台履约详细设计.md#23-供应商接入配置与现有-qihaofu-兼容边界) 为准。
+
+中台复用 `sc_supplier_connector`、`sc_supplier_connector_version`、`sc_credential_slot`，电影库不另建账号凭证管理表，也不跨库读取中台表。当前中台凭证解析只支持 ENV；受控配置接口、电影消费逻辑及历史秘密版本解析尚待实现，不能把已有表等同于已完成电影接入。
+
+目标态每轮同步从中台取得已启用、已发布且获授权的账号，固定 `connectorAccountRef/configVersion` 后执行；配置异常明确失败，不能回退 Nacos 或清空原排期。账号停用与历史操作授权由中台控制。XXL-JOB 启动注册全部 Handler 的规则保持不变，不增加同步总开关或分类开关。
+
+迁移完成并通过验收后移除电影 Nacos `movie.supply.accounts` 及电影进程供应商凭证环境变量。Nacos 继续管理基础设施、服务发现、XXL-JOB 连接及停售策略。下节与第 8.1 节的 Nacos/环境变量方式仅描述当前过渡实现，本次文档修改不改变运行配置。
+
 ### 配置归属调整（2026-09-28）
+
+> 当前代码的过渡部署方式；账号和凭证的目标归属以上述 2026-09-29 修订为准，代码迁移完成前仍需保留以下配置。
 
 `application.yaml` 仅保留基础启动、安全、基础设施默认值及配置导入；`movie.supply` 和 `xxl.job` 统一放在当前环境的 Nacos 配置 `movie-server-${spring.profiles.active}.yaml`。本地 `local` 也启用 Nacos 配置与服务注册，命名空间为 `aifuli-supplyhub-local`、分组为 `DEFAULT_GROUP`；`test` 使用 `aifuli-supplyhub-test`、分组为 `test`；`dev` 沿用环境变量指定连接位置。
 
@@ -22,7 +34,7 @@
 
 2026-09-28 新增影乐星 `LX/lx`，协议、全国影院采集与排期差异以第 8 节为准；前文 JC/JY 的 `success=true` 要求不适用于 LX。
 
-配置命名空间 `movie.supply`，账号按稳定 `accountRef` 标识，包含渠道枚举 JC/JY、配置版本、启停、URL、连接/读取超时以及环境变量形式的应用标识和密钥引用。账号可记录项目/采购商绑定引用；当前任务只采集供给，不执行账号路由。不同账号的排期独立保存；主数据 Mapping 使用供应商范围 ID，与既有六表契约保持一致。禁止复制参考仓库中的凭证或关闭 TLS 校验。
+账号按稳定 `accountRef` 标识，包含渠道 JC/JY/LX、配置版本、启停、URL、连接/读取超时和凭证版本。目标态从中台内部接口获取，当前过渡实现仍绑定 `movie.supply` 并通过环境变量读取凭证。账号可记录项目/采购商绑定引用；当前任务只采集供给，不执行账号路由。不同账号的排期独立保存；主数据 Mapping 使用供应商范围 ID，与既有六表契约保持一致。禁止复制参考仓库中的凭证或关闭 TLS 校验。
 
 协议优先依据用户提供的佳意、今晨 API Markdown，旧 `qihaofu/qihaofuAdmin` SDK 用于补充线协议参考；冲突见第 7.5 节，未对生产供应商发起请求：
 
@@ -64,7 +76,7 @@ HTTP 必须同时验证状态码、`success=true` 和数据结构；缺字段或
 
 五类 Job 改为 XXL-JOB BEAN Handler，复用 `aifuli-spring-boot-starter-job`，Handler 名依次为 `movieCitySyncJob`、`movieCinemaSyncJob`、`movieHotFilmSyncJob`、`movieSoonFilmSyncJob`、`movieScheduleSyncJob`。移除电影专属 Spring 调度器和 `@Scheduled`。2026-09-28 简化注册：五类 Job 和执行边界均为普通 Spring Bean，不设置任务注册条件；XXL-JOB 执行器启动时统一发现并注册全部 Handler。删除 `movie.supply.sync` 总开关、分类开关及对应环境变量，旧值不再影响注册；任务启停、执行时间和手工触发完全由调度中心管理。
 
-只保留共享 starter 的执行器基础设施开关 `xxl.job.enabled`，模板使用 `${MOVIE_XXL_JOB_ENABLED:false}`，与任何业务开关无关。执行器默认 AppName 为 `movie-server`，地址、令牌、端口、注册 IP 与日志路径沿用原配置。开启执行器仅注册 Handler，不自动创建或启动调度中心任务；首次初始化完成前保持调度中心任务停止。每轮筛选 Nacos `movie.supply.accounts` 中启用的账号，不参与 Handler 注册。
+只保留共享 starter 的执行器基础设施开关 `xxl.job.enabled`，模板使用 `${MOVIE_XXL_JOB_ENABLED:false}`，与任何业务开关无关。执行器默认 AppName 为 `movie-server`，地址、令牌、端口、注册 IP 与日志路径沿用原配置。开启执行器仅注册 Handler，不自动创建或启动调度中心任务；首次初始化完成前保持调度中心任务停止。目标态每轮使用中台提供的可用账号，当前过渡实现仍筛选 Nacos `movie.supply.accounts`；账号来源与启停均不参与 Handler 注册。
 
 调度计划统一由 XXL-JOB 管理；五类任务的执行时间均由使用者在任务管理中自行配置，代码不预设周期；调度中心 JVM 使用 Asia/Shanghai。排期不再提供应用内 fixedDelay 语义。删除应用中的 cron、zone、delay、initial-delay 配置，不再由应用启动自动触发。每个 Handler 只配置一个任务，路由选 FIRST，阻塞策略选丢弃后续调度，失败重试次数为 0、超时为 0、过期策略不补偿；单轮串行外呼及既有类别锁不变。
 
@@ -144,6 +156,8 @@ MySQL GET_LOCK 是会话锁，连接池 close 只是归还代理。取得结果�
 ## 8. LX 影乐星渠道接入
 
 ### 8.1 范围与协议
+
+账号来源说明：下文环境变量配置为现有实现；目标态由中台统一提供应用 ID、密钥及配置版本，见第 2 节。账号来源调整不改变 LX 签名和接口协议。
 
 依据 `docs/影乐星开放平台接口文档.md` 第 1、3 章，在现有五类只读同步流程中增加 `MovieChannel.LX`，持久化编码为 `lx`。锁座、出票、查单、退款、回调尚无现有实现，本次不扩展交易契约。继续只在独立电影进程内访问电影库，不新增 RPC、事务管理器、安全入口或供应链依赖，不触发供应链架构测试变更范围。
 
