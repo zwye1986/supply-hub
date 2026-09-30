@@ -179,6 +179,28 @@ class RoutingRuleAdminCommandServiceTest {
     }
 
     @Test
+    void publishesDistributorProjectProductTypeRule() {
+        when(policyMapper.selectActiveByType(RoutingType.STANDARD_PRODUCT.code())).thenReturn(List.of());
+        when(buyerMapper.selectByBuyerCode("BYR_1")).thenReturn(buyer(1L, "BYR_1"));
+        when(projectMapper.selectByProjectCode("PRJ_1")).thenReturn(
+                BuyerProjectDO.builder().id(2L).projectCode("PRJ_1").buyerId(1L).build());
+        when(productTypeMapper.selectByCode("MOVIE")).thenReturn(
+                com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProductTypeDO.builder().id(3L).typeCode("MOVIE").typeName("电影票").build());
+        when(queryService.get(NEW_RULE_CODE)).thenReturn(sampleView(NEW_RULE_CODE));
+
+        service.create(projectProductTypePatch("BYR_1", "PRJ_1", "MOVIE"), OPERATOR_ID);
+
+        ArgumentCaptor<SuccessorPublishCommand> captor = ArgumentCaptor.forClass(SuccessorPublishCommand.class);
+        verify(publicationService).publishSuccessorStandardProductRules(captor.capture());
+        RuleDraft draft = captor.getValue().rules().getFirst();
+        assertThat(draft.distributorCodes()).containsExactly("BYR_1");
+        assertThat(draft.projectCodes()).containsExactly("PRJ_1");
+        assertThat(draft.productTypeCodes()).containsExactly("MOVIE");
+        assertThat(draft.supplierMode()).isEqualTo("ALL");
+        assertThat(draft.candidates()).isEmpty();
+    }
+
+    @Test
     void createSecondKeepsExistingRuleAndRetainsCandidateCheckModes() {
         stubActivePolicyAndVersion();
         // 既有 AUTO+SPECIFIED 规则：两个候选，健康检查 OPTIONAL/60
@@ -359,6 +381,17 @@ class RoutingRuleAdminCommandServiceTest {
                 RoutingRuleScopeMode.SPECIFIED, List.of(distributorCode),
                 RoutingRuleScopeMode.SPECIFIED, List.of(projectCode),
                 RoutingRuleScopeMode.ALL, List.of(), RoutingRuleScopeMode.ALL, List.of(),
+                null, List.of(RoutingRuleStrategy.STABLE, RoutingRuleStrategy.PRICE,
+                        RoutingRuleStrategy.COMPOSITE), new WeightInput(40, 30, 30), null);
+    }
+
+    private static NormalizedRulePatch projectProductTypePatch(String distributorCode, String projectCode, String productTypeCode) {
+        return new NormalizedRulePatch(
+                null, "分销商项目品类专属路由", RoutingRuleRouteMode.AUTO, RoutingRuleStatus.ENABLED,
+                RoutingRuleScopeMode.SPECIFIED, List.of(distributorCode),
+                RoutingRuleScopeMode.SPECIFIED, List.of(projectCode),
+                RoutingRuleScopeMode.SPECIFIED, List.of(productTypeCode),
+                RoutingRuleScopeMode.ALL, List.of(),
                 null, List.of(RoutingRuleStrategy.STABLE, RoutingRuleStrategy.PRICE,
                         RoutingRuleStrategy.COMPOSITE), new WeightInput(40, 30, 30), null);
     }

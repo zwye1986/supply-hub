@@ -23,15 +23,26 @@ class SupplierRoutingRuleMatchingTest {
     void fourDimensionWinsBeforeOtherTiersRegardlessOfRulePriority() {
         StdRoutingRuleDO full = rule(1L, "FULL", "SPECIFIED", "SPECIFIED",
                 "SPECIFIED", "SPECIFIED", 100, (short) 10);
+        StdRoutingRuleDO buyerProjectType = rule(2L, "BUYER_PROJECT_TYPE", "SPECIFIED", "SPECIFIED",
+                "SPECIFIED", "ALL", 0, (short) 10);
+        StdRoutingRuleDO buyerType = rule(3L, "BUYER_TYPE", "SPECIFIED", "ALL",
+                "SPECIFIED", "ALL", 0, (short) 10);
+        StdRoutingRuleDO projectType = rule(4L, "PROJECT_TYPE", "ALL", "SPECIFIED",
+                "SPECIFIED", "ALL", 0, (short) 10);
+        StdRoutingRuleDO type = rule(5L, "TYPE", "ALL", "ALL",
+                "SPECIFIED", "ALL", 0, (short) 10);
+        StdRoutingRuleDO global = rule(6L, "GLOBAL_DEFAULT", "ALL", "ALL",
+                "ALL", "ALL", 0, (short) 10);
+        assertThat(select(List.of(global, type, projectType, buyerType, buyerProjectType, full))).isEqualTo(full);
+    }
+
+    @Test
+    void distributorProjectProductTypeWinsBeforeDistributorProductType() {
+        StdRoutingRuleDO buyerProjectType = rule(1L, "BUYER_PROJECT_TYPE", "SPECIFIED", "SPECIFIED",
+                "SPECIFIED", "ALL", 100, (short) 10);
         StdRoutingRuleDO buyerType = rule(2L, "BUYER_TYPE", "SPECIFIED", "ALL",
                 "SPECIFIED", "ALL", 0, (short) 10);
-        StdRoutingRuleDO projectType = rule(3L, "PROJECT_TYPE", "ALL", "SPECIFIED",
-                "SPECIFIED", "ALL", 0, (short) 10);
-        StdRoutingRuleDO type = rule(4L, "TYPE", "ALL", "ALL",
-                "SPECIFIED", "ALL", 0, (short) 10);
-        StdRoutingRuleDO global = rule(5L, "GLOBAL_DEFAULT", "ALL", "ALL",
-                "ALL", "ALL", 0, (short) 10);
-        assertThat(select(List.of(global, type, projectType, buyerType, full))).isEqualTo(full);
+        assertThat(select(List.of(buyerType, buyerProjectType))).isEqualTo(buyerProjectType);
     }
 
     @Test

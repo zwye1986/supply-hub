@@ -16,10 +16,12 @@ class RoutingRuleScopeTierTest {
     @Test
     void classifiesOnlyPrdTiersInDescendingPrecedence() {
         assertThat(RoutingRuleScopeTier.values()).extracting(Enum::name).containsExactly(
-                "FOUR_DIMENSION", "DISTRIBUTOR_PRODUCT_TYPE", "PROJECT_PRODUCT_TYPE",
-                "PRODUCT_TYPE", "DISTRIBUTOR_PROJECT", "GLOBAL_DEFAULT");
+                "FOUR_DIMENSION", "DISTRIBUTOR_PROJECT_PRODUCT_TYPE", "DISTRIBUTOR_PRODUCT_TYPE",
+                "PROJECT_PRODUCT_TYPE", "PRODUCT_TYPE", "DISTRIBUTOR_PROJECT", "GLOBAL_DEFAULT");
         assertThat(RoutingRuleScopeTier.require(SPECIFIED, SPECIFIED, SPECIFIED, SPECIFIED))
                 .isEqualTo(RoutingRuleScopeTier.FOUR_DIMENSION);
+        assertThat(RoutingRuleScopeTier.require(SPECIFIED, SPECIFIED, SPECIFIED, ALL))
+                .isEqualTo(RoutingRuleScopeTier.DISTRIBUTOR_PROJECT_PRODUCT_TYPE);
         assertThat(RoutingRuleScopeTier.require(SPECIFIED, ALL, SPECIFIED, ALL))
                 .isEqualTo(RoutingRuleScopeTier.DISTRIBUTOR_PRODUCT_TYPE);
         assertThat(RoutingRuleScopeTier.require(ALL, SPECIFIED, SPECIFIED, ALL))
@@ -36,12 +38,12 @@ class RoutingRuleScopeTierTest {
     void rejectsShapesThatWouldNeverMatch() {
         assertThatThrownBy(() -> RoutingRuleScopeTier.require(SPECIFIED, ALL, ALL, ALL))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("六级匹配层级");
+                .hasMessageContaining("七级匹配层级");
         assertThatThrownBy(() -> RoutingRuleScopeTier.require(ALL, ALL, ALL, SPECIFIED))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("六级匹配层级");
-        assertThatThrownBy(() -> RoutingRuleScopeTier.require(SPECIFIED, SPECIFIED, SPECIFIED, ALL))
+                .hasMessageContaining("七级匹配层级");
+        assertThatThrownBy(() -> RoutingRuleScopeTier.require(ALL, SPECIFIED, ALL, ALL))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("六级匹配层级");
+                .hasMessageContaining("七级匹配层级");
     }
 }

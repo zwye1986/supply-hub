@@ -199,7 +199,7 @@ public interface SupplyChainErrorCodeConstants {
     ErrorCode BUSINESS_CODE_PERMANENT_EXISTS = error(1_050_001_145, "永久编码已存在：{}");
     ErrorCode BUSINESS_CODE_LEGACY_PARENT_OCCUPIED = error(1_050_001_146, "旧父对象占用父段：{}");
     ErrorCode ROUTING_RULE_SCOPE_UNSUPPORTED =
-            error(1_050_001_147, "路由规则范围组合不支持，请按六级匹配层级配置");
+            error(1_050_001_147, "路由规则范围组合不支持，请按七级匹配层级配置");
     ErrorCode ROUTING_RULE_PROJECT_BUYER_MISMATCH =
             error(1_050_001_148, "项目不属于所选分销商");
 
