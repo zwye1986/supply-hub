@@ -146,6 +146,100 @@ class RechargeFrequencyExecutionIntegrationTest {
         } finally { fixture.stopContainer(); }
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"FULFILL", "QUERY_ORDER"})
+    void credentialFailureWithPrebuiltFutureOperationOrQueryReturnsWaitingAndRetriesOnce(String kind) {
+        var fixture = new FulfillmentAcceptanceIntegrationTest(); fixture.startContainer();
+        try (var context = fixture.applicationContext(ExecutionConfiguration.class)) {
+            fixture.seed(context); context.getBean(BuyerFulfillmentCommandFacade.class).acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("PREBUILT-"+kind, 1L));
+            var jdbc = new JdbcTemplate(context.getBean("supplyChainDataSource", DataSource.class));
+            var op = operations(jdbc).getFirst(); long opId = jdbc.queryForObject("SELECT id FROM sc_fulfillment_operation WHERE operation_no=?", Long.class, op);
+            if ("QUERY_ORDER".equals(kind)) { jdbc.update("UPDATE sc_fulfillment_operation SET sequence_no=2 WHERE id=?", opId); }
+            RechargeFrequencyAcceptanceIntegrationTest.cloneRow(jdbc, "sc_fulfillment_operation", opId,
+                    Map.of("operation_no", "OP_PREBUILT", "sequence_no", "QUERY_ORDER".equals(kind) ? 1 : 2, "operation_kind", kind, "idempotency_key", "PREBUILT"));
+            long frozen = jdbc.queryForObject("SELECT frozen FROM sc_buyer_account", Long.class);
+            long wake = jdbc.queryForObject("SELECT wake_generation FROM sc_recharge_frequency_queue", Long.class);
+            var provider = context.getBean(MutableCredentialProvider.class); provider.fail = true;
+            var handler = context.getBean(FulfillmentOperationExecuteHandler.class); var payload = context.getBean(ObjectMapper.class).createObjectNode().put("operationNo", op);
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> handler.handle(timer(), payload)).hasMessage("CREDENTIAL_UNAVAILABLE");
+            assertThat(jdbc.queryForObject("SELECT status FROM sc_recharge_frequency_entry", Short.class)).isZero();
+            assertThat(jdbc.queryForObject("SELECT holder_entry_id FROM sc_recharge_frequency_queue", Long.class)).isNull();
+            assertThat(jdbc.queryForObject("SELECT status FROM sc_fulfillment_operation WHERE id=?", Short.class, opId)).isZero();
+            assertThat(jdbc.queryForObject("SELECT attempt_count FROM sc_fulfillment_operation WHERE id=?", Integer.class, opId)).isZero();
+            assertThat(jdbc.queryForObject("SELECT enqueue_sequence FROM sc_recharge_frequency_entry", Long.class)).isEqualTo(1L);
+            assertThat(jdbc.queryForObject("SELECT frozen FROM sc_buyer_account", Long.class)).isEqualTo(frozen);
+            assertThat(jdbc.queryForObject("SELECT wake_generation FROM sc_recharge_frequency_queue", Long.class)).isGreaterThan(wake);
+            assertThat(jdbc.queryForObject("SELECT next_check_at FROM sc_recharge_frequency_queue", java.time.LocalDateTime.class)).isNotNull();
+            provider.fail = false; assertThat(handler.handle(timer(), payload)).isEqualTo("ACCEPTED");
+            assertThat(context.getBean(CountingExecutor.class).calls.get()).isEqualTo(1);
+        } finally { fixture.stopContainer(); }
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(ints = {1, 3})
+    void credentialFailureWithUnconfirmedChargingRiskKeepsHolderEvenWhenRiskIsLater(int riskSequence) {
+        var fixture = new FulfillmentAcceptanceIntegrationTest(); fixture.startContainer();
+        try (var context = fixture.applicationContext(ExecutionConfiguration.class)) {
+            fixture.seed(context); context.getBean(BuyerFulfillmentCommandFacade.class).acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("RISK-"+riskSequence, 1L));
+            var jdbc = new JdbcTemplate(context.getBean("supplyChainDataSource", DataSource.class)); var op = operations(jdbc).getFirst();
+            long opId = jdbc.queryForObject("SELECT id FROM sc_fulfillment_operation WHERE operation_no=?", Long.class, op);
+            jdbc.update("UPDATE sc_fulfillment_operation SET sequence_no=2 WHERE id=?", opId);
+            RechargeFrequencyAcceptanceIntegrationTest.cloneRow(jdbc, "sc_fulfillment_operation", opId,
+                    Map.of("operation_no", "OP_UNKNOWN_RISK", "sequence_no", riskSequence, "status", 30, "result_class", "RESULT_UNKNOWN", "attempt_count", 1, "idempotency_key", "UNKNOWN_RISK"));
+            long frozen = jdbc.queryForObject("SELECT frozen FROM sc_buyer_account", Long.class);
+            var provider = context.getBean(MutableCredentialProvider.class); provider.fail = true;
+            var handler = context.getBean(FulfillmentOperationExecuteHandler.class); var payload = context.getBean(ObjectMapper.class).createObjectNode().put("operationNo", op);
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> handler.handle(timer(), payload)).hasMessage("CREDENTIAL_UNAVAILABLE");
+            assertThat(jdbc.queryForObject("SELECT status FROM sc_recharge_frequency_entry", Short.class)).isEqualTo((short)10);
+            assertThat(jdbc.queryForObject("SELECT dispatch_phase FROM sc_recharge_frequency_entry", Short.class)).isZero();
+            assertThat(jdbc.queryForObject("SELECT holder_entry_id FROM sc_recharge_frequency_queue", Long.class)).isNotNull();
+            assertThat(jdbc.queryForObject("SELECT frozen FROM sc_buyer_account", Long.class)).isEqualTo(frozen);
+            provider.fail = false; assertThat(handler.handle(timer(), payload)).isEqualTo("ALREADY_EXECUTING");
+            assertThat(context.getBean(CountingExecutor.class).calls.get()).isZero();
+        } finally { fixture.stopContainer(); }
+    }
+
+    @Test void preparationAndRevocationStorageFailuresKeepSafeDualCausesAndRollbackPreparedState() {
+        var fixture = new FulfillmentAcceptanceIntegrationTest(); fixture.startContainer();
+        try (var context = fixture.applicationContext(ExecutionConfiguration.class, RevokeStorageFailureConfiguration.class)) {
+            fixture.seed(context); context.getBean(BuyerFulfillmentCommandFacade.class).acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("DOUBLE-FAULT", 1L));
+            var jdbc = new JdbcTemplate(context.getBean("supplyChainDataSource", DataSource.class)); var op = operations(jdbc).getFirst();
+            var provider = context.getBean(MutableCredentialProvider.class); provider.fail = true;
+            provider.failure = new IllegalArgumentException("phone=13800138000 credential=evil-credential");
+            context.getBean(RevokeStorageFailureHook.class).armed = true;
+            var handler = context.getBean(FulfillmentOperationExecuteHandler.class); var payload = context.getBean(ObjectMapper.class).createObjectNode().put("operationNo", op);
+            Throwable failure = org.assertj.core.api.Assertions.catchThrowable(() -> handler.handle(timer(), payload));
+            assertThat(failure).hasMessage("CREDENTIAL_UNAVAILABLE"); assertThat(failure.getCause().getMessage()).contains("IllegalArgumentException");
+            assertThat(failure.getSuppressed()).hasSize(1); assertThat(failure.getSuppressed()[0].getMessage()).contains("IllegalStateException", "SQLException");
+            var text = new java.io.StringWriter(); failure.printStackTrace(new java.io.PrintWriter(text));
+            assertThat(text.toString()).doesNotContain("13800138000", "evil-credential", "evil-storage");
+            assertThat(jdbc.queryForObject("SELECT status FROM sc_fulfillment_operation", Short.class)).isEqualTo((short)20);
+            assertThat(jdbc.queryForObject("SELECT status FROM sc_recharge_frequency_entry", Short.class)).isEqualTo((short)10);
+            assertThat(jdbc.queryForObject("SELECT dispatch_phase FROM sc_recharge_frequency_entry", Short.class)).isZero();
+            assertThat(jdbc.queryForObject("SELECT holder_entry_id FROM sc_recharge_frequency_queue", Long.class)).isNotNull();
+            assertThat(jdbc.queryForObject("SELECT frozen FROM sc_buyer_account", Long.class)).isPositive();
+            assertThat(context.getBean(CountingExecutor.class).calls.get()).isZero();
+        } finally { fixture.stopContainer(); }
+    }
+    @Configuration(proxyBeanMethods=false)
+    static class RevokeStorageFailureConfiguration { @Bean static RevokeStorageFailureHook revokeStorageFailure() { return new RevokeStorageFailureHook(); } }
+    /** 在真实撤销事务已更新Operation/Entry之后抛储存异常，验证两次写入完整回滚。 */
+    static class RevokeStorageFailureHook implements org.springframework.beans.factory.config.BeanPostProcessor {
+        volatile boolean armed;
+        @Override public Object postProcessAfterInitialization(Object bean, String name) {
+            if (!(bean instanceof com.aifuli.module.supplychain.border.fulfillment.dal.mysql.RechargeFrequencyEntryMapper)) { return bean; }
+            var factory = new org.springframework.aop.framework.ProxyFactory(bean);
+            factory.addAdvice((org.aopalliance.intercept.MethodInterceptor) invocation -> {
+                Object result = invocation.proceed();
+                if (armed && invocation.getMethod().getName().equals("updateById") && invocation.getArguments()[0] instanceof com.aifuli.module.supplychain.border.fulfillment.dal.dataobject.RechargeFrequencyEntryDO entry && entry.getStatus() == RechargeFrequencyEntryStatus.WAITING.getCode()) {
+                    throw new IllegalStateException("phone=13800138000 secret=evil-storage", new java.sql.SQLException("evil-storage credential"));
+                }
+                return result;
+            });
+            return factory.getProxy();
+        }
+    }
+
     @Test void sameMobileDifferentSpuClaimsConcurrently() throws Exception {
         var fixture = new FulfillmentAcceptanceIntegrationTest(); fixture.startContainer();
         try (var context = fixture.applicationContext(ExecutionConfiguration.class)) {
@@ -291,10 +385,11 @@ class RechargeFrequencyExecutionIntegrationTest {
     }
     static class MutableCredentialProvider implements CredentialProvider {
         volatile boolean fail;
+        volatile RuntimeException failure = new IllegalStateException("test credential unavailable");
         public boolean supports(String providerType) { return true; }
         public boolean isResolvable(com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.CredentialSlotDO slot) { return !fail; }
         public char[] resolve(com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.CredentialSlotDO slot) {
-            if (fail) { throw new IllegalStateException("test credential unavailable"); } return "test-secret".toCharArray();
+            if (fail) { throw failure; } return "test-secret".toCharArray();
         }
     }
     static class CountingExecutor implements OperationExecutorPort {

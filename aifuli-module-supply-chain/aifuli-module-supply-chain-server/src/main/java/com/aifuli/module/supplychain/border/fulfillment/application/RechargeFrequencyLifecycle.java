@@ -168,12 +168,15 @@ public class RechargeFrequencyLifecycle {
                 || locked.operation().getVersion() != permit.operationVersion()
                 || !Objects.equals(locked.entry().getDispatchPhase(), RechargeFrequencyDispatchPhase.PREPARED.getCode())
                 || locked.operation().getStatus() != SupplierOrderOperationStatus.EXECUTING.getCode()
-                || locked.operation().getAttemptCount() != 0 || locked.operation().getResultClass() != null) { return false; }
-        // 同单所有更早操作必须已可靠失败；缺失事实或未知、MANUAL、成功均不构成未决风险清除依据。
-        for (var earlier : locked.relatedOperations()) {
-            if (earlier.getId().equals(locked.operation().getId())) { continue; }
-            if (earlier.getStatus() != SupplierOrderOperationStatus.FAILED.getCode()
-                    || !OperationOutcomeClass.REJECTED.name().equals(earlier.getResultClass())) { return false; }
+                || locked.operation().getAttemptCount() != 0 || locked.operation().getResultClass() != null
+                || locked.operation().getExternalOperationNo() != null) { return false; }
+        // 只读QUERY没有充值风险；严格后序且没有任何发送迹象的预建候选不能阻断本次未发送撤销。
+        // 其余充值操作只有可信FAILED/REJECTED可清除风险，序号靠后不能忽略UNKNOWN/EXECUTING/MANUAL。
+        for (var related : locked.relatedOperations()) {
+            if (related.getId().equals(locked.operation().getId()) || isReadOnlyQuery(related)
+                    || isStrictlyLaterUnsent(locked, related)) { continue; }
+            if (related.getStatus() != SupplierOrderOperationStatus.FAILED.getCode()
+                    || !OperationOutcomeClass.REJECTED.name().equals(related.getResultClass())) { return false; }
         }
         locked.operation().setStatus(SupplierOrderOperationStatus.PENDING.getCode());
         locked.operation().setUpdatedAt(databaseClock.now());
@@ -182,6 +185,25 @@ public class RechargeFrequencyLifecycle {
         locked.entry().setDispatchPhase(null); saveEntry(locked.entry());
         clearHolder(locked.queue());
         return true;
+    }
+
+    /**
+     * 按锁定的BO尝试号与Op序号确定严格后序；任何外呼次数、结果、外部引用或完成记录均不能猜为未发送。
+     * 设计见 docs/superpowers/specs/2026-09-30-direct-recharge-mobile-spu-frequency-design.md#42-认领。
+     */
+    private static boolean isStrictlyLaterUnsent(LockedExecution locked, FulfillmentOperationDO related) {
+        if (!isRechargeSideEffect(related) || !canClaim(related) || related.getAttemptCount() != 0
+                || related.getResultClass() != null || related.getExternalOperationNo() != null || related.getCompletedAt() != null) { return false; }
+        var bOrder = locked.relatedBOrders().stream().filter(bo -> bo.getId().equals(related.getBOrderId())).findFirst().orElse(null);
+        if (bOrder == null || !bOrder.getFulfillmentRequestId().equals(locked.request().getId())
+                || !bOrder.getOrderId().equals(locked.order().getId())) { return false; }
+        return bOrder.getId().equals(locked.bOrder().getId())
+                ? related.getSequenceNo() > locked.operation().getSequenceNo()
+                : bOrder.getAttemptNo() > locked.bOrder().getAttemptNo();
+    }
+    private static boolean isReadOnlyQuery(FulfillmentOperationDO operation) {
+        return FulfillmentOperationKind.QUERY_ORDER.name().equals(operation.getOperationKind())
+                || FulfillmentOperationKind.QUERY_ASSET.name().equals(operation.getOperationKind());
     }
 
     /**

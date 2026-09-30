@@ -203,8 +203,15 @@ public class FulfillmentOperationExecuteHandler implements PersistentTimerHandle
             if (permit != null) {
                 // 凭证与全部ticket装配共用该边界；原资格仍PREPARED才可撤销，失败则保守保留占用。
                 // 故障交给Timer有界重试，不计实际外呼；SEND_POSSIBLE后的异常不能进入本分支。
-                frequencyLifecycle.revokePrepared(permit);
-                throw new IllegalStateException(preparationFailureCode, safeCause(exception));
+                var preparationFailure = new IllegalStateException(preparationFailureCode, safeCause(exception));
+                try {
+                    frequencyLifecycle.revokePrepared(permit);
+                } catch (Exception revocationFailure) {
+                    // 撤销存储异常仍向Timer传播并保留安全双因果；事务自行回滚，不让它覆盖原准备故障。
+                    // 设计见 docs/superpowers/specs/2026-09-30-direct-recharge-mobile-spu-frequency-design.md#42-认领。
+                    preparationFailure.addSuppressed(safeCause(revocationFailure));
+                }
+                throw preparationFailure;
             }
             supplierOrderLifecycle.transition(operationNo, OperationOutcome.builder()
                     .outcomeClass(OperationOutcomeClass.MANUAL_REQUIRED).externalErrorCode(preparationFailureCode).build(), traceId);

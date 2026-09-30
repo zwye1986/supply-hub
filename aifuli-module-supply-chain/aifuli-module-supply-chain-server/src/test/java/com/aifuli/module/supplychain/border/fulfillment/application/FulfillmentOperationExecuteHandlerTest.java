@@ -408,6 +408,34 @@ class FulfillmentOperationExecuteHandlerTest {
     }
 
     @Test
+    void preparationFailureRetainsSanitizedRevocationFailureAsSuppressedCause() {
+        String no = "OP_SAFE_PREPARATION";
+        var operation = FulfillmentOperationDO.builder().id(1L).operationNo(no).bOrderId(2L).status((short)0)
+                .operationKind("FULFILL").adapterStepCode("SEND").sequenceNo(1).build();
+        var request = FulfillmentRequestDO.builder().id(3L).buyerId(8L).targetCiphertext(new byte[]{1}).targetKeyVersion("1").build();
+        when(operationMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(operation);
+        when(bOrderMapper.selectById(2L)).thenReturn(BOrderDO.builder().id(2L).bOrderNo("BO_SAFE").fulfillmentRequestId(3L).orderId(4L).supplierId(5L).connectorVersionId(6L).offerVersionId(7L).build());
+        when(requestMapper.selectById(3L)).thenReturn(request);
+        when(orderMapper.selectById(4L)).thenReturn(SupplyChainOrderDO.builder().id(4L).orderNo("SC_SAFE").build());
+        when(supplierMapper.selectById(5L)).thenReturn(SupplierDO.builder().id(5L).supplierCode("QNM").build());
+        when(offerVersionMapper.selectById(7L)).thenReturn(SupplierOfferVersionDO.builder().id(7L).build());
+        when(connectorResolver.resolve(6L)).thenReturn(new PublishedConnectorConfiguration("CON_SAFE",6L,1,"QNM","https://supplier.invalid","fixture",9L,null,Set.of(Capability.CREATE_RECHARGE)));
+        when(envelopeCrypto.decrypt(eq(request.getTargetCiphertext()), eq("1"), any())).thenReturn("{\"values\":{\"accountType\":\"MOBILE\",\"accountValue\":\"13800138000\"}}".getBytes(StandardCharsets.UTF_8));
+        when(frequencyLifecycle.requiresFrequency(no,"MOBILE")).thenReturn(true);
+        var permit = new RechargeFrequencyExecutionPermit(1L,1L,no,1L,1L,1L); when(frequencyLifecycle.claim(no)).thenReturn(permit);
+        var slot = CredentialSlotDO.builder().id(9L).providerType("ENV").status((short)10).build(); when(credentialSlotMapper.selectById(9L)).thenReturn(slot);
+        when(credentialProvider.supports("ENV")).thenReturn(true);
+        when(credentialProvider.resolve(slot)).thenThrow(new IllegalArgumentException("phone=13800138000 secret=evil-credential"));
+        when(frequencyLifecycle.revokePrepared(permit)).thenThrow(new IllegalStateException("evil-storage phone=13800138000",new java.sql.SQLException("evil-storage credential")));
+        Throwable failure = org.assertj.core.api.Assertions.catchThrowable(() -> executeHandler.handle(new TimerTaskContext("SAFE",1L,1,1L,"worker"),objectMapper.createObjectNode().put("operationNo",no)));
+        assertThat(failure).hasMessage("CREDENTIAL_UNAVAILABLE"); assertThat(failure.getCause().getMessage()).contains("IllegalArgumentException");
+        assertThat(failure.getSuppressed()).hasSize(1); assertThat(failure.getSuppressed()[0].getMessage()).contains("IllegalStateException", "SQLException");
+        var text = new java.io.StringWriter(); failure.printStackTrace(new java.io.PrintWriter(text));
+        assertThat(text.toString()).doesNotContain("13800138000", "evil-credential", "evil-storage");
+        verify(operationExecutorPort, never()).execute(any());
+    }
+
+    @Test
     void skipsOutboundWhenAlreadyExecuting() {
         TimerTaskContext context = new TimerTaskContext("TASK_07", 7L, 1, 100L, "worker-1");
         JsonNode payload = objectMapper.createObjectNode().put("operationNo", "OP_EXECUTING");
