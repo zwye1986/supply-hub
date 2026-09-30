@@ -1,6 +1,6 @@
 # 直充手机号与 SPU 限频及运营监控设计
 
-日期：2026-09-30。状态：用户已确认全文，进入实施。当前尚未实现。
+日期：2026-09-30。状态：用户已确认全文，实施中。纯领域规则及持久化模型已完成，执行接入与监控尚未完成。
 
 关联：[项目签名标准商品 HTTP 设计 §10](2026-09-30-project-signed-standard-order-http-design.md#10-本期新增直充手机号与-spu-限频及管理端监控)、`docs/集成测试.md#774-项目签名标准商品-http-闭环设计待实现2026-09-30`。
 
@@ -27,11 +27,15 @@
 
 平台 SPU 由平台 SKU 的 spu_id 解析，通过 catalog 应用层提供所需身份。队列在首次入队时冻结 platformSpuId，之后同订单沿用。不能按供应商 Offer、分销商品或项目商品分队列。
 
+专用摘要密钥由 `aifuli.supply-chain.recharge-frequency.identity-key-ref` 配置引用。本期默认解析器只支持 `env:环境变量名`，读取该环境变量的32字节Base64密钥并在独立供应链进程启动时固定快照；部署配置填写引用，仓库不保存密钥或测试默认值。推荐引用 `env:AIFULI_SUPPLY_CHAIN_RECHARGE_FREQUENCY_IDENTITY_KEY`。引用缺失、格式错误、密钥不可解析或长度不符时供应链进程启动失败，不能关闭队列绕过。该配置不改变其他独立进程；测试上下文显式注入测试密钥端口。返回密钥字节时防御性复制，异常和日志不包含引用所指的密钥值。所有节点必须使用同一稳定密钥，在线更新环境变量不改变已有进程快照，变更密钥需要离线迁移全部队列身份，不作为普通凭证轮换操作。
+
 队列编排放在 `border.fulfillment.application`，领域规则与枚举放在对应 domain，存储放在对应 dal。Facade 委派应用服务，不访问 DAL；Timer Handler 调用 Lifecycle/恢复入口，不直接写领域表。资金动作只经既有应用服务，border 不访问账户/账本 DAL。所有数据位于供应链独立库，无物理外键；菜单与权限部署 SQL 位于 script/deploy 并由部署过程写入 system 库。
 
 ## 3. 持久化模型与不变量
 
 新增 Liquibase changeset，旧 changeset 不修改。以下字段语义用于后续 DDL/DTO 中文注释对齐，状态和错误名称以枚举/常量实现。
+
+真实迁移门禁核对发现既有 046 的 `sc_business_code_scope.created_at` 与 `sc_business_code_claim.created_at` 注释未标记 Asia/Shanghai。新 048 同时以 ALTER COLUMN COMMENT 方式补正这两处元数据，保留原类型、精度、NULL 约束和数据，不修改046校验和，也不再次平移时间。既有全库测试的变更集/表/时间列数量以实际完整 changelog 为准更新，不关闭全库时间门禁。
 
 ### 3.1 队列控制行：sc_recharge_frequency_queue
 
@@ -49,6 +53,8 @@
 - wake_generation：每次安排新的唤醒意图递增的任务代次。
 - next_check_at：下一次队列补偿检查时间，Asia/Shanghai，可空。
 - blocked_reason：队列阻塞原因，可空；存量并发外呼冲突等需要核实的状态不得认领新项。
+- occupied_alert_active / backlog_alert_active：当前占用超时/积压告警是否处于激活状态，用于记录跨阈值及恢复。
+- last_occupied_alert_at / last_backlog_alert_at：上次对应告警时间，Asia/Shanghai，可空；用于跨节点和重启后的告警限频。
 - version：乐观锁版本；created_at/updated_at 统一 Asia/Shanghai。
 
 沿用 022 数据库时间迁移及 SupplyChainDatabaseClock，持久化 DATETIME(3) 全部为 Asia/Shanghai；5 秒窗口、30 分钟阈值与扫描条件使用数据库时钟。Timer 接受 Instant 时通过 databaseClock.toInstant 转换，不直接将本地时间当 UTC。
@@ -81,13 +87,17 @@ dispatch_phase 区分 PREPARED（本次外呼资格已取得但尚未越过发�
 
 预占失败则整个受理回滚，不留队列项。入队存储故障不得绕过限频向供应商发送。
 
+并发首次创建同队列时以唯一键裁决；队列身份唯一键冲突须回滚本次完整受理事务，在事务外的受理协调入口进行最多3次有界重试，每次重新调用事务代理并读取已创建队列。只识别该身份唯一键的创建竞争，不将其他完整性异常当作队列竞争吞掉；达到上限向调用方报告失败并保留既有回执恢复语义。不得在发生冲突的同一事务里 catch 后继续资金/订单写入。
+
 ### 4.2 认领
 
 短事务内锁定控制行，检查阻塞原因、当前持有者、成功时间窗口及有效队首。只有未阻塞队列的队首可取得占用；同事务更新控制行、队列项和目标履约操作的执行状态/版本，dispatch_phase 为 PREPARED。非队首返回正常等待结果，不递增供应商实际外呼失败次数。
 
 外呼前另一个短事务按当前 holder、代次、操作引用及版本，将 PREPARED 改为 SEND_POSSIBLE；成功提交才允许该执行者在事务外发送。执行者携带首次认领取得的资格快照，校验失败便结束，不重新读取新代次来替换旧资格。人工未发送释放与此阶段推进竞争同一控制行锁：释放先提交则旧执行者不能越过发送边界；SEND_POSSIBLE 先提交则释放被拒绝，之后即使执行者在 HTTP 前失联也保守按可能已发送处理。不得采用“检查资格→释放锁→稍后无条件发送”的实现。占用版本只能保护本地推进，不承诺外部系统也识别本地令牌。
 
-所有入口使用相同锁序：队列控制行→队列项→履约请求/总单→BOrder/Operation，具体多行按主键升序。回调与认领须遵循同一顺序；需要预读解析 queue_id 的路径在加锁后重新校验，不依赖未加锁快照。
+执行、结果收敛与运营恢复入口使用相同锁序：队列控制行→队列项→履约请求/总单→BOrder/Operation→经资金服务取得资金锁，具体多行按主键升序。回调与认领须遵循同一顺序；需要预读解析 queue_id 的路径在加锁后重新校验，不依赖未加锁快照。
+
+首次受理保留已有回执/商品限购锁序，创建当前事务独占的新订单和操作后先取得队列锁并入队，最后调用资金预占；不能先锁资金账户再取得队列锁，否则会与结果收敛的队列→资金顺序形成反向等待。结果收敛和恢复入口不取得商品限购写锁；同事务中的入队或资金失败一起回滚。
 
 占用在完整订单履约周期内由同订单持有；供应商切换或下一合法操作仍核对该订单与代次，不释放给后续订单后又重新抢占。QUERY_ORDER、查询确认与回调不进入等待队列。只对真正产生充值副作用的适配器步骤认领；不能将协议中所有 HTTP 请求都当作 SEND。
 
@@ -123,7 +133,7 @@ dispatch_phase 区分 PREPARED（本次外呼资格已取得但尚未越过发�
 
 - `GET /statistics`：返回全局 waitingOrderCount、occupiedQueueCount、overThresholdQueueCount、overdueQueueCount、successMinimumHoldSeconds=5、occupiedAlertSeconds=1800、backlogThreshold=5、observedAt。超阈值指单队列 WAITING 数>5，超时指未释放占用超过 30 分钟。
 - `GET /waiting-orders`：PageResult，展示 entryId、queueId、version、maskedMobile、SPU 名称/编码、订单号、归属、enqueuedAt、waitSeconds 与原入队序号；同队列按原序号排序，全列表按入队时间、queueId、序号稳定排序。支持分销商、项目、SPU 编码、中台/项目订单号、入队时间范围等适用筛选。
-- `GET /occupancies`：PageResult，展示 queueId、maskedMobile、平台 SPU 名称/编码、holderOrderNo、履约展示状态、acquiredAt、minimumHoldUntil、heldSeconds、overdue、generation、version、canRelease/releaseBlockedReason。
+- `GET /occupancies`：PageResult，展示 queueId、maskedMobile、平台 SPU 名称/编码、holderOrderNo、履约展示状态、acquiredAt、minimumHoldUntil、heldSeconds、overdue、generation、version、canRelease/releaseBlockedReason。包含 holder 非空或 blocked_reason 非空的队列；迁移阻塞行允许 holderOrderNo/占用时间为空，展示阻塞原因与待核实订单引用，canRelease 为 false，不能将其隐藏为“无占用、可发送”。
 - `GET /backlogs`：PageResult，按手机号+SPU 聚合，按等待数量降序、最早等待时间及队列主键稳定排序；返回等待数、最早等待时间、超阈值标识。
 
 列表都由数据库分页/聚合，默认 pageSize=20、最大100，不使用截断前200条计算统计。统计卡片全局口径，列表筛选不悄悄改变卡片口径，页面明确“全局统计”；每次响应给 observedAt，不承诺不同 HTTP 请求共享同一快照。列表不返回明文手机号或摘要密钥。
@@ -154,7 +164,7 @@ dispatch_phase 区分 PREPARED（本次外呼资格已取得但尚未越过发�
 
 ## 9. 告警与观测
 
-沿用旧系统的积压>5与占用30分钟阈值作为本期默认监控基线；告警按手机号+SPU 队列聚合，在跨阈值或达到受控重复间隔时发送，恢复后记录恢复，不每次任务扫描刷日志。成功窗口不作为故障告警。
+沿用旧系统的积压>5与占用30分钟阈值作为本期默认监控基线；告警按手机号+SPU 队列聚合，在跨阈值或达到受控重复间隔时发送，恢复后记录恢复，不每次任务扫描刷日志。告警激活状态与上次时间在控制行锁内持久化，多节点或重启不各自重置限频；成功窗口不作为故障告警。
 
 入口和状态变更记录业务单号、队列ID、SPU、代次、状态、traceId；不记录明文手机号、完整目标、密钥或凭证。第三方查询/发送日志沿用适配器脱敏及耗时规范。存储故障不能 fail-open，统计/查询故障不能返回伪造空集合。
 
@@ -163,6 +173,8 @@ dispatch_phase 区分 PREPARED（本次外呼资格已取得但尚未越过发�
 发布前暂停手机号直充新受理和 SEND，等正在外呼的节点退出或明确登记其未知处理状态；对存量非终态手机号直充恢复冻结目标与 SPU，重建队列项和持有者。已外呼或无法证明未发送的存量操作按 SEND_POSSIBLE 迁移，acquiredAt 使用可信历史发送时间，无法还原时采用保守迁移时间并标记依据缺失，不伪造为 PREPARED。同组合若已有多个可能在外部处理的订单，标记迁移冲突并保持阻塞，核实后才能启用，不能任选一个 holder 后忽略其他订单。无法可靠解析的历史目标不得从 buyerUserId 推断。
 
 迁移控制行需要支持冲突阻塞原因；有冲突时不认领新项，监控展示需人工核实。先部署新表和任务注册、完成存量检查，全节点切换后恢复受理/发送；禁止旧节点绕过新队列继续 SEND。摘要密钥在所有节点一致，部署检查验证；无密钥或迁移未完成失败关闭。
+
+存在多个存量可能已发送订单时，控制行以 blocked_reason 阻塞且不任选 holder；各风险队列项按 HOLDING+SEND_POSSIBLE 保存已有操作引用，并标记迁移占用代次，不作为新执行资格。可信结果可结束其对应旧队列项，但不能据此清除其他风险项；全部存量风险经核实结束后，迁移恢复入口才清除阻塞并唤醒正常等待项。正常运行只允许控制行 holder 对应的一项获得新发送资格，迁移例外不能作为并行执行途径。
 
 自动化门禁：
 

@@ -51,13 +51,15 @@ mvn -pl aifuli-module-supply-chain/aifuli-module-supply-chain-server -am verify 
 
 ## Task 1：纯领域身份、占用窗口与释放规则
 
+状态：已完成，提交 `84deed4`。设计符合性与代码质量审查均通过；定向 38 项测试通过（新规则9、既有目标规范化2、架构27）。
+
 **文件：**
 - 新建 `border/fulfillment/domain/RechargeFrequencyPolicy.java`。
 - 新建 `border/fulfillment/domain/RechargeFrequencyEntryStatus.java`、`RechargeFrequencyDispatchPhase.java`、`RechargeFrequencyConstants.java`。
 - 新建测试 `border/fulfillment/domain/RechargeFrequencyPolicyTest.java`。
 - 复用 `border/fulfillment/domain/FulfillmentTargetFields.java` 的规范化逻辑，不再新增手机号解析器。
 
-- [ ] 写入成功时间边界、未知结果、PREPARED 撤销与 SEND_POSSIBLE 拒绝的失败测试，使用固定 LocalDateTime 而不是 sleep。
+- [x] 写入成功时间边界、未知结果、PREPARED 撤销与 SEND_POSSIBLE 拒绝的失败测试，使用固定 LocalDateTime 而不是 sleep。
 
 ```java
 @Test
@@ -69,13 +71,14 @@ void successfulOrderReleasesAtAcquiredPlusFiveSeconds() {
 }
 ```
 
-- [ ] 运行 `mvn -pl aifuli-module-supply-chain/aifuli-module-supply-chain-server -am test -Dtest=RechargeFrequencyPolicyTest -Dsurefire.failIfNoSpecifiedTests=false`，确认缺失规则导致失败。
-- [ ] 实现有明确含义的枚举与常量：WAITING/HOLDING/FINISHED，PREPARED/SEND_POSSIBLE；成功窗口5秒、超时1800秒、积压严格大于5。
-- [ ] 实现下列核心纯规则，其他条件由 Lifecycle 基于锁定数据提供，领域层不得读取 Mapper/Spring：
+- [x] 运行 `mvn -pl aifuli-module-supply-chain/aifuli-module-supply-chain-server -am test -Dtest=RechargeFrequencyPolicyTest -Dsurefire.failIfNoSpecifiedTests=false`，确认缺失规则导致失败。
+- [x] 实现有明确含义的枚举与常量：WAITING/HOLDING/FINISHED，PREPARED/SEND_POSSIBLE；成功窗口5秒、超时1800秒、积压严格大于5。
+- [x] 实现下列核心纯规则，其他条件由 Lifecycle 基于锁定数据提供，领域层不得读取 Mapper/Spring：
 
 ```java
 public static boolean canReleaseSuccess(LocalDateTime acquiredAt, LocalDateTime now) {
-    return acquiredAt != null && !now.isBefore(acquiredAt.plusSeconds(5));
+    return acquiredAt != null && now != null && !now.isBefore(acquiredAt.plusSeconds(
+            RechargeFrequencyConstants.SUCCESS_MINIMUM_HOLD_SECONDS));
 }
 
 public static boolean canRevokePrepared(boolean noUnresolvedEarlierSend,
@@ -84,10 +87,12 @@ public static boolean canRevokePrepared(boolean noUnresolvedEarlierSend,
 }
 ```
 
-- [ ] 增补未知结果不能释放、1800秒严格边界、积压5/6单、非MOBILE与卡券不适用、+86/0086归一用例，运行 Task 1 测试与架构测试。
-- [ ] 提交：`明确直充限频占用窗口与可信释放规则`。
+- [x] 增补未知结果不能释放、1800秒严格边界、积压5/6单、非MOBILE与卡券不适用、+86/0086归一用例，运行 Task 1 测试与架构测试。
+- [x] 提交：`明确直充限频占用窗口与可信释放规则`。
 
 ## Task 2：三张持久化表、Mapper 与真实约束
+
+状态：已完成，提交 `c46c630`。设计符合性与代码质量审查均通过；36项策略/架构测试、8项持久化集成测试与3项Liquibase集成测试全部通过，无失败或跳过。
 
 **文件：**
 - 新建资源 `src/main/resources/db/changelog/releases/1.0.0/048-recharge-frequency.sql`，注册到同目录 `db.changelog-1.0.0.yaml`；执行前确认048尚未被其他变更占用。
@@ -97,10 +102,11 @@ public static boolean canRevokePrepared(boolean noUnresolvedEarlierSend,
 - 新建测试 `border/fulfillment/RechargeFrequencyPersistenceIntegrationTest.java`。
 - 修改 `infrastructure/configuration/SupplyChainLiquibaseIntegrationTest.java`，校验新增表时间语义及变更集数，不改旧文件校验和。
 
-- [ ] 使用现有 MySQLContainer/mysql:8.4 与 Liquibase 建库方式，先验证缺表失败。
-- [ ] 按设计 §3 创建完整字段；QUEUE 唯一 `(mobile_digest,platform_spu_id)`，ENTRY 唯一 `order_id` 与 `(queue_id,enqueue_sequence)`，AUDIT 唯一 `action_no`。所有时间 DATETIME(3)/Asia/Shanghai，摘要 BINARY(32)，版本BIGINT，物理外键为零。
-- [ ] 控制行允许等待阶段 holder/acquiredAt/minimumHoldUntil 均NULL；持有时三者同时非空；next_enqueue_sequence初值1，代次初值0；状态 CHECK 与枚举一致，SPU/序号正数、版本非负。
-- [ ] Mapper 简单查询/更新用 Lambda；需要行锁的 XML 精确按主键或已有唯一键 `FOR UPDATE`，不对尚不存在的唯一键先锁后插入。
+- [x] 使用现有 MySQLContainer/mysql:8.4 与 Liquibase 建库方式，先验证缺表失败。
+- [x] 按设计 §3 创建完整字段；QUEUE 唯一 `(mobile_digest,platform_spu_id)`，ENTRY 唯一 `order_id` 与 `(queue_id,enqueue_sequence)`，AUDIT 唯一 `action_no`。所有时间 DATETIME(3)/Asia/Shanghai，摘要 BINARY(32)，版本BIGINT，物理外键为零。
+- [x] 在048补正046的两列created_at注释为Asia/Shanghai，保留原字段定义与值、原changeset校验和。真实数据库当前既有49个changeset/117张表/277个时间列，本次新增后为50/120/289（12个新时间列含持久化告警），按实际快照验证，不以文件编号推断计数。
+- [x] 控制行允许等待阶段 holder/acquiredAt/minimumHoldUntil 均NULL；持有时三者同时非空；next_enqueue_sequence初值1，代次初值0；状态 CHECK 与枚举一致，SPU/序号正数、版本非负。
+- [x] Mapper 简单查询/更新用 Lambda；需要行锁的 XML 精确按主键或已有唯一键 `FOR UPDATE`，不对尚不存在的唯一键先锁后插入。
 
 ```sql
 SELECT * FROM sc_recharge_frequency_queue WHERE id = #{id} FOR UPDATE;
@@ -109,14 +115,15 @@ WHERE queue_id = #{queueId} AND status = #{waitingStatus}
 ORDER BY enqueue_sequence LIMIT 1 FOR UPDATE;
 ```
 
-- [ ] 验证同组合唯一、同手机号不同SPU独立、同订单不能重复入队、错误状态与时间空值组合被拒、版本CAS失败不改变其他列。
-- [ ] 运行 Task 2 的 Failsafe 定向验证与 SupplyChainLiquibaseIntegrationTest；期望真实MySQL无失败，不接受H2替代。
-- [ ] 提交：`新增直充限频队列与运营审计持久化模型`。
+- [x] 验证同组合唯一、同手机号不同SPU独立、同订单不能重复入队、错误状态与时间空值组合被拒、版本CAS失败不改变其他列。
+- [x] 运行 Task 2 的 Failsafe 定向验证与 SupplyChainLiquibaseIntegrationTest；期望真实MySQL无失败，不接受H2替代。
+- [x] 提交：`新增直充限频队列与运营审计持久化模型`。
 
 ## Task 3：稳定手机号摘要、服务端SPU解析与入队
 
 **文件：**
 - 新建 `border/fulfillment/application/RechargeFrequencyIdentityService.java`、`RechargeFrequencyLifecycle.java`。
+- 新建 `border/fulfillment/application/RechargeFrequencyAcceptanceCoordinator.java`，在事务外协调最多3次队列身份创建竞争重试；修改 `application/facade/BuyerFulfillmentCommandFacade.java` 的受理调用以委派协调入口，不访问DAL。
 - 新建专用密钥解析端口/实现于 `infrastructure/security/RechargeFrequencyIdentityKeyProvider.java` 与 `ConfiguredRechargeFrequencyIdentityKeyProvider.java`。
 - 新建 `tradecore/catalog/application/RechargeFrequencyProductResolver.java`，负责平台SKU→SPU身份及履约方式；不能把供应商商品当SPU。
 - 修改 `border/fulfillment/application/FulfillmentAcceptanceLifecycle.java`，在首次操作和资金预占同事务内入队；将所需目标身份随 PreparedAcceptance 传递，不从 buyerUserId 恢复。
@@ -129,13 +136,14 @@ ORDER BY enqueue_sequence LIMIT 1 FOR UPDATE;
 ```java
 Mac mac = Mac.getInstance("HmacSHA256");
 mac.init(new SecretKeySpec(identityKeyProvider.keyBytes(), "HmacSHA256"));
-mac.update("RECHARGE_FREQUENCY_MOBILE".getBytes(StandardCharsets.UTF_8));
+mac.update(RechargeFrequencyConstants.HMAC_PURPOSE.getBytes(StandardCharsets.UTF_8));
 mac.update((byte) 0);
 byte[] digest = mac.doFinal(normalizedMobile.getBytes(StandardCharsets.UTF_8));
 ```
 
 - [ ] 应用服务仅传递摘要、maskedMobile和冻结spuId。手机号仍从经过验证的实际目标取得，忽略非手机号直充/卡券；非法MOBILE失败关闭。
-- [ ] 入队按orderId幂等；首次不存在QUEUE时普通插入由唯一键裁决，冲突整个事务回滚后重新读取；不在已失败事务继续业务。锁定控制行分配序号，新增WAITING项，同事务持久化唤醒意图。
+- [ ] 入队按orderId幂等；首次不存在QUEUE时普通插入由唯一键裁决，冲突整个事务回滚后重新读取；不在已失败事务继续业务。锁定控制行分配序号，新增WAITING项，同事务持久化唤醒意图。在既有首次Operation创建后、fundReservationService.freeze之前调用入队，统一队列→资金的锁序；不能在已锁资金账户后取得队列锁。
+- [ ] 在协调入口仅捕获队列身份唯一键创建竞争的专用异常，每次重新调用Lifecycle事务代理，最多3次（集中常量），保留因果异常；其他完整性异常不重试/不吞掉。测试跨SKU并发首次入同队列双方均可正常受理，失败事务不存在资金/订单残留。
 - [ ] 真实测试跨买家/项目同组合入同队列、同手机号不同SPU两队列、入队失败时资金/建单全回滚、重复受理不重复预占/入队。
 - [ ] 运行 IdentityServiceTest 和 AcceptanceIntegrationTest 后提交：`按真实手机号与平台SPU原子入队并保留资金预占`。
 
@@ -155,7 +163,7 @@ public record RechargeFrequencyExecutionPermit(long queueId, long entryId,
 ```
 
 - [ ] 先用真实MySQL并发测试：多个节点只能认领队首一项，同手机号不同SPU可并发；非队首正常返回等待、不调用适配器、不增加外呼失败次数。
-- [ ] 完成同事务QUEUE+ENTRY+Operation认领，状态PREPARED。锁序统一QUEUE→ENTRY→Request/Order→BOrder/Operation，加锁后重新校验关联。
+- [ ] 完成同事务QUEUE+ENTRY+Operation认领，状态PREPARED。执行/结果/恢复锁序统一QUEUE→ENTRY→Request/Order→BOrder/Operation→既有资金服务，加锁后重新校验关联，不在结果处理入口取得商品限购写锁。
 - [ ] 实现外呼前事务 PREPARED→SEND_POSSIBLE，条件包含首次资格全部字段。必须返回成功才执行适配器；失败返回稳定跳过结果。
 - [ ] 加两线程屏障测试：人工撤销先提交则旧外呼0次；标记可能发送先提交则释放失败，节点失联仍保留占用。不靠sleep判定先后。
 - [ ] 回调/查询统一事实收敛：ACCEPTED/UNKNOWN/MANUAL保持占用；可信成功待acquired+5秒；总订单可信失败释放；继续履约仍同订单持有。
