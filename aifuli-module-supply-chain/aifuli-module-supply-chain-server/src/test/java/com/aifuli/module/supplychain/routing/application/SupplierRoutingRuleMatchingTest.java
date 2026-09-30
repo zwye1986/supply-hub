@@ -10,7 +10,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * 已发布规则裁决的纯逻辑测试：固定五级顺序、停用跳过、同层裁决和默认兜底。
+ * 已发布规则裁决的纯逻辑测试：固定六级顺序、停用跳过、同层裁决和默认兜底。
  * 设计见 {@code docs/superpowers/specs/2026-09-24-standard-order-routing-execution-design.md#3-规则匹配}。
  */
 class SupplierRoutingRuleMatchingTest {
@@ -69,6 +69,32 @@ class SupplierRoutingRuleMatchingTest {
                 rules, scopes, "OTHER", "OTHER", "OTHER"))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("matched enabled rule");
+    }
+
+    @Test
+    void productTypeRuleWinsOverDistributorProjectRule() {
+        StdRoutingRuleDO type = rule(1L, "TYPE", "ALL", "ALL",
+                "SPECIFIED", "ALL", 100, (short) 10);
+        StdRoutingRuleDO buyerProject = rule(2L, "BUYER_PROJECT", "SPECIFIED", "SPECIFIED",
+                "ALL", "ALL", 0, (short) 10);
+        assertThat(select(List.of(buyerProject, type))).isEqualTo(type);
+    }
+
+    @Test
+    void distributorProjectRuleMatchesAnyProductTypeBeforeGlobalFallback() {
+        StdRoutingRuleDO buyerProject = rule(1L, "BUYER_PROJECT", "SPECIFIED", "SPECIFIED",
+                "ALL", "ALL", 100, (short) 10);
+        StdRoutingRuleDO global = rule(2L, "GLOBAL_DEFAULT", "ALL", "ALL",
+                "ALL", "ALL", 0, (short) 10);
+        List<StdRoutingRuleDO> rules = List.of(global, buyerProject);
+        List<StdRoutingRuleScopeDO> scopes = scopesFor(rules);
+        assertThat(SupplierRoutingApplicationService.selectMatchedRule(
+                rules, scopes, BUYER, PROJECT, "OTHER")).isEqualTo(buyerProject);
+        assertThat(SupplierRoutingApplicationService.selectMatchedRule(
+                rules, scopes, BUYER, "OTHER", "OTHER")).isEqualTo(global);
+        buyerProject.setStatus((short) 20);
+        assertThat(SupplierRoutingApplicationService.selectMatchedRule(
+                rules, scopes, BUYER, PROJECT, "OTHER")).isEqualTo(global);
     }
 
     @Test

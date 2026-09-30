@@ -60,6 +60,7 @@ import java.util.List;
 import java.util.Map;
 
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.ROUTING_RULE_NOT_FOUND;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.ROUTING_RULE_PROJECT_BUYER_MISMATCH;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -233,7 +234,50 @@ class RoutingRuleAdminWriteIntegrationTest {
                     .isInstanceOf(ServiceException.class)
                     .extracting(ex -> ((ServiceException) ex).getCode())
                     .isEqualTo(ROUTING_RULE_NOT_FOUND.getCode());
+
+            String otherBuyerCode = buyerService.createBuyer(new BuyerCommandService.CreateBuyerCommand(
+                    null, "异属路由分销商", "异属路由分销商", null, null,
+                    "AIFULI_MALL", "tenant-routing-write-other", seedNow.minusMinutes(1), 1L));
+            // 直调草稿发布路径也须校验项目归属，不能只依赖管理端请求校验。
+            assertThatThrownBy(() -> publication.createDraft(
+                    new RoutingPolicyPublicationService.CreateDraftCommand(
+                            POLICY_CODE, POLICY_NAME, "项目归属不符草稿", clock.now().plusMinutes(1), null,
+                            List.of(projectAllSuppliersRule("RR_WRONG_PROJECT", otherBuyerCode)),
+                            OPERATOR_ID, 40, 30, 30)))
+                    .isInstanceOf(ServiceException.class)
+                    .extracting(ex -> ((ServiceException) ex).getCode())
+                    .isEqualTo(ROUTING_RULE_PROJECT_BUYER_MISMATCH.getCode());
+
+            NormalizedRulePatch projectPatch = new NormalizedRulePatch(
+                    null, "项目通用供给路由", RoutingRuleRouteMode.AUTO, RoutingRuleStatus.ENABLED,
+                    RoutingRuleScopeMode.SPECIFIED, List.of(BUYER_CODE),
+                    RoutingRuleScopeMode.SPECIFIED, List.of(PROJECT_CODE),
+                    RoutingRuleScopeMode.ALL, List.of(), RoutingRuleScopeMode.ALL, List.of(),
+                    null, List.of(RoutingRuleStrategy.STABLE, RoutingRuleStrategy.PRICE,
+                            RoutingRuleStrategy.COMPOSITE), new WeightInput(40, 30, 30), null);
+            RoutingRuleView projectView = commandService.create(projectPatch, OPERATOR_ID);
+            assertThat(projectView.supplierMode()).isEqualTo(RoutingRuleScopeMode.ALL);
+            assertThat(projectView.supplierCodes()).isEmpty();
+            commandService.changeStatus(RULE_2, RoutingRuleStatus.DISABLED, OPERATOR_ID);
+
+            SupplierRoutingApplicationService.RoutingSnapshot projectRoute = routing.route(
+                    new RoutingInput(buyer.getId(), project.getId(), sku200.getId(), "DIRECT_RECHARGE",
+                            1L, clock.now(), Map.of()));
+            assertThat(projectRoute.decision().selected()).isTrue();
+            assertThat(projectRoute.decision().orderedCandidates())
+                    .extracting(RoutingCandidate::supplierCode)
+                    .containsExactlyInAnyOrder(SUPPLIER_A, SUPPLIER_B);
         }
+    }
+
+    /** 分销商+项目通用层：AUTO+ALL 不持久化候选，按订单 SKU 有效报价动态解析。 */
+    private static RoutingPolicyPublicationService.RuleDraft projectAllSuppliersRule(
+            String ruleCode, String buyerCode) {
+        return new RoutingPolicyPublicationService.RuleDraft(
+                ruleCode, "项目通用规则", "AUTO", null,
+                "SPECIFIED", List.of(buyerCode), "SPECIFIED", List.of(PROJECT_CODE),
+                "ALL", List.of(), "ALL", List.of(), null,
+                "STABLE", "PRICE", "COMPOSITE", 100, (short) 10, false, List.of());
     }
 
     /** 停用规则：不参与匹配与启用集范围唯一性校验，仅验证可被删除。 */

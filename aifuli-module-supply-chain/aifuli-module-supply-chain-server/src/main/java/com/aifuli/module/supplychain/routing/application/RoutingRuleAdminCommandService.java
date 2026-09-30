@@ -54,6 +54,7 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.ROUTING_RULE_NAME_DUPLICATED;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.ROUTING_RULE_NOT_FOUND;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.ROUTING_RULE_PROTECTED;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.ROUTING_RULE_PROJECT_BUYER_MISMATCH;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.ROUTING_RULE_SCOPE_DUPLICATED;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.ROUTING_RULE_VERSION_CONFLICT;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.SUPPLIER_NOT_FOUND;
@@ -63,7 +64,8 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
  *
  * <p>不原地 UPDATE 已发布规则行；DISABLED/ENABLED 为规则真实状态（不再等同删除）；
  * 受保护 GLOBAL_DEFAULT 不可删除、范围与路由模式不可改。设计见
- * {@code docs/superpowers/specs/2026-09-23-order-frontend-alignment-and-routing-prd-model-design.md#55-保存校验}。</p>
+ * {@code docs/superpowers/specs/2026-09-23-order-frontend-alignment-and-routing-prd-model-design.md#55-保存校验}
+ * 与 {@code docs/superpowers/specs/2026-09-24-standard-order-routing-execution-design.md#3-规则匹配}。</p>
  */
 @Slf4j
 @Service
@@ -326,11 +328,17 @@ public class RoutingRuleAdminCommandService {
     private MutableRuleState buildPatchedState(String ruleCode, NormalizedRulePatch patch,
                                                MutableRuleState previous) {
         // 范围编码与供应商的存在性校验（带业务错误码）。
+        // 两维同时指定时，项目必须归属所选分销商；否则规则在真实订单中永远无法命中。
+        // 设计见 docs/superpowers/specs/2026-09-24-standard-order-routing-execution-design.md#3-规则匹配。
+        Set<Long> selectedBuyerIds = new HashSet<>();
         for (String buyerCode : patch.distributorCodes()) {
-            requireActiveBuyerByCode(buyerCode);
+            selectedBuyerIds.add(requireActiveBuyerByCode(buyerCode).getId());
         }
         for (String projectCode : patch.projectCodes()) {
-            requireProjectByCode(projectCode);
+            BuyerProjectDO project = requireProjectByCode(projectCode);
+            if (!selectedBuyerIds.isEmpty() && !selectedBuyerIds.contains(project.getBuyerId())) {
+                throw exception(ROUTING_RULE_PROJECT_BUYER_MISMATCH);
+            }
         }
         for (String typeCode : patch.productTypeCodes()) {
             requireProductTypeByCode(typeCode);
