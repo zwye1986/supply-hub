@@ -7,6 +7,7 @@ import com.aifuli.module.supplychain.border.fulfillment.dal.mysql.BOrderMapper;
 import com.aifuli.module.supplychain.border.fulfillment.dal.mysql.FulfillmentOperationMapper;
 import com.aifuli.module.supplychain.border.fulfillment.dal.mysql.FulfillmentRequestMapper;
 import com.aifuli.module.supplychain.border.fulfillment.domain.AdapterStepCode;
+import static com.aifuli.module.supplychain.border.fulfillment.domain.FulfillmentExecutionFailureCodes.*;
 import com.aifuli.module.supplychain.border.fulfillment.domain.FulfillmentOperationKind;
 import com.aifuli.module.supplychain.border.fulfillment.domain.FulfillmentTimerTaskTypes;
 import com.aifuli.module.supplychain.border.fulfillment.domain.OperationExecutorPort;
@@ -69,6 +70,7 @@ public class FulfillmentOperationExecuteHandler implements PersistentTimerHandle
     private final SupplierOrderLifecycle supplierOrderLifecycle;
     private final ObjectMapper objectMapper;
     private final FulfillmentCallbackProperties callbackProperties;
+    private final RechargeFrequencyLifecycle frequencyLifecycle;
 
     @Override
     public String taskType() {
@@ -127,15 +129,20 @@ public class FulfillmentOperationExecuteHandler implements PersistentTimerHandle
         SupplierOfferVersionDO offerVersion = offerVersionMapper.selectById(bOrder.getOfferVersionId());
 
         PublishedConnectorConfiguration connectorConfig = connectorResolver.resolve(bOrder.getConnectorVersionId());
-        String secretKey = resolveSecretKey(connectorConfig.credentialSlotId());
         String traceId = context.taskId() != null ? String.valueOf(context.taskId()) : operationNo;
 
-        String rechargeAccount;
+        ResolvedTarget target;
         try {
-            rechargeAccount = resolveRechargeAccount(operation, request, order);
+            target = resolveRechargeAccount(operation, request, order);
         } catch (TargetAccountUnavailableException e) {
-            log.warn("[履约执行] 目标账号解密失败，失败关闭转 MANUAL operationNo={}, reason={}",
-                    operationNo, e.getReasonCode(), e);
+            log.warn("[履约执行] 目标账号不可用 operationNo={}, reason={}, cause={}", operationNo, e.getReasonCode(), safeFailureSummary(e));
+            try {
+                if (frequencyLifecycle.requiresFrequency(operationNo, null)) { throw e; }
+            } catch (RechargeFrequencyLifecycle.MissingFrequencyEntryException missing) {
+                supplierOrderLifecycle.transition(operationNo, OperationOutcome.builder().outcomeClass(OperationOutcomeClass.MANUAL_REQUIRED)
+                        .externalErrorCode(FREQUENCY_MIGRATION_MISSING).build(), traceId);
+                return FREQUENCY_MIGRATION_MISSING;
+            }
             supplierOrderLifecycle.transition(operation.getOperationNo(), OperationOutcome.builder()
                     .outcomeClass(OperationOutcomeClass.MANUAL_REQUIRED)
                     .externalErrorCode(e.getReasonCode())
@@ -144,38 +151,69 @@ public class FulfillmentOperationExecuteHandler implements PersistentTimerHandle
             return OperationOutcomeClass.MANUAL_REQUIRED.name();
         }
 
-        if (!supplierOrderLifecycle.claimForExecution(operationNo)) {
-            log.info("[履约执行] claim 未成功，跳过外呼 operationNo={}", operationNo);
-            return "CLAIM_SKIPPED";
+        RechargeFrequencyExecutionPermit permit = null;
+        try {
+            if (frequencyLifecycle.requiresFrequency(operationNo, target.accountType())) {
+                permit = frequencyLifecycle.claim(operationNo);
+                if (permit == null) { return "FREQUENCY_WAITING"; }
+            } else if (!supplierOrderLifecycle.claimForExecution(operationNo, target.accountType())) {
+                return "CLAIM_SKIPPED";
+            }
+        } catch (RechargeFrequencyLifecycle.MissingFrequencyEntryException exception) {
+            log.warn("[履约执行] 缺少可信冻结队列，禁止发送 operationNo={}", operationNo);
+            supplierOrderLifecycle.transition(operationNo, OperationOutcome.builder()
+                    .outcomeClass(OperationOutcomeClass.MANUAL_REQUIRED)
+                    .externalErrorCode(FREQUENCY_MIGRATION_MISSING).build(), traceId);
+            return FREQUENCY_MIGRATION_MISSING;
+        }
+        OperationTicket ticket;
+        String preparationFailureCode = CREDENTIAL_UNAVAILABLE;
+        try {
+            String secretKey = resolveSecretKey(connectorConfig.credentialSlotId());
+            preparationFailureCode = TICKET_PREPARATION_FAILED;
+            ticket = OperationTicket.builder()
+                    .operationNo(operation.getOperationNo())
+                    .bOrderNo(bOrder.getBOrderNo())
+                    .billno(bOrder.getBillno() != null && !bOrder.getBillno().isBlank() ? bOrder.getBillno() : bOrder.getBOrderNo())
+                    .externalOrderNo(bOrder.getExternalOrderNo())
+                    .supplierCode(supplier.getSupplierCode())
+                    .adapterType(connectorConfig.adapterType())
+                    .connectorVersionId(bOrder.getConnectorVersionId())
+                    .offerVersionId(bOrder.getOfferVersionId())
+                    .operationKind(FulfillmentOperationKind.valueOf(operation.getOperationKind()))
+                    .adapterStepCode(AdapterStepCode.valueOf(operation.getAdapterStepCode()))
+                    .sequenceNo(operation.getSequenceNo() != null ? operation.getSequenceNo() : 1)
+                    .idempotencyKey(operation.getIdempotencyKey())
+                    .externalSkuCode(offerVersion != null ? offerVersion.getExternalSkuCode() : null)
+                    .quantity(bOrder.getRequestedQuantity() != null ? bOrder.getRequestedQuantity() : 1L)
+                    .rechargeAccount(target.accountValue())
+                    .targetSchemaCode(request.getTargetSchemaCode())
+                    .callbackUrl(resolveCallbackUrl(connectorConfig.callbackPath()))
+                    .baseUrl(connectorConfig.baseUrl())
+                    .merchantAccount(connectorConfig.merchantAccount())
+                    .secretKey(secretKey)
+                    .timeoutSeconds(DEFAULT_READ_TIMEOUT_SECONDS)
+                    .traceId(traceId)
+                    .checkpointPayload(operation.getCheckpointCiphertext())
+                    .extraParameters(Map.of())
+                    .build();
+        } catch (Exception exception) {
+            log.warn("[履约执行] 本地发送准备失败 operationNo={}, reason={}, cause={}",
+                    operationNo, preparationFailureCode, safeFailureSummary(exception));
+            if (permit != null) {
+                // 凭证与全部ticket装配共用该边界；原资格仍PREPARED才可撤销，失败则保守保留占用。
+                // 故障交给Timer有界重试，不计实际外呼；SEND_POSSIBLE后的异常不能进入本分支。
+                frequencyLifecycle.revokePrepared(permit);
+                throw new IllegalStateException(preparationFailureCode, safeCause(exception));
+            }
+            supplierOrderLifecycle.transition(operationNo, OperationOutcome.builder()
+                    .outcomeClass(OperationOutcomeClass.MANUAL_REQUIRED).externalErrorCode(preparationFailureCode).build(), traceId);
+            return OperationOutcomeClass.MANUAL_REQUIRED.name();
         }
 
-        OperationTicket ticket = OperationTicket.builder()
-                .operationNo(operation.getOperationNo())
-                .bOrderNo(bOrder.getBOrderNo())
-                .billno(bOrder.getBillno() != null && !bOrder.getBillno().isBlank() ? bOrder.getBillno() : bOrder.getBOrderNo())
-                .externalOrderNo(bOrder.getExternalOrderNo())
-                .supplierCode(supplier.getSupplierCode())
-                .adapterType(connectorConfig.adapterType())
-                .connectorVersionId(bOrder.getConnectorVersionId())
-                .offerVersionId(bOrder.getOfferVersionId())
-                .operationKind(FulfillmentOperationKind.valueOf(operation.getOperationKind()))
-                .adapterStepCode(AdapterStepCode.valueOf(operation.getAdapterStepCode()))
-                .sequenceNo(operation.getSequenceNo() != null ? operation.getSequenceNo() : 1)
-                .idempotencyKey(operation.getIdempotencyKey())
-                .externalSkuCode(offerVersion != null ? offerVersion.getExternalSkuCode() : null)
-                .quantity(bOrder.getRequestedQuantity() != null ? bOrder.getRequestedQuantity() : 1L)
-                .rechargeAccount(rechargeAccount)
-                .targetSchemaCode(request.getTargetSchemaCode())
-                .callbackUrl(resolveCallbackUrl(connectorConfig.callbackPath()))
-                .baseUrl(connectorConfig.baseUrl())
-                .merchantAccount(connectorConfig.merchantAccount())
-                .secretKey(secretKey)
-                .timeoutSeconds(DEFAULT_READ_TIMEOUT_SECONDS)
-                .traceId(traceId)
-                .checkpointPayload(operation.getCheckpointCiphertext())
-                .extraParameters(Map.of())
-                .build();
-
+        if (permit != null && !frequencyLifecycle.markSendPossible(permit)) {
+            return "SEND_PERMIT_SKIPPED";
+        }
         log.info("[履约执行] 调用适配器 adapterType={}, supplierCode={}, bOrderNo={}, operationNo={}",
                 connectorConfig.adapterType(), supplier.getSupplierCode(), bOrder.getBOrderNo(), operationNo);
 
@@ -183,15 +221,15 @@ public class FulfillmentOperationExecuteHandler implements PersistentTimerHandle
         try {
             outcome = operationExecutorPort.execute(ticket);
         } catch (Exception e) {
-            log.warn("[履约执行] 适配器调用抛出未捕获异常 operationNo={}, 转换为 RESULT_UNKNOWN: {}",
-                    operationNo, e.getMessage(), e);
+            log.warn("[履约执行] 适配器调用异常 operationNo={}, traceId={}, cause={}, 转换为 RESULT_UNKNOWN",
+                    operationNo, traceId, safeFailureSummary(e));
             outcome = OperationOutcome.builder()
                     .outcomeClass(OperationOutcomeClass.RESULT_UNKNOWN)
-                    .externalErrorMessage(e.getMessage())
+                    .externalErrorCode(ADAPTER_EXECUTION_FAILED).externalErrorMessage(ADAPTER_EXECUTION_FAILED)
                     .build();
         }
 
-        supplierOrderLifecycle.transition(operation.getOperationNo(), outcome, traceId);
+        supplierOrderLifecycle.confirmTrustedOutcome(operation.getOperationNo(), outcome, traceId, permit);
 
         log.info("[履约执行] 完成 operationNo={}, outcomeClass={}", operationNo, outcome.outcomeClass());
         return outcome.outcomeClass().name();
@@ -235,17 +273,18 @@ public class FulfillmentOperationExecuteHandler implements PersistentTimerHandle
         return secretChars != null ? new String(secretChars) : null;
     }
 
-    private String resolveRechargeAccount(FulfillmentOperationDO operation,
+    private ResolvedTarget resolveRechargeAccount(FulfillmentOperationDO operation,
                                           FulfillmentRequestDO request,
                                           SupplyChainOrderDO order) {
+        if (!FulfillmentOperationKind.FULFILL.name().equals(operation.getOperationKind())) { return new ResolvedTarget(null, null); }
         boolean sendStep = AdapterStepCode.SEND.name().equals(operation.getAdapterStepCode());
         byte[] ciphertext = request.getTargetCiphertext();
         if (ciphertext == null || ciphertext.length == 0) {
             if (sendStep) {
-                throw new TargetAccountUnavailableException("TARGET_ACCOUNT_MISSING",
+                throw new TargetAccountUnavailableException(TARGET_ACCOUNT_MISSING,
                         "直充缺少目标账号密文");
             }
-            return null;
+            return new ResolvedTarget(null, null);
         }
         try {
             byte[] associatedData = (request.getBuyerId() + "|" + order.getBuyerOrderNo() + "|"
@@ -266,16 +305,39 @@ public class FulfillmentOperationExecuteHandler implements PersistentTimerHandle
                 }
             }
             if (sendStep && (account == null || account.isBlank())) {
-                throw new TargetAccountUnavailableException("TARGET_ACCOUNT_UNAVAILABLE",
+                throw new TargetAccountUnavailableException(TARGET_ACCOUNT_UNAVAILABLE,
                         "目标密文未包含可充值账号");
             }
-            return account;
+            return new ResolvedTarget(valuesNode.path("accountType").asText(null), account);
         } catch (TargetAccountUnavailableException e) {
             throw e;
         } catch (Exception e) {
-            throw new TargetAccountUnavailableException("TARGET_DECRYPT_FAILED",
-                    "解密充值目标账号失败", e);
+            throw new TargetAccountUnavailableException(TARGET_DECRYPT_FAILED,
+                    "解密充值目标账号失败", safeCause(e));
         }
+    }
+
+    /** 安全因果只保留异常类型和首个代码位置，不包含任意异常报文、目标JSON或凭证。 */
+    private static String safeFailureSummary(Throwable exception) {
+        StringBuilder summary = new StringBuilder(); int depth = 0;
+        for (Throwable cause = exception; cause != null && depth++ < 8; cause = cause.getCause()) {
+            if (!summary.isEmpty()) { summary.append(" <- "); }
+            summary.append(cause.getClass().getName());
+            if (cause.getStackTrace().length > 0) { summary.append('@').append(cause.getStackTrace()[0]); }
+        }
+        return summary.toString();
+    }
+
+    /** 传播装配故障到Timer时保留安全因果与原代码位置，防通用重试日志打印供应商任意原始报文。 */
+    private static Throwable safeCause(Throwable cause) {
+        var safe = new IllegalStateException(safeFailureSummary(cause));
+        safe.setStackTrace(cause.getStackTrace());
+        return safe;
+    }
+
+    /** 来自已认证目标密文的实际类型与值，禁止toString泄露账号。 */
+    private record ResolvedTarget(String accountType, String accountValue) {
+        @Override public String toString() { return "ResolvedTarget[type=" + accountType + "]"; }
     }
 
     static final class TargetAccountUnavailableException extends RuntimeException {

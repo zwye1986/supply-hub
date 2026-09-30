@@ -4,6 +4,8 @@ import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import com.baomidou.mybatisplus.annotation.Version;
+import com.baomidou.mybatisplus.annotation.TableField;
+import com.baomidou.mybatisplus.annotation.FieldStrategy;
 import lombok.Builder;
 import lombok.Data;
 
@@ -29,12 +31,15 @@ public class RechargeFrequencyQueueDO {
     /** 下一次入队可分配的队列序号。 */
     private Long nextEnqueueSequence;
     /** 当前持有占用的队列项内部主键。 */
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private Long holderEntryId;
     /** 每次取得新占用递增的占用代次。 */
     private Long occupancyGeneration;
     /** 当前占用取得时间，Asia/Shanghai。 */
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private LocalDateTime acquiredAt;
     /** 本次成功最短占用截止时间，Asia/Shanghai。 */
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private LocalDateTime minimumHoldUntil;
     /** 下一次队列补偿检查时间，Asia/Shanghai。 */
     private LocalDateTime nextCheckAt;

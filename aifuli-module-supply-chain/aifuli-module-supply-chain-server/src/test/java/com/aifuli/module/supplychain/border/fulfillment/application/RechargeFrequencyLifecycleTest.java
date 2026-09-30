@@ -2,6 +2,10 @@ package com.aifuli.module.supplychain.border.fulfillment.application;
 
 import com.aifuli.module.supplychain.border.fulfillment.dal.dataobject.RechargeFrequencyEntryDO;
 import com.aifuli.module.supplychain.border.fulfillment.dal.mysql.RechargeFrequencyEntryMapper;
+import com.aifuli.module.supplychain.border.fulfillment.dal.mysql.RechargeFrequencyExecutionMapper;
+import com.aifuli.module.supplychain.border.fulfillment.dal.mysql.FulfillmentOperationMapper;
+import com.aifuli.module.supplychain.border.fulfillment.dal.mysql.BOrderMapper;
+import com.aifuli.module.supplychain.border.order.dal.mysql.SupplyChainOrderMapper;
 import com.aifuli.module.supplychain.border.fulfillment.dal.mysql.RechargeFrequencyQueueMapper;
 import com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock;
 import com.aifuli.module.supplychain.tradecore.catalog.application.RechargeFrequencyProductResolver;
@@ -15,7 +19,12 @@ class RechargeFrequencyLifecycleTest {
     private final RechargeFrequencyProductResolver products = mock(RechargeFrequencyProductResolver.class);
     private final RechargeFrequencyIdentityService identities = new RechargeFrequencyIdentityService(() -> new byte[32]);
     private final SupplyChainDatabaseClock clock = mock(SupplyChainDatabaseClock.class);
-    private final RechargeFrequencyLifecycle lifecycle = new RechargeFrequencyLifecycle(queues, entries, identities, products, clock);
+    private final RechargeFrequencyExecutionMapper executionLocks = mock(RechargeFrequencyExecutionMapper.class);
+    private final FulfillmentOperationMapper operations = mock(FulfillmentOperationMapper.class);
+    private final BOrderMapper bOrders = mock(BOrderMapper.class);
+    private final SupplyChainOrderMapper orders = mock(SupplyChainOrderMapper.class);
+    private final RechargeFrequencyLifecycle lifecycle = new RechargeFrequencyLifecycle(
+            queues, entries, identities, products, clock, executionLocks, operations, bOrders, orders);
 
     @Test
     void nonMobileDirectRechargeDoesNotEnqueue() {

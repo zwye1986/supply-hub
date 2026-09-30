@@ -7,6 +7,9 @@ package com.aifuli.module.supplychain.border.fulfillment.domain;
  */
 public final class FulfillmentExceptionReasonCodes {
 
+    /** 权威供应商终态相互矛盾，只审计核实，不能覆盖资金事实。 */
+    public static final String SUPPLIER_TERMINAL_CONTRADICTION = "SUPPLIER_TERMINAL_CONTRADICTION";
+
     private FulfillmentExceptionReasonCodes() {
     }
 

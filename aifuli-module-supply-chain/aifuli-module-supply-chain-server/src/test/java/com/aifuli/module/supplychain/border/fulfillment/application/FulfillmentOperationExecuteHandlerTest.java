@@ -82,6 +82,9 @@ class FulfillmentOperationExecuteHandlerTest {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
+    @Mock
+    private RechargeFrequencyLifecycle frequencyLifecycle;
+
     private FulfillmentOperationExecuteHandler executeHandler;
     private FulfillmentCallbackProperties callbackProperties;
 
@@ -103,7 +106,7 @@ class FulfillmentOperationExecuteHandlerTest {
                 operationExecutorPort,
                 supplierOrderLifecycle,
                 objectMapper,
-                callbackProperties
+                callbackProperties, frequencyLifecycle
         );
     }
 
@@ -234,7 +237,7 @@ class FulfillmentOperationExecuteHandlerTest {
                 .outcomeClass(OperationOutcomeClass.SUCCEEDED)
                 .externalOrderNo("EXT_QNM_999")
                 .build();
-        when(supplierOrderLifecycle.claimForExecution(operationNo)).thenReturn(true);
+        when(supplierOrderLifecycle.claimForExecution(operationNo, null)).thenReturn(true);
         when(operationExecutorPort.execute(any(OperationTicket.class))).thenReturn(successOutcome);
 
         String result = executeHandler.handle(context, payload);
@@ -256,9 +259,9 @@ class FulfillmentOperationExecuteHandlerTest {
         assertThat(ticket.callbackUrl()).isEqualTo("https://api.aifuli.com/qnm/callback");
 
         org.mockito.InOrder inOrder = inOrder(supplierOrderLifecycle, operationExecutorPort);
-        inOrder.verify(supplierOrderLifecycle).claimForExecution(operationNo);
+        inOrder.verify(supplierOrderLifecycle).claimForExecution(operationNo, null);
         inOrder.verify(operationExecutorPort).execute(any(OperationTicket.class));
-        verify(supplierOrderLifecycle).transition(eq(operationNo), eq(successOutcome), eq("4"));
+        verify(supplierOrderLifecycle).confirmTrustedOutcome(eq(operationNo), eq(successOutcome), eq("4"), org.mockito.ArgumentMatchers.isNull());
     }
 
     @Test
@@ -316,19 +319,26 @@ class FulfillmentOperationExecuteHandlerTest {
         when(orderMapper.selectById(41L)).thenReturn(order);
         when(supplierMapper.selectById(51L)).thenReturn(supplier);
         when(connectorResolver.resolve(61L)).thenReturn(connectorConfig);
-        when(supplierOrderLifecycle.claimForExecution(operationNo)).thenReturn(true);
+        when(supplierOrderLifecycle.claimForExecution(operationNo, null)).thenReturn(true);
 
         when(operationExecutorPort.execute(any(OperationTicket.class)))
-                .thenThrow(new RuntimeException("Network timeout"));
+                .thenThrow(new RuntimeException("Network timeout phone=13800138000 credential=evil-secret"));
+        var logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(FulfillmentOperationExecuteHandler.class);
+        var logs = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+        logs.start(); logger.addAppender(logs);
 
         String result = executeHandler.handle(context, payload);
 
         assertThat(result).isEqualTo("RESULT_UNKNOWN");
 
         ArgumentCaptor<OperationOutcome> outcomeCaptor = ArgumentCaptor.forClass(OperationOutcome.class);
-        verify(supplierOrderLifecycle).transition(eq(operationNo), outcomeCaptor.capture(), eq("5"));
+        verify(supplierOrderLifecycle).confirmTrustedOutcome(eq(operationNo), outcomeCaptor.capture(), eq("5"), org.mockito.ArgumentMatchers.isNull());
         assertThat(outcomeCaptor.getValue().outcomeClass()).isEqualTo(OperationOutcomeClass.RESULT_UNKNOWN);
-        assertThat(outcomeCaptor.getValue().externalErrorMessage()).contains("Network timeout");
+        assertThat(outcomeCaptor.getValue().externalErrorMessage()).doesNotContain("13800138000", "evil-secret");
+        assertThat(logs.list.stream().map(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage).toList().toString())
+                .doesNotContain("13800138000", "evil-secret");
+        assertThat(logs.list.stream().filter(event -> event.getThrowableProxy() != null).count()).isZero();
+        logger.detachAppender(logs);
     }
 
     @Test

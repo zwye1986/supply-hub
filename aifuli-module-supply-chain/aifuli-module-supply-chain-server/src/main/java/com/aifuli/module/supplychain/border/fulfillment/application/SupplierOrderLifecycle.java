@@ -93,6 +93,7 @@ public class SupplierOrderLifecycle {
     private final BusinessNoGenerator businessNoGenerator;
     private final SupplyChainDatabaseClock databaseClock;
     private final ObjectMapper objectMapper;
+    private final RechargeFrequencyLifecycle frequencyLifecycle;
 
     /**
      * 根据执行结果状态事实推进 BOrder、Operation、Request、Order 及资金/资产闭环。
@@ -104,43 +105,73 @@ public class SupplierOrderLifecycle {
      */
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public TransitionResult transition(String operationNo, OperationOutcome outcome, String traceId) {
+        return transitionInternal(operationNo, outcome, traceId, false, null);
+    }
+
+    /**
+     * 查单、可信回调或内部核实的终态事实入口。MANUAL只能由权威SUCCEEDED/REJECTED恢复，不能据此重新发送。
+     * 资格非空时验证原占用代次，迟到旧执行者只留观察，不能影响新持有者或资金。
+     * 设计见 docs/superpowers/specs/2026-09-30-direct-recharge-mobile-spu-frequency-design.md#5-结果窗口和资金。
+     */
+    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
+    public TransitionResult confirmTrustedOutcome(String operationNo, OperationOutcome outcome, String traceId,
+                                                   RechargeFrequencyExecutionPermit permit) {
+        return transitionInternal(operationNo, outcome, traceId, true, permit);
+    }
+
+    private TransitionResult transitionInternal(String operationNo, OperationOutcome outcome, String traceId,
+                                               boolean trustedRecovery, RechargeFrequencyExecutionPermit permit) {
         log.info("[供应商订单][lifecycle] transition 入口 operationNo={}, outcomeClass={}, traceId={}",
                 operationNo, outcome != null ? outcome.outcomeClass() : null, traceId);
         Objects.requireNonNull(operationNo, "operationNo must not be null");
         Objects.requireNonNull(outcome, "outcome must not be null");
 
-        FulfillmentOperationDO operation = operationMapper.selectOne(
+        var locked = frequencyLifecycle.lockForResult(operationNo);
+        FulfillmentOperationDO operation = locked != null ? locked.operation() : operationMapper.selectOne(
                 new LambdaQueryWrapper<FulfillmentOperationDO>()
                         .eq(FulfillmentOperationDO::getOperationNo, operationNo));
         if (operation == null) {
             throw new IllegalArgumentException("FulfillmentOperation does not exist: " + operationNo);
         }
-        BOrderDO bOrder = bOrderMapper.selectById(operation.getBOrderId());
+        BOrderDO bOrder = locked != null ? locked.bOrder() : bOrderMapper.selectById(operation.getBOrderId());
         if (bOrder == null) {
             throw new IllegalStateException("BOrder does not exist for operation: " + operationNo);
         }
-        FulfillmentRequestDO request = requestMapper.selectById(bOrder.getFulfillmentRequestId());
+        FulfillmentRequestDO request = locked != null ? locked.request() : requestMapper.selectById(bOrder.getFulfillmentRequestId());
         if (request == null) {
             throw new IllegalStateException("FulfillmentRequest does not exist: " + bOrder.getFulfillmentRequestId());
         }
-        SupplyChainOrderDO order = orderMapper.selectById(bOrder.getOrderId());
+        SupplyChainOrderDO order = locked != null ? locked.order() : orderMapper.selectById(bOrder.getOrderId());
         if (order == null) {
             throw new IllegalStateException("SupplyChainOrder does not exist: " + bOrder.getOrderId());
         }
 
-        // 幂等保护：若 Operation 已为终态，直接返回已有事实
-        if (operation.getStatus() != null
-                && (operation.getStatus() == SupplierOrderOperationStatus.SUCCEEDED.getCode()
-                || operation.getStatus() == SupplierOrderOperationStatus.FAILED.getCode()
-                || operation.getStatus() == SupplierOrderOperationStatus.MANUAL.getCode())) {
-            log.info("[供应商订单][lifecycle] Operation 已达终态，幂等返回 operationNo={}, status={}",
-                    operationNo, operation.getStatus());
-            return new TransitionResult(operation.getOperationNo(), bOrder.getBOrderNo(), order.getOrderNo(),
-                    operation.getStatus(), bOrder.getFulfillmentStatus(), order.getOrderStatus(), true);
+        LocalDateTime now = databaseClock.now();
+        // 观察以专用原子SQL去重；RR下的定位预读不能用于判断最新观察存在与否。
+        persistCallAndObservation(operation, bOrder, outcome, traceId, now);
+        boolean terminal = operation.getStatus() != null && (operation.getStatus() == SupplierOrderOperationStatus.SUCCEEDED.getCode()
+                || operation.getStatus() == SupplierOrderOperationStatus.FAILED.getCode());
+        boolean authoritativeTerminal = outcome.outcomeClass() == OperationOutcomeClass.SUCCEEDED
+                || outcome.outcomeClass() == OperationOutcomeClass.REJECTED;
+        boolean late = locked != null && locked.entry() != null && (!RechargeFrequencyLifecycle.isCurrentHolder(locked)
+                || (permit != null && (permit.queueId() != locked.queue().getId() || permit.entryId() != locked.entry().getId()
+                || permit.generation() != locked.entry().getOccupancyGeneration()
+                || !permit.operationNo().equals(operationNo))));
+        if (terminal) {
+            if (authoritativeTerminal && ((operation.getStatus() == SupplierOrderOperationStatus.SUCCEEDED.getCode())
+                    != (outcome.outcomeClass() == OperationOutcomeClass.SUCCEEDED))) {
+                openContradictoryCase(operation, bOrder, request, order, now);
+            }
+            if (!late) { frequencyLifecycle.reconcile(locked); }
+            return new TransitionResult(operationNo, bOrder.getBOrderNo(), order.getOrderNo(), operation.getStatus(),
+                    bOrder.getFulfillmentStatus(), order.getOrderStatus(), true);
+        }
+        if (late || (operation.getStatus() != null && operation.getStatus() == SupplierOrderOperationStatus.MANUAL.getCode()
+                && (!trustedRecovery || !authoritativeTerminal))) {
+            return new TransitionResult(operationNo, bOrder.getBOrderNo(), order.getOrderNo(), operation.getStatus(),
+                    bOrder.getFulfillmentStatus(), order.getOrderStatus(), false);
         }
 
-        LocalDateTime now = databaseClock.now();
-        persistCallAndObservation(operation, bOrder, outcome, traceId, now);
         OperationOutcomeClass outcomeClass = outcome.outcomeClass();
 
         switch (outcomeClass) {
@@ -151,6 +182,7 @@ public class SupplierOrderLifecycle {
             default -> handleManualOrOther(operation, bOrder, request, order, outcome, traceId, now);
         }
 
+        frequencyLifecycle.reconcile(locked);
         log.info("[供应商订单][lifecycle] transition 完成 operationNo={}, opStatus={}, bOrderStatus={}, orderStatus={}",
                 operation.getOperationNo(), operation.getStatus(), bOrder.getFulfillmentStatus(), order.getOrderStatus());
         boolean isTerminal = operation.getStatus() == SupplierOrderOperationStatus.SUCCEEDED.getCode()
@@ -167,6 +199,13 @@ public class SupplierOrderLifecycle {
      */
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public boolean claimForExecution(String operationNo) {
+        return claimForExecution(operationNo, null);
+    }
+
+    /** 普通执行入口必须提供可信实际target类型；频控项只能通过不可变permit及发送marker获得资格。 */
+    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
+    public boolean claimForExecution(String operationNo, String actualTargetType) {
+        if (frequencyLifecycle.requiresFrequency(operationNo, actualTargetType)) { return false; }
         Objects.requireNonNull(operationNo, "operationNo must not be null");
         FulfillmentOperationDO operation = operationMapper.selectOne(
                 new LambdaQueryWrapper<FulfillmentOperationDO>()
@@ -645,7 +684,7 @@ public class SupplierOrderLifecycle {
         if (externalSubStatus != null) {
             externalSubStatus = QnmMaskingUtils.maskResponseBody(externalSubStatus);
         }
-        observationMapper.insert(RawStatusObservationDO.builder()
+        observationMapper.insertIdempotent(RawStatusObservationDO.builder()
                 .observationNo(businessNoGenerator.next(BusinessNoPrefixes.OBS))
                 .observationKey(observationKey)
                 .sourceType(sourceType)
@@ -662,6 +701,20 @@ public class SupplierOrderLifecycle {
                 .receivedAt(now)
                 .traceId(traceId != null ? traceId : "")
                 .build());
+    }
+
+    /** 矛盾供应商终态仅开异常审计，不覆写既有订单事实或重复资金动作。设计见限频设计 #5-结果窗口和资金。 */
+    private void openContradictoryCase(FulfillmentOperationDO operation, BOrderDO bOrder,
+                                       FulfillmentRequestDO request, SupplyChainOrderDO order, LocalDateTime now) {
+        if (exceptionCaseMapper.selectActiveByOperationId(operation.getId()) != null) { return; }
+        String evidenceRef = "TERMINAL_CONTRADICTION:" + operation.getOperationNo();
+        exceptionCaseMapper.insert(FulfillmentExceptionCaseDO.builder()
+                .caseNo(businessNoGenerator.next(BusinessNoPrefixes.CASE)).orderId(order.getId())
+                .fulfillmentRequestId(request.getId()).bOrderId(bOrder.getId()).operationId(operation.getId())
+                .reasonCode(FulfillmentExceptionReasonCodes.SUPPLIER_TERMINAL_CONTRADICTION)
+                .status(FulfillmentExceptionCaseStatus.OPEN.getCode()).evidenceRef(evidenceRef)
+                .evidenceDigest(hmacFingerprint.fingerprint("EXCEPTION_CASE", evidenceRef.getBytes(StandardCharsets.UTF_8)))
+                .activeCaseFlag(1).createdAt(now).updatedAt(now).version(0L).build());
     }
 
     private void openRecoverAssetCase(FulfillmentOperationDO operation, BOrderDO bOrder,

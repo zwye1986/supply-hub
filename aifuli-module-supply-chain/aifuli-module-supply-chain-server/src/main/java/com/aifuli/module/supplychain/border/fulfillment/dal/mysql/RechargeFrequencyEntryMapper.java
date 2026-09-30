@@ -18,6 +18,14 @@ public interface RechargeFrequencyEntryMapper extends BaseMapperX<RechargeFreque
                 .eq(RechargeFrequencyEntryDO::getOrderId, orderId));
     }
 
+    /** QUEUE锁取得后的认领定位；调用方必须在独立READ_COMMITTED事务内读取，并按PK锁定队首与候选再校验。 */
+    default RechargeFrequencyEntryDO selectFirstWaiting(Long queueId) {
+        return selectOne(new LambdaQueryWrapper<RechargeFrequencyEntryDO>()
+                .eq(RechargeFrequencyEntryDO::getQueueId, queueId)
+                .eq(RechargeFrequencyEntryDO::getStatus, com.aifuli.module.supplychain.border.fulfillment.domain.RechargeFrequencyEntryStatus.WAITING.getCode())
+                .orderByAsc(RechargeFrequencyEntryDO::getEnqueueSequence).last("LIMIT 1"));
+    }
+
     /** 控制行加锁后锁定具体队列项，保持所有业务入口的统一锁序。 */
     RechargeFrequencyEntryDO selectByIdForUpdate(@Param("id") Long id);
 

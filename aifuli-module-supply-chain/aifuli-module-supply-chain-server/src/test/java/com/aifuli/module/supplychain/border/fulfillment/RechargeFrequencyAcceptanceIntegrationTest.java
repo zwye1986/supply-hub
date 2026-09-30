@@ -167,7 +167,7 @@ class RechargeFrequencyAcceptanceIntegrationTest {
         assertThat(freezes(jdbc)).isZero();
     }
     /** 测试复制有效种子关系，所有引用仍在真实供应链库中。 */
-    private static long cloneRow(JdbcTemplate jdbc, String table, long id, Map<String, Object> overrides) {
+    static long cloneRow(JdbcTemplate jdbc, String table, long id, Map<String, Object> overrides) {
         var values = new LinkedHashMap<>(jdbc.queryForMap("SELECT * FROM " + table + " WHERE id=?", id));
         values.remove("id"); values.putAll(overrides);
         var keys = new GeneratedKeyHolder();
@@ -179,7 +179,7 @@ class RechargeFrequencyAcceptanceIntegrationTest {
         }, keys);
         return Objects.requireNonNull(keys.getKey()).longValue();
     }
-    private static void cloneListing(JdbcTemplate jdbc, long original, String listingNo, String buyerSku, long buyer, Long sku) {
+    static void cloneListing(JdbcTemplate jdbc, long original, String listingNo, String buyerSku, long buyer, Long sku) {
         var override = new HashMap<String, Object>(); override.put("listing_no", listingNo); override.put("buyer_sku_code", buyerSku); override.put("buyer_id", buyer);
         if (sku != null) { override.put("platform_sku_id", sku); }
         long listing = cloneRow(jdbc, "sc_buyer_listing", original, override);
@@ -189,7 +189,7 @@ class RechargeFrequencyAcceptanceIntegrationTest {
         long availability = jdbc.queryForObject("SELECT id FROM sc_buyer_listing_availability WHERE listing_id=?", Long.class, original);
         cloneRow(jdbc, "sc_buyer_listing_availability", availability, Map.of("listing_id", listing));
     }
-    private static long cloneSkuAndSupply(JdbcTemplate jdbc, long original, String code, Long spu) {
+    static long cloneSkuAndSupply(JdbcTemplate jdbc, long original, String code, Long spu) {
         var overrides = new HashMap<String, Object>(); overrides.put("sku_code", code);
         if (spu != null) { overrides.put("spu_id", spu); }
         long sku = cloneRow(jdbc, "sc_platform_sku", original, overrides);

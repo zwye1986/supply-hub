@@ -4,6 +4,8 @@ import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import com.baomidou.mybatisplus.annotation.Version;
+import com.baomidou.mybatisplus.annotation.TableField;
+import com.baomidou.mybatisplus.annotation.FieldStrategy;
 import lombok.Builder;
 import lombok.Data;
 
@@ -37,6 +39,7 @@ public class RechargeFrequencyEntryDO {
     /** 本队列项取得占用的代次。 */
     private Long occupancyGeneration;
     /** 外呼阶段：0已取得资格尚未发送，10外部可能已受理。 */
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private Short dispatchPhase;
     /** 分销商内部主键。 */
     private Long buyerId;

@@ -86,6 +86,9 @@ class SupplierOrderLifecycleTest {
     private final CardOrderSummaryPolicy cardOrderSummaryPolicy = new CardOrderSummaryPolicy();
     private final ObjectMapper objectMapper = new ObjectMapper();
 
+    @Mock
+    private RechargeFrequencyLifecycle frequencyLifecycle;
+
     private SupplierOrderLifecycle lifecycle;
 
     private final LocalDateTime fixedNow = LocalDateTime.of(2026, 8, 11, 10, 0, 0);
@@ -108,7 +111,7 @@ class SupplierOrderLifecycleTest {
                 hmacFingerprint,
                 businessNoGenerator,
                 databaseClock,
-                objectMapper
+                objectMapper, frequencyLifecycle
         );
     }
 

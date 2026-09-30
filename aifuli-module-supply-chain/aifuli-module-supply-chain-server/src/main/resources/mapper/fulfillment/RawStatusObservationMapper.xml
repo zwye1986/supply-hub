@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.aifuli.module.supplychain.border.fulfillment.dal.mysql.RawStatusObservationMapper">
+    <!-- 同观察键只保持原行；其它唯一冲突显式触发NOT NULL错误，整单事务回滚，不掩盖存储故障。 -->
+    <insert id="insertIdempotent">
+        INSERT INTO sc_raw_status_observation
+        (observation_no, observation_key, source_type, operation_id, b_order_id, connector_version_id, external_order_no, external_status, external_sub_status, mapping_definition_id, mapped_result_class, payload_digest, observed_at, received_at, trace_id)
+        VALUES
+        (#{observation.observationNo}, #{observation.observationKey}, #{observation.sourceType}, #{observation.operationId}, #{observation.bOrderId}, #{observation.connectorVersionId}, #{observation.externalOrderNo}, #{observation.externalStatus}, #{observation.externalSubStatus}, #{observation.mappingDefinitionId}, #{observation.mappedResultClass}, #{observation.payloadDigest}, #{observation.observedAt}, #{observation.receivedAt}, #{observation.traceId}) AS incoming
+        ON DUPLICATE KEY UPDATE
+            observation_key = IF(sc_raw_status_observation.observation_key = incoming.observation_key,
+                                 sc_raw_status_observation.observation_key, NULL)
+    </insert>
+</mapper>
