@@ -33,7 +33,7 @@ export PATH="$JAVA_HOME/bin:$PATH"
 
 ```bash
 mvn -pl aifuli-module-supply-chain/aifuli-module-supply-chain-server -am test \
-  -Dtest='RechargeFrequency*Test,FulfillmentTargetFieldsTest,SupplierOrderLifecycleTest,SupplyChainModuleArchitectureTest' \
+  -Dtest='RechargeFrequency*Test,!RechargeFrequency*IntegrationTest,!RechargeFrequency*ContractTest,FulfillmentTargetFieldsTest,SupplierOrderLifecycleTest,SupplyChainModuleArchitectureTest' \
   -Dsurefire.failIfNoSpecifiedTests=false
 ```
 
@@ -42,7 +42,7 @@ mvn -pl aifuli-module-supply-chain/aifuli-module-supply-chain-server -am test \
 ```bash
 mvn -pl aifuli-module-supply-chain/aifuli-module-supply-chain-server -am verify \
   -Psupply-chain-integration \
-  -Dtest='RechargeFrequency*Test,SupplyChainModuleArchitectureTest' \
+  -Dtest='RechargeFrequency*Test,!RechargeFrequency*IntegrationTest,!RechargeFrequency*ContractTest,SupplyChainModuleArchitectureTest' \
   -Dit.test='RechargeFrequency*IntegrationTest,RechargeFrequency*ContractTest,SupplyChainLiquibaseIntegrationTest' \
   -Dsurefire.failIfNoSpecifiedTests=false -Dfailsafe.failIfNoSpecifiedTests=false
 ```
@@ -121,6 +121,8 @@ ORDER BY enqueue_sequence LIMIT 1 FOR UPDATE;
 
 ## Task 3：稳定手机号摘要、服务端SPU解析与入队
 
+状态：已完成，提交 `f68cd50`。设计符合性与代码质量审查均通过；新增23项单测、既有11项纯逻辑及27项架构测试，共61项通过；新增3项与既有2项真实受理集成测试通过，无失败/错误/跳过。
+
 **文件：**
 - 新建 `border/fulfillment/application/RechargeFrequencyIdentityService.java`、`RechargeFrequencyLifecycle.java`。
 - 新建 `border/fulfillment/application/RechargeFrequencyAcceptanceCoordinator.java`，在事务外协调最多3次队列身份创建竞争重试；修改 `application/facade/BuyerFulfillmentCommandFacade.java` 的受理调用以委派协调入口，不访问DAL。
@@ -130,8 +132,8 @@ ORDER BY enqueue_sequence LIMIT 1 FOR UPDATE;
 - 新建测试 `border/fulfillment/application/RechargeFrequencyIdentityServiceTest.java`、`border/fulfillment/RechargeFrequencyAcceptanceIntegrationTest.java`。
 - 修改新流程所依赖的既有测试上下文，显式导入新服务并提供测试专用密钥解析实现；不在生产配置填测试密钥。
 
-- [ ] 先写不同前缀同摘要、不同手机号不同摘要、不合法号码拒绝、日志/DTO不输出明文、密钥缺失不绕过的失败测试。
-- [ ] 专用HMAC-SHA256用途域 `RECHARGE_FREQUENCY_MOBILE`，32字节稳定密钥由密钥引用解析，不复用项目appKey，不随凭证轮换；摘要实现如下，Mac每次创建避免线程共享：
+- [x] 先写不同前缀同摘要、不同手机号不同摘要、不合法号码拒绝、日志/DTO不输出明文、密钥缺失不绕过的失败测试。
+- [x] 专用HMAC-SHA256用途域 `RECHARGE_FREQUENCY_MOBILE`，32字节稳定密钥由密钥引用解析，不复用项目appKey，不随凭证轮换；摘要实现如下，Mac每次创建避免线程共享：
 
 ```java
 Mac mac = Mac.getInstance("HmacSHA256");
@@ -141,11 +143,11 @@ mac.update((byte) 0);
 byte[] digest = mac.doFinal(normalizedMobile.getBytes(StandardCharsets.UTF_8));
 ```
 
-- [ ] 应用服务仅传递摘要、maskedMobile和冻结spuId。手机号仍从经过验证的实际目标取得，忽略非手机号直充/卡券；非法MOBILE失败关闭。
-- [ ] 入队按orderId幂等；首次不存在QUEUE时普通插入由唯一键裁决，冲突整个事务回滚后重新读取；不在已失败事务继续业务。锁定控制行分配序号，新增WAITING项，同事务持久化唤醒意图。在既有首次Operation创建后、fundReservationService.freeze之前调用入队，统一队列→资金的锁序；不能在已锁资金账户后取得队列锁。
-- [ ] 在协调入口仅捕获队列身份唯一键创建竞争的专用异常，每次重新调用Lifecycle事务代理，最多3次（集中常量），保留因果异常；其他完整性异常不重试/不吞掉。测试跨SKU并发首次入同队列双方均可正常受理，失败事务不存在资金/订单残留。
-- [ ] 真实测试跨买家/项目同组合入同队列、同手机号不同SPU两队列、入队失败时资金/建单全回滚、重复受理不重复预占/入队。
-- [ ] 运行 IdentityServiceTest 和 AcceptanceIntegrationTest 后提交：`按真实手机号与平台SPU原子入队并保留资金预占`。
+- [x] 应用服务仅传递摘要、maskedMobile和冻结spuId。手机号仍从经过验证的实际目标取得，忽略非手机号直充/卡券；非法MOBILE失败关闭。
+- [x] 入队按orderId幂等；首次不存在QUEUE时普通插入由唯一键裁决，冲突整个事务回滚后重新读取；不在已失败事务继续业务。锁定控制行分配序号，新增WAITING项，同事务持久化唤醒意图。在既有首次Operation创建后、fundReservationService.freeze之前调用入队，统一队列→资金的锁序；不能在已锁资金账户后取得队列锁。
+- [x] 在协调入口仅捕获队列身份唯一键创建竞争的专用异常，每次重新调用Lifecycle事务代理，最多3次（集中常量），保留因果异常；其他完整性异常不重试/不吞掉。测试跨SKU并发首次入同队列双方均可正常受理，失败事务不存在资金/订单残留。
+- [x] 真实测试跨买家/项目同组合入同队列、同手机号不同SPU两队列、入队失败时资金/建单全回滚、重复受理不重复预占/入队。
+- [x] 运行 IdentityServiceTest 和 AcceptanceIntegrationTest 后提交：`按真实手机号与平台SPU原子入队并保留资金预占`。
 
 ## Task 4：FIFO认领、发送边界与可信终态推进
 
@@ -204,6 +206,7 @@ timer.scheduleOnce(FulfillmentTimerTaskTypes.RECHARGE_FREQUENCY_WAKE,
 - 修改 `interfaceapi/admin/SupplyChainAdminPermissions.java`。
 - 修改 API 模块 `src/main/java/com/aifuli/module/supplychain/error/SupplyChainErrorCodeConstants.java`，登记稳定错误和RetryDirective。
 - 新建资源 `src/main/resources/mapper/fulfillment/RechargeFrequencyMonitorMapper.xml` 与DAL Mapper，复杂聚合仅XML。
+- 修改共享web框架 `ApiAccessLogPathUtils` 登记限频管理端敏感路径，以及 `GlobalExceptionHandler` 的敏感路径请求参数/校验与解析异常日志；影响评估限定明确敏感路径，普通路径行为保持既有契约。供应链ContractTest覆盖正常、非法JSON/手机号、存储故障的日志与错误记录不含正文/手机号。
 - 新建测试 `interfaceapi/admin/RechargeFrequencyAdminControllerTest.java`、`RechargeFrequencyAdminContractTest.java`、`border/fulfillment/RechargeFrequencyAdminIntegrationTest.java`。
 
 - [ ] 先测试GET statistics/waiting-orders/occupancies/backlogs、POST search、POST entries/{id}/retry、POST queues/{id}/release全部有独立授权；query不能替代retry/release，项目HMAC上下文不能调用。
