@@ -40,12 +40,17 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Set;
 
+import static com.aifuli.framework.common.exception.util.ServiceExceptionUtil.exception;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.ROUTING_RULE_PROJECT_BUYER_MISMATCH;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.ROUTING_RULE_SCOPE_UNSUPPORTED;
+
 /**
  * 标准商品路由策略的草稿创建和不可变版本发布入口（PRD 四级范围模型）。
  *
  * <p>规则携带分销商/项目/商品类型三级范围明细与供应商候选；全局综合权重挂策略身份行，
  * 任一保存携带 COMPOSITE 时同步更新并全规则生效。
- * 设计见 {@code docs/superpowers/specs/2026-09-23-order-frontend-alignment-and-routing-prd-model-design.md#52 与 #55}。</p>
+ * 六级范围及项目归属发布门禁见
+ * {@code docs/superpowers/specs/2026-09-24-standard-order-routing-execution-design.md#3-规则匹配}。</p>
  */
 @Service
 @RequiredArgsConstructor
@@ -307,11 +312,17 @@ public class RoutingPolicyPublicationService {
             }
             SupplierDO primary = rule.primarySupplierCode() == null ? null
                     : requireActiveStandardSupplier(rule.primarySupplierCode());
+            Set<Long> selectedBuyerIds = new HashSet<>();
             for (String buyerCode : rule.distributorCodes()) {
-                requireActiveBuyer(buyerCode);
+                selectedBuyerIds.add(requireActiveBuyer(buyerCode).getId());
             }
             for (String projectCode : rule.projectCodes()) {
-                requireProject(projectCode);
+                BuyerProjectDO project = requireProject(projectCode);
+                // 分销商与项目同时指定时，项目必须落在所选分销商下；草稿直调也不能绕过。
+                // 设计见 docs/superpowers/specs/2026-09-24-standard-order-routing-execution-design.md#3-规则匹配。
+                if (!selectedBuyerIds.isEmpty() && !selectedBuyerIds.contains(project.getBuyerId())) {
+                    throw exception(ROUTING_RULE_PROJECT_BUYER_MISMATCH);
+                }
             }
             for (String typeCode : rule.productTypeCodes()) {
                 requireProductType(typeCode);
@@ -398,6 +409,15 @@ public class RoutingPolicyPublicationService {
         }
         Set<String> enabledScopeKeys = new HashSet<>();
         for (StdRoutingRuleDO rule : rules) {
+            // 发布时再次检查数据库中的草稿形状，拦截旧草稿及创建后变更的范围明细。
+            // 设计见 docs/superpowers/specs/2026-09-24-standard-order-routing-execution-design.md#3-规则匹配。
+            if (!RoutingRuleScopeTier.isSupported(
+                    RoutingRuleScopeMode.valueOf(rule.getDistributorMode()),
+                    RoutingRuleScopeMode.valueOf(rule.getProjectMode()),
+                    RoutingRuleScopeMode.valueOf(rule.getProductTypeMode()),
+                    RoutingRuleScopeMode.valueOf(rule.getSupplierMode()))) {
+                throw exception(ROUTING_RULE_SCOPE_UNSUPPORTED);
+            }
             List<StdRoutingRuleScopeDO> scopes = scopeMapper.selectByRuleIds(List.of(rule.getId()));
             List<StdRoutingCandidateDO> candidates = candidateMapper.selectByRuleId(rule.getId());
             // 候选行仅 AUTO+SPECIFIED 必需；FIXED 由主供应商单候选表达（设计 §5.5 候选集构造）。
@@ -409,14 +429,20 @@ public class RoutingPolicyPublicationService {
             if (rule.getStatus() == RULE_ENABLED && !enabledScopeKeys.add(scopeKey(rule, scopes, candidates))) {
                 throw new IllegalStateException("Published routing version contains overlapping enabled rules");
             }
+            Set<Long> selectedBuyerIds = new HashSet<>();
+            List<BuyerProjectDO> selectedProjects = new ArrayList<>();
             for (StdRoutingRuleScopeDO scope : scopes) {
                 switch (scope.getScopeKind()) {
-                    case "DISTRIBUTOR" -> requireActiveBuyerByIdRef(scope.getScopeCode());
-                    case "PROJECT" -> requireProject(scope.getScopeCode());
+                    case "DISTRIBUTOR" -> selectedBuyerIds.add(requireActiveBuyer(scope.getScopeCode()).getId());
+                    case "PROJECT" -> selectedProjects.add(requireProject(scope.getScopeCode()));
                     case "PRODUCT_TYPE" -> requireProductType(scope.getScopeCode());
                     default -> throw new IllegalStateException("Unknown routing scope kind: "
                             + scope.getScopeKind());
                 }
+            }
+            if (!selectedBuyerIds.isEmpty() && selectedProjects.stream()
+                    .anyMatch(project -> !selectedBuyerIds.contains(project.getBuyerId()))) {
+                throw exception(ROUTING_RULE_PROJECT_BUYER_MISMATCH);
             }
             if (rule.getPrimarySupplierId() != null) {
                 requireActiveSupplierById(rule.getPrimarySupplierId());
@@ -442,22 +468,20 @@ public class RoutingPolicyPublicationService {
         return String.join(",", codes);
     }
 
-    private void requireActiveBuyer(String buyerCode) {
+    private BuyerDO requireActiveBuyer(String buyerCode) {
         BuyerDO buyer = buyerMapper.selectByBuyerCode(buyerCode);
         if (buyer == null || buyer.getStatus() != BuyerStatus.ACTIVE.getCode()) {
             throw new IllegalArgumentException("Active buyer does not exist: " + buyerCode);
         }
+        return buyer;
     }
 
-    private void requireActiveBuyerByIdRef(String buyerCode) {
-        requireActiveBuyer(buyerCode);
-    }
-
-    private void requireProject(String projectCode) {
+    private BuyerProjectDO requireProject(String projectCode) {
         BuyerProjectDO project = projectMapper.selectByProjectCode(projectCode);
         if (project == null) {
             throw new IllegalArgumentException("Project does not exist: " + projectCode);
         }
+        return project;
     }
 
     private void requireProductType(String typeCode) {

@@ -96,8 +96,20 @@ class RoutingRuleSaveSupportTest {
                 .supplierMode(RoutingRuleScopeMode.ALL).supplierCodes(List.of())
                 .build();
         assertThatThrownBy(() -> support.validateAndNormalize(distributorOnly, null, Operation.CREATE))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("五级匹配层级");
+                .isInstanceOf(ServiceException.class)
+                .hasMessageContaining("范围组合");
+    }
+
+    @Test
+    void acceptsDistributorProjectAcrossAllProductTypesAndSuppliers() {
+        SaveRequest request = request()
+                .productTypeMode(RoutingRuleScopeMode.ALL).productTypeCodes(List.of())
+                .supplierMode(RoutingRuleScopeMode.ALL).supplierCodes(List.of())
+                .build();
+        NormalizedRulePatch patch = support.validateAndNormalize(request, null, Operation.CREATE);
+        assertThat(patch.projectCodes()).containsExactly("P001", "P002");
+        assertThat(patch.productTypeCodes()).isEmpty();
+        assertThat(patch.orderedSupplierCodes()).isEmpty();
     }
 
     @Test

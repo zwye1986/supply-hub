@@ -1,7 +1,10 @@
 package com.aifuli.module.supplychain.routing.application;
 
+import com.aifuli.framework.common.exception.ServiceException;
 import com.aifuli.module.supplychain.infrastructure.outbox.OutboxEventRepository;
 import com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock;
+import com.aifuli.module.supplychain.routing.dal.dataobject.StdRoutingRuleDO;
+import com.aifuli.module.supplychain.routing.dal.dataobject.StdRoutingRuleScopeDO;
 import com.aifuli.module.supplychain.routing.dal.dataobject.SupplierRoutingPolicyDO;
 import com.aifuli.module.supplychain.routing.dal.dataobject.SupplierRoutingPolicyVersionDO;
 import com.aifuli.module.supplychain.routing.dal.mysql.StdRoutingCandidateMapper;
@@ -9,8 +12,12 @@ import com.aifuli.module.supplychain.routing.dal.mysql.StdRoutingRuleMapper;
 import com.aifuli.module.supplychain.routing.dal.mysql.StdRoutingRuleScopeMapper;
 import com.aifuli.module.supplychain.routing.dal.mysql.SupplierRoutingPolicyMapper;
 import com.aifuli.module.supplychain.routing.dal.mysql.SupplierRoutingPolicyVersionMapper;
+import com.aifuli.module.supplychain.routing.domain.RoutingType;
+import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerDO;
+import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerProjectDO;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerMapper;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerProjectMapper;
+import com.aifuli.module.supplychain.tradecore.buyer.domain.BuyerStatus;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProductTypeMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierMapper;
 import org.junit.jupiter.api.BeforeEach;
@@ -19,6 +26,8 @@ import org.junit.jupiter.api.Test;
 import java.time.LocalDateTime;
 import java.util.List;
 
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.ROUTING_RULE_PROJECT_BUYER_MISMATCH;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -40,16 +49,19 @@ class RoutingPolicyPublicationSuccessorOwnershipTest {
     private final SupplierRoutingPolicyMapper policyMapper = mock(SupplierRoutingPolicyMapper.class);
     private final SupplierRoutingPolicyVersionMapper versionMapper =
             mock(SupplierRoutingPolicyVersionMapper.class);
+    private final StdRoutingRuleMapper ruleMapper = mock(StdRoutingRuleMapper.class);
+    private final StdRoutingRuleScopeMapper scopeMapper = mock(StdRoutingRuleScopeMapper.class);
+    private final StdRoutingCandidateMapper candidateMapper = mock(StdRoutingCandidateMapper.class);
+    private final BuyerMapper buyerMapper = mock(BuyerMapper.class);
+    private final BuyerProjectMapper projectMapper = mock(BuyerProjectMapper.class);
     private RoutingPolicyPublicationService service;
 
     @BeforeEach
     void setUp() {
         service = new RoutingPolicyPublicationService(
                 databaseClock, policyMapper, versionMapper,
-                mock(StdRoutingRuleMapper.class),
-                mock(StdRoutingRuleScopeMapper.class),
-                mock(StdRoutingCandidateMapper.class),
-                mock(BuyerMapper.class), mock(BuyerProjectMapper.class),
+                ruleMapper, scopeMapper, candidateMapper,
+                buyerMapper, projectMapper,
                 mock(ProductTypeMapper.class), mock(SupplierMapper.class),
                 mock(OutboxEventRepository.class));
         when(databaseClock.now()).thenReturn(NOW);
@@ -90,6 +102,38 @@ class RoutingPolicyPublicationSuccessorOwnershipTest {
         verify(versionMapper).selectByIdForUpdate(100L);
         verify(policyMapper).selectByCodeForUpdate(POLICY_CODE);
         verifyNoMoreInteractions(versionMapper);
+    }
+
+    @Test
+    void rejectsExistingDraftWhenStoredProjectBelongsToAnotherBuyer() {
+        SupplierRoutingPolicyVersionDO draft = SupplierRoutingPolicyVersionDO.builder()
+                .id(200L).policyId(1L).versionNo(2).status((short) 0).version(0L).build();
+        SupplierRoutingPolicyDO policy = SupplierRoutingPolicyDO.builder()
+                .id(1L).policyCode(POLICY_CODE).routingType(RoutingType.STANDARD_PRODUCT.code())
+                .status((short) 20).build();
+        StdRoutingRuleDO rule = StdRoutingRuleDO.builder()
+                .id(300L).ruleCode("RR_OLD_DRAFT").routeMode("AUTO")
+                .distributorMode("SPECIFIED").projectMode("SPECIFIED")
+                .productTypeMode("ALL").supplierMode("ALL").status((short) 10).build();
+        when(versionMapper.selectByIdForUpdate(200L)).thenReturn(draft);
+        when(policyMapper.selectByIdForUpdate(1L)).thenReturn(policy);
+        when(versionMapper.selectPublished(1L)).thenReturn(List.of());
+        when(policyMapper.selectActiveByType(RoutingType.STANDARD_PRODUCT.code())).thenReturn(List.of());
+        when(ruleMapper.selectByPolicyVersionId(200L)).thenReturn(List.of(rule));
+        when(scopeMapper.selectByRuleIds(List.of(300L))).thenReturn(List.of(
+                StdRoutingRuleScopeDO.builder().scopeKind("DISTRIBUTOR").scopeCode("BUYER_A").build(),
+                StdRoutingRuleScopeDO.builder().scopeKind("PROJECT").scopeCode("PROJECT_B").build()));
+        when(candidateMapper.selectByRuleId(300L)).thenReturn(List.of());
+        when(buyerMapper.selectByBuyerCode("BUYER_A")).thenReturn(BuyerDO.builder()
+                .id(11L).status(BuyerStatus.ACTIVE.getCode()).build());
+        when(projectMapper.selectByProjectCode("PROJECT_B")).thenReturn(BuyerProjectDO.builder()
+                .buyerId(12L).build());
+
+        assertThatThrownBy(() -> service.publish(new RoutingPolicyPublicationService.PublishCommand(
+                200L, 0L, "发布旧草稿", 1L, "trace-old-draft", null, null)))
+                .isInstanceOfSatisfying(ServiceException.class, exception ->
+                        assertThat(exception.getCode())
+                                .isEqualTo(ROUTING_RULE_PROJECT_BUYER_MISMATCH.getCode()));
     }
 
     private static RoutingPolicyPublicationService.SuccessorPublishCommand command() {
