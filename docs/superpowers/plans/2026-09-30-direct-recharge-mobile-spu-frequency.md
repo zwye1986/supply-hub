@@ -151,28 +151,31 @@ byte[] digest = mac.doFinal(normalizedMobile.getBytes(StandardCharsets.UTF_8));
 
 ## Task 4：FIFO认领、发送边界与可信终态推进
 
+状态：已完成，执行接入 `d099deb`、可信拒绝续履约 `90b2932`、未发送资格风险及双因果修复 `b392692`。两级独立复评均通过。原完整定向77项单测/架构+20项MySQL通过；请求装配追加36+10、续履约整组36+9、活动指针追加36+4、撤销风险与双因果追加37+5均通过，0失败/错误/跳过。分次范围不相加为去重总数；证据保存于 `/tmp/task4-full-verify-reports`、`/tmp/task4-continuation-reports`、`/tmp/task4-quality-reports`。
+
 **文件：**
 - 修改 `border/fulfillment/application/RechargeFrequencyLifecycle.java`。
 - 修改 `border/fulfillment/application/FulfillmentOperationExecuteHandler.java`、`SupplierOrderLifecycle.java`。
 - 新建 `border/fulfillment/application/RechargeFrequencyExecutionPermit.java`。
 - 新建测试 `border/fulfillment/RechargeFrequencyExecutionIntegrationTest.java`、`RechargeFrequencyLifecycleIntegrationTest.java`；修改 `border/fulfillment/application/SupplierOrderLifecycleTest.java`。
 
-- [ ] 定义执行资格快照，必须携带首次认领的代次和操作版本，旧执行者不允许重新读取新代次替换自己的资格：
+- [x] 定义执行资格快照，必须携带首次认领的代次和操作版本，旧执行者不允许重新读取新代次替换自己的资格：
 
 ```java
 public record RechargeFrequencyExecutionPermit(long queueId, long entryId,
         String operationNo, long generation, long entryVersion, long operationVersion) { }
 ```
 
-- [ ] 先用真实MySQL并发测试：多个节点只能认领队首一项，同手机号不同SPU可并发；非队首正常返回等待、不调用适配器、不增加外呼失败次数。
-- [ ] 验证历史MOBILE直充缺队列项、目标类型无法可靠解析时不能走普通claim绕过限频；仅可靠确认不适用的目标走普通执行，已冻结队列项不因商品后续变更而失效。
-- [ ] 完成同事务QUEUE+ENTRY+Operation认领，状态PREPARED。执行/结果/恢复锁序统一QUEUE→ENTRY→Request/Order→BOrder/Operation→既有资金服务，加锁后重新校验关联，不在结果处理入口取得商品限购写锁。
-- [ ] 实现外呼前事务 PREPARED→SEND_POSSIBLE，条件包含首次资格全部字段。必须返回成功才执行适配器；失败返回稳定跳过结果。
-- [ ] 加两线程屏障测试：人工撤销先提交则旧外呼0次；标记可能发送先提交则释放失败，节点失联仍保留占用。不靠sleep判定先后。
-- [ ] 回调/查询统一事实收敛：ACCEPTED/UNKNOWN/MANUAL保持占用；可信成功待acquired+5秒；总订单可信失败释放；继续履约仍同订单持有。
-- [ ] 针对已MANUAL操作补充受控可信事实恢复，复用原资金与观察写入，区别禁止重发与允许核实；无可信事实不能调用该入口。重复/相互矛盾事实保留审计，迟到事实不能清除新holder。
-- [ ] 测试资金预占保留、成功只扣一次、明确失败只释放一次、重路由不更换队列、旧回调不会释放新代次。
-- [ ] 执行定向真实MySQL与既有SupplierOrderLifecycleTest，提交：`接入FIFO直充执行与可信结果占用释放`。
+- [x] 先用真实MySQL并发测试：多个节点只能认领队首一项，同手机号不同SPU可并发；非队首正常返回等待、不调用适配器、不增加外呼失败次数。
+- [x] 验证历史MOBILE直充缺队列项、目标类型无法可靠解析时不能走普通claim绕过限频；仅可靠确认不适用的目标走普通执行，已冻结队列项不因商品后续变更而失效。
+- [x] 完成同事务QUEUE+ENTRY+Operation认领，状态PREPARED。执行/结果/恢复锁序统一QUEUE→ENTRY→Request/Order→BOrder/Operation→既有资金服务，加锁后重新校验关联，不在结果处理入口取得商品限购写锁。
+- [x] 实现外呼前事务 PREPARED→SEND_POSSIBLE，条件包含首次资格全部字段。必须返回成功才执行适配器；失败返回稳定跳过结果。
+- [x] 加两线程屏障测试：人工撤销先提交则旧外呼0次；标记可能发送先提交则释放失败，节点失联仍保留占用。不靠sleep判定先后。
+- [x] 回调/查询统一事实收敛：ACCEPTED/UNKNOWN/MANUAL保持占用；可信成功待acquired+5秒；总订单可信失败释放；继续履约仍同订单持有。
+- [x] 针对已MANUAL操作补充受控可信事实恢复，复用原资金与观察写入，区别禁止重发与允许核实；无可信事实不能调用该入口。重复/相互矛盾事实保留审计，迟到事实不能清除新holder。
+- [x] 区分单次拒绝与整单耗尽：由内部受控可信REJECTED入口显式指定已存在合法下一Operation，验证同Request/Order、序列/尝试、活动BOrder及无未决风险，原结果事务保留资金和占用并切换引用；无指示保持M1耗尽语义。删除失败释放后的断开绑定接口，测试必须走真实结果入口，不用SQL伪造旧失败终态。
+- [x] 测试资金预占保留、成功只扣一次、明确失败只释放一次、重路由不更换队列、旧回调不会释放新代次。
+- [x] 执行定向真实MySQL与既有SupplierOrderLifecycleTest，提交：`接入FIFO直充执行与可信结果占用释放`。
 
 ## Task 5：持久化唤醒、成功窗口检查和补偿告警
 
@@ -192,7 +195,7 @@ timer.scheduleOnce(FulfillmentTimerTaskTypes.RECHARGE_FREQUENCY_WAKE,
         key, payload, databaseClock.toInstant(fireAt));
 ```
 
-- [ ] Handler只调用Lifecycle。检查holder：未知只计划下一次观察/告警，成功在minimumHoldUntil释放，无holder认领FIFO队首；不把等待当失败。
+- [ ] Handler委派队列应用入口。检查holder：未知只计划下一次观察/告警，成功在minimumHoldUntil释放；无holder选择FIFO队首并安排既有OPERATION_EXECUTE，由执行Handler取得资格，不预先claim后再二次claim。执行任务幂等键包含唤醒代次，旧任务完成后新意图仍可唤醒同一业务操作。Timer用延迟解析端口避免构造环，不把等待当失败。
 - [ ] 补全现有标准履约缺失的主动查单恢复：仅已配置支持QUERY_ORDER的供应商，在事务外以原operationNo和冻结配置查询，由统一可信结果入口收敛；处理中/未知沿用30秒恢复基线，查询失败或NOT_FOUND继续占用，MANUAL只接受可信终态恢复。无查询能力不能退化为SEND。测试查询不带目标账号、不新建资金预占或SEND、迟到结果不释放新holder。
 - [ ] 补偿扫描有next_check_at索引、批量上限、仅恢复缺失/死信唤醒；同队列有效未来任务不重复新增。扫描不直接删除holder，不使用Redis租约作为授权依据。
 - [ ] 30分钟占用与积压>5按组合聚合告警，首次跨阈值记录、受控重复与恢复记录，日志仅队列ID/SPU/订单号，监控查询异常不伪装0值。
