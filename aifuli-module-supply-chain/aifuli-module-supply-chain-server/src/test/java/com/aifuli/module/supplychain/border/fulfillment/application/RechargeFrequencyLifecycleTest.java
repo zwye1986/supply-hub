@@ -24,7 +24,7 @@ class RechargeFrequencyLifecycleTest {
     private final BOrderMapper bOrders = mock(BOrderMapper.class);
     private final SupplyChainOrderMapper orders = mock(SupplyChainOrderMapper.class);
     private final RechargeFrequencyLifecycle lifecycle = new RechargeFrequencyLifecycle(
-            queues, entries, identities, products, clock, executionLocks, operations, bOrders, orders);
+            queues, entries, identities, products, clock, executionLocks, operations, bOrders, orders, mock(RechargeFrequencyWakeScheduler.class));
 
     @Test
     void nonMobileDirectRechargeDoesNotEnqueue() {

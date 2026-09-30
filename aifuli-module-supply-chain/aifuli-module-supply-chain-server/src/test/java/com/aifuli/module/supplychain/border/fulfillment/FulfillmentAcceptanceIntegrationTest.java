@@ -777,7 +777,15 @@ class FulfillmentAcceptanceIntegrationTest {
             com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyAcceptanceCoordinator.class,
             com.aifuli.module.supplychain.tradecore.catalog.application.RechargeFrequencyProductResolver.class,
             OrderSummaryPolicyRegistry.class, CardOrderSummaryPolicy.class,
-            BuyerFulfillmentCommandFacade.class})
+            BuyerFulfillmentCommandFacade.class,
+            RechargeFrequencyExecutionIntegrationTest.ExecutionConfiguration.class,
+            com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyWakeScheduler.class,
+            com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyTimerStartupCheck.class,
+            com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyRecoveryService.class,
+            com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyWakeHandler.class,
+            com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyQueryService.class,
+            com.aifuli.module.supplychain.infrastructure.timer.DatabasePersistentTimer.class,
+            com.aifuli.module.supplychain.infrastructure.timer.PersistentTimerHandlerRegistry.class})
     static class TestConfiguration {
         @Bean
         com.aifuli.module.supplychain.infrastructure.security.RechargeFrequencyIdentityKeyProvider frequencyKey() {

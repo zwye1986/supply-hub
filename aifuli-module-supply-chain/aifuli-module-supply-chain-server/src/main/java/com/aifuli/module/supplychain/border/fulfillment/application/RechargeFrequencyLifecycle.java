@@ -43,6 +43,7 @@ public class RechargeFrequencyLifecycle {
     private final FulfillmentOperationMapper operationMapper;
     private final BOrderMapper bOrderMapper;
     private final SupplyChainOrderMapper orderMapper;
+    private final RechargeFrequencyWakeScheduler wakeScheduler;
 
     /**
      * 当前事务独占的新订单先入队、后预占资金；同单重放复用冻结队列，不能重新解析可变SPU。
@@ -83,8 +84,7 @@ public class RechargeFrequencyLifecycle {
         queue.setNextCheckAt(now);
         queue.setUpdatedAt(now);
         if (queueMapper.updateById(queue) != 1) { throw new IllegalStateException("直充限频入队控制行版本冲突"); }
-        // TODO docs/superpowers/specs/2026-09-30-direct-recharge-mobile-spu-frequency-design.md#6-timer-与补偿：
-        // 后续Task5注册Handler后消费持久化唤醒意图；当前不向未注册类型调度任务。
+        wakeScheduler.schedule(queue);
         log.info("[直充限频] 入队成功 orderNo={}, queueId={}, platformSpuId={}, sequence={}, wakeGeneration={}",
                 command.orderNo(), queue.getId(), product.platformSpuId(), sequence, queue.getWakeGeneration());
     }
@@ -133,7 +133,10 @@ public class RechargeFrequencyLifecycle {
         entry.setUpdatedAt(databaseClock.now());
         operation.setStatus(SupplierOrderOperationStatus.EXECUTING.getCode());
         operation.setUpdatedAt(databaseClock.now());
+        queue.setNextCheckAt(databaseClock.now().plusSeconds(RechargeFrequencyConstants.RECOVERY_CHECK_SECONDS));
+        queue.setWakeGeneration(Math.incrementExact(queue.getWakeGeneration()));
         saveQueue(queue); saveEntry(entry);
+        wakeScheduler.schedule(queue);
         if (operationMapper.updateById(operation) != 1) { throw new IllegalStateException("限频认领操作版本冲突"); }
         return new RechargeFrequencyExecutionPermit(queue.getId(), entry.getId(), operationNo,
                 queue.getOccupancyGeneration(), entry.getVersion(), operation.getVersion());
@@ -162,7 +165,18 @@ public class RechargeFrequencyLifecycle {
      */
     @Transactional(transactionManager = "supplyChainTransactionManager", rollbackFor = Exception.class)
     public boolean revokePrepared(RechargeFrequencyExecutionPermit permit) {
-        log.info("[直充限频] 撤销准备资格 operationNo={}, queueId={}, generation={}", permit.operationNo(), permit.queueId(), permit.generation());
+        return revokePreparedInternal(permit, false);
+    }
+
+    /** 运行时本地准备故障撤销：第一次调度就使用DBnow+30秒，避免新代次任务绕过原Timer有界重试。
+     * 人工可信撤销仍使用立即唤醒入口。设计见 docs/superpowers/specs/2026-09-30-direct-recharge-mobile-spu-frequency-design.md#42-认领。 */
+    @Transactional(transactionManager = "supplyChainTransactionManager", rollbackFor = Exception.class)
+    public boolean revokePreparedForLocalFailure(RechargeFrequencyExecutionPermit permit) {
+        return revokePreparedInternal(permit, true);
+    }
+
+    private boolean revokePreparedInternal(RechargeFrequencyExecutionPermit permit, boolean localFailure) {
+        log.debug("[直充限频] 撤销准备资格 operationNo={}, queueId={}, generation={}", permit.operationNo(), permit.queueId(), permit.generation());
         var locked = lockForResult(permit.operationNo());
         if (!matches(locked, permit) || locked.entry().getVersion() != permit.entryVersion()
                 || locked.operation().getVersion() != permit.operationVersion()
@@ -183,7 +197,7 @@ public class RechargeFrequencyLifecycle {
         if (operationMapper.updateById(locked.operation()) != 1) { throw new IllegalStateException("撤销操作版本冲突"); }
         locked.entry().setStatus(RechargeFrequencyEntryStatus.WAITING.getCode());
         locked.entry().setDispatchPhase(null); saveEntry(locked.entry());
-        clearHolder(locked.queue());
+        clearHolder(locked.queue(), localFailure ? databaseClock.now().plusSeconds(RechargeFrequencyConstants.RECOVERY_CHECK_SECONDS) : databaseClock.now());
         return true;
     }
 
@@ -223,7 +237,7 @@ public class RechargeFrequencyLifecycle {
         locked.entry().setDispatchPhase(RechargeFrequencyDispatchPhase.PREPARED.getCode()); saveEntry(locked.entry());
         locked.queue().setNextCheckAt(databaseClock.now());
         locked.queue().setWakeGeneration(Math.incrementExact(locked.queue().getWakeGeneration())); saveQueue(locked.queue());
-        // TODO docs/superpowers/specs/2026-09-30-direct-recharge-mobile-spu-frequency-design.md#6-timer-与补偿：Task5消费续履约持久化唤醒意图。
+        wakeScheduler.schedule(locked.queue());
     }
 
     /**
@@ -290,7 +304,7 @@ public class RechargeFrequencyLifecycle {
             if (Objects.equals(locked.queue().getNextCheckAt(), locked.queue().getMinimumHoldUntil())) { return; }
             locked.queue().setNextCheckAt(locked.queue().getMinimumHoldUntil());
             locked.queue().setWakeGeneration(Math.incrementExact(locked.queue().getWakeGeneration())); saveQueue(locked.queue());
-            // TODO docs/superpowers/specs/2026-09-30-direct-recharge-mobile-spu-frequency-design.md#6-timer-与补偿：Task5消费持久化意图。
+            wakeScheduler.schedule(locked.queue());
             return;
         }
         locked.entry().setStatus(RechargeFrequencyEntryStatus.FINISHED.getCode());
@@ -326,8 +340,12 @@ public class RechargeFrequencyLifecycle {
         if (entryMapper.updateById(entry) != 1) { throw new IllegalStateException("限频队列项版本冲突"); }
     }
     private void clearHolder(RechargeFrequencyQueueDO queue) {
+        clearHolder(queue, databaseClock.now());
+    }
+    private void clearHolder(RechargeFrequencyQueueDO queue, java.time.LocalDateTime fireAt) {
         queue.setHolderEntryId(null); queue.setAcquiredAt(null); queue.setMinimumHoldUntil(null);
-        queue.setNextCheckAt(databaseClock.now()); queue.setWakeGeneration(Math.incrementExact(queue.getWakeGeneration())); saveQueue(queue);
+        queue.setNextCheckAt(fireAt); queue.setWakeGeneration(Math.incrementExact(queue.getWakeGeneration())); saveQueue(queue);
+        wakeScheduler.schedule(queue);
     }
     /**
      * 统一锁序取得的当前读行；关联BOrder/Operation列表按PK锁定，结果编排直接复用而不再普通查询旧快照。

@@ -15,6 +15,10 @@ public final class RechargeFrequencyConstants {
     /** 等待记录超过该数量时触发积压告警。 */
     public static final long BACKLOG_THRESHOLD = 5L;
 
+    public static final long RECOVERY_CHECK_SECONDS = 30L;
+    public static final int RECOVERY_BATCH_SIZE = 100;
+    public static final long ALERT_REPEAT_SECONDS = 1_800L;
+
     /** 手机号 HMAC 摘要用途码，与履约目标指纹用途隔离。 */
     public static final String HMAC_PURPOSE = "RECHARGE_FREQUENCY_MOBILE";
 

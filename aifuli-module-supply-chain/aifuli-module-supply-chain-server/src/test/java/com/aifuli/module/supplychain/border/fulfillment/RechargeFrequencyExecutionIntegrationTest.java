@@ -368,7 +368,7 @@ class RechargeFrequencyExecutionIntegrationTest {
     }
     static TimerTaskContext timer() { return new TimerTaskContext("FREQ-TEST", 99L, 1, 10L, "test-worker"); }
     @Configuration(proxyBeanMethods=false)
-    @Import({SupplierOrderLifecycle.class, FulfillmentOperationExecuteHandler.class})
+    @Import({SupplierOrderLifecycle.class, FulfillmentOperationExecuteHandler.class, FulfillmentOperationTicketFactory.class})
     static class ExecutionConfiguration {
         @Bean FulfillmentCallbackProperties callbacks() { return new FulfillmentCallbackProperties(); }
         @Bean PublishedConnectorConfigurationResolver connectorResolver(DataSource supplyChainDataSource) {
@@ -395,6 +395,13 @@ class RechargeFrequencyExecutionIntegrationTest {
     static class CountingExecutor implements OperationExecutorPort {
         final AtomicInteger calls = new AtomicInteger();
         public boolean supports(String adapterType) { return true; }
-        public OperationOutcome execute(OperationTicket ticket) { calls.incrementAndGet(); return OperationOutcome.builder().outcomeClass(OperationOutcomeClass.ACCEPTED).build(); }
+        volatile OperationTicket lastTicket;
+        volatile OperationOutcome outcome=OperationOutcome.builder().outcomeClass(OperationOutcomeClass.ACCEPTED).build();
+        public OperationOutcome execute(OperationTicket ticket) {
+            if (ticket.operationKind() == com.aifuli.module.supplychain.border.fulfillment.domain.FulfillmentOperationKind.QUERY_ORDER) {
+                assertThat(org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
+            }
+            calls.incrementAndGet(); lastTicket=ticket; return outcome;
+        }
     }
 }

@@ -17,19 +17,15 @@ import com.aifuli.module.supplychain.border.fulfillment.domain.OperationTicket;
 import com.aifuli.module.supplychain.border.order.dal.dataobject.SupplyChainOrderDO;
 import com.aifuli.module.supplychain.border.order.dal.mysql.SupplyChainOrderMapper;
 import com.aifuli.module.supplychain.border.order.domain.SupplierOrderOperationStatus;
-import com.aifuli.module.supplychain.infrastructure.security.CredentialProvider;
 import com.aifuli.module.supplychain.infrastructure.security.EnvelopeCryptoPort;
 import com.aifuli.module.supplychain.infrastructure.timer.PersistentTimerHandler;
 import com.aifuli.module.supplychain.infrastructure.timer.TimerTaskContext;
 import com.aifuli.module.supplychain.supplieradapter.metadata.PublishedConnectorConfigurationResolver;
 import com.aifuli.module.supplychain.supplieradapter.metadata.PublishedConnectorConfigurationResolver.PublishedConnectorConfiguration;
-import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.CredentialSlotDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierOfferVersionDO;
-import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.CredentialSlotMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferVersionMapper;
-import com.aifuli.module.supplychain.tradecore.supply.domain.CredentialSlotStatus;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -38,8 +34,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
-import java.util.List;
-import java.util.Map;
 
 /**
  * 履约操作执行处理器：消费 {@link FulfillmentTimerTaskTypes#OPERATION_EXECUTE} 持久化任务，
@@ -54,7 +48,6 @@ import java.util.Map;
 public class FulfillmentOperationExecuteHandler implements PersistentTimerHandler {
 
     public static final String TASK_TYPE = FulfillmentTimerTaskTypes.OPERATION_EXECUTE;
-    static final int DEFAULT_READ_TIMEOUT_SECONDS = 10;
 
     private final FulfillmentOperationMapper operationMapper;
     private final BOrderMapper bOrderMapper;
@@ -62,14 +55,12 @@ public class FulfillmentOperationExecuteHandler implements PersistentTimerHandle
     private final SupplyChainOrderMapper orderMapper;
     private final SupplierMapper supplierMapper;
     private final SupplierOfferVersionMapper offerVersionMapper;
-    private final CredentialSlotMapper credentialSlotMapper;
     private final PublishedConnectorConfigurationResolver connectorResolver;
-    private final List<CredentialProvider> credentialProviders;
     private final EnvelopeCryptoPort envelopeCrypto;
     private final OperationExecutorPort operationExecutorPort;
     private final SupplierOrderLifecycle supplierOrderLifecycle;
     private final ObjectMapper objectMapper;
-    private final FulfillmentCallbackProperties callbackProperties;
+    private final FulfillmentOperationTicketFactory ticketFactory;
     private final RechargeFrequencyLifecycle frequencyLifecycle;
 
     @Override
@@ -169,43 +160,19 @@ public class FulfillmentOperationExecuteHandler implements PersistentTimerHandle
         OperationTicket ticket;
         String preparationFailureCode = CREDENTIAL_UNAVAILABLE;
         try {
-            String secretKey = resolveSecretKey(connectorConfig.credentialSlotId());
+            String secretKey = ticketFactory.resolveCredential(connectorConfig);
             preparationFailureCode = TICKET_PREPARATION_FAILED;
-            ticket = OperationTicket.builder()
-                    .operationNo(operation.getOperationNo())
-                    .bOrderNo(bOrder.getBOrderNo())
-                    .billno(bOrder.getBillno() != null && !bOrder.getBillno().isBlank() ? bOrder.getBillno() : bOrder.getBOrderNo())
-                    .externalOrderNo(bOrder.getExternalOrderNo())
-                    .supplierCode(supplier.getSupplierCode())
-                    .adapterType(connectorConfig.adapterType())
-                    .connectorVersionId(bOrder.getConnectorVersionId())
-                    .offerVersionId(bOrder.getOfferVersionId())
-                    .operationKind(FulfillmentOperationKind.valueOf(operation.getOperationKind()))
-                    .adapterStepCode(AdapterStepCode.valueOf(operation.getAdapterStepCode()))
-                    .sequenceNo(operation.getSequenceNo() != null ? operation.getSequenceNo() : 1)
-                    .idempotencyKey(operation.getIdempotencyKey())
-                    .externalSkuCode(offerVersion != null ? offerVersion.getExternalSkuCode() : null)
-                    .quantity(bOrder.getRequestedQuantity() != null ? bOrder.getRequestedQuantity() : 1L)
-                    .rechargeAccount(target.accountValue())
-                    .targetSchemaCode(request.getTargetSchemaCode())
-                    .callbackUrl(resolveCallbackUrl(connectorConfig.callbackPath()))
-                    .baseUrl(connectorConfig.baseUrl())
-                    .merchantAccount(connectorConfig.merchantAccount())
-                    .secretKey(secretKey)
-                    .timeoutSeconds(DEFAULT_READ_TIMEOUT_SECONDS)
-                    .traceId(traceId)
-                    .checkpointPayload(operation.getCheckpointCiphertext())
-                    .extraParameters(Map.of())
-                    .build();
+            ticket = ticketFactory.create(operation, bOrder, request, supplier, offerVersion, connectorConfig,
+                    FulfillmentOperationKind.valueOf(operation.getOperationKind()), target.accountValue(), secretKey, traceId);
         } catch (Exception exception) {
-            log.warn("[履约执行] 本地发送准备失败 operationNo={}, reason={}, cause={}",
+            log.debug("[履约执行] 本地发送准备失败 operationNo={}, reason={}, cause={}",
                     operationNo, preparationFailureCode, safeFailureSummary(exception));
             if (permit != null) {
                 // 凭证与全部ticket装配共用该边界；原资格仍PREPARED才可撤销，失败则保守保留占用。
                 // 故障交给Timer有界重试，不计实际外呼；SEND_POSSIBLE后的异常不能进入本分支。
                 var preparationFailure = new IllegalStateException(preparationFailureCode, safeCause(exception));
                 try {
-                    frequencyLifecycle.revokePrepared(permit);
+                    frequencyLifecycle.revokePreparedForLocalFailure(permit);
                 } catch (Exception revocationFailure) {
                     // 撤销存储异常仍向Timer传播并保留安全双因果；事务自行回滚，不让它覆盖原准备故障。
                     // 设计见 docs/superpowers/specs/2026-09-30-direct-recharge-mobile-spu-frequency-design.md#42-认领。
@@ -252,32 +219,6 @@ public class FulfillmentOperationExecuteHandler implements PersistentTimerHandle
                 && (status == SupplierOrderOperationStatus.SUCCEEDED.getCode()
                 || status == SupplierOrderOperationStatus.FAILED.getCode()
                 || status == SupplierOrderOperationStatus.MANUAL.getCode());
-    }
-
-    private String resolveCallbackUrl(String callbackPath) {
-        String base = callbackProperties != null ? callbackProperties.getPublicCallbackBaseUrl() : null;
-        if (base == null || base.isBlank() || callbackPath == null || callbackPath.isBlank()) {
-            return "";
-        }
-        String normalizedBase = base.endsWith("/") ? base.substring(0, base.length() - 1) : base;
-        String normalizedPath = callbackPath.startsWith("/") ? callbackPath : "/" + callbackPath;
-        return normalizedBase + normalizedPath;
-    }
-
-    private String resolveSecretKey(Long credentialSlotId) {
-        if (credentialSlotId == null) {
-            return null;
-        }
-        CredentialSlotDO slot = credentialSlotMapper.selectById(credentialSlotId);
-        if (slot == null || slot.getStatus() != CredentialSlotStatus.ACTIVE.getCode()) {
-            throw new IllegalStateException("CredentialSlot 不可用 slotId=" + credentialSlotId);
-        }
-        CredentialProvider provider = credentialProviders.stream()
-                .filter(p -> p.supports(slot.getProviderType()))
-                .findFirst()
-                .orElseThrow(() -> new IllegalStateException("未找到支持的 CredentialProvider: " + slot.getProviderType()));
-        char[] secretChars = provider.resolve(slot);
-        return secretChars != null ? new String(secretChars) : null;
     }
 
     private ResolvedTarget resolveRechargeAccount(FulfillmentOperationDO operation,

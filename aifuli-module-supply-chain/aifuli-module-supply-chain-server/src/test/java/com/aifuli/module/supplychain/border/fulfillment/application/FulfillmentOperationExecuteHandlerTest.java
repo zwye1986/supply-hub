@@ -99,14 +99,12 @@ class FulfillmentOperationExecuteHandlerTest {
                 orderMapper,
                 supplierMapper,
                 offerVersionMapper,
-                credentialSlotMapper,
                 connectorResolver,
-                List.of(credentialProvider),
                 envelopeCrypto,
                 operationExecutorPort,
                 supplierOrderLifecycle,
                 objectMapper,
-                callbackProperties, frequencyLifecycle
+                new FulfillmentOperationTicketFactory(credentialSlotMapper, List.of(credentialProvider), callbackProperties), frequencyLifecycle
         );
     }
 
@@ -426,7 +424,7 @@ class FulfillmentOperationExecuteHandlerTest {
         var slot = CredentialSlotDO.builder().id(9L).providerType("ENV").status((short)10).build(); when(credentialSlotMapper.selectById(9L)).thenReturn(slot);
         when(credentialProvider.supports("ENV")).thenReturn(true);
         when(credentialProvider.resolve(slot)).thenThrow(new IllegalArgumentException("phone=13800138000 secret=evil-credential"));
-        when(frequencyLifecycle.revokePrepared(permit)).thenThrow(new IllegalStateException("evil-storage phone=13800138000",new java.sql.SQLException("evil-storage credential")));
+        when(frequencyLifecycle.revokePreparedForLocalFailure(permit)).thenThrow(new IllegalStateException("evil-storage phone=13800138000",new java.sql.SQLException("evil-storage credential")));
         Throwable failure = org.assertj.core.api.Assertions.catchThrowable(() -> executeHandler.handle(new TimerTaskContext("SAFE",1L,1,1L,"worker"),objectMapper.createObjectNode().put("operationNo",no)));
         assertThat(failure).hasMessage("CREDENTIAL_UNAVAILABLE"); assertThat(failure.getCause().getMessage()).contains("IllegalArgumentException");
         assertThat(failure.getSuppressed()).hasSize(1); assertThat(failure.getSuppressed()[0].getMessage()).contains("IllegalStateException", "SQLException");

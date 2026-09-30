@@ -42,6 +42,7 @@ public class RechargeFrequencyQueueDO {
     @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private LocalDateTime minimumHoldUntil;
     /** 下一次队列补偿检查时间，Asia/Shanghai。 */
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private LocalDateTime nextCheckAt;
     /** 每次安排新的唤醒意图递增的任务代次。 */
     private Long wakeGeneration;
