@@ -3,14 +3,14 @@
 spring:
   cloud:
     nacos:
-      server-addr: 127.0.0.1:8848 # Nacos 服务器地址
-      username: # Nacos 账号
-      password: # Nacos 密码
-      discovery: # 【配置中心】配置项
-        namespace: dev # 命名空间。这里使用 dev 开发环境
+      server-addr: 47.117.130.100:8848 # Nacos 服务器地址
+      username: nacos # Nacos 账号
+      password: "!2026NacosAdmin@Qhf." # Nacos 密码，! 开头必须使用引号避免 YAML 解析为 tag
+      discovery: # 【注册中心】配置项
+        namespace: aifuli-supplyhub-local # 命名空间。这里使用 aifuli-supplyhub-local 开发环境
         group: DEFAULT_GROUP # 使用的 Nacos 配置分组，默认为 DEFAULT_GROUP
-      config: # 【注册中心】配置项
-        namespace: dev # 命名空间。这里使用 dev 开发环境
+      config: # 【配置中心】配置项
+        namespace: aifuli-supplyhub-local # 命名空间。这里使用 aifuli-supplyhub-local 开发环境
         group: DEFAULT_GROUP # 使用的 Nacos 配置分组，默认为 DEFAULT_GROUP
 
 --- #################### 监控相关配置 ####################

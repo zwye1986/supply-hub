@@ -198,6 +198,10 @@ public interface SupplyChainErrorCodeConstants {
     ErrorCode BUSINESS_CODE_MANUAL_NOT_ALLOWED = error(1_050_001_144, "{}编号由系统生成，请勿手填");
     ErrorCode BUSINESS_CODE_PERMANENT_EXISTS = error(1_050_001_145, "永久编码已存在：{}");
     ErrorCode BUSINESS_CODE_LEGACY_PARENT_OCCUPIED = error(1_050_001_146, "旧父对象占用父段：{}");
+    ErrorCode ROUTING_RULE_SCOPE_UNSUPPORTED =
+            error(1_050_001_147, "路由规则范围组合不支持，请按七级匹配层级配置");
+    ErrorCode ROUTING_RULE_PROJECT_BUYER_MISMATCH =
+            error(1_050_001_148, "项目不属于所选分销商");
 
     /** 订单详情不可用只作为成功响应中的详情标记，不作为 CommonResult 失败码。 */
     String DETAIL_UNAVAILABLE = "DETAIL_UNAVAILABLE";
@@ -339,6 +343,8 @@ public interface SupplyChainErrorCodeConstants {
             entry(ROUTING_RULE_SCOPE_DUPLICATED, RetryDirective.DO_NOT_RETRY),
             entry(ROUTING_RULE_PROTECTED, RetryDirective.DO_NOT_RETRY),
             entry(ROUTING_RULE_WEIGHTS_INVALID, RetryDirective.DO_NOT_RETRY),
+            entry(ROUTING_RULE_SCOPE_UNSUPPORTED, RetryDirective.DO_NOT_RETRY),
+            entry(ROUTING_RULE_PROJECT_BUYER_MISMATCH, RetryDirective.DO_NOT_RETRY),
             entry(PLATFORM_DEFAULT_PRICING_MISSING, RetryDirective.DO_NOT_RETRY),
             entry(SUPPLIER_CODE_REQUIRED, RetryDirective.DO_NOT_RETRY),
             entry(BUSINESS_CODE_FORMAT_INVALID, RetryDirective.DO_NOT_RETRY),

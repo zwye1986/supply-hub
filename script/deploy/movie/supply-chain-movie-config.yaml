@@ -1,0 +1,10 @@
+# 合并到当前环境中台Nacos配置，不整份覆盖已有配置。
+# 供应商密钥按数据库sc_credential_slot.secret_ref配置在中台环境中：
+# MOVIE_JC_APP_SECRET / MOVIE_JY_APP_SECRET / MOVIE_LX_APP_SECRET。
+# 电影与中台的MOVIE_CONFIG_RPC_TOKEN必须相同，32至512字符。
+movie:
+  supply:
+    config-token: ${MOVIE_CONFIG_RPC_TOKEN:}
+    # 默认要求HTTPS。生产须配置TLS或可信代理终止，不能直接信任外部伪造转发头。
+    # 只有受控本地HTTP联调时才设置为false；这会让密钥响应通过HTTP传输。
+    config-require-https: true

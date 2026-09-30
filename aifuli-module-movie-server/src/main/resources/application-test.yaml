@@ -1,0 +1,18 @@
+--- #################### 注册中心 + 配置中心相关配置 ####################
+
+spring:
+  cloud:
+    nacos:
+      server-addr: 47.117.130.100:8848 # Nacos 服务器地址
+      username: nacos # Nacos 账号
+      password: "!2026NacosAdmin@Qhf." # ! 开头必须使用引号避免 YAML 解析为 tag
+      discovery:
+        enabled: true
+        namespace: aifuli-supplyhub-test # 测试环境命名空间 ID
+        group: test # 与 Nacos 中的测试配置分组保持一致
+        metadata:
+          version: 1.0.0
+      config:
+        enabled: true
+        namespace: aifuli-supplyhub-test # 测试环境命名空间 ID
+        group: test # 与 Nacos 中的测试配置分组保持一致

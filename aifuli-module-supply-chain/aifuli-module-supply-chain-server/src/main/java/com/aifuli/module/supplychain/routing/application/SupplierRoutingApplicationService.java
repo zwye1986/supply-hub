@@ -68,9 +68,9 @@ import java.util.Set;
 import java.util.stream.Stream;
 
 /**
- * 读取已发布配置并构造不可变候选快照，最终选择只委托纯路由内核（PRD 五级范围模型）。
+ * 读取已发布配置并构造不可变候选快照，最终选择只委托纯路由内核（PRD 六级范围模型）。
  *
- * <p>规则匹配按 PRD 五级范围逐级裁决，停用规则跳过；
+ * <p>规则匹配按 PRD 六级范围逐级裁决，停用规则跳过；
  * 候选按 FIXED 主供应商 / AUTO+SPECIFIED 保序候选 / AUTO+ALL 动态解析三种来源装配；
  * STABLE/PRICE/COMPOSITE 三策略真实生效，评分（offer 人工录入稳定性/时效性）在本层读取后
  * 经 {@link RoutingCandidate} 快照注入引擎，domain 不依赖评分服务。
@@ -160,7 +160,7 @@ public class SupplierRoutingApplicationService {
     }
 
     /**
-     * 在启用规则中按 PRD 五级范围逐级匹配，同层再按配置优先级和编码裁决。
+     * 在启用规则中按 PRD 六级范围逐级匹配，同层再按配置优先级和编码裁决。
      * 供应商指定范围只限定候选池，不与尚未选定的供应商比较；停用规则不会阻断下一级。
      * 设计见 {@code docs/superpowers/specs/2026-09-24-standard-order-routing-execution-design.md#3-规则匹配}。
      */

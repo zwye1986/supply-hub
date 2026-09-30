@@ -19,6 +19,7 @@ import com.aifuli.module.supplychain.routing.dal.mysql.SupplierRoutingPolicyMapp
 import com.aifuli.module.supplychain.routing.dal.mysql.SupplierRoutingPolicyVersionMapper;
 import com.aifuli.module.supplychain.routing.domain.RoutingType;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerDO;
+import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerProjectDO;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerMapper;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerProjectMapper;
 import com.aifuli.module.supplychain.tradecore.buyer.domain.BuyerStatus;
@@ -146,6 +147,57 @@ class RoutingRuleAdminCommandServiceTest {
         assertThat(command.policyName()).isEqualTo(existingName);
         assertThat(command.policyName()).isNotEqualTo(RoutingRuleAdminCommandService.BOOTSTRAP_POLICY_NAME);
         assertThat(command.closeVersionId()).isNull();
+    }
+
+    @Test
+    void rejectsProjectOutsideSelectedDistributorBeforePublishing() {
+        when(policyMapper.selectActiveByType(RoutingType.STANDARD_PRODUCT.code())).thenReturn(List.of());
+        when(buyerMapper.selectByBuyerCode("BYR_1")).thenReturn(buyer(1L, "BYR_1"));
+        when(projectMapper.selectByProjectCode("PRJ_2")).thenReturn(
+                BuyerProjectDO.builder().id(2L).projectCode("PRJ_2").buyerId(2L).build());
+
+        assertThatThrownBy(() -> service.create(projectPatch("BYR_1", "PRJ_2"), OPERATOR_ID))
+                .isInstanceOf(ServiceException.class)
+                .hasMessageContaining("项目不属于所选分销商");
+        verify(publicationService, never()).publishSuccessorStandardProductRules(any());
+    }
+
+    @Test
+    void publishesProjectOwnedBySelectedDistributor() {
+        when(policyMapper.selectActiveByType(RoutingType.STANDARD_PRODUCT.code())).thenReturn(List.of());
+        when(buyerMapper.selectByBuyerCode("BYR_1")).thenReturn(buyer(1L, "BYR_1"));
+        when(projectMapper.selectByProjectCode("PRJ_1")).thenReturn(
+                BuyerProjectDO.builder().id(2L).projectCode("PRJ_1").buyerId(1L).build());
+        when(queryService.get(NEW_RULE_CODE)).thenReturn(sampleView(NEW_RULE_CODE));
+
+        service.create(projectPatch("BYR_1", "PRJ_1"), OPERATOR_ID);
+
+        ArgumentCaptor<SuccessorPublishCommand> captor = ArgumentCaptor.forClass(SuccessorPublishCommand.class);
+        verify(publicationService).publishSuccessorStandardProductRules(captor.capture());
+        assertThat(captor.getValue().rules().getFirst().projectCodes()).containsExactly("PRJ_1");
+        assertThat(captor.getValue().rules().getFirst().supplierMode()).isEqualTo("ALL");
+    }
+
+    @Test
+    void publishesDistributorProjectProductTypeRule() {
+        when(policyMapper.selectActiveByType(RoutingType.STANDARD_PRODUCT.code())).thenReturn(List.of());
+        when(buyerMapper.selectByBuyerCode("BYR_1")).thenReturn(buyer(1L, "BYR_1"));
+        when(projectMapper.selectByProjectCode("PRJ_1")).thenReturn(
+                BuyerProjectDO.builder().id(2L).projectCode("PRJ_1").buyerId(1L).build());
+        when(productTypeMapper.selectByCode("MOVIE")).thenReturn(
+                com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProductTypeDO.builder().id(3L).typeCode("MOVIE").typeName("电影票").build());
+        when(queryService.get(NEW_RULE_CODE)).thenReturn(sampleView(NEW_RULE_CODE));
+
+        service.create(projectProductTypePatch("BYR_1", "PRJ_1", "MOVIE"), OPERATOR_ID);
+
+        ArgumentCaptor<SuccessorPublishCommand> captor = ArgumentCaptor.forClass(SuccessorPublishCommand.class);
+        verify(publicationService).publishSuccessorStandardProductRules(captor.capture());
+        RuleDraft draft = captor.getValue().rules().getFirst();
+        assertThat(draft.distributorCodes()).containsExactly("BYR_1");
+        assertThat(draft.projectCodes()).containsExactly("PRJ_1");
+        assertThat(draft.productTypeCodes()).containsExactly("MOVIE");
+        assertThat(draft.supplierMode()).isEqualTo("ALL");
+        assertThat(draft.candidates()).isEmpty();
     }
 
     @Test
@@ -321,6 +373,27 @@ class RoutingRuleAdminCommandServiceTest {
                 List.of(RoutingRuleStrategy.STABLE, RoutingRuleStrategy.PRICE,
                         RoutingRuleStrategy.COMPOSITE),
                 new WeightInput(40, 30, 30), null);
+    }
+
+    private static NormalizedRulePatch projectPatch(String distributorCode, String projectCode) {
+        return new NormalizedRulePatch(
+                null, "项目通用路由", RoutingRuleRouteMode.AUTO, RoutingRuleStatus.ENABLED,
+                RoutingRuleScopeMode.SPECIFIED, List.of(distributorCode),
+                RoutingRuleScopeMode.SPECIFIED, List.of(projectCode),
+                RoutingRuleScopeMode.ALL, List.of(), RoutingRuleScopeMode.ALL, List.of(),
+                null, List.of(RoutingRuleStrategy.STABLE, RoutingRuleStrategy.PRICE,
+                        RoutingRuleStrategy.COMPOSITE), new WeightInput(40, 30, 30), null);
+    }
+
+    private static NormalizedRulePatch projectProductTypePatch(String distributorCode, String projectCode, String productTypeCode) {
+        return new NormalizedRulePatch(
+                null, "分销商项目品类专属路由", RoutingRuleRouteMode.AUTO, RoutingRuleStatus.ENABLED,
+                RoutingRuleScopeMode.SPECIFIED, List.of(distributorCode),
+                RoutingRuleScopeMode.SPECIFIED, List.of(projectCode),
+                RoutingRuleScopeMode.SPECIFIED, List.of(productTypeCode),
+                RoutingRuleScopeMode.ALL, List.of(),
+                null, List.of(RoutingRuleStrategy.STABLE, RoutingRuleStrategy.PRICE,
+                        RoutingRuleStrategy.COMPOSITE), new WeightInput(40, 30, 30), null);
     }
 
     private static StdRoutingRuleDO rule(long id, String code, String name, String distributorMode,

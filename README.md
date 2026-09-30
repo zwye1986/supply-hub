@@ -1,386 +1,93 @@
-<p align="center">
- <img src="https://img.shields.io/badge/Spring%20Cloud-2024-blue.svg" alt="Coverage Status">
- <img src="https://img.shields.io/badge/Spring%20Boot-3.4.5-blue.svg" alt="Downloads">
- <img src="https://img.shields.io/badge/Vue-3.2-blue.svg" alt="Downloads">
- <img src="https://img.shields.io/github/license/YunaiV/aifuli-cloud" alt="Downloads" />
-</p>
+# supply-hub
 
-**严肃声明：现在、未来都不会有商业版本，所有代码全部开源!！**
 
-**「我喜欢写代码，乐此不疲」**  
-**「我喜欢做开源，以此为乐」**
 
-我 🐶 在上海艰苦奋斗，早中晚在 top3 大厂认真搬砖，夜里为开源做贡献。
+## Getting started
 
-如果这个项目让你有所收获，记得 Star 关注哦，这对我是非常不错的鼓励与支持。
+To make it easy for you to get started with GitLab, here's a list of recommended next steps.
 
-可参考 [《迁移文档》](https://cloud.iocoder.cn/migrate-module/) ，只需要 5-10 分钟，即可将【完整版】按需迁移到【精简版】
+Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
 
-## 🐶 新手必读
+## Add your files
 
-* 演示地址【Vue3 + element-plus】：<http://dashboard-vue3.aifuli.iocoder.cn>
-* 演示地址【Vue3 + vben(ant-design-vue)】：<http://dashboard-vben.aifuli.iocoder.cn>
-* 演示地址【Vue2 + element-ui】：<http://dashboard.aifuli.iocoder.cn>
-* 启动文档：<https://cloud.iocoder.cn/quick-start/>
-* 视频教程：<https://cloud.iocoder.cn/video/>
+- [ ] [Create](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#create-a-file) or [upload](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#upload-a-file) files
+- [ ] [Add files using the command line](https://docs.gitlab.com/ee/gitlab-basics/add-file.html#add-a-file-using-the-command-line) or push an existing Git repository with the following command:
 
-## 🐰 版本说明
-
-| 版本                                                                    | JDK 8 + Spring Boot 2.7                                                  | JDK 17/21 + Spring Boot 3.2                                                          |
-|-----------------------------------------------------------------------|--------------------------------------------------------------------------|--------------------------------------------------------------------------------------|
-| 【完整版】[aifuli-cloud](https://gitee.com/zhijiantianya/aifuli-cloud)       | [`master`](https://gitee.com/zhijiantianya/aifuli-cloud/tree/master/) 分支  | [`master-jdk17`](https://gitee.com/zhijiantianya/aifuli-cloud/tree/master-jdk17/) 分支  |
-| 【精简版】[aifuli-cloud-mini](https://gitee.com/aifulicode/aifuli-cloud-mini) | [`master`](https://gitee.com/aifulicode/aifuli-cloud-mini/tree/master/) 分支 | [`master-jdk17`](https://gitee.com/aifulicode/aifuli-cloud-mini/tree/master-jdk17/) 分支 |
-
-* 【完整版】：包括系统功能、基础设施、会员中心、数据报表、工作流程、商城系统、微信公众号、CRM、ERP、IM 即时通讯等功能
-* 【精简版】：只包括系统功能、基础设施功能，不包括会员中心、数据报表、工作流程、商城系统、微信公众号、CRM、ERP、IM 即时通讯等功能
-
-可参考 [《迁移文档》](https://cloud.iocoder.cn/migrate-module/) ，只需要 5-10 分钟，即可将【完整版】按需迁移到【精简版】
-
-## pro143 测试环境发布
-
-### 前置条件
-
-- 本机安装 JDK 21、Maven、Docker Desktop（含 Buildx）、`ssh` 和 `scp`。
-- 本机 SSH 配置中已存在可登录 `root@8.133.164.143` 的 `pro143` 别名；如需覆盖，可设置环境变量
-  `SUPPLYHUB_DOCKER_HOST`。
-- 启动 Docker Desktop，并在仓库根目录执行发布命令。
-- 两个脚本都会把当前工作区的未提交修改打入镜像，镜像标签使用当前 HEAD 的短 commit hash；正式发布前建议先提交代码，
-  确保镜像可追溯。
-- 发布脚本的 Maven 打包使用 `-DskipTests`，自动化测试应在发布前独立执行。
-
-### supplyhub 基础服务
-
-`script/deploy/supplyhub-test/deploy-pro143.sh` 用于构建 `linux/amd64` 镜像并发布 pro143 的 supplyhub Docker
-Compose 服务。脚本支持单独发布一个服务，也支持一次发布全部服务：
-
-```bash
-cd /path/to/supply-hub
-
-# 单独发布
-bash script/deploy/supplyhub-test/deploy-pro143.sh gateway
-bash script/deploy/supplyhub-test/deploy-pro143.sh system
-bash script/deploy/supplyhub-test/deploy-pro143.sh infra
-bash script/deploy/supplyhub-test/deploy-pro143.sh member
-
-# 发布上述全部服务；不传参数时也默认 all
-bash script/deploy/supplyhub-test/deploy-pro143.sh all
+```
+cd existing_repo
+git remote add origin http://47.117.129.235/jierongjinfu/supply-hub.git
+git branch -M main
+git push -uf origin main
 ```
 
-| 参数 | Maven 模块 | pro143 容器 |
-|---|---|---|
-| `gateway` | `aifuli-gateway` | `supplyhub-gateway` |
-| `system` | `aifuli-module-system/aifuli-module-system-server` | `supplyhub-system` |
-| `infra` | `aifuli-module-infra/aifuli-module-infra-server` | `supplyhub-infra` |
-| `member` | `aifuli-module-member/aifuli-module-member-server` | `supplyhub-member` |
+## Integrate with your tools
 
-指定单个服务时，脚本只更新该服务的镜像标签并执行对应 Compose 服务，不重启供应链中台。当前 supplyhub 测试栈不包含
-`pay`、`erp`、`mall` 和 `statistics`。
+- [ ] [Set up project integrations](http://47.117.129.235/jierongjinfu/supply-hub/-/settings/integrations)
 
-### 供应链中台
+## Collaborate with your team
 
-`aifuli-module-supply-chain/scripts/deploy-pro143.sh` 只发布供应链中台：构建
-`aifuli-module-supply-chain-server`，生成 `aifuli/supply-chain-server:<commit>-amd64` 镜像并更新
-`supply-chain-server-test` 容器，不发布或重启 supplyhub 基础服务。
+- [ ] [Invite team members and collaborators](https://docs.gitlab.com/ee/user/project/members/)
+- [ ] [Create a new merge request](https://docs.gitlab.com/ee/user/project/merge_requests/creating_merge_requests.html)
+- [ ] [Automatically close issues from merge requests](https://docs.gitlab.com/ee/user/project/issues/managing_issues.html#closing-issues-automatically)
+- [ ] [Enable merge request approvals](https://docs.gitlab.com/ee/user/project/merge_requests/approvals/)
+- [ ] [Set auto-merge](https://docs.gitlab.com/ee/user/project/merge_requests/merge_when_pipeline_succeeds.html)
 
-```bash
-cd /path/to/supply-hub
+## Test and Deploy
 
-# 发布当前工作区（包含未提交修改）
-bash aifuli-module-supply-chain/scripts/deploy-pro143.sh
+Use the built-in continuous integration in GitLab.
 
-# 发布指定提交；脚本会先执行 git checkout，请仅在工作区干净时使用
-bash aifuli-module-supply-chain/scripts/deploy-pro143.sh <commit-hash>
-```
+- [ ] [Get started with GitLab CI/CD](https://docs.gitlab.com/ee/ci/quick_start/index.html)
+- [ ] [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/ee/user/application_security/sast/)
+- [ ] [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/ee/topics/autodevops/requirements.html)
+- [ ] [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/ee/user/clusters/agent/)
+- [ ] [Set up protected environments](https://docs.gitlab.com/ee/ci/environments/protected_environments.html)
 
-若同一批改动同时包含 system-server 的 Liquibase、字典、菜单或权限变更，推荐先发布 system-server，再发布供应链中台：
+***
 
-```bash
-bash script/deploy/supplyhub-test/deploy-pro143.sh system
-bash aifuli-module-supply-chain/scripts/deploy-pro143.sh
-```
+# Editing this README
 
-### 发布后检查
+When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
 
-```bash
-ssh pro143 '
-docker ps \
-  --filter name=supplyhub- \
-  --filter name=supply-chain-server-test \
-  --format "table {{.Names}}\t{{.Image}}\t{{.Status}}"
-'
+## Suggestions for a good README
 
-ssh pro143 'docker logs --since 10m --tail 150 <container-name> 2>&1'
-```
+Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
 
-发布成功时，目标容器应显示为 `healthy`。供应链中台部署目录为 `/data/aifuli-test/supply-chain`，supplyhub 基础服务
-部署目录为 `/data/aifuli-test/supplyhub`；服务器 `.env` 包含敏感配置，不得提交或在终端输出其完整内容。
+## Name
+Choose a self-explaining name for your project.
 
-## 🐯 平台简介
+## Description
+Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
 
-**芋道**，以开发者为中心，打造中国第一流的快速开发平台，全部开源，个人与企业可 100% 免费使用。
+## Badges
+On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
 
-> 有任何问题，或者想要的功能，可以在 _Issues_ 中提给艿艿。
->
-> 😜 给项目点点 Star 吧，这对我们真的很重要！
+## Visuals
+Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
 
-![架构图](/.image/common/aifuli-cloud-architecture.png)
+## Installation
+Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
 
-* Java 后端：`master` 分支为 JDK 8 + Spring Boot 2.7，`master-jdk17` 分支为 JDK 17/21 + Spring Boot 3.2
-* 管理后台的电脑端：Vue3 提供 [element-plus](https://gitee.com/aifulicode/aifuli-ui-admin-vue3)、[vben(ant-design-vue)](https://gitee.com/aifulicode/aifuli-ui-admin-vben) 两个版本，Vue2 提供 [element-ui](https://gitee.com/zhijiantianya/ruoyi-vue-pro/tree/master/aifuli-ui-admin) 版本
-* 管理后台的移动端：采用 [uni-app](https://github.com/dcloudio/uni-app) 方案，一份代码多终端适配，同时支持 APP、小程序、H5！
-* 后端采用 Spring Cloud Alibaba 微服务架构，注册中心 + 配置中心 Nacos，定时任务 XXL-Job，服务保障 Sentinel，服务网关 Gateway，分布式事务 Seata
-* 数据库可使用 MySQL、Oracle、PostgreSQL、SQL Server、MariaDB、国产达梦 DM、TiDB 等，基于 MyBatis Plus、Redis + Redisson 操作
-* 消息队列可使用 Event、Redis、RabbitMQ、Kafka、RocketMQ 等
-* 权限认证使用 Spring Security & Token & Redis，支持多终端、多种用户的认证系统，支持 SSO 单点登录
-* 支持加载动态权限菜单，按钮级别权限控制，Redis 缓存提升性能
-* 支持 SaaS 多租户，可自定义每个租户的权限，提供透明化的多租户底层封装
-* 工作流使用 Flowable，支持动态表单、在线设计流程、会签 / 或签、多种任务分配方式
-* 高效率开发，使用代码生成器可以一键生成 Java、Vue 前后端代码、SQL 脚本、接口文档，支持单表、树表、主子表
-* 实时通信，采用 Spring WebSocket 实现，内置 Token 身份校验，支持 WebSocket 集群
-* 集成微信小程序、微信公众号、企业微信、钉钉等三方登陆，集成支付宝、微信等支付与退款
-* 集成阿里云、腾讯云等短信渠道，集成 MinIO、阿里云、腾讯云、七牛云等云存储服务
-* 集成报表设计器、大屏设计器，通过拖拽即可生成酷炫的报表与大屏
+## Usage
+Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
 
-##  🐳 项目关系
+## Support
+Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
 
-![架构演进](/.image/common/aifuli-roadmap.png)
+## Roadmap
+If you have ideas for releases in the future, it is a good idea to list them in the README.
 
-三个项目的功能对比，可见社区共同整理的 [国产开源项目对比](https://www.yuque.com/xiatian-bsgny/lm0ec1/wqf8mn) 表格。
+## Contributing
+State if you are open to contributions and what your requirements are for accepting them.
 
-### 后端项目
+For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
 
-| 项目                                                              | Star                                                                                                                                                                                                                                                                                             | 简介                          |
-|-----------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------------------|
-| [ruoyi-vue-pro](https://gitee.com/zhijiantianya/ruoyi-vue-pro)  | [![Gitee star](https://gitee.com/zhijiantianya/ruoyi-vue-pro/badge/star.svg?theme=white)](https://gitee.com/zhijiantianya/ruoyi-vue-pro) [![GitHub stars](https://img.shields.io/github/stars/YunaiV/ruoyi-vue-pro.svg?style=social&label=Stars)](https://github.com/YunaiV/ruoyi-vue-pro)       | 基于 Spring Boot 多模块架构        |
-| [aifuli-cloud](https://gitee.com/zhijiantianya/aifuli-cloud)      | [![Gitee star](https://gitee.com/zhijiantianya/aifuli-cloud/badge/star.svg?theme=white)](https://gitee.com/zhijiantianya/aifuli-cloud) [![GitHub stars](https://img.shields.io/github/stars/YunaiV/aifuli-cloud.svg?style=social&label=Stars)](https://github.com/YunaiV/aifuli-cloud)               | 基于 Spring Cloud 微服务架构       |
-| [Spring-Boot-Labs](https://gitee.com/aifulicode/SpringBoot-Labs) | [![Gitee star](https://gitee.com/aifulicode/SpringBoot-Labs/badge/star.svg?theme=white)](https://gitee.com/zhijiantianya/aifuli-cloud) [![GitHub stars](https://img.shields.io/github/stars/aifulicode/SpringBoot-Labs.svg?style=social&label=Stars)](https://github.com/aifulicode/SpringBoot-Labs) | 系统学习 Spring Boot & Cloud 专栏 |
+You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
 
-### 前端项目
-
-| 项目                                                                         | Star                                                                                                                                                                                                                                                                                                                     | 简介                                     |
-|----------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------|
-| [aifuli-ui-admin-vue3](https://gitee.com/aifulicode/aifuli-ui-admin-vue3)     | [![Gitee star](https://gitee.com/aifulicode/aifuli-ui-admin-vue3/badge/star.svg?theme=white)](https://gitee.com/aifulicode/aifuli-ui-admin-vue3) [![GitHub stars](https://img.shields.io/github/stars/aifulicode/aifuli-ui-admin-vue3.svg?style=social&label=Stars)](https://github.com/aifulicode/aifuli-ui-admin-vue3)         | 基于 Vue3 + element-plus 实现的管理后台         |
-| [aifuli-ui-admin-vben](https://gitee.com/aifulicode/aifuli-ui-admin-vben)     | [![Gitee star](https://gitee.com/aifulicode/aifuli-ui-admin-vben/badge/star.svg?theme=white)](https://gitee.com/aifulicode/aifuli-ui-admin-vben) [![GitHub stars](https://img.shields.io/github/stars/aifulicode/aifuli-ui-admin-vben.svg?style=social&label=Stars)](https://github.com/aifulicode/aifuli-ui-admin-vben)         | 基于 Vue3 + vben(ant-design-vue) 实现的管理后台 |
-| [aifuli-mall-uniapp](https://gitee.com/aifulicode/aifuli-mall-uniapp)         | [![Gitee star](https://gitee.com/aifulicode/aifuli-mall-uniapp/badge/star.svg?theme=white)](https://gitee.com/aifulicode/aifuli-mall-uniapp) [![GitHub stars](https://img.shields.io/github/stars/aifulicode/aifuli-mall-uniapp.svg?style=social&label=Stars)](https://github.com/aifulicode/aifuli-mall-uniapp)                 | 基于 uni-app 实现的商城小程序                    |
-| [aifuli-ui-admin-vue2](https://gitee.com/aifulicode/aifuli-ui-admin-vue2)     | [![Gitee star](https://gitee.com/aifulicode/aifuli-ui-admin-vue2/badge/star.svg?theme=white)](https://gitee.com/aifulicode/aifuli-ui-admin-vue2) [![GitHub stars](https://img.shields.io/github/stars/aifulicode/aifuli-ui-admin-vue2.svg?style=social&label=Stars)](https://github.com/aifulicode/aifuli-ui-admin-vue2)         | 基于 Vue2 + element-ui 实现的管理后台           |
-| [aifuli-ui-admin-uniapp](https://gitee.com/aifulicode/aifuli-ui-admin-uniapp) | [![Gitee star](https://gitee.com/aifulicode/aifuli-ui-admin-uniapp/badge/star.svg?theme=white)](https://gitee.com/aifulicode/aifuli-ui-admin-uniapp) [![GitHub stars](https://img.shields.io/github/stars/aifulicode/aifuli-ui-admin-uniapp.svg?style=social&label=Stars)](https://github.com/aifulicode/aifuli-ui-admin-uniapp) | 基于 Vue2 + element-ui 实现的管理后台           |
-| [aifuli-ui-go-view](https://gitee.com/aifulicode/aifuli-ui-go-view)           | [![Gitee star](https://gitee.com/aifulicode/aifuli-ui-go-view/badge/star.svg?theme=white)](https://gitee.com/aifulicode/aifuli-ui-go-view) [![GitHub stars](https://img.shields.io/github/stars/aifulicode/aifuli-ui-go-view.svg?style=social&label=Stars)](https://github.com/aifulicode/aifuli-ui-go-view)                     | 基于 Vue3 + naive-ui 实现的大屏报表             |
-
-## 😎 开源协议
-
-**为什么推荐使用本项目？**
+## Authors and acknowledgment
+Show your appreciation to those who have contributed to the project.
 
-① 本项目采用比 Apache 2.0 更宽松的 [MIT License](https://gitee.com/zhijiantianya/ruoyi-vue-pro/blob/master/LICENSE) 开源协议，个人与企业可 100% 免费使用，不用保留类作者、Copyright 信息。
+## License
+For open source projects, say how it is licensed.
 
-② 代码全部开源，不会像其他项目一样，只开源部分代码，让你无法了解整个项目的架构设计。[国产开源项目对比](https://www.yuque.com/xiatian-bsgny/lm0ec1/wqf8mn)
-
-![开源项目对比](/.image/common/project-vs.png)
-
-③ 代码整洁、架构整洁，遵循《阿里巴巴 Java 开发手册》规范，代码注释详细，113770 行 Java 代码，42462 行代码注释。
-
-## 🤝 项目外包
-
-我们也是接外包滴，如果你有项目想要外包，可以微信联系【**Aix9975**】。
-
-团队包含专业的项目经理、架构师、前端工程师、后端工程师、测试工程师、运维工程师，可以提供全流程的外包服务。
-
-项目可以是商城、SCRM 系统、OA 系统、物流系统、ERP 系统、CMS 系统、HIS 系统、支付系统、IM 即时通讯、微信公众号、微信小程序等等。
-
-## 🐼 内置功能
-
-系统内置多种多种业务功能，可以用于快速你的业务系统：
-
-![功能分层](/.image/common/ruoyi-vue-pro-biz.png)
-
-* 通用模块（必选）：系统功能、基础设施
-* 通用模块（可选）：工作流程、支付系统、数据报表、会员中心
-* 业务系统（按需）：Mall 电子商城、OA 办公自动化、ERP 企业资源计划系统、CRM 客户关系管理、CMS 内容管理系统、IM 即时通讯系统、Mobile 手机移动端、Report 数据大屏
-
-> 友情提示：本项目基于 RuoYi-Vue 修改，**重构优化**后端的代码，**美化**前端的界面。
->
-> * 额外新增的功能，我们使用 🚀 标记。
-> * 重新实现的功能，我们使用 ⭐️ 标记。
-
-🙂 所有功能，都通过 **单元测试** 保证高质量。
-
-### 系统功能
-
-|     | 功能    | 描述                              |
-|-----|-------|---------------------------------|
-|     | 用户管理  | 用户是系统操作者，该功能主要完成系统用户配置          |
-| ⭐️  | 在线用户  | 当前系统中活跃用户状态监控，支持手动踢下线           |
-|     | 角色管理  | 角色菜单权限分配、设置角色按机构进行数据范围权限划分      |
-|     | 菜单管理  | 配置系统菜单、操作权限、按钮权限标识等，本地缓存提供性能    |
-|     | 部门管理  | 配置系统组织机构（公司、部门、小组），树结构展现支持数据权限  |
-|     | 岗位管理  | 配置系统用户所属担任职务                    |
-| 🚀  | 租户管理  | 配置系统租户，支持 SaaS 场景下的多租户功能        |
-| 🚀  | 租户套餐  | 配置租户套餐，自定每个租户的菜单、操作、按钮的权限       |
-|     | 字典管理  | 对系统中经常使用的一些较为固定的数据进行维护          |
-| 🚀  | 短信管理  | 短信渠道、短息模板、短信日志，对接阿里云、腾讯云等主流短信平台 |
-| 🚀  | 邮件管理  | 邮箱账号、邮件模版、邮件发送日志，支持所有邮件平台       |
-| 🚀  | 站内信   | 系统内的消息通知，提供站内信模版、站内信消息          |
-| 🚀  | 操作日志  | 系统正常操作日志记录和查询，集成 Swagger 生成日志内容 |
-| ⭐️  | 登录日志  | 系统登录日志记录查询，包含登录异常               |
-| 🚀  | 错误码管理 | 系统所有错误码的管理，可在线修改错误提示，无需重启服务     |
-|     | 通知公告  | 系统通知公告信息发布维护                    |
-| 🚀  | 敏感词   | 配置系统敏感词，支持标签分组                  |
-| 🚀  | 应用管理  | 管理 SSO 单点登录的应用，支持多种 OAuth2 授权方式 |
-| 🚀  | 地区管理  | 展示省份、城市、区镇等城市信息，支持 IP 对应城市      |
-
-![功能图](/.image/common/system-feature.png)
-
-### 支付系统
-
-|     | 功能   | 描述                        |
-|-----|------|---------------------------|
-| 🚀  | 应用信息 | 配置商户的应用信息，对接支付宝、微信等多个支付渠道 |
-| 🚀  | 支付订单 | 查看用户发起的支付宝、微信等的【支付】订单     |
-| 🚀  | 退款订单 | 查看用户发起的支付宝、微信等的【退款】订单     |
-| 🚀  | 回调通知 | 查看支付回调业务的【支付】【退款】的通知结果    |
-| 🚀  | 接入示例 | 提供接入支付系统的【支付】【退款】的功能实战    |
-
-### 基础设施
-
-|     | 功能        | 描述                                           |
-|-----|-----------|----------------------------------------------|
-| 🚀  | 代码生成      | 前后端代码的生成（Java、Vue、SQL、单元测试），支持 CRUD 下载       |
-| 🚀  | 系统接口      | 基于 Swagger 自动生成相关的 RESTful API 接口文档          |
-| 🚀  | 数据库文档     | 基于 Screw 自动生成数据库文档，支持导出 Word、HTML、MD 格式      |
-|     | 表单构建      | 拖动表单元素生成相应的 HTML 代码，支持导出 JSON、Vue 文件         |
-| 🚀  | 配置管理      | 对系统动态配置常用参数，支持 SpringBoot 加载                 |
-| ⭐️  | 定时任务      | 在线（添加、修改、删除)任务调度包含执行结果日志                     |
-| 🚀  | 文件服务      | 支持将文件存储到 S3（MinIO、阿里云、腾讯云、七牛云）、本地、FTP、数据库等   | 
-| 🚀  | WebSocket | 提供 WebSocket 接入示例，支持一对一、一对多发送方式              | 
-| 🚀  | API 日志    | 包括 RESTful API 访问日志、异常日志两部分，方便排查 API 相关的问题   |
-|     | MySQL 监控  | 监视当前系统数据库连接池状态，可进行分析SQL找出系统性能瓶颈              |
-|     | Redis 监控  | 监控 Redis 数据库的使用情况，使用的 Redis Key 管理           |
-| 🚀  | 消息队列      | 基于 Redis 实现消息队列，Stream 提供集群消费，Pub/Sub 提供广播消费 |
-| 🚀  | Java 监控   | 基于 Spring Boot Admin 实现 Java 应用的监控           |
-| 🚀  | 链路追踪      | 接入 SkyWalking 组件，实现链路追踪                      |
-| 🚀  | 日志中心      | 接入 SkyWalking 组件，实现日志中心                      |
-| 🚀  | 服务保障      | 基于 Redis 实现分布式锁、幂等、限流功能，满足高并发场景              |
-| 🚀  | 日志服务      | 轻量级日志中心，查看远程服务器的日志                           |
-| 🚀  | 单元测试      | 基于 JUnit + Mockito 实现单元测试，保证功能的正确性、代码的质量等    |
-
-![功能图](/.image/common/infra-feature.png)
-
-### 商城系统
-
-演示地址：<https://cloud.iocoder.cn/mall-preview/>
-
-![功能图](/.image/common/mall-feature.png)
-
-![功能图](/.image/common/mall-preview.png)
-
-### 会员中心
-
-|     | 功能   | 描述                               |
-|-----|------|----------------------------------|
-| 🚀  | 会员管理 | 会员是 C 端的消费者，该功能用于会员的搜索与管理        |
-| 🚀  | 会员标签 | 对会员的标签进行创建、查询、修改、删除等操作           |
-| 🚀  | 会员等级 | 对会员的等级、成长值进行管理，可用于订单折扣等会员权益      |
-| 🚀  | 会员分组 | 对会员进行分组，用于用户画像、内容推送等运营手段         |
-| 🚀  | 积分签到 | 回馈给签到、消费等行为的积分，会员可订单抵现、积分兑换等途径消耗 |
-
-### ERP 系统
-
-演示地址：<https://cloud.iocoder.cn/erp-preview/>
-
-![功能图](/.image/common/erp-feature.png)
-
-### WMS 系统
-
-演示地址：<https://cloud.iocoder.cn/wms-preview/>
-
-![功能图](/.image/common/wms-feature.png)
-
-![功能图](/.image/common/wms-preview.png)
-
-## 🐨 技术栈
-
-### 微服务
-
-| 项目                    | 说明                 |
-|-----------------------|--------------------|
-| `aifuli-dependencies`  | Maven 依赖版本管理       |
-| `aifuli-framework`     | Java 框架拓展          |
-| `aifuli-server`        | 管理后台 + 用户 APP 的服务端 |
-| `aifuli-module-system` | 系统功能的 Module 模块    |
-| `aifuli-module-member` | 会员中心的 Module 模块    |
-| `aifuli-module-infra`  | 基础设施的 Module 模块    |
-| `aifuli-module-pay`    | 支付系统的 Module 模块    |
-| `aifuli-module-mall`   | 商城系统的 Module 模块    |
-| `aifuli-module-erp`    | ERP 系统的 Module 模块  |
-
-### 框架
-
-| 框架                                                                                          | 说明               | 版本         | 学习指南                                                                |
-|---------------------------------------------------------------------------------------------|------------------|------------|---------------------------------------------------------------------|
-| [Spring Cloud Alibaba](https://github.com/alibaba/spring-cloud-alibaba)                     | 微服务框架            | 2023.0.1   | [文档](https://github.com/YunaiV/SpringBoot-Labs)                     |
-| [Nacos](https://github.com/alibaba/nacos)                                                   | 配置中心 & 注册中心      | 2.3.2      | [文档](https://www.iocoder.cn/categories/Nacos/?aifuli)                |
-| [RocketMQ](https://github.com/apache/rocketmq)                                              | 消息队列             | 5.2.0      | [文档](https://www.iocoder.cn/categories/RocketMQ/?aifuli)             |
-| [Sentinel](https://github.com/alibaba/sentinel)                                             | 服务保障             | 1.8.6      | [文档](https://www.iocoder.cn/categories/Sentinel/?aifuli)             |
-| [XXL Job](https://github.com/xuxueli/xxl-job)                                               | 定时任务             | 2.4.0      | [文档](https://www.iocoder.cn/XXL-JOB/good-collection/?aifuli)         |
-| [Spring Cloud Gateway](https://github.com/spring-cloud/spring-cloud-gateway)                | 服务网关             | 4.1.0      | [文档](https://www.iocoder.cn/categories/Spring-Cloud-Gateway/?aifuli) |
-| [Seata](https://github.com/seata/seata)                                                     | 分布式事务            | 1.6.1      | [文档](https://www.iocoder.cn/categories/Seata/?aifuli)                |
-| [MySQL](https://www.mysql.com/cn/)                                                          | 数据库服务器           | 5.7 / 8.0+ |                                                                     |
-| [Druid](https://github.com/alibaba/druid)                                                   | JDBC 连接池、监控组件    | 1.2.23     | [文档](http://www.iocoder.cn/Spring-Boot/datasource-pool/?aifuli)      |
-| [MyBatis Plus](https://mp.baomidou.com/)                                                    | MyBatis 增强工具包    | 3.5.7      | [文档](http://www.iocoder.cn/Spring-Boot/MyBatis/?aifuli)              |
-| [Dynamic Datasource](https://dynamic-datasource.com/)                                       | 动态数据源            | 4.3.1      | [文档](http://www.iocoder.cn/Spring-Boot/datasource-pool/?aifuli)      |
-| [Redis](https://redis.io/)                                                                  | key-value 数据库    | 5.0 / 6.0  |                                                                     |
-| [Redisson](https://github.com/redisson/redisson)                                            | Redis 客户端        | 3.32.0     | [文档](http://www.iocoder.cn/Spring-Boot/Redis/?aifuli)                |
-| [Spring MVC](https://github.com/spring-projects/spring-framework/tree/master/spring-webmvc) | MVC 框架           | 6.1.10     | [文档](http://www.iocoder.cn/SpringMVC/MVC/?aifuli)                    |
-| [Spring Security](https://github.com/spring-projects/spring-security)                       | Spring 安全框架      | 6.3.1      | [文档](http://www.iocoder.cn/Spring-Boot/Spring-Security/?aifuli)      |
-| [Hibernate Validator](https://github.com/hibernate/hibernate-validator)                     | 参数校验组件           | 8.0.1      | [文档](http://www.iocoder.cn/Spring-Boot/Validation/?aifuli)           |
-| [Knife4j](https://gitee.com/xiaoym/knife4j)                                                 | Swagger 增强 UI 实现 | 4.5.0      | [文档](http://www.iocoder.cn/Spring-Boot/Swagger/?aifuli)              |
-| [SkyWalking](https://skywalking.apache.org/)                                                | 分布式应用追踪系统        | 9.0.0      | [文档](http://www.iocoder.cn/Spring-Boot/SkyWalking/?aifuli)           |
-| [Spring Boot Admin](https://github.com/codecentric/spring-boot-admin)                       | Spring Boot 监控平台 | 3.6.1      | [文档](http://www.iocoder.cn/Spring-Boot/Admin/?aifuli)                |
-| [Jackson](https://github.com/FasterXML/jackson)                                             | JSON 工具库         | 2.17.1     |                                                                     |
-| [MapStruct](https://mapstruct.org/)                                                         | Java Bean 转换     | 1.6.3      | [文档](http://www.iocoder.cn/Spring-Boot/MapStruct/?aifuli)            |
-| [Lombok](https://projectlombok.org/)                                                        | 消除冗长的 Java 代码    | 1.18.34    | [文档](http://www.iocoder.cn/Spring-Boot/Lombok/?aifuli)               |
-| [JUnit](https://junit.org/junit5/)                                                          | Java 单元测试框架      | 5.10.1     | -                                                                   |
-| [Mockito](https://github.com/mockito/mockito)                                               | Java Mock 框架     | 5.7.0      | -                                                                   |
-
-## 🐷 演示图
-
-### 系统功能
-
-| 模块       | biu                         | biu                       | biu                      |
-|----------|-----------------------------|---------------------------|--------------------------|
-| 登录 & 首页  | ![登录](/.image/登录.jpg)       | ![首页](/.image/首页.jpg)     | ![个人中心](/.image/个人中心.jpg) |
-| 用户 & 应用  | ![用户管理](/.image/用户管理.jpg)   | ![令牌管理](/.image/令牌管理.jpg) | ![应用管理](/.image/应用管理.jpg) |
-| 租户 & 套餐  | ![租户管理](/.image/租户管理.jpg)   | ![租户套餐](/.image/租户套餐.png) | -                        |
-| 部门 & 岗位  | ![部门管理](/.image/部门管理.jpg)   | ![岗位管理](/.image/岗位管理.jpg) | -                        |
-| 菜单 & 角色  | ![菜单管理](/.image/菜单管理.jpg)   | ![角色管理](/.image/角色管理.jpg) | -                        |
-| 审计日志     | ![操作日志](/.image/操作日志.jpg)   | ![登录日志](/.image/登录日志.jpg) | -                        |
-| 短信       | ![短信渠道](/.image/短信渠道.jpg)   | ![短信模板](/.image/短信模板.jpg) | ![短信日志](/.image/短信日志.jpg) |
-| 字典 & 敏感词 | ![字典类型](/.image/字典类型.jpg)   | ![字典数据](/.image/字典数据.jpg) | ![敏感词](/.image/敏感词.jpg)  |
-| 错误码 & 通知 | ![错误码管理](/.image/错误码管理.jpg) | ![通知公告](/.image/通知公告.jpg) | -                        |
-
-### 基础设施
-
-| 模块            | biu                           | biu                         | biu                       |
-|---------------|-------------------------------|-----------------------------|---------------------------|
-| 代码生成          | ![代码生成](/.image/代码生成.jpg)     | ![生成效果](/.image/生成效果.jpg)   | -                         |
-| 文档            | ![系统接口](/.image/系统接口.jpg)     | ![数据库文档](/.image/数据库文档.jpg) | -                         |
-| 文件 & 配置       | ![文件配置](/.image/文件配置.jpg)     | ![文件管理](/.image/文件管理2.jpg)  | ![配置管理](/.image/配置管理.jpg) |
-| 定时任务          | ![定时任务](/.image/定时任务.jpg)     | ![任务日志](/.image/任务日志.jpg)   | -                         |
-| API 日志        | ![访问日志](/.image/访问日志.jpg)     | ![错误日志](/.image/错误日志.jpg)   | -                         |
-| MySQL & Redis | ![MySQL](/.image/MySQL.jpg)   | ![Redis](/.image/Redis.jpg) | -                         |
-| 监控平台          | ![Java监控](/.image/Java监控.jpg) | ![链路追踪](/.image/链路追踪.jpg)   | ![日志中心](/.image/日志中心.jpg) |
-
-### 支付系统
-
-| 模块      | biu                       | biu                             | biu                             |
-|---------|---------------------------|---------------------------------|---------------------------------|
-| 商家 & 应用 | ![商户信息](/.image/商户信息.jpg) | ![应用信息-列表](/.image/应用信息-列表.jpg) | ![应用信息-编辑](/.image/应用信息-编辑.jpg) |
-| 支付 & 退款 | ![支付订单](/.image/支付订单.jpg) | ![退款订单](/.image/退款订单.jpg)       | ---                             |
-### 移动端（管理后台）
-
-| biu                              | biu                              | biu                              |
-|----------------------------------|----------------------------------|----------------------------------|
-| ![](/.image/admin-uniapp/01.png) | ![](/.image/admin-uniapp/02.png) | ![](/.image/admin-uniapp/03.png) |
-| ![](/.image/admin-uniapp/04.png) | ![](/.image/admin-uniapp/05.png) | ![](/.image/admin-uniapp/06.png) |
-| ![](/.image/admin-uniapp/07.png) | ![](/.image/admin-uniapp/08.png) | ![](/.image/admin-uniapp/09.png) |
-
-目前已经实现登录、我的、工作台、编辑资料、头像修改、密码修改、常见问题、关于我们等基础功能。
+## Project status
+If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.

@@ -12,14 +12,15 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.ROUTING_RULE_CANDIDATE_INVALID;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.ROUTING_RULE_CODE_MISMATCH;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.ROUTING_RULE_SCOPE_DUPLICATED;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.ROUTING_RULE_SCOPE_UNSUPPORTED;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.ROUTING_RULE_WEIGHTS_INVALID;
 
 /**
  * 路由规则页保存请求的无库校验与归一化（PRD 四级范围模型）。
  *
  * <p>不依赖 {@code interfaceapi} VO 与数据库；编码存在性、同范围唯一性、名称唯一等
- * 需要查库的校验由 CommandService 执行。设计见
- * {@code docs/superpowers/specs/2026-09-23-order-frontend-alignment-and-routing-prd-model-design.md#55-保存校验}。</p>
+ * 需要查库的校验由 CommandService 执行。六级范围及拒绝语义见
+ * {@code docs/superpowers/specs/2026-09-24-standard-order-routing-execution-design.md#3-规则匹配}。</p>
  */
 public final class RoutingRuleSaveSupport {
 
@@ -75,7 +76,9 @@ public final class RoutingRuleSaveSupport {
         List<String> distributorCodes = normalizeScopeCodes(distributorMode, request.distributorCodes(), "适用分销商");
         List<String> projectCodes = normalizeScopeCodes(projectMode, request.projectCodes(), "适用项目");
         List<String> productTypeCodes = normalizeScopeCodes(productTypeMode, request.productTypeCodes(), "适用商品类型");
-        RoutingRuleScopeTier.require(distributorMode, projectMode, productTypeMode, supplierMode);
+        if (!RoutingRuleScopeTier.isSupported(distributorMode, projectMode, productTypeMode, supplierMode)) {
+            throw exception(ROUTING_RULE_SCOPE_UNSUPPORTED);
+        }
         List<RoutingRuleStrategy> strategies = validatePriorities(request.priorities());
         WeightInput weights = validateWeights(request.weights(), strategies);
 
