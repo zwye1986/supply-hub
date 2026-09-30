@@ -185,26 +185,23 @@ public class RechargeFrequencyLifecycle {
     }
 
     /**
-     * 同订单仍可合法履约时绑定新操作，保留原SPU/序号/代次与acquiredAt，禁止后续订单抢先。
-     * 只有原操作可靠失败、请求仍非终态且新操作属于同请求/总单且待执行才允许绑定。
+     * 仅由可信拒绝结果事务完成绑定；不得在整单失败/资金释放后通过独立事务救回。
+     * 前置合法性由SupplierOrderLifecycle在同一锁上下文验证；保持原SPU、FIFO序号、代次和窗口。
      * 设计见 docs/superpowers/specs/2026-09-30-direct-recharge-mobile-spu-frequency-design.md#5-结果窗口和资金。
      */
-    @Transactional(transactionManager = "supplyChainTransactionManager", rollbackFor = Exception.class)
-    public boolean bindContinuingOperation(String oldOperationNo, String newOperationNo) {
-        log.info("[直充限频] 继续履约绑定 oldOperationNo={}, newOperationNo={}", oldOperationNo, newOperationNo);
-        var locked = lockForResult(oldOperationNo);
+    @Transactional(transactionManager = "supplyChainTransactionManager", propagation = Propagation.MANDATORY, rollbackFor = Exception.class)
+    void bindContinuingOperation(LockedExecution locked, FulfillmentOperationDO next) {
         if (!isCurrentHolder(locked) || locked.operation().getStatus() != SupplierOrderOperationStatus.FAILED.getCode()
                 || !OperationOutcomeClass.REJECTED.name().equals(locked.operation().getResultClass())
-                || locked.request().getStatus() == FulfillmentRequestStatus.FAILED.getCode()
-                || locked.request().getStatus() == FulfillmentRequestStatus.SUCCEEDED.getCode()
-                || locked.request().getStatus() == FulfillmentRequestStatus.MANUAL.getCode()) { return false; }
-        var next = locked.relatedOperations().stream().filter(op -> newOperationNo.equals(op.getOperationNo())).findFirst().orElse(null);
-        if (next == null || !canClaim(next) || !isRechargeSideEffect(next)) { return false; }
-        var nextBOrder = bOrderMapper.selectById(next.getBOrderId());
-        if (!nextBOrder.getFulfillmentRequestId().equals(locked.request().getId()) || !Boolean.TRUE.equals(nextBOrder.getActiveFlag())) { return false; }
-        locked.entry().setActiveOperationNo(newOperationNo);
+                || locked.request().getStatus() != FulfillmentRequestStatus.FULFILLING.getCode()
+                || !locked.relatedOperations().contains(next) || !canClaim(next) || !isRechargeSideEffect(next)) {
+            throw new IllegalStateException("可信续履约绑定前置条件不成立");
+        }
+        locked.entry().setActiveOperationNo(next.getOperationNo());
         locked.entry().setDispatchPhase(RechargeFrequencyDispatchPhase.PREPARED.getCode()); saveEntry(locked.entry());
-        return true;
+        locked.queue().setNextCheckAt(databaseClock.now());
+        locked.queue().setWakeGeneration(Math.incrementExact(locked.queue().getWakeGeneration())); saveQueue(locked.queue());
+        // TODO docs/superpowers/specs/2026-09-30-direct-recharge-mobile-spu-frequency-design.md#6-timer-与补偿：Task5消费续履约持久化唤醒意图。
     }
 
     /**
@@ -256,7 +253,7 @@ public class RechargeFrequencyLifecycle {
                 || !entry.getFulfillmentRequestId().equals(request.getId())))
                 || !currentBOrder.getFulfillmentRequestId().equals(request.getId()) || !currentBOrder.getOrderId().equals(order.getId())
                 || !currentOperation.getBOrderId().equals(currentBOrder.getId())) { throw new IllegalStateException("限频执行关联变化"); }
-        return new LockedExecution(queue, entry, request, order, currentBOrder, currentOperation, operations, head == null ? null : head.getId());
+        return new LockedExecution(queue, entry, request, order, currentBOrder, currentOperation, bOrders, operations, head == null ? null : head.getId());
     }
 
     /** 可信业务终态后处理队列，资金动作仍由SupplierOrderLifecycle先完成。重复成功不刷新acquiredAt。 */
@@ -310,9 +307,13 @@ public class RechargeFrequencyLifecycle {
         queue.setHolderEntryId(null); queue.setAcquiredAt(null); queue.setMinimumHoldUntil(null);
         queue.setNextCheckAt(databaseClock.now()); queue.setWakeGeneration(Math.incrementExact(queue.getWakeGeneration())); saveQueue(queue);
     }
+    /**
+     * 统一锁序取得的当前读行；关联BOrder/Operation列表按PK锁定，结果编排直接复用而不再普通查询旧快照。
+     * 设计见 docs/superpowers/specs/2026-09-30-direct-recharge-mobile-spu-frequency-design.md#42-认领。
+     */
     public record LockedExecution(RechargeFrequencyQueueDO queue, RechargeFrequencyEntryDO entry,
                                   FulfillmentRequestDO request, SupplyChainOrderDO order, BOrderDO bOrder, FulfillmentOperationDO operation,
-                                  java.util.List<FulfillmentOperationDO> relatedOperations, Long waitingHeadId) { }
+                                  java.util.List<BOrderDO> relatedBOrders, java.util.List<FulfillmentOperationDO> relatedOperations, Long waitingHeadId) { }
     public static final class MissingFrequencyEntryException extends IllegalStateException {
         MissingFrequencyEntryException() { super(FulfillmentExecutionFailureCodes.FREQUENCY_MIGRATION_MISSING); }
     }

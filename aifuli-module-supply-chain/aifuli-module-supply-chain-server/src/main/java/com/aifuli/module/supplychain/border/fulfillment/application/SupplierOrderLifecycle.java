@@ -45,6 +45,9 @@ import com.aifuli.module.supplychain.supplieradapter.qnm.QnmMaskingUtils;
 import com.aifuli.module.supplychain.tradecore.account.application.FundReservationService;
 import com.aifuli.module.supplychain.tradecore.account.domain.FundReferenceType;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.aifuli.module.supplychain.api.order.dto.SupplyChainOrderStatus;
+import com.aifuli.module.supplychain.border.fulfillment.domain.FulfillmentOperationKind;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -105,7 +108,7 @@ public class SupplierOrderLifecycle {
      */
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public TransitionResult transition(String operationNo, OperationOutcome outcome, String traceId) {
-        return transitionInternal(operationNo, outcome, traceId, false, null);
+        return transitionInternal(operationNo, outcome, traceId, false, null, null);
     }
 
     /**
@@ -116,11 +119,25 @@ public class SupplierOrderLifecycle {
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public TransitionResult confirmTrustedOutcome(String operationNo, OperationOutcome outcome, String traceId,
                                                    RechargeFrequencyExecutionPermit permit) {
-        return transitionInternal(operationNo, outcome, traceId, true, permit);
+        return transitionInternal(operationNo, outcome, traceId, true, permit, null);
+    }
+
+    /**
+     * 内部受控编排显式提交可信拒绝和已存在的下一充值操作，不自动发现PENDING或创建路由。
+     * 所有合法性校验、旧事实、活动尝试切换及冻结队列绑定处于同一事务；失败完整回滚。
+     * 设计见 docs/superpowers/specs/2026-09-30-direct-recharge-mobile-spu-frequency-design.md#5-结果窗口和资金。
+     */
+    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
+    public TransitionResult confirmTrustedRejectedAndContinue(String operationNo, OperationOutcome outcome, String traceId,
+                                                               RechargeFrequencyExecutionPermit permit, String nextOperationNo) {
+        log.info("[供应商订单][lifecycle] 受控续履约 operationNo={}, nextOperationNo={}, traceId={}", operationNo, nextOperationNo, traceId);
+        Objects.requireNonNull(permit, "续履约必须携带原资格");
+        Objects.requireNonNull(nextOperationNo, "续履约必须显式指定下一操作");
+        return transitionInternal(operationNo, outcome, traceId, true, permit, nextOperationNo);
     }
 
     private TransitionResult transitionInternal(String operationNo, OperationOutcome outcome, String traceId,
-                                               boolean trustedRecovery, RechargeFrequencyExecutionPermit permit) {
+                                               boolean trustedRecovery, RechargeFrequencyExecutionPermit permit, String nextOperationNo) {
         log.info("[供应商订单][lifecycle] transition 入口 operationNo={}, outcomeClass={}, traceId={}",
                 operationNo, outcome != null ? outcome.outcomeClass() : null, traceId);
         Objects.requireNonNull(operationNo, "operationNo must not be null");
@@ -146,6 +163,7 @@ public class SupplierOrderLifecycle {
             throw new IllegalStateException("SupplyChainOrder does not exist: " + bOrder.getOrderId());
         }
 
+        FulfillmentOperationDO next = nextOperationNo == null ? null : validateContinuation(locked, outcome, permit, nextOperationNo);
         LocalDateTime now = databaseClock.now();
         // 观察以专用原子SQL去重；RR下的定位预读不能用于判断最新观察存在与否。
         persistCallAndObservation(operation, bOrder, outcome, traceId, now);
@@ -174,12 +192,16 @@ public class SupplierOrderLifecycle {
 
         OperationOutcomeClass outcomeClass = outcome.outcomeClass();
 
+        boolean frequencyHolding = RechargeFrequencyLifecycle.isCurrentHolder(locked);
         switch (outcomeClass) {
-            case SUCCEEDED -> handleSucceeded(operation, bOrder, request, order, outcome, traceId, now);
-            case REJECTED -> handleRejected(operation, bOrder, request, order, outcome, traceId, now);
+            case SUCCEEDED -> handleSucceeded(operation, bOrder, request, order, outcome, traceId, now, frequencyHolding);
+            case REJECTED -> {
+                if (next == null) { handleRejected(operation, bOrder, request, order, outcome, traceId, now, frequencyHolding); }
+                else { handleRejectedAndContinue(locked, next, outcome, traceId, now); }
+            }
             case RESULT_UNKNOWN -> handleResultUnknown(operation, bOrder, outcome, now);
             case ACCEPTED -> handleAccepted(operation, bOrder, outcome, now);
-            default -> handleManualOrOther(operation, bOrder, request, order, outcome, traceId, now);
+            default -> handleManualOrOther(operation, bOrder, request, order, outcome, traceId, now, frequencyHolding);
         }
 
         frequencyLifecycle.reconcile(locked);
@@ -229,7 +251,7 @@ public class SupplierOrderLifecycle {
 
     private void handleSucceeded(FulfillmentOperationDO operation, BOrderDO bOrder,
                                  FulfillmentRequestDO request, SupplyChainOrderDO order,
-                                 OperationOutcome outcome, String traceId, LocalDateTime now) {
+                                 OperationOutcome outcome, String traceId, LocalDateTime now, boolean frequencyHolding) {
         boolean isCardIssuing = AdapterStepCode.SEND_KM.name().equals(operation.getAdapterStepCode());
         boolean emptyCards = outcome.assets() == null || outcome.assets().isEmpty();
 
@@ -264,7 +286,7 @@ public class SupplierOrderLifecycle {
             }
             bOrder.setCompletedAt(now);
             bOrder.setUpdatedAt(now);
-            if (bOrderMapper.updateById(bOrder) != 1) {
+            if (updateBOrderState(bOrder, frequencyHolding) != 1) {
                 throw new IllegalStateException("BOrder CAS update lost optimistic lock: " + bOrder.getBOrderNo());
             }
 
@@ -341,7 +363,7 @@ public class SupplierOrderLifecycle {
         }
         bOrder.setCompletedAt(now);
         bOrder.setUpdatedAt(now);
-        if (bOrderMapper.updateById(bOrder) != 1) {
+        if (updateBOrderState(bOrder, frequencyHolding) != 1) {
             throw new IllegalStateException("BOrder CAS update lost optimistic lock: " + bOrder.getBOrderNo());
         }
 
@@ -395,9 +417,132 @@ public class SupplierOrderLifecycle {
                 order.getOrderNo(), traceId, bOrder.getBOrderNo());
     }
 
+    /**
+     * 锁后当前读校验原占用与显式下一操作；同BO必须下一sequence，跨BO必须下一attempt的首操作。
+     * 旧MANUAL的历史completedAt仅在可信拒绝恢复时兼容，其他终态/查单/未知发送风险均拒绝。
+     * Request活动指针历史NULL可兼容，非空必须指向原当前尝试；从不靠普通快照猜测合法next。
+     * 设计见 docs/superpowers/specs/2026-09-30-direct-recharge-mobile-spu-frequency-design.md#5-结果窗口和资金。
+     */
+    private FulfillmentOperationDO validateContinuation(RechargeFrequencyLifecycle.LockedExecution locked,
+                                                        OperationOutcome outcome, RechargeFrequencyExecutionPermit permit,
+                                                        String nextOperationNo) {
+        if (locked == null || !RechargeFrequencyLifecycle.isCurrentHolder(locked)
+                || outcome.outcomeClass() != OperationOutcomeClass.REJECTED
+                || permit.queueId() != locked.queue().getId() || permit.entryId() != locked.entry().getId()
+                || permit.generation() != locked.entry().getOccupancyGeneration()
+                || !permit.operationNo().equals(locked.operation().getOperationNo())) { throw invalidContinuation(); }
+        var old = locked.operation(); var oldBOrder = locked.bOrder();
+        if (!isRechargeOperation(old) || (old.getStatus() != SupplierOrderOperationStatus.EXECUTING.getCode()
+                && old.getStatus() != SupplierOrderOperationStatus.RESULT_UNKNOWN.getCode()
+                && old.getStatus() != SupplierOrderOperationStatus.MANUAL.getCode())
+                || (locked.request().getStatus() != FulfillmentRequestStatus.FULFILLING.getCode()
+                && locked.request().getStatus() != FulfillmentRequestStatus.MANUAL.getCode())
+                || (locked.order().getOrderStatus() != SupplyChainOrderStatus.PROCESSING.getCode()
+                && locked.order().getOrderStatus() != SupplyChainOrderStatus.MANUAL.getCode())
+                || (locked.request().getActiveBOrderId() != null && !locked.request().getActiveBOrderId().equals(oldBOrder.getId()))
+                || !Boolean.TRUE.equals(oldBOrder.getActiveFlag())
+                || (oldBOrder.getCompletedAt() != null && !(old.getStatus() == SupplierOrderOperationStatus.MANUAL.getCode()
+                && oldBOrder.getFulfillmentStatus() == BOrderFulfillmentStatus.MANUAL.getCode()))
+                || !isContinuableBOrder(oldBOrder)) { throw invalidContinuation(); }
+        var next = locked.relatedOperations().stream().filter(op -> nextOperationNo.equals(op.getOperationNo())).findFirst().orElseThrow(SupplierOrderLifecycle::invalidContinuation);
+        var nextBOrder = locked.relatedBOrders().stream().filter(bo -> bo.getId().equals(next.getBOrderId())).findFirst().orElseThrow(SupplierOrderLifecycle::invalidContinuation);
+        if (!isUnsentRecharge(next) || !nextBOrder.getFulfillmentRequestId().equals(locked.request().getId())
+                || !nextBOrder.getOrderId().equals(locked.order().getId()) || nextBOrder.getFulfilledQuantity() != 0L) { throw invalidContinuation(); }
+        boolean sameBOrder = nextBOrder.getId().equals(oldBOrder.getId());
+        if (sameBOrder ? next.getSequenceNo() != Math.incrementExact(old.getSequenceNo())
+                : nextBOrder.getAttemptNo() != Math.incrementExact(oldBOrder.getAttemptNo()) || next.getSequenceNo() != 1
+                || Boolean.TRUE.equals(nextBOrder.getActiveFlag()) || nextBOrder.getCompletedAt() != null
+                || (nextBOrder.getFulfillmentStatus() != BOrderFulfillmentStatus.WAITING.getCode()
+                && nextBOrder.getFulfillmentStatus() != BOrderFulfillmentStatus.PENDING.getCode())
+                || nextBOrder.getExternalOrderNo() != null) { throw invalidContinuation(); }
+        for (var other : locked.relatedOperations()) {
+            if (other.getId().equals(old.getId()) || other.getId().equals(next.getId()) || !isRechargeOperation(other)) { continue; }
+            var bo = locked.relatedBOrders().stream().filter(row -> row.getId().equals(other.getBOrderId())).findFirst().orElseThrow(SupplierOrderLifecycle::invalidContinuation);
+            boolean earlier = bo.getAttemptNo() < oldBOrder.getAttemptNo()
+                    || (bo.getId().equals(oldBOrder.getId()) && other.getSequenceNo() < old.getSequenceNo());
+            boolean rejected = other.getStatus() == SupplierOrderOperationStatus.FAILED.getCode()
+                    && OperationOutcomeClass.REJECTED.name().equals(other.getResultClass());
+            if (!rejected && (earlier || !isUnsentRecharge(other))) { throw invalidContinuation(); }
+        }
+        return next;
+    }
+
+    private static boolean isContinuableBOrder(BOrderDO bOrder) {
+        return bOrder.getFulfilledQuantity() == 0L && (bOrder.getFulfillmentStatus() == BOrderFulfillmentStatus.WAITING.getCode()
+                || bOrder.getFulfillmentStatus() == BOrderFulfillmentStatus.PENDING.getCode()
+                || bOrder.getFulfillmentStatus() == BOrderFulfillmentStatus.PROCESSING.getCode()
+                || bOrder.getFulfillmentStatus() == BOrderFulfillmentStatus.MANUAL.getCode());
+    }
+    private static boolean isRechargeOperation(FulfillmentOperationDO operation) {
+        return FulfillmentOperationKind.FULFILL.name().equals(operation.getOperationKind())
+                && (AdapterStepCode.SEND.name().equals(operation.getAdapterStepCode()) || AdapterStepCode.SEND_KM.name().equals(operation.getAdapterStepCode()));
+    }
+    private static boolean isUnsentRecharge(FulfillmentOperationDO operation) {
+        return isRechargeOperation(operation) && (operation.getStatus() == SupplierOrderOperationStatus.PENDING.getCode()
+                || operation.getStatus() == SupplierOrderOperationStatus.CLAIMED.getCode())
+                && operation.getAttemptCount() == 0 && operation.getResultClass() == null
+                && operation.getExternalOperationNo() == null && operation.getCompletedAt() == null;
+    }
+    private static IllegalStateException invalidContinuation() { return new IllegalStateException("可信续履约资格或下一操作不合法"); }
+
+    private static final String CONTINUATION_EVENT = "FULFILLMENT_CONTINUED";
+    private static final String CONTINUATION_REASON = "TRUSTED_REJECTION_CONTINUE";
+
+    /**
+     * 旧操作可靠拒绝而整单仍有显式合法候选：仅结束旧操作/尝试，恢复请求汇总并原子切换活动引用。
+     * 资金继续预占；冻结队列的代次、SPU、序号和时间窗口不变，下一发送仍必须独立claim/marker。
+     * 设计见 docs/superpowers/specs/2026-09-30-direct-recharge-mobile-spu-frequency-design.md#5-结果窗口和资金。
+     */
+    private void handleRejectedAndContinue(RechargeFrequencyLifecycle.LockedExecution locked, FulfillmentOperationDO next,
+                                           OperationOutcome outcome, String traceId, LocalDateTime now) {
+        var operation = locked.operation(); var oldBOrder = locked.bOrder();
+        operation.setStatus(SupplierOrderOperationStatus.FAILED.getCode()); operation.setResultClass(outcome.outcomeClass().name());
+        operation.setAttemptCount(Math.incrementExact(operation.getAttemptCount())); operation.setCompletedAt(now); operation.setUpdatedAt(now);
+        if (operationMapper.updateById(operation) != 1) { throw new IllegalStateException("续履约旧操作版本冲突"); }
+        var nextBOrder = locked.relatedBOrders().stream().filter(bo -> bo.getId().equals(next.getBOrderId())).findFirst().orElseThrow(SupplierOrderLifecycle::invalidContinuation);
+        if (!oldBOrder.getId().equals(nextBOrder.getId())) {
+            // MP默认NOT_NULL不会清空active_flag，显式CAS清空，先结束原活动尝试再激活新尝试。
+            if (bOrderMapper.update(null, new LambdaUpdateWrapper<BOrderDO>().eq(BOrderDO::getId, oldBOrder.getId())
+                    .eq(BOrderDO::getVersion, oldBOrder.getVersion()).set(BOrderDO::getActiveFlag, null)
+                    .set(BOrderDO::getFulfillmentStatus, BOrderFulfillmentStatus.FAILED.getCode())
+                    .set(BOrderDO::getCompletedAt, now).set(BOrderDO::getUpdatedAt, now)
+                    .set(BOrderDO::getVersion, Math.incrementExact(oldBOrder.getVersion()))) != 1) { throw new IllegalStateException("续履约旧尝试版本冲突"); }
+            oldBOrder.setActiveFlag(null); oldBOrder.setFulfillmentStatus(BOrderFulfillmentStatus.FAILED.getCode());
+            oldBOrder.setCompletedAt(now); oldBOrder.setVersion(Math.incrementExact(oldBOrder.getVersion()));
+        }
+        nextBOrder.setActiveFlag(true); nextBOrder.setFulfillmentStatus(BOrderFulfillmentStatus.PROCESSING.getCode());
+        nextBOrder.setCompletedAt(null); nextBOrder.setUpdatedAt(now);
+        if (updateBOrderState(nextBOrder, true) != 1) { throw new IllegalStateException("续履约活动尝试版本冲突"); }
+        var request = locked.request(); request.setStatus(FulfillmentRequestStatus.FULFILLING.getCode());
+        request.setActiveBOrderId(nextBOrder.getId()); request.setUpdatedAt(now);
+        if (requestMapper.updateById(request) != 1) { throw new IllegalStateException("续履约请求版本冲突"); }
+        var order = locked.order(); short from = order.getOrderStatus();
+        var decision = cardOrderSummaryPolicy.decide(new OrderSummaryFact(SupplyChainOrderTypes.ORDER_TYPE_CARD,
+                SupplyChainOrderTypes.DETAIL_TYPE_FULFILLMENT, request.getStatus(), order.getQuantity(), 0L, null));
+        order.setOrderStatus(decision.orderStatus()); order.setAftersaleStatus(decision.aftersaleStatus()); order.setBusinessStage(decision.businessStage());
+        order.setDetailVersion(Math.incrementExact(order.getDetailVersion())); order.setUpdatedAt(now);
+        if (orderMapper.updateById(order) != 1) { throw new IllegalStateException("续履约总单版本冲突"); }
+        statusLogMapper.insert(OrderStatusLogDO.builder().orderId(order.getId()).detailVersion(order.getDetailVersion())
+                .fromOrderStatus(from).toOrderStatus(decision.orderStatus()).fromAftersaleStatus((short)0).toAftersaleStatus(decision.aftersaleStatus())
+                .businessStage(decision.businessStage()).sourceEventType(CONTINUATION_EVENT).sourceEventNo(operation.getOperationNo())
+                .reasonCode(CONTINUATION_REASON).traceId(traceId).createdAt(now).build());
+        frequencyLifecycle.bindContinuingOperation(locked, next);
+    }
+
+    /**
+     * 频控已锁定完整BOrder；显式写可空状态字段，保留MP的版本CAS及回写新版本。
+     * MANUAL/可信恢复可清历史completedAt，真实终态可清activeFlag，不能依赖默认NOT_NULL。
+     * 设计见 docs/superpowers/specs/2026-09-30-direct-recharge-mobile-spu-frequency-design.md#5-结果窗口和资金。
+     */
+    private int updateBOrderState(BOrderDO bOrder, boolean explicitNullableState) {
+        if (!explicitNullableState) { return bOrderMapper.updateById(bOrder); }
+        return bOrderMapper.update(bOrder, new LambdaUpdateWrapper<BOrderDO>().eq(BOrderDO::getId, bOrder.getId())
+                .set(BOrderDO::getActiveFlag, bOrder.getActiveFlag()).set(BOrderDO::getCompletedAt, bOrder.getCompletedAt()));
+    }
+
     private void handleRejected(FulfillmentOperationDO operation, BOrderDO bOrder,
                                 FulfillmentRequestDO request, SupplyChainOrderDO order,
-                                OperationOutcome outcome, String traceId, LocalDateTime now) {
+                                OperationOutcome outcome, String traceId, LocalDateTime now, boolean frequencyHolding) {
         // 1. 推进 Operation 状态为 50 失败
         operation.setStatus(SupplierOrderOperationStatus.FAILED.getCode());
         operation.setResultClass(outcome.outcomeClass().name());
@@ -414,7 +559,7 @@ public class SupplierOrderLifecycle {
         bOrder.setActiveFlag(null); // 终态 activeFlag 置空
         bOrder.setCompletedAt(now);
         bOrder.setUpdatedAt(now);
-        if (bOrderMapper.updateById(bOrder) != 1) {
+        if (updateBOrderState(bOrder, frequencyHolding) != 1) {
             throw new IllegalStateException("BOrder CAS update lost optimistic lock: " + bOrder.getBOrderNo());
         }
 
@@ -507,7 +652,7 @@ public class SupplierOrderLifecycle {
 
     private void handleManualOrOther(FulfillmentOperationDO operation, BOrderDO bOrder,
                                      FulfillmentRequestDO request, SupplyChainOrderDO order,
-                                     OperationOutcome outcome, String traceId, LocalDateTime now) {
+                                     OperationOutcome outcome, String traceId, LocalDateTime now, boolean frequencyHolding) {
         operation.setStatus(SupplierOrderOperationStatus.MANUAL.getCode());
         operation.setResultClass(outcome.outcomeClass().name());
         operation.setAttemptCount(operation.getAttemptCount() + 1);
@@ -518,10 +663,11 @@ public class SupplierOrderLifecycle {
         }
 
         bOrder.setFulfillmentStatus(BOrderFulfillmentStatus.MANUAL.getCode());
-        bOrder.setActiveFlag(null);
-        bOrder.setCompletedAt(now);
+        // 频控MANUAL仍是未核实的活动尝试，不能靠MP忽略NULL偶然保留标记。
+        bOrder.setActiveFlag(frequencyHolding ? true : null);
+        bOrder.setCompletedAt(frequencyHolding ? null : now);
         bOrder.setUpdatedAt(now);
-        if (bOrderMapper.updateById(bOrder) != 1) {
+        if (updateBOrderState(bOrder, frequencyHolding) != 1) {
             throw new IllegalStateException("BOrder CAS update lost optimistic lock: " + bOrder.getBOrderNo());
         }
 

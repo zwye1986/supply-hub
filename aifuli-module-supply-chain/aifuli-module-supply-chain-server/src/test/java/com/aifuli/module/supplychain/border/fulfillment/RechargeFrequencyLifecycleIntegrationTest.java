@@ -8,6 +8,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import javax.sql.DataSource;
 import java.time.LocalDateTime;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** 真实MySQL资金与可信终态，见限频设计 #5-结果窗口和资金；不以超时释放。 */
 class RechargeFrequencyLifecycleIntegrationTest {
@@ -62,6 +63,7 @@ class RechargeFrequencyLifecycleIntegrationTest {
             lifecycle.transition(op, fact(OperationOutcomeClass.REJECTED), "FAIL");
             lifecycle.confirmTrustedOutcome(op, fact(OperationOutcomeClass.REJECTED), "FAIL-REPLAY", permit);
             assertThat(ledger(jdbc, "RELEASE")).isEqualTo(1L);
+            assertThat(jdbc.queryForObject("SELECT active_flag FROM sc_b_order", Integer.class)).isNull();
             assertThat(jdbc.queryForObject("SELECT frozen FROM sc_buyer_account", Long.class)).isZero();
             assertThat(jdbc.queryForObject("SELECT holder_entry_id FROM sc_recharge_frequency_queue", Long.class)).isNull();
             assertThat(jdbc.queryForObject("SELECT status FROM sc_recharge_frequency_entry", Short.class)).isEqualTo((short)20);
@@ -76,24 +78,169 @@ class RechargeFrequencyLifecycleIntegrationTest {
             var jdbc = new JdbcTemplate(context.getBean("supplyChainDataSource", DataSource.class));
             var ops = RechargeFrequencyExecutionIntegrationTest.operations(jdbc); var frequency = context.getBean(RechargeFrequencyLifecycle.class);
             var first = frequency.claim(ops.getFirst()); frequency.markSendPossible(first);
-            var queueBefore = jdbc.queryForMap("SELECT platform_spu_id, holder_entry_id, occupancy_generation, acquired_at FROM sc_recharge_frequency_queue");
+            long frozenBefore = jdbc.queryForObject("SELECT frozen FROM sc_buyer_account", Long.class);
+            var queueBefore = jdbc.queryForMap("SELECT platform_spu_id, holder_entry_id, occupancy_generation, acquired_at, minimum_hold_until FROM sc_recharge_frequency_queue");
             long operationId = jdbc.queryForObject("SELECT id FROM sc_fulfillment_operation WHERE operation_no=?", Long.class, ops.getFirst());
-            // 持久化种子模拟已有合法继续履约编排：当前尝试可信失败，但Request/BOrder仍允许后续操作，未调用M1整单失败路径。
-            jdbc.update("UPDATE sc_fulfillment_operation SET status=50,result_class='REJECTED' WHERE id=?", operationId);
             long nextId = RechargeFrequencyAcceptanceIntegrationTest.cloneRow(jdbc, "sc_fulfillment_operation", operationId,
                     java.util.Map.of("operation_no", "OP_CONTINUING", "sequence_no", 2, "idempotency_key", "CONTINUING", "status", 0,
                             "attempt_count", 0, "version", 0));
             jdbc.update("UPDATE sc_fulfillment_operation SET result_class=NULL WHERE id=?", nextId);
-            assertThat(frequency.bindContinuingOperation(ops.getFirst(), "OP_CONTINUING")).isTrue();
+            // 经真实可信结果入口收敛旧操作，不允许用SQL伪造FAILED绕过资金流程。
+            context.getBean(SupplierOrderLifecycle.class).confirmTrustedRejectedAndContinue(ops.getFirst(), fact(OperationOutcomeClass.REJECTED), "CONTINUE-FACT", first, "OP_CONTINUING");
+            assertThat(jdbc.queryForObject("SELECT status FROM sc_fulfillment_request WHERE id=(SELECT fulfillment_request_id FROM sc_b_order WHERE id=(SELECT b_order_id FROM sc_fulfillment_operation WHERE operation_no=?))", Short.class, ops.getFirst())).isEqualTo(FulfillmentRequestStatus.FULFILLING.getCode());
+            assertThat(ledger(jdbc, "RELEASE")).isZero();
+            assertThat(jdbc.queryForObject("SELECT frozen FROM sc_buyer_account", Long.class)).isEqualTo(frozenBefore);
+            assertThat(jdbc.queryForObject("SELECT enqueue_sequence FROM sc_recharge_frequency_entry WHERE id=?", Long.class, first.entryId())).isEqualTo(1L);
+            assertThat(jdbc.queryForObject("SELECT active_operation_no FROM sc_recharge_frequency_entry WHERE id=?", String.class, first.entryId())).isEqualTo("OP_CONTINUING");
+            assertThat(jdbc.queryForObject("SELECT wake_generation FROM sc_recharge_frequency_queue", Long.class)).isGreaterThan(0L);
             assertThat(frequency.claim(ops.getLast())).isNull();
             var next = frequency.claim("OP_CONTINUING"); assertThat(next).isNotNull();
-            assertThat(jdbc.queryForMap("SELECT platform_spu_id, holder_entry_id, occupancy_generation, acquired_at FROM sc_recharge_frequency_queue")).isEqualTo(queueBefore);
+            assertThat(jdbc.queryForMap("SELECT platform_spu_id, holder_entry_id, occupancy_generation, acquired_at, minimum_hold_until FROM sc_recharge_frequency_queue")).isEqualTo(queueBefore);
             // 后来可变SKU归属不能让已冻结项移队或绕过频控。
             jdbc.update("UPDATE sc_platform_sku SET fulfillment_type='ACCOUNT_BOUND_BENEFIT'");
             assertThat(frequency.requiresFrequency("OP_CONTINUING", "EXTERNAL_ACCOUNT")).isTrue();
             context.getBean(SupplierOrderLifecycle.class).confirmTrustedOutcome(ops.getFirst(), fact(OperationOutcomeClass.REJECTED), "OLD-OP", first);
             assertThat(jdbc.queryForObject("SELECT holder_entry_id FROM sc_recharge_frequency_queue", Long.class)).isEqualTo(next.entryId());
             assertThat(ledger(jdbc, "RELEASE")).isZero();
+            assertThat(jdbc.queryForObject("SELECT active_operation_no FROM sc_recharge_frequency_entry WHERE id=?", String.class, first.entryId())).isEqualTo("OP_CONTINUING");
+            assertThat(frequency.markSendPossible(first)).isFalse();
+            assertThat(frequency.markSendPossible(next)).isTrue();
+            var lifecycle = context.getBean(SupplierOrderLifecycle.class);
+            lifecycle.confirmTrustedOutcome("OP_CONTINUING", fact(OperationOutcomeClass.REJECTED), "FINAL-FAIL", next);
+            lifecycle.confirmTrustedOutcome("OP_CONTINUING", fact(OperationOutcomeClass.REJECTED), "FINAL-REPLAY", next);
+            assertThat(ledger(jdbc, "RELEASE")).isEqualTo(1L);
+            assertThat(jdbc.queryForObject("SELECT frozen FROM sc_buyer_account", Long.class)).isEqualTo(frozenBefore / 2);
+            var tail = frequency.claim(ops.getLast()); assertThat(tail).isNotNull();
+            lifecycle.confirmTrustedOutcome(ops.getFirst(), fact(OperationOutcomeClass.REJECTED), "OLD-AFTER-TAIL", first);
+            assertThat(jdbc.queryForObject("SELECT holder_entry_id FROM sc_recharge_frequency_queue", Long.class)).isEqualTo(tail.entryId());
+        } finally { fixture.stopContainer(); }
+    }
+
+    @Test void trustedManualRejectionCanSwitchToExistingNextSupplierAttemptAtomically() {
+        var fixture = new FulfillmentAcceptanceIntegrationTest(); fixture.startContainer();
+        try (var context = fixture.applicationContext(RechargeFrequencyExecutionIntegrationTest.ExecutionConfiguration.class)) {
+            fixture.seed(context); var facade = context.getBean(BuyerFulfillmentCommandFacade.class);
+            facade.acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("NEXT-ATTEMPT", 1L));
+            facade.acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("ATTEMPT-TAIL", 1L));
+            var jdbc = new JdbcTemplate(context.getBean("supplyChainDataSource", DataSource.class));
+            var ops = RechargeFrequencyExecutionIntegrationTest.operations(jdbc); var frequency = context.getBean(RechargeFrequencyLifecycle.class);
+            var lifecycle = context.getBean(SupplierOrderLifecycle.class); var permit = frequency.claim(ops.getFirst()); frequency.markSendPossible(permit);
+            long oldOpId = jdbc.queryForObject("SELECT id FROM sc_fulfillment_operation WHERE operation_no=?", Long.class, ops.getFirst());
+            long oldBOrderId = jdbc.queryForObject("SELECT b_order_id FROM sc_fulfillment_operation WHERE id=?", Long.class, oldOpId);
+            var changes = new java.util.HashMap<String, Object>();
+            changes.put("b_order_no", "BO_NEXT_ATTEMPT"); changes.put("attempt_no", 2); changes.put("active_flag", null);
+            changes.put("billno", "BILL_NEXT_ATTEMPT"); changes.put("idempotency_key", "ATTEMPT_KEY"); changes.put("version", 0);
+            long nextBOrderId = RechargeFrequencyAcceptanceIntegrationTest.cloneRow(jdbc, "sc_b_order", oldBOrderId, changes);
+            long nextOpId = RechargeFrequencyAcceptanceIntegrationTest.cloneRow(jdbc, "sc_fulfillment_operation", oldOpId,
+                    java.util.Map.of("operation_no", "OP_NEXT_ATTEMPT", "b_order_id", nextBOrderId, "idempotency_key", "NEXT_ATTEMPT", "status", 0, "version", 0));
+            var before = jdbc.queryForMap("SELECT platform_spu_id,holder_entry_id,occupancy_generation,acquired_at,minimum_hold_until FROM sc_recharge_frequency_queue");
+            lifecycle.transition(ops.getFirst(), fact(OperationOutcomeClass.MANUAL_REQUIRED), "MANUAL");
+            assertThat(jdbc.queryForObject("SELECT active_flag FROM sc_b_order WHERE id=?", Integer.class, oldBOrderId)).isEqualTo(1);
+            assertThat(jdbc.queryForObject("SELECT completed_at FROM sc_b_order WHERE id=?", LocalDateTime.class, oldBOrderId)).isNull();
+            // 兼容历史MANUAL曾写completedAt的记录；旧操作状态仍由真实结果入口推进。
+            jdbc.update("UPDATE sc_b_order SET completed_at=NOW() WHERE id=?", oldBOrderId);
+            assertThat(jdbc.queryForObject("SELECT order_status FROM sc_supply_chain_order WHERE id=(SELECT order_id FROM sc_b_order WHERE id=?)", Short.class, oldBOrderId)).isEqualTo((short)90);
+            jdbc.update("UPDATE sc_b_order SET attempt_no=3 WHERE id=?", nextBOrderId);
+            assertThatThrownBy(() -> lifecycle.confirmTrustedRejectedAndContinue(ops.getFirst(), fact(OperationOutcomeClass.REJECTED), "WRONG-ATTEMPT", permit, "OP_NEXT_ATTEMPT")).isInstanceOf(IllegalStateException.class);
+            jdbc.update("UPDATE sc_b_order SET attempt_no=2 WHERE id=?", nextBOrderId);
+            jdbc.update("UPDATE sc_fulfillment_operation SET sequence_no=2 WHERE id=?", nextOpId);
+            assertThatThrownBy(() -> lifecycle.confirmTrustedRejectedAndContinue(ops.getFirst(), fact(OperationOutcomeClass.REJECTED), "WRONG-FIRST-SEQ", permit, "OP_NEXT_ATTEMPT")).isInstanceOf(IllegalStateException.class);
+            jdbc.update("UPDATE sc_fulfillment_operation SET sequence_no=1 WHERE id=?", nextOpId);
+            lifecycle.confirmTrustedRejectedAndContinue(ops.getFirst(), fact(OperationOutcomeClass.REJECTED), "VERIFIED-REJECTION", permit, "OP_NEXT_ATTEMPT");
+            assertThat(jdbc.queryForObject("SELECT active_flag FROM sc_b_order WHERE id=?", Integer.class, oldBOrderId)).isNull();
+            assertThat(jdbc.queryForObject("SELECT fulfillment_status FROM sc_b_order WHERE id=?", Short.class, oldBOrderId)).isEqualTo((short)50);
+            assertThat(jdbc.queryForObject("SELECT active_flag FROM sc_b_order WHERE id=?", Integer.class, nextBOrderId)).isEqualTo(1);
+            assertThat(jdbc.queryForObject("SELECT active_b_order_id FROM sc_fulfillment_request WHERE id=(SELECT fulfillment_request_id FROM sc_b_order WHERE id=?)", Long.class, nextBOrderId)).isEqualTo(nextBOrderId);
+            assertThat(jdbc.queryForObject("SELECT fulfillment_status FROM sc_b_order WHERE id=?", Short.class, nextBOrderId)).isEqualTo((short)20);
+            assertThat(jdbc.queryForObject("SELECT order_status FROM sc_supply_chain_order WHERE id=(SELECT order_id FROM sc_b_order WHERE id=?)", Short.class, oldBOrderId)).isEqualTo((short)10);
+            assertThat(jdbc.queryForMap("SELECT platform_spu_id,holder_entry_id,occupancy_generation,acquired_at,minimum_hold_until FROM sc_recharge_frequency_queue")).isEqualTo(before);
+            assertThat(ledger(jdbc, "RELEASE")).isZero(); assertThat(frequency.claim(ops.getLast())).isNull();
+            var next = frequency.claim("OP_NEXT_ATTEMPT"); assertThat(next).isNotNull(); frequency.markSendPossible(next);
+            lifecycle.confirmTrustedOutcome(ops.getFirst(), fact(OperationOutcomeClass.REJECTED), "LATE-OLD", permit);
+            assertThat(jdbc.queryForObject("SELECT active_operation_no FROM sc_recharge_frequency_entry WHERE id=?", String.class, permit.entryId())).isEqualTo("OP_NEXT_ATTEMPT");
+            lifecycle.confirmTrustedOutcome("OP_NEXT_ATTEMPT", fact(OperationOutcomeClass.REJECTED), "EXHAUSTED", next);
+            lifecycle.confirmTrustedOutcome("OP_NEXT_ATTEMPT", fact(OperationOutcomeClass.REJECTED), "EXHAUSTED-REPLAY", next);
+            assertThat(ledger(jdbc, "RELEASE")).isEqualTo(1L);
+            assertThat(jdbc.queryForObject("SELECT status FROM sc_fulfillment_operation WHERE id=?", Short.class, nextOpId)).isEqualTo((short)50);
+        } finally { fixture.stopContainer(); }
+    }
+
+    @Test void trustedManualSameBOrderRecoveryClearsHistoricalCompletionWithVersionCas() {
+        var fixture = new FulfillmentAcceptanceIntegrationTest(); fixture.startContainer();
+        try (var context = fixture.applicationContext(RechargeFrequencyExecutionIntegrationTest.ExecutionConfiguration.class)) {
+            fixture.seed(context); context.getBean(BuyerFulfillmentCommandFacade.class).acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("MANUAL-SAME-BO", 1L));
+            var jdbc = new JdbcTemplate(context.getBean("supplyChainDataSource", DataSource.class));
+            var op = RechargeFrequencyExecutionIntegrationTest.operations(jdbc).getFirst();
+            var frequency = context.getBean(RechargeFrequencyLifecycle.class); var lifecycle = context.getBean(SupplierOrderLifecycle.class);
+            var permit = frequency.claim(op); frequency.markSendPossible(permit);
+            long oldId = jdbc.queryForObject("SELECT id FROM sc_fulfillment_operation WHERE operation_no=?", Long.class, op);
+            long boId = jdbc.queryForObject("SELECT b_order_id FROM sc_fulfillment_operation WHERE id=?", Long.class, oldId);
+            RechargeFrequencyAcceptanceIntegrationTest.cloneRow(jdbc, "sc_fulfillment_operation", oldId,
+                    java.util.Map.of("operation_no", "OP_MANUAL_CONTINUE", "sequence_no", 2, "idempotency_key", "MANUAL_CONTINUE", "status", 0, "version", 0));
+            long frozenBefore = jdbc.queryForObject("SELECT frozen FROM sc_buyer_account", Long.class);
+            lifecycle.transition(op, fact(OperationOutcomeClass.MANUAL_REQUIRED), "MANUAL-SAME");
+            assertThat(jdbc.queryForObject("SELECT active_flag FROM sc_b_order WHERE id=?", Integer.class, boId)).isEqualTo(1);
+            jdbc.update("UPDATE sc_b_order SET completed_at=NOW() WHERE id=?", boId);
+            long versionBefore = jdbc.queryForObject("SELECT version FROM sc_b_order WHERE id=?", Long.class, boId);
+            lifecycle.confirmTrustedRejectedAndContinue(op, fact(OperationOutcomeClass.REJECTED), "CONFIRMED", permit, "OP_MANUAL_CONTINUE");
+            assertThat(jdbc.queryForObject("SELECT completed_at FROM sc_b_order WHERE id=?", LocalDateTime.class, boId)).isNull();
+            assertThat(jdbc.queryForObject("SELECT fulfillment_status FROM sc_b_order WHERE id=?", Short.class, boId)).isEqualTo((short)20);
+            assertThat(jdbc.queryForObject("SELECT version FROM sc_b_order WHERE id=?", Long.class, boId)).isEqualTo(versionBefore+1);
+            assertThat(jdbc.queryForObject("SELECT frozen FROM sc_buyer_account", Long.class)).isEqualTo(frozenBefore);
+            assertThat(ledger(jdbc, "RELEASE")).isZero();
+            var next = frequency.claim("OP_MANUAL_CONTINUE"); assertThat(next).isNotNull(); assertThat(frequency.markSendPossible(next)).isTrue();
+            lifecycle.confirmTrustedOutcome("OP_MANUAL_CONTINUE", fact(OperationOutcomeClass.REJECTED), "FINAL", next);
+            assertThat(jdbc.queryForObject("SELECT active_flag FROM sc_b_order WHERE id=?", Integer.class, boId)).isNull();
+            assertThat(ledger(jdbc, "RELEASE")).isEqualTo(1L);
+        } finally { fixture.stopContainer(); }
+    }
+
+    @Test void illegalContinuationRollsBackRealResultFactsStatusMoneyAndHolder() {
+        var fixture = new FulfillmentAcceptanceIntegrationTest(); fixture.startContainer();
+        try (var context = fixture.applicationContext(RechargeFrequencyExecutionIntegrationTest.ExecutionConfiguration.class)) {
+            fixture.seed(context); var facade = context.getBean(BuyerFulfillmentCommandFacade.class);
+            facade.acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("INVALID-NEXT", 1L));
+            facade.acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("OTHER-REQUEST", 1L));
+            var jdbc = new JdbcTemplate(context.getBean("supplyChainDataSource", DataSource.class));
+            var ops = RechargeFrequencyExecutionIntegrationTest.operations(jdbc); var frequency = context.getBean(RechargeFrequencyLifecycle.class);
+            var lifecycle = context.getBean(SupplierOrderLifecycle.class); var permit = frequency.claim(ops.getFirst()); frequency.markSendPossible(permit);
+            long oldId = jdbc.queryForObject("SELECT id FROM sc_fulfillment_operation WHERE operation_no=?", Long.class, ops.getFirst());
+            long nextId = RechargeFrequencyAcceptanceIntegrationTest.cloneRow(jdbc, "sc_fulfillment_operation", oldId,
+                    java.util.Map.of("operation_no", "OP_INVALID_NEXT", "sequence_no", 2, "idempotency_key", "INVALID_NEXT", "status", 0, "version", 0));
+            var before = jdbc.queryForMap("SELECT id,platform_spu_id,holder_entry_id,occupancy_generation,acquired_at,minimum_hold_until,wake_generation,version,next_check_at FROM sc_recharge_frequency_queue");
+            var observedRejected = OperationOutcome.builder().outcomeClass(OperationOutcomeClass.REJECTED)
+                    .rawObservation(RawObservationFact.builder().sourceType("CALLBACK").externalOrderNo("INVALID-REJECTION").externalStatus("R").payloadDigest(new byte[32]).observedAt(LocalDateTime.now()).build()).build();
+            java.util.function.Consumer<String> rejected = no -> assertThatThrownBy(() -> lifecycle.confirmTrustedRejectedAndContinue(ops.getFirst(), observedRejected, "INVALID", permit, no)).isInstanceOf(IllegalStateException.class);
+            rejected.accept(ops.getFirst()); rejected.accept(ops.getLast());
+            jdbc.update("UPDATE sc_fulfillment_operation SET operation_kind='QUERY_ORDER' WHERE id=?", nextId); rejected.accept("OP_INVALID_NEXT");
+            jdbc.update("UPDATE sc_fulfillment_operation SET operation_kind='FULFILL',sequence_no=3 WHERE id=?", nextId); rejected.accept("OP_INVALID_NEXT");
+            jdbc.update("UPDATE sc_fulfillment_operation SET sequence_no=2,status=30,result_class='RESULT_UNKNOWN',attempt_count=1 WHERE id=?", nextId); rejected.accept("OP_INVALID_NEXT");
+            jdbc.update("UPDATE sc_fulfillment_operation SET status=0,result_class=NULL,attempt_count=1 WHERE id=?", nextId); rejected.accept("OP_INVALID_NEXT");
+            jdbc.update("UPDATE sc_fulfillment_operation SET attempt_count=0,external_operation_no='UNVERIFIED' WHERE id=?", nextId); rejected.accept("OP_INVALID_NEXT");
+            jdbc.update("UPDATE sc_fulfillment_operation SET external_operation_no=NULL WHERE id=?", nextId);
+            assertThatThrownBy(() -> lifecycle.confirmTrustedRejectedAndContinue(ops.getFirst(), fact(OperationOutcomeClass.RESULT_UNKNOWN), "NOT-REJECTION", permit, "OP_INVALID_NEXT")).isInstanceOf(IllegalStateException.class);
+            long requestId = jdbc.queryForObject("SELECT fulfillment_request_id FROM sc_b_order WHERE id=(SELECT b_order_id FROM sc_fulfillment_operation WHERE id=?)", Long.class, oldId);
+            long orderId = jdbc.queryForObject("SELECT order_id FROM sc_b_order WHERE id=(SELECT b_order_id FROM sc_fulfillment_operation WHERE id=?)", Long.class, oldId);
+            jdbc.update("UPDATE sc_fulfillment_request SET active_b_order_id=999999 WHERE id=?", requestId); rejected.accept("OP_INVALID_NEXT");
+            jdbc.update("UPDATE sc_fulfillment_request SET active_b_order_id=NULL WHERE id=?", requestId);
+            jdbc.update("UPDATE sc_fulfillment_request SET status=50 WHERE id=?", requestId); rejected.accept("OP_INVALID_NEXT");
+            jdbc.update("UPDATE sc_fulfillment_request SET status=20 WHERE id=?", requestId);
+            jdbc.update("UPDATE sc_supply_chain_order SET order_status=50 WHERE id=?", orderId); rejected.accept("OP_INVALID_NEXT");
+            jdbc.update("UPDATE sc_supply_chain_order SET order_status=10 WHERE id=?", orderId);
+            var stale = new RechargeFrequencyExecutionPermit(permit.queueId(), permit.entryId(), permit.operationNo(), permit.generation()+1, permit.entryVersion(), permit.operationVersion());
+            assertThatThrownBy(() -> lifecycle.confirmTrustedRejectedAndContinue(ops.getFirst(), observedRejected, "STALE", stale, "OP_INVALID_NEXT")).isInstanceOf(IllegalStateException.class);
+            long priorRisk = RechargeFrequencyAcceptanceIntegrationTest.cloneRow(jdbc, "sc_fulfillment_operation", nextId,
+                    java.util.Map.of("operation_no", "OP_PRIOR_RISK", "sequence_no", 3, "idempotency_key", "PRIOR_RISK", "status", 30, "attempt_count", 1, "result_class", "RESULT_UNKNOWN"));
+            rejected.accept("OP_INVALID_NEXT");
+            jdbc.update("DELETE FROM sc_fulfillment_operation WHERE id=?", priorRisk);
+            assertThat(jdbc.queryForMap("SELECT id,platform_spu_id,holder_entry_id,occupancy_generation,acquired_at,minimum_hold_until,wake_generation,version,next_check_at FROM sc_recharge_frequency_queue")).isEqualTo(before);
+            assertThat(jdbc.queryForObject("SELECT status FROM sc_fulfillment_operation WHERE id=?", Short.class, oldId)).isEqualTo((short)20);
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_raw_status_observation", Long.class)).isZero();
+            assertThat(ledger(jdbc, "RELEASE")).isZero();
+            // 同样的合法待执行种子可由真实可信结果推进，证明拒绝来自前置风险校验。
+            lifecycle.confirmTrustedRejectedAndContinue(ops.getFirst(), observedRejected, "VALID", permit, "OP_INVALID_NEXT");
+            assertThatThrownBy(() -> lifecycle.confirmTrustedRejectedAndContinue(ops.getFirst(), observedRejected, "REPLAY-CONTINUE", permit, "OP_INVALID_NEXT")).isInstanceOf(IllegalStateException.class);
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_raw_status_observation", Long.class)).isEqualTo(1L);
         } finally { fixture.stopContainer(); }
     }
 
