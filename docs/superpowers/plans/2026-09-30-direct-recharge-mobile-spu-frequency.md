@@ -175,6 +175,7 @@ public record RechargeFrequencyExecutionPermit(long queueId, long entryId,
 
 **文件：**
 - 新建 `border/fulfillment/application/RechargeFrequencyWakeHandler.java`、`RechargeFrequencyRecoveryService.java`。
+- 新建 `border/fulfillment/application/RechargeFrequencyQueryService.java`、`FulfillmentOperationTicketFactory.java`，后者抽取既有执行Handler的冻结配置/凭证装配以供发送和查询复用；查询不解密充值目标。修改 `FulfillmentOperationExecuteHandler.java` 委派装配，保留Task4发送资格校验。
 - 修改 `border/fulfillment/domain/FulfillmentTimerTaskTypes.java`，新增受控队列唤醒类型。
 - 新建 `border/fulfillment/application/RechargeFrequencyRecoveryConfiguration.java`，注册受控定期补偿，不改变Timer全局行为。
 - 新建测试 `border/fulfillment/RechargeFrequencyTimerIntegrationTest.java`、`border/fulfillment/application/RechargeFrequencyRecoveryServiceTest.java`。
@@ -189,6 +190,7 @@ timer.scheduleOnce(FulfillmentTimerTaskTypes.RECHARGE_FREQUENCY_WAKE,
 ```
 
 - [ ] Handler只调用Lifecycle。检查holder：未知只计划下一次观察/告警，成功在minimumHoldUntil释放，无holder认领FIFO队首；不把等待当失败。
+- [ ] 补全现有标准履约缺失的主动查单恢复：仅已配置支持QUERY_ORDER的供应商，在事务外以原operationNo和冻结配置查询，由统一可信结果入口收敛；处理中/未知沿用30秒恢复基线，查询失败或NOT_FOUND继续占用，MANUAL只接受可信终态恢复。无查询能力不能退化为SEND。测试查询不带目标账号、不新建资金预占或SEND、迟到结果不释放新holder。
 - [ ] 补偿扫描有next_check_at索引、批量上限、仅恢复缺失/死信唤醒；同队列有效未来任务不重复新增。扫描不直接删除holder，不使用Redis租约作为授权依据。
 - [ ] 30分钟占用与积压>5按组合聚合告警，首次跨阈值记录、受控重复与恢复记录，日志仅队列ID/SPU/订单号，监控查询异常不伪装0值。
 - [ ] 真实测试崩溃、死信补偿、窗口剩余时间、重复任务和UTC+8转换。提交：`实现直充队列Timer恢复与积压占用告警`。
