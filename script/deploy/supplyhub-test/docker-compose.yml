@@ -1,0 +1,97 @@
+# supplyhub 测试栈。设计见
+# docs/superpowers/specs/2026-09-04-supplyhub-test-docker-compose-design.md
+# 2026-09-07：移除 pay/erp/mall/statistics，仅保留 gateway/system/infra/member 四服务。
+name: supplyhub-test
+
+x-common: &common
+  pull_policy: never
+  network_mode: host
+  restart: unless-stopped
+  init: true
+  stop_grace_period: 45s
+  security_opt:
+    - no-new-privileges:true
+  env_file:
+    - ${SUPPLYHUB_ENV_FILE:-.env}
+  logging:
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: "3"
+  volumes:
+    - /data/aifuli-test/supplyhub/logs:/data/aifuli-test/supplyhub/logs
+
+services:
+  system:
+    <<: *common
+    image: ${SYSTEM_IMAGE:?SYSTEM_IMAGE is required}
+    container_name: supplyhub-system
+    environment:
+      SERVER_PORT: "59081"
+      SPRING_CLOUD_NACOS_DISCOVERY_PORT: "59081"
+      JAVA_OPTS: "${SYSTEM_JAVA_OPTS}"
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo >/dev/tcp/127.0.0.1/59081"]
+      interval: 10s
+      timeout: 3s
+      start_period: 60s
+      retries: 12
+
+  infra:
+    <<: *common
+    image: ${INFRA_IMAGE:?INFRA_IMAGE is required}
+    container_name: supplyhub-infra
+    environment:
+      SERVER_PORT: "59082"
+      SPRING_CLOUD_NACOS_DISCOVERY_PORT: "59082"
+      JAVA_OPTS: "${INFRA_JAVA_OPTS}"
+    depends_on:
+      system:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo >/dev/tcp/127.0.0.1/59082"]
+      interval: 10s
+      timeout: 3s
+      start_period: 60s
+      retries: 12
+
+  member:
+    <<: *common
+    image: ${MEMBER_IMAGE:?MEMBER_IMAGE is required}
+    container_name: supplyhub-member
+    environment:
+      SERVER_PORT: "59087"
+      SPRING_CLOUD_NACOS_DISCOVERY_PORT: "59087"
+      JAVA_OPTS: "${MEMBER_JAVA_OPTS}"
+    depends_on:
+      system:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo >/dev/tcp/127.0.0.1/59087"]
+      interval: 10s
+      timeout: 3s
+      start_period: 60s
+      retries: 12
+
+  gateway:
+    <<: *common
+    image: ${GATEWAY_IMAGE:?GATEWAY_IMAGE is required}
+    container_name: supplyhub-gateway
+    environment:
+      SERVER_PORT: "59080"
+      SPRING_CLOUD_NACOS_DISCOVERY_PORT: "59080"
+      JAVA_OPTS: "${GATEWAY_JAVA_OPTS}"
+      AIFULI_GATEWAY_SUPPLY_CHAIN_URI: "${AIFULI_GATEWAY_SUPPLY_CHAIN_URI}"
+    depends_on:
+      system:
+        condition: service_healthy
+      infra:
+        condition: service_healthy
+      member:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo >/dev/tcp/127.0.0.1/59080"]
+      interval: 10s
+      timeout: 3s
+      start_period: 60s
+      retries: 12

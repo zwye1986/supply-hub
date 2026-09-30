@@ -1,0 +1,90 @@
+-- 表中文名：采购商资金账户
+-- 核心职责：维护采购商预付账户余额和冻结金额的唯一汇总
+CREATE TABLE sc_buyer_account (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT '采购商资金账户内部主键',
+    account_no VARCHAR(32) NOT NULL COMMENT '采购商资金账户稳定业务编号',
+    buyer_id BIGINT NOT NULL COMMENT '采购商内部主键，逻辑引用sc_buyer.id',
+    currency CHAR(3) NOT NULL COMMENT '账户币种，一期固定CNY',
+    balance BIGINT NOT NULL DEFAULT 0 COMMENT '账户总余额，单位为分',
+    frozen BIGINT NOT NULL DEFAULT 0 COMMENT '账户已冻结金额，单位为分',
+    status SMALLINT NOT NULL COMMENT '账户状态：10正常，20冻结新交易，90已关闭',
+    version BIGINT NOT NULL DEFAULT 0 COMMENT '余额并发更新乐观锁版本号',
+    created_by BIGINT NULL COMMENT '创建人用户ID',
+    created_at DATETIME(3) NOT NULL COMMENT '创建时间，UTC',
+    updated_by BIGINT NULL COMMENT '最后修改人用户ID',
+    updated_at DATETIME(3) NOT NULL COMMENT '最后修改时间，UTC',
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_sc_buyer_account_no (account_no),
+    UNIQUE KEY uk_sc_buyer_account_currency (buyer_id, currency),
+    KEY idx_sc_buyer_account_status (status),
+    CONSTRAINT ck_sc_buyer_account_currency CHECK (currency = 'CNY'),
+    CONSTRAINT ck_sc_buyer_account_amount CHECK (balance >= 0 AND frozen >= 0 AND balance >= frozen),
+    CONSTRAINT ck_sc_buyer_account_status CHECK (status IN (10, 20, 90))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='采购商预付资金账户唯一余额汇总';
+
+-- 表中文名：采购商账户流水
+-- 核心职责：追加记录采购商账户每次余额和冻结金额变化
+CREATE TABLE sc_account_ledger (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT '采购商账户流水内部主键',
+    ledger_no VARCHAR(32) NOT NULL COMMENT '账户流水稳定业务编号',
+    account_id BIGINT NOT NULL COMMENT '采购商资金账户主键，逻辑引用sc_buyer_account.id',
+    entry_key VARCHAR(128) NOT NULL COMMENT '账户范围内业务幂等键',
+    entry_type VARCHAR(32) NOT NULL COMMENT '流水类型：DEPOSIT入金或期初余额，FREEZE冻结，COMMIT确认扣款，RELEASE解冻，REFUND返还，ADJUSTMENT调账',
+    balance_delta BIGINT NOT NULL COMMENT '本次总余额变化金额，单位为分，可正可负',
+    frozen_delta BIGINT NOT NULL COMMENT '本次冻结金额变化，单位为分，可正可负',
+    balance_before BIGINT NOT NULL COMMENT '变更前账户总余额，单位为分',
+    balance_after BIGINT NOT NULL COMMENT '变更后账户总余额，单位为分',
+    frozen_before BIGINT NOT NULL COMMENT '变更前账户冻结金额，单位为分',
+    frozen_after BIGINT NOT NULL COMMENT '变更后账户冻结金额，单位为分',
+    reservation_no VARCHAR(32) NULL COMMENT '关联资金预留业务编号',
+    order_no VARCHAR(32) NULL COMMENT '关联供应链订单业务编号',
+    reference_type VARCHAR(32) NOT NULL COMMENT '触发流水的业务引用类型',
+    reference_no VARCHAR(64) NOT NULL COMMENT '触发流水的业务引用编号',
+    operator_id BIGINT NULL COMMENT '人工触发资金命令的操作人用户ID，自动流水为空',
+    evidence_ref VARCHAR(512) NULL COMMENT '期初余额或人工资金操作的受控证据引用',
+    evidence_digest BINARY(32) NULL COMMENT '期初余额或人工资金操作证据SHA-256摘要',
+    audit_note VARCHAR(1024) NULL COMMENT '期初余额或人工资金操作的脱敏审计说明',
+    trace_id VARCHAR(64) NOT NULL COMMENT '链路追踪标识',
+    causation_id VARCHAR(64) NULL COMMENT '触发本流水的命令或事件标识',
+    occurred_at DATETIME(3) NOT NULL COMMENT '资金事实发生时间，UTC',
+    created_at DATETIME(3) NOT NULL COMMENT '流水入库时间，UTC',
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_sc_account_ledger_no (ledger_no),
+    UNIQUE KEY uk_sc_account_ledger_entry (account_id, entry_key),
+    KEY idx_sc_account_ledger_order (order_no, id),
+    KEY idx_sc_account_ledger_reservation (reservation_no, id),
+    KEY idx_sc_account_ledger_reference (reference_type, reference_no),
+    CONSTRAINT ck_sc_account_ledger_balance CHECK (balance_before >= 0 AND balance_after >= 0),
+    CONSTRAINT ck_sc_account_ledger_frozen CHECK (frozen_before >= 0 AND frozen_after >= 0 AND balance_before >= frozen_before AND balance_after >= frozen_after),
+    CONSTRAINT ck_sc_account_ledger_delta CHECK (balance_after = balance_before + balance_delta AND frozen_after = frozen_before + frozen_delta),
+    CONSTRAINT ck_sc_account_ledger_type CHECK (entry_type IN ('DEPOSIT', 'FREEZE', 'COMMIT', 'RELEASE', 'REFUND', 'ADJUSTMENT')),
+    CONSTRAINT ck_sc_account_ledger_entry_semantics CHECK ((entry_type = 'DEPOSIT' AND balance_delta > 0 AND frozen_delta = 0) OR (entry_type = 'FREEZE' AND balance_delta = 0 AND frozen_delta > 0) OR (entry_type = 'COMMIT' AND balance_delta < 0 AND frozen_delta = balance_delta) OR (entry_type = 'RELEASE' AND balance_delta = 0 AND frozen_delta < 0) OR (entry_type = 'REFUND' AND balance_delta > 0 AND frozen_delta = 0) OR (entry_type = 'ADJUSTMENT' AND balance_delta <> 0 AND frozen_delta = 0)),
+    CONSTRAINT ck_sc_account_ledger_deposit_audit CHECK (entry_type <> 'DEPOSIT' OR (operator_id IS NOT NULL AND evidence_ref IS NOT NULL AND evidence_digest IS NOT NULL AND audit_note IS NOT NULL))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='采购商账户不可变资金流水';
+
+-- 表中文名：资金预留
+-- 核心职责：维护订单资金冻结、确认扣款、释放和返还的守恒事实
+CREATE TABLE sc_fund_reservation (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT '资金预留内部主键',
+    reservation_no VARCHAR(32) NOT NULL COMMENT '资金预留稳定业务编号',
+    account_id BIGINT NOT NULL COMMENT '采购商资金账户主键，逻辑引用sc_buyer_account.id',
+    buyer_id BIGINT NOT NULL COMMENT '采购商内部主键，逻辑引用sc_buyer.id',
+    reference_type VARCHAR(32) NOT NULL COMMENT '资金预留业务引用类型：CARD_ORDER或O2O_ORDER',
+    reference_no VARCHAR(64) NOT NULL COMMENT '资金预留业务引用编号',
+    total_amount BIGINT NOT NULL COMMENT '初始预留总金额，单位为分',
+    committed_amount BIGINT NOT NULL DEFAULT 0 COMMENT '已确认扣款金额，单位为分',
+    released_amount BIGINT NOT NULL DEFAULT 0 COMMENT '已释放或返还金额，单位为分',
+    remaining_amount BIGINT NOT NULL COMMENT '仍冻结等待处理的金额，单位为分',
+    currency CHAR(3) NOT NULL COMMENT '预留币种，一期固定CNY',
+    status SMALLINT NOT NULL COMMENT '预留状态：10已预留，20部分确认，30已确认，40已释放，50部分确认后释放，90人工处理',
+    version BIGINT NOT NULL DEFAULT 0 COMMENT '状态和金额并发更新乐观锁版本号',
+    created_at DATETIME(3) NOT NULL COMMENT '资金预留创建时间，UTC',
+    updated_at DATETIME(3) NOT NULL COMMENT '资金预留最后更新时间，UTC',
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_sc_fund_reservation_no (reservation_no),
+    UNIQUE KEY uk_sc_fund_reservation_reference (buyer_id, reference_type, reference_no),
+    KEY idx_sc_fund_reservation_account_status (account_id, status),
+    CONSTRAINT ck_sc_fund_reservation_currency CHECK (currency = 'CNY'),
+    CONSTRAINT ck_sc_fund_reservation_amount CHECK (total_amount >= 0 AND committed_amount >= 0 AND released_amount >= 0 AND remaining_amount >= 0 AND total_amount = committed_amount + released_amount + remaining_amount),
+    CONSTRAINT ck_sc_fund_reservation_status CHECK (status IN (10, 20, 30, 40, 50, 90))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='采购商订单资金冻结与确认事实';

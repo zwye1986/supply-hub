@@ -1,0 +1,488 @@
+databaseChangeLog:
+  - changeSet:
+      id: 001-identity-and-master
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 001-identity-and-master.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 002-product-and-offer
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 002-product-and-offer.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 003-account-and-ledger
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 003-account-and-ledger.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 004-routing-order-and-fulfillment
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 004-routing-order-and-fulfillment.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 005-o2o-detail
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 005-o2o-detail.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 006-adapter-and-observation
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 006-adapter-and-observation.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 007-reconciliation
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 007-reconciliation.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 008-timer-inbox-outbox
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 008-timer-inbox-outbox.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 009-buyer-integration
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 009-buyer-integration.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 010-sensitive-access-audit
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 010-sensitive-access-audit.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 011-buyer-account-overdraft
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 011-buyer-account-overdraft.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 012-o2o-supplier-order
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 012-o2o-supplier-order.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 013-instore-channel
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 013-instore-channel.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 014-instore-production-invariants
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 014-instore-production-invariants.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 015-timer-outbox-schema-repair
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 015-timer-outbox-schema-repair.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 016-project-integration-route
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 016-project-integration-route.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 017-instore-project-cashier-route
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 017-instore-project-cashier-route.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 018-instore-member-entry-route
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 018-instore-member-entry-route.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 019-project-app-auth
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 019-project-app-auth.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 020-supplier-admin-profile
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 020-supplier-admin-profile.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 021-admin-frontend-alignment
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 021-admin-frontend-alignment.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 021-supplier-admin-plaintext-echo
+      author: supply-chain
+      preConditions:
+        onFail: MARK_RAN
+        not:
+          columnExists:
+            tableName: sc_supplier
+            columnName: legal_person_id_no
+      changes:
+        - sqlFile:
+            path: 021-supplier-admin-plaintext-echo.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 022-database-local-time
+      author: supply-chain
+      runInTransaction: true
+      changes:
+        - sqlFile:
+            path: 022-database-local-time.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 023-admin-invoice
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 023-admin-invoice.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 024-admin-form-dictionary-codes
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 024-admin-form-dictionary-codes.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 025-project-type-prd-values
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 025-project-type-prd-values.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 026-buyer-descendant-index
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 026-buyer-descendant-index.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 027-supplier-scope-min-quantity-reserved
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 027-supplier-scope-min-quantity-reserved.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 028-platform-product-center-enhancement
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 028-platform-product-center-enhancement.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 029-brand-and-product-type-enhancement
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 029-brand-and-product-type-enhancement.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 030-product-management-grid-enhancement
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 030-product-management-grid-enhancement.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 031-batch-pricing-tax-metadata
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 031-batch-pricing-tax-metadata.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 032-sku-purchase-limit
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 032-sku-purchase-limit.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 033-sku-phone-bind-limit
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 033-sku-phone-bind-limit.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 034-sku-display-content
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 034-sku-display-content.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 035-generic-batch-pricing
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 035-generic-batch-pricing.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 036-category-product-type-description
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 036-category-product-type-description.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 037-category-type-codes
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 037-category-type-codes.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 038-spu-fulfillment-type
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 038-spu-fulfillment-type.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 039-sku-suggested-sale-price-rule
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 039-sku-suggested-sale-price-rule.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 040-fulfillment-asset-lifecycle-status
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 040-fulfillment-asset-lifecycle-status.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 040-product-classification-category-code
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 040-product-classification-category-code.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 041-sku-inventory
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 041-sku-inventory.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 042-offer-fulfillment-score
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 042-offer-fulfillment-score.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 043-offer-fulfillment-score-default
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 043-offer-fulfillment-score-default.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 044-routing-rule-prd-model
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 044-routing-rule-prd-model.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 045-supplier-sku-daily-quota
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 045-supplier-sku-daily-quota.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 046-business-code-scope
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 046-business-code-scope.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false

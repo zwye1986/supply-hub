@@ -1,0 +1,4 @@
+com.aifuli.framework.idempotent.config.AifuliIdempotentConfiguration
+com.aifuli.framework.lock4j.config.AifuliLock4jConfiguration
+com.aifuli.framework.ratelimiter.config.AifuliRateLimiterConfiguration
+com.aifuli.framework.signature.config.AifuliApiSignatureAutoConfiguration

@@ -1,0 +1,72 @@
+spring:
+  application:
+    name: movie-server
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:local}
+  main:
+    allow-circular-references: false
+    allow-bean-definition-overriding: false
+  autoconfigure:
+    # 骨架不提供本地用户名密码登录，避免生成无实际用途的默认用户。
+    exclude:
+      - org.springframework.boot.autoconfigure.security.servlet.UserDetailsServiceAutoConfiguration
+  cloud:
+    nacos:
+      config:
+        enabled: false
+        import-check:
+          enabled: false
+      discovery:
+        enabled: false
+  datasource:
+    # 专属电影库，禁止配置为商城或供应链中台数据库。
+    url: ${MOVIE_MYSQL_URL:jdbc:mysql://127.0.0.1:3306/aifuli_movie?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai}
+    username: ${MOVIE_MYSQL_USERNAME:movie}
+    password: ${MOVIE_MYSQL_PASSWORD:}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  sql:
+    init:
+      mode: never
+  liquibase:
+    # 表结构由发布流程显式迁移，正常应用启动不执行 DDL。
+    enabled: false
+    change-log: classpath:db/movie/movie-db.changelog-master.yaml
+  data:
+    mongodb:
+      uri: ${MOVIE_MONGODB_URI:mongodb://127.0.0.1:27017/aifuli_movie}
+      auto-index-creation: false
+    redis:
+      host: ${MOVIE_REDIS_HOST:127.0.0.1}
+      port: ${MOVIE_REDIS_PORT:6379}
+      database: ${MOVIE_REDIS_DATABASE:0}
+      password: ${MOVIE_REDIS_PASSWORD:}
+      repositories:
+        enabled: false
+
+server:
+  port: ${MOVIE_SERVER_PORT:58191}
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+  global-config:
+    banner: false
+    db-config:
+      id-type: AUTO
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
+
+aifuli:
+  info:
+    version: 1.0.0
+    base-package: com.aifuli.module.movie
+  tenant:
+    # 电影供给为平台数据；同时不引入商城租户 starter。
+    enable: false

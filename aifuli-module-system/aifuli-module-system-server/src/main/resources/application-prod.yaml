@@ -1,0 +1,19 @@
+--- #################### 生产环境：端口 + 注册中心 + 配置中心 ####################
+
+server:
+  port: 60081
+
+spring:
+  cloud:
+    nacos:
+      server-addr: 47.117.129.235:8848
+      username: nacos
+      password: "@2025BDHBHK9FS^%0O."
+      discovery:
+        namespace: aifuli-mall-prod
+        group: prod
+        metadata:
+          version: 1.0.0
+      config:
+        namespace: aifuli-mall-prod
+        group: prod

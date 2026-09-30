@@ -1,0 +1,21 @@
+# 独立商城库入口；禁止加入电影平台表变更集或打入 movie-server。
+databaseChangeLog:
+  - logicalFilePath: db/mall/movie/mall-db.changelog-master.yaml
+  - changeSet:
+      id: mall-movie-001-trade-order-movie
+      author: movie
+      dbms: mysql
+      runInTransaction: false
+      preConditions:
+        - onFail: HALT
+        - onError: HALT
+        # 必须连接已经拥有商城订单主表的数据库。
+        - tableExists:
+            tableName: trade_order
+      changes:
+        - sqlFile:
+            path: 001-trade-order-movie.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false

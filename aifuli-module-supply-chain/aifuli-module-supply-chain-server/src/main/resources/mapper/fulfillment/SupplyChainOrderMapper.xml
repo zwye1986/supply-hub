@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.aifuli.module.supplychain.border.order.dal.mysql.SupplyChainOrderMapper">
+
+    <!--
+      订单状态是限购额度的权威投影：失败、取消、全部退款自动退出统计，部分退款继续占用。
+      设计见 docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#35-sku-限购计算并发与释放规则。
+    -->
+    <select id="sumEffectivePurchaseQuantity" resultType="java.lang.Long">
+        SELECT COALESCE(SUM(quantity), 0)
+        FROM sc_supply_chain_order
+        WHERE order_type = #{orderType}
+          AND project_id = #{projectId}
+          AND buyer_user_id = #{buyerUserId}
+          AND platform_sku_id = #{platformSkuId}
+          AND order_status NOT IN (#{failedStatus}, #{cancelledStatus})
+          AND aftersale_status != #{fullyRefundedStatus}
+        <if test="startInclusive != null">
+          AND created_at &gt;= #{startInclusive}
+        </if>
+        <if test="endExclusive != null">
+          AND created_at &lt; #{endExclusive}
+        </if>
+    </select>
+
+    <select id="sumEffectivePhoneBindPurchaseQuantity" resultType="java.lang.Long">
+        SELECT COALESCE(SUM(quantity), 0)
+        FROM sc_supply_chain_order
+        WHERE order_type = #{orderType}
+          AND project_id = #{projectId}
+          AND fulfillment_account_value = #{fulfillmentAccountValue}
+          AND platform_sku_id = #{platformSkuId}
+          AND order_status NOT IN (#{failedStatus}, #{cancelledStatus})
+          AND aftersale_status != #{fullyRefundedStatus}
+        <if test="startInclusive != null">
+          AND created_at &gt;= #{startInclusive}
+        </if>
+        <if test="endExclusive != null">
+          AND created_at &lt; #{endExclusive}
+        </if>
+    </select>
+
+    <!--
+      供货配额按初始路由选中的供应商与平台SKU计数；失败、取消自动释放，成功后的退款仍计数。
+      设计见 docs/superpowers/specs/2026-09-24-standard-order-routing-execution-design.md#4-每日累计配额与并发。
+    -->
+    <select id="sumReservedSupplierSkuQuantity" resultType="java.lang.Long">
+        SELECT COALESCE(SUM(quantity), 0)
+        FROM sc_supply_chain_order
+        WHERE order_type = #{orderType}
+          AND display_supplier_id = #{supplierId}
+          AND platform_sku_id = #{platformSkuId}
+          AND created_at &gt;= #{startInclusive}
+          AND created_at &lt; #{endExclusive}
+          AND order_status NOT IN (#{failedStatus}, #{cancelledStatus})
+    </select>
+</mapper>

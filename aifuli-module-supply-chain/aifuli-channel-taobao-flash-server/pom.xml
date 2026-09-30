@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.aifuli</groupId>
+        <artifactId>aifuli-module-supply-chain</artifactId>
+        <version>${revision}</version>
+    </parent>
+
+    <artifactId>aifuli-channel-taobao-flash-server</artifactId>
+
+    <name>${project.artifactId}</name>
+    <description>淘宝闪购 O2O 渠道协议服务：ele.me SDK 验签、SSO、对账，调供应链中台 O2O 命令。独立部署、独立 DB，不访问中台表。</description>
+
+    <dependencies>
+        <!-- 中台 api 契约：渠道服务作为 Feign client 调用 O2OChannelCommandApi -->
+        <dependency>
+            <groupId>com.aifuli</groupId>
+            <artifactId>aifuli-module-supply-chain-api</artifactId>
+            <version>${revision}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>com.aifuli</groupId>
+            <artifactId>aifuli-spring-boot-starter-env</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.aifuli</groupId>
+            <artifactId>aifuli-spring-boot-starter-web</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.aifuli</groupId>
+            <artifactId>aifuli-spring-boot-starter-mybatis</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.aifuli</groupId>
+            <artifactId>aifuli-spring-boot-starter-redis</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.aifuli</groupId>
+            <artifactId>aifuli-spring-boot-starter-rpc</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.aifuli</groupId>
+            <artifactId>aifuli-spring-boot-starter-monitor</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>com.alibaba.cloud</groupId>
+            <artifactId>spring-cloud-starter-alibaba-nacos-discovery</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.alibaba.cloud</groupId>
+            <artifactId>spring-cloud-starter-alibaba-nacos-config</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>com.mysql</groupId>
+            <artifactId>mysql-connector-j</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+
+        <!-- 饿了么开放平台 H5 SDK：支付验签、签响应、JWT 签发 -->
+        <dependency>
+            <groupId>me.ele.openapi</groupId>
+            <artifactId>eleme-openapi-h5-sdk</artifactId>
+            <version>1.0.15-RELEASE</version>
+        </dependency>
+
+        <dependency>
+            <groupId>com.aifuli</groupId>
+            <artifactId>aifuli-spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <finalName>${project.artifactId}</finalName>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <version>${spring.boot.version}</version>
+                <configuration>
+                    <mainClass>com.aifuli.channel.taobaoflash.TaobaoFlashChannelApplication</mainClass>
+                </configuration>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>repackage</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>

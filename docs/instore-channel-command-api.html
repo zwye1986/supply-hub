@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>到店购渠道分销商户接口 — 旅通协议接口文档（②③④⑤⑥）</title>
+<style>
+  :root {
+    --bg: #f8f9fa; --card: #ffffff; --border: #e2e8f0;
+    --text: #1a202c; --text-2: #4a5568; --text-3: #718096;
+    --primary: #2563eb; --primary-light: #dbeafe;
+    --green: #059669; --green-light: #d1fae5;
+    --red: #dc2626; --red-light: #fee2e2;
+    --orange: #d97706; --orange-light: #fef3c7;
+    --code-bg: #1e293b; --code-text: #e2e8f0;
+    --mono: 'SF Mono','Fira Code','JetBrains Mono',Consolas,monospace;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif; background:var(--bg); color:var(--text); line-height:1.7; font-size:15px; }
+  .container { max-width:960px; margin:0 auto; padding:40px 24px 80px; }
+  .doc-header { background:linear-gradient(135deg,#1e3a5f 0%,#2563eb 100%); color:white; padding:48px 32px; border-radius:16px; margin-bottom:32px; }
+  .doc-header h1 { font-size:28px; font-weight:700; margin-bottom:8px; }
+  .doc-header .subtitle { font-size:16px; opacity:0.85; }
+  .doc-header .meta { display:flex; gap:24px; margin-top:20px; flex-wrap:wrap; }
+  .doc-header .meta-item { font-size:14px; opacity:0.9; }
+  .toc { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:24px 28px; margin-bottom:32px; }
+  .toc h2 { font-size:16px; margin-bottom:12px; }
+  .toc ol { padding-left:20px; }
+  .toc li { margin:4px 0; }
+  .toc a { color:var(--primary); text-decoration:none; }
+  .toc a:hover { text-decoration:underline; }
+  section { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:28px 32px; margin-bottom:24px; }
+  section h2 { font-size:20px; font-weight:700; padding-bottom:12px; margin-bottom:16px; border-bottom:2px solid var(--primary-light); }
+  section h2 .num { display:inline-flex; align-items:center; justify-content:center; width:28px; height:28px; border-radius:8px; background:var(--primary); color:white; font-size:14px; margin-right:10px; vertical-align:middle; }
+  section h3 { font-size:16px; font-weight:600; margin:20px 0 10px; }
+  table { width:100%; border-collapse:collapse; margin:12px 0 20px; font-size:14px; }
+  th { background:#f1f5f9; text-align:left; padding:10px 14px; border:1px solid var(--border); font-weight:600; color:var(--text-2); white-space:nowrap; }
+  td { padding:10px 14px; border:1px solid var(--border); vertical-align:top; }
+  tr:nth-child(even) td { background:#fafbfc; }
+  code { font-family:var(--mono); font-size:13px; background:#f1f5f9; color:var(--primary); padding:2px 6px; border-radius:4px; }
+  pre { background:var(--code-bg); color:var(--code-text); padding:18px 20px; border-radius:10px; overflow-x:auto; font-family:var(--mono); font-size:13px; line-height:1.6; margin:12px 0 20px; }
+  pre code { background:transparent; color:inherit; padding:0; }
+  .badge { display:inline-block; padding:2px 8px; border-radius:4px; font-size:12px; font-weight:600; }
+  .badge-y { background:var(--green-light); color:var(--green); }
+  .badge-n { background:var(--orange-light); color:var(--orange); }
+  .note { background:var(--primary-light); border-left:4px solid var(--primary); padding:12px 16px; border-radius:0 8px 8px 0; margin:12px 0; }
+  .note-warn { background:var(--orange-light); border-left-color:var(--orange); }
+</style>
+</head>
+<body>
+<div class="container">
+
+<div class="doc-header">
+  <h1>到店购渠道分销商户接口（②③④⑤⑥）</h1>
+  <div class="subtitle">旅通协议接口文档 — 创建订单 / 查询支付 / 取消支付 / 申请退款 / 查询退款</div>
+  <div class="meta">
+    <span class="meta-item">协议版本: v1</span>
+    <span class="meta-item">签名算法: SHA1withRSA</span>
+    <span class="meta-item">Base URL: http://apitest.kalaiwang.com/api/rtmart</span>
+    <span class="meta-item">更新日期: 2026-08-26</span>
+  </div>
+</div>
+
+<div class="toc">
+  <h2>目录</h2>
+  <ol>
+    <li><a href="#signing">签名规则（SHA1withRSA）</a></li>
+    <li><a href="#create-order">创建订单（接口②）</a></li>
+    <li><a href="#query-payment">查询支付单状态（接口③）</a></li>
+    <li><a href="#cancel-payment">取消支付流水（接口④）</a></li>
+    <li><a href="#accept-refund">申请退款（接口⑤）</a></li>
+    <li><a href="#query-refund">查询退款状态（接口⑥）</a></li>
+    <li><a href="#error-codes">错误码</a></li>
+    <li><a href="#status-mapping">状态码映射</a></li>
+  </ol>
+</div>
+
+<section id="signing">
+  <h2><span class="num">1</span>签名规则（SHA1withRSA）</h2>
+  <p>所有接口共用同一签名规则，与"获取会员信息"接口①完全一致。</p>
+  <div class="note">
+    <strong>规范串生成：</strong>取除 <code>sign</code> 外的所有非 null 字段，按 <strong>字段名字典序</strong> 升序排列，依次拼接 <strong>key + value</strong>（无任何分隔符），对 UTF-8 字节以 <strong>旅通私钥</strong> 执行 <strong>SHA1withRSA</strong> 签名，标准 Base64 编码即 <code>sign</code>。
+  </div>
+  <pre><code>app_key1G23d45P6company_codeX0000Anonce_strabc...timestamp1787733990trade_idRT-TRADE-001...</code></pre>
+</section>
+
+<section id="create-order">
+  <h2><span class="num">2</span>创建订单（接口②）</h2>
+  <h3>请求地址</h3>
+  <pre><code>POST http://apitest.kalaiwang.com/api/rtmart/order/create</code></pre>
+  <h3>请求参数</h3>
+  <table>
+    <tr><th>参数名称</th><th>类型</th><th>必传</th><th>描述</th></tr>
+    <tr><td>app_key</td><td>String</td><td><span class="badge badge-y">Y</span></td><td>授权key</td></tr>
+    <tr><td>version</td><td>String</td><td><span class="badge badge-y">Y</span></td><td>等级</td></tr>
+    <tr><td>timestamp</td><td>Integer</td><td><span class="badge badge-y">Y</span></td><td>请求日期（时间戳，秒）</td></tr>
+    <tr><td>nonce_str</td><td>String</td><td><span class="badge badge-y">Y</span></td><td>随机数</td></tr>
+    <tr><td>sign</td><td>String</td><td><span class="badge badge-y">Y</span></td><td>签名</td></tr>
+    <tr><td>order_id</td><td>String</td><td><span class="badge badge-y">Y</span></td><td>中台订单号</td></tr>
+    <tr><td>trade_id</td><td>String</td><td><span class="badge badge-y">Y</span></td><td>中台支付流水号</td></tr>
+    <tr><td>user_code</td><td>String</td><td><span class="badge badge-y">Y</span></td><td>会员编号</td></tr>
+    <tr><td>company_code</td><td>String</td><td><span class="badge badge-y">Y</span></td><td>企业组编号</td></tr>
+    <tr><td>total_amount</td><td>Integer</td><td><span class="badge badge-y">Y</span></td><td>应付金额，单位：分</td></tr>
+    <tr><td>order_time</td><td>Integer</td><td><span class="badge badge-y">Y</span></td><td>支付单创建时间，单位：秒</td></tr>
+    <tr><td>order_type</td><td>Integer</td><td><span class="badge badge-y">Y</span></td><td>支付单类型：当前仅支持 1（线下扫码购）；其他值返回 E4001</td></tr>
+    <tr><td>shop_code</td><td>String</td><td><span class="badge badge-y">Y</span></td><td>门店编号</td></tr>
+    <tr><td>shop_name</td><td>String</td><td><span class="badge badge-y">Y</span></td><td>门店名称</td></tr>
+  </table>
+  <h3>请求示例</h3>
+<pre><code>{
+  "app_key": "1G23d45P6",
+  "version": "v1",
+  "timestamp": 1744191949,
+  "nonce_str": "5KfeeG8vVAXpp734",
+  "sign": "base64-encoded-signature==",
+  "order_id": "RT-ORDER-001",
+  "trade_id": "RT-TRADE-001",
+  "user_code": "247",
+  "company_code": "X0000A",
+  "total_amount": 1650,
+  "order_time": 1744191948,
+  "order_type": 1,
+  "shop_code": "1001",
+  "shop_name": "宜山路店"
+}</code></pre>
+  <h3>成功响应</h3>
+<pre><code>{
+  "result": "success",
+  "code": "E0000",
+  "msg": "",
+  "data": {
+    "out_trade_no": "IPF_OTN_001",
+    "cashier_url": "https://cashier.example.com/pay?token=xxx"
+  }
+}</code></pre>
+  <h3>响应参数</h3>
+  <table>
+    <tr><th>参数名称</th><th>类型</th><th>描述</th></tr>
+    <tr><td>result</td><td>String</td><td>接口状态，success为成功</td></tr>
+    <tr><td>code</td><td>String</td><td>状态码，E0000为成功</td></tr>
+    <tr><td>msg</td><td>String</td><td>状态描述</td></tr>
+    <tr><td>data.out_trade_no</td><td>String</td><td>商户支付单号</td></tr>
+    <tr><td>data.cashier_url</td><td>String</td><td>收银台地址（处理中可能为空，需按out_trade_no查询）</td></tr>
+  </table>
+</section>
+
+<section id="query-payment">
+  <h2><span class="num">3</span>查询支付单状态（接口③）</h2>
+  <h3>请求地址</h3>
+  <pre><code>POST http://apitest.kalaiwang.com/api/rtmart/payment/query</code></pre>
+  <h3>请求参数</h3>
+  <table>
+    <tr><th>参数名称</th><th>类型</th><th>必传</th><th>描述</th></tr>
+    <tr><td>app_key</td><td>String</td><td><span class="badge badge-y">Y</span></td><td>授权key</td></tr>
+    <tr><td>version</td><td>String</td><td><span class="badge badge-y">Y</span></td><td>等级</td></tr>
+    <tr><td>timestamp</td><td>Integer</td><td><span class="badge badge-y">Y</span></td><td>请求日期（时间戳，秒）</td></tr>
+    <tr><td>nonce_str</td><td>String</td><td><span class="badge badge-y">Y</span></td><td>随机数</td></tr>
+    <tr><td>sign</td><td>String</td><td><span class="badge badge-y">Y</span></td><td>签名</td></tr>
+    <tr><td>order_id</td><td>String</td><td><span class="badge badge-y">Y</span></td><td>订单号</td></tr>
+    <tr><td>trade_id</td><td>String</td><td><span class="badge badge-y">Y</span></td><td>支付流水号</td></tr>
+    <tr><td>user_code</td><td>String</td><td><span class="badge badge-y">Y</span></td><td>会员编号</td></tr>
+    <tr><td>company_code</td><td>String</td><td><span class="badge badge-y">Y</span></td><td>企业组编号</td></tr>
+  </table>
+  <h3>成功响应</h3>
+<pre><code>{
+  "result": "success",
+  "code": "E0000",
+  "msg": "",
+  "data": {
+    "out_trade_no": "IPF_OTN_001",
+    "pay_status": 1,
+    "pay_fee": 1650,
+    "pay_time": 1744192000,
+    "transaction_id": "TXN_001"
+  }
+}</code></pre>
+  <h3>响应参数</h3>
+  <table>
+    <tr><th>参数名称</th><th>类型</th><th>描述</th></tr>
+    <tr><td>data.out_trade_no</td><td>String</td><td>商户支付单号</td></tr>
+    <tr><td>data.pay_status</td><td>Integer</td><td>支付状态：0待支付，1支付成功，2取消支付</td></tr>
+    <tr><td>data.pay_fee</td><td>Integer</td><td>支付金额，单位：分（待支付也要填）</td></tr>
+    <tr><td>data.pay_time</td><td>Integer</td><td>支付时间，单位：秒；未支付填 0</td></tr>
+    <tr><td>data.transaction_id</td><td>String</td><td>支付流水号（可为空，支付成功时必传）；待支付/取消为空字符串</td></tr>
+  </table>
+</section>
+
+<section id="cancel-payment">
+  <h2><span class="num">4</span>取消支付流水（接口④）</h2>
+  <h3>请求地址</h3>
+  <pre><code>POST http://apitest.kalaiwang.com/api/rtmart/payment/cancel</code></pre>
+  <div class="note note-warn">
+    Pos发起取消请求，取消支付流水。如支付流水已支付，商户将自动转全额退款。
+  </div>
+  <h3>请求参数</h3>
+  <table>
+    <tr><th>参数名称</th><th>类型</th><th>必传</th><th>描述</th></tr>
+    <tr><td>app_key</td><td>String</td><td><span class="badge badge-y">Y</span></td><td>授权key</td></tr>
+    <tr><td>version</td><td>String</td><td><span class="badge badge-y">Y</span></td><td>等级</td></tr>
+    <tr><td>timestamp</td><td>Integer</td><td><span class="badge badge-y">Y</span></td><td>请求日期（时间戳，秒）</td></tr>
+    <tr><td>nonce_str</td><td>String</td><td><span class="badge badge-y">Y</span></td><td>随机数</td></tr>
+    <tr><td>sign</td><td>String</td><td><span class="badge badge-y">Y</span></td><td>签名</td></tr>
+    <tr><td>order_id</td><td>String</td><td><span class="badge badge-y">Y</span></td><td>订单号</td></tr>
+    <tr><td>trade_id</td><td>String</td><td><span class="badge badge-y">Y</span></td><td>支付流水号</td></tr>
+    <tr><td>user_code</td><td>String</td><td><span class="badge badge-y">Y</span></td><td>会员编号</td></tr>
+    <tr><td>company_code</td><td>String</td><td><span class="badge badge-y">Y</span></td><td>企业组编号</td></tr>
+  </table>
+  <h3>成功响应</h3>
+<pre><code>{
+  "result": "success",
+  "code": "E0000",
+  "msg": "",
+  "data": {
+    "out_trade_no": "IPF_OTN_001"
+  }
+}</code></pre>
+  <h3>响应参数</h3>
+  <table>
+    <tr><th>参数名称</th><th>类型</th><th>描述</th></tr>
+    <tr><td>data.out_trade_no</td><td>String</td><td>商户支付单号</td></tr>
+  </table>
+</section>
+
+<section id="accept-refund">
+  <h2><span class="num">5</span>申请退款（接口⑤）</h2>
+  <h3>请求地址</h3>
+  <pre><code>POST http://apitest.kalaiwang.com/api/rtmart/refund/apply</code></pre>
+  <div class="note note-warn">
+    Pos推送退款到商城，商城转发到商户。商户处理退款，需支持多次退款。
+  </div>
+  <h3>请求参数</h3>
+  <table>
+    <tr><th>参数名称</th><th>类型</th><th>必传</th><th>描述</th></tr>
+    <tr><td>app_key</td><td>String</td><td><span class="badge badge-y">Y</span></td><td>授权key</td></tr>
+    <tr><td>version</td><td>String</td><td><span class="badge badge-y">Y</span></td><td>等级</td></tr>
+    <tr><td>timestamp</td><td>Integer</td><td><span class="badge badge-y">Y</span></td><td>请求日期（时间戳，秒）</td></tr>
+    <tr><td>nonce_str</td><td>String</td><td><span class="badge badge-y">Y</span></td><td>随机数</td></tr>
+    <tr><td>sign</td><td>String</td><td><span class="badge badge-y">Y</span></td><td>签名</td></tr>
+    <tr><td>order_id</td><td>String</td><td><span class="badge badge-y">Y</span></td><td>订单号</td></tr>
+    <tr><td>trade_id</td><td>String</td><td><span class="badge badge-y">Y</span></td><td>支付流水号</td></tr>
+    <tr><td>refund_bn</td><td>String</td><td><span class="badge badge-y">Y</span></td><td>退款单号</td></tr>
+    <tr><td>refund_fee</td><td>Integer</td><td><span class="badge badge-y">Y</span></td><td>退款金额，单位：分</td></tr>
+    <tr><td>user_code</td><td>String</td><td><span class="badge badge-y">Y</span></td><td>会员编号</td></tr>
+    <tr><td>company_code</td><td>String</td><td><span class="badge badge-y">Y</span></td><td>企业组编号</td></tr>
+  </table>
+  <h3>成功响应</h3>
+<pre><code>{
+  "result": "success",
+  "code": "E0000",
+  "msg": "",
+  "data": {
+    "out_trade_no": "IPF_001",
+    "out_refund_no": "IRC_001",
+    "refund_status": 0,
+    "refund_fee": 580,
+    "refund_time": 1736735103,
+    "refuse_reason": ""
+  }
+}</code></pre>
+  <h3>响应参数</h3>
+  <table>
+    <tr><th>参数名称</th><th>类型</th><th>描述</th></tr>
+    <tr><td>data.out_trade_no</td><td>String</td><td>商户支付单号</td></tr>
+    <tr><td>data.out_refund_no</td><td>String</td><td>商户退款单号</td></tr>
+    <tr><td>data.refund_status</td><td>Integer</td><td>退款状态：0 待退款或处理中，1 退款成功，2 退款失败。受理成功通常为 0</td></tr>
+    <tr><td>data.refund_fee</td><td>Integer</td><td>退款金额，单位：分；取本次请求金额</td></tr>
+    <tr><td>data.refund_time</td><td>Integer</td><td>退款时间，单位：秒。受理时无完成时间，填接口调用当前时间；键必须输出</td></tr>
+    <tr><td>data.refuse_reason</td><td>String</td><td>退款失败原因；没有时填空字符串，禁止 null 或省略</td></tr>
+  </table>
+</section>
+
+<section id="query-refund">
+  <h2><span class="num">6</span>查询退款状态（接口⑥）</h2>
+  <h3>请求地址</h3>
+  <pre><code>POST http://apitest.kalaiwang.com/api/rtmart/refund/query</code></pre>
+  <div class="note note-warn">
+    Pos定时查询退款单退款结果，商户返回当前退款情况：成功、失败或待退款。
+  </div>
+  <h3>请求参数</h3>
+  <table>
+    <tr><th>参数名称</th><th>类型</th><th>必传</th><th>描述</th></tr>
+    <tr><td>app_key</td><td>String</td><td><span class="badge badge-y">Y</span></td><td>授权key</td></tr>
+    <tr><td>version</td><td>String</td><td><span class="badge badge-y">Y</span></td><td>等级</td></tr>
+    <tr><td>timestamp</td><td>Integer</td><td><span class="badge badge-y">Y</span></td><td>请求日期（时间戳，秒）</td></tr>
+    <tr><td>nonce_str</td><td>String</td><td><span class="badge badge-y">Y</span></td><td>随机数</td></tr>
+    <tr><td>sign</td><td>String</td><td><span class="badge badge-y">Y</span></td><td>签名</td></tr>
+    <tr><td>order_id</td><td>String</td><td><span class="badge badge-y">Y</span></td><td>订单号</td></tr>
+    <tr><td>trade_id</td><td>String</td><td><span class="badge badge-y">Y</span></td><td>支付流水号</td></tr>
+    <tr><td>refund_bn</td><td>String</td><td><span class="badge badge-y">Y</span></td><td>退款单号</td></tr>
+    <tr><td>user_code</td><td>String</td><td><span class="badge badge-y">Y</span></td><td>会员编号</td></tr>
+    <tr><td>company_code</td><td>String</td><td><span class="badge badge-y">Y</span></td><td>企业组编号</td></tr>
+  </table>
+  <h3>成功响应</h3>
+<pre><code>{
+  "result": "success",
+  "code": "E0000",
+  "msg": "",
+  "data": {
+    "out_trade_no": "IPF_001",
+    "out_refund_no": "IRC_001",
+    "refund_status": 1,
+    "refund_fee": 580,
+    "refund_time": 1736735103,
+    "refuse_reason": ""
+  }
+}</code></pre>
+  <h3>响应参数</h3>
+  <table>
+    <tr><th>参数名称</th><th>类型</th><th>描述</th></tr>
+    <tr><td>data.out_trade_no</td><td>String</td><td>商户支付单号</td></tr>
+    <tr><td>data.out_refund_no</td><td>String</td><td>商户退款单号</td></tr>
+    <tr><td>data.refund_status</td><td>Integer</td><td>退款状态：0 待退款或处理中，1 退款成功，2 退款失败</td></tr>
+    <tr><td>data.refund_fee</td><td>Integer</td><td>退款金额，单位：分；成功返回实际退款金额，处理中返回申请金额，失败为 JSON null 但键必须保留</td></tr>
+    <tr><td>data.refund_time</td><td>Integer</td><td>退款时间，单位：秒。有完成时间用完成时间，否则取接口调用当前时间；键必须输出</td></tr>
+    <tr><td>data.refuse_reason</td><td>String</td><td>退款失败原因；没有时填空字符串，禁止 null 或省略</td></tr>
+  </table>
+</section>
+
+<section id="error-codes">
+  <h2><span class="num">7</span>错误码</h2>
+  <table>
+    <tr><th>状态码</th><th>说明</th><th>描述</th></tr>
+    <tr><td><code>E0000</code></td><td>成功</td><td></td></tr>
+    <tr><td><code>E4001</code></td><td>请求参数缺失或非法</td><td>公共/业务必填字段缺失或非法、nonce 重放、可由调用方修正的业务拒绝</td></tr>
+    <tr><td><code>E4002</code></td><td>请求已过期</td><td>timestamp 与服务端时钟偏差超过三分钟窗口（默认 ±180 秒，可配置）</td></tr>
+    <tr><td><code>E4003</code></td><td>app_key 不正确</td><td>app_key 与服务端配置的期望值不匹配</td></tr>
+    <tr><td><code>E4004</code></td><td>签名验证失败</td><td>sign 缺失、为空或 SHA1withRSA 验签不通过</td></tr>
+    <tr><td><code>E5000</code></td><td>系统错误</td><td>Redis/收银台/内部配置等服务异常及未知异常（fail-closed）</td></tr>
+  </table>
+</section>
+
+<section id="status-mapping">
+  <h2><span class="num">8</span>状态码映射</h2>
+  <h3>支付状态映射（内部 → 旅通）</h3>
+  <table>
+    <tr><th>内部状态</th><th>旅通状态</th><th>说明</th></tr>
+    <tr><td>0 待支付</td><td>0 待支付</td><td></td></tr>
+    <tr><td>10 支付处理中</td><td>0 待支付</td><td>旅通视为未完成</td></tr>
+    <tr><td>20 已支付</td><td>1 支付成功</td><td></td></tr>
+    <tr><td>30 支付失败</td><td>0 待支付</td><td>旅通可重试</td></tr>
+    <tr><td>40 已取消</td><td>2 取消支付</td><td></td></tr>
+    <tr><td>90 人工处理</td><td>0 待支付</td><td></td></tr>
+  </table>
+  <h3>退款状态映射（内部 → 旅通）</h3>
+  <table>
+    <tr><th>内部状态</th><th>旅通状态</th><th>说明</th></tr>
+    <tr><td>10 排队中</td><td>0 待退款</td><td></td></tr>
+    <tr><td>20 采购商退款中</td><td>0 待退款</td><td></td></tr>
+    <tr><td>30 退款成功</td><td>1 退款成功</td><td></td></tr>
+    <tr><td>40 退款失败</td><td>2 退款失败</td><td></td></tr>
+    <tr><td>60 已完成</td><td>1 退款成功</td><td></td></tr>
+    <tr><td>90 人工处理</td><td>0 待退款</td><td></td></tr>
+  </table>
+</section>
+
+</div>
+</body>
+</html>

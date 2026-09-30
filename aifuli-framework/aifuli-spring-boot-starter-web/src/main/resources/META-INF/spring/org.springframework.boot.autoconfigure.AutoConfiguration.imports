@@ -1,0 +1,8 @@
+com.aifuli.framework.apilog.config.AifuliApiLogAutoConfiguration
+com.aifuli.framework.jackson.config.AifuliJacksonAutoConfiguration
+com.aifuli.framework.swagger.config.AifuliSwaggerAutoConfiguration
+com.aifuli.framework.web.config.AifuliWebAutoConfiguration
+com.aifuli.framework.apilog.config.AifuliApiLogRpcAutoConfiguration
+com.aifuli.framework.xss.config.AifuliXssAutoConfiguration
+com.aifuli.framework.banner.config.AifuliBannerAutoConfiguration
+com.aifuli.framework.encrypt.config.AifuliApiEncryptAutoConfiguration

@@ -1,0 +1,3 @@
+com.aifuli.framework.mq.redis.config.AifuliRedisMQProducerAutoConfiguration
+com.aifuli.framework.mq.redis.config.AifuliRedisMQConsumerAutoConfiguration
+com.aifuli.framework.mq.rabbitmq.config.AifuliRabbitMQAutoConfiguration

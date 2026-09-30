@@ -1,0 +1,23 @@
+[Unit]
+Description=Aifuli Test Gateway Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=aifuli
+Group=aifuli
+WorkingDirectory=/data/aifuli-test/apps/gateway/current
+ExecStart=/usr/bin/java -server -Xms512m -Xmx1024m -XX:+UseG1GC -Dfile.encoding=UTF-8 -Duser.timezone=Asia/Shanghai -Duser.home=/data/aifuli-test -Dspring.profiles.active=test -jar /data/aifuli-test/apps/gateway/current/aifuli-gateway.jar
+SuccessExitStatus=143
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=60
+LimitNOFILE=65535
+UMask=0027
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=aifuli-test-gateway
+
+[Install]
+WantedBy=multi-user.target

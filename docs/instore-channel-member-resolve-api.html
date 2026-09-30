@@ -1,0 +1,703 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>获取到店购会员信息 — 旅通协议接口文档</title>
+<style>
+  :root {
+    --bg: #f8f9fa;
+    --card: #ffffff;
+    --border: #e2e8f0;
+    --text: #1a202c;
+    --text-2: #4a5568;
+    --text-3: #718096;
+    --primary: #2563eb;
+    --primary-light: #dbeafe;
+    --green: #059669;
+    --green-light: #d1fae5;
+    --red: #dc2626;
+    --red-light: #fee2e2;
+    --orange: #d97706;
+    --orange-light: #fef3c7;
+    --purple: #7c3aed;
+    --purple-light: #ede9fe;
+    --code-bg: #1e293b;
+    --code-text: #e2e8f0;
+    --mono: 'SF Mono', 'Fira Code', 'JetBrains Mono', Consolas, monospace;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.7;
+    font-size: 15px;
+  }
+  .container { max-width: 960px; margin: 0 auto; padding: 40px 24px 80px; }
+
+  .doc-header {
+    background: linear-gradient(135deg, #1e3a5f 0%, #2563eb 100%);
+    color: white;
+    padding: 48px 32px;
+    border-radius: 16px;
+    margin-bottom: 32px;
+  }
+  .doc-header h1 { font-size: 28px; font-weight: 700; margin-bottom: 8px; }
+  .doc-header .subtitle { font-size: 16px; opacity: 0.85; }
+  .doc-header .meta { display: flex; gap: 24px; margin-top: 20px; flex-wrap: wrap; }
+  .doc-header .meta-item { display: flex; align-items: center; gap: 6px; font-size: 14px; opacity: 0.9; }
+
+  .toc {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px 28px;
+    margin-bottom: 32px;
+  }
+  .toc h2 { font-size: 16px; margin-bottom: 12px; color: var(--text); }
+  .toc ol { padding-left: 20px; }
+  .toc li { margin: 4px 0; }
+  .toc a { color: var(--primary); text-decoration: none; }
+  .toc a:hover { text-decoration: underline; }
+
+  section {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 28px 32px;
+    margin-bottom: 24px;
+  }
+  section h2 {
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--text);
+    padding-bottom: 12px;
+    margin-bottom: 16px;
+    border-bottom: 2px solid var(--primary-light);
+  }
+  section h2 .num {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px; height: 28px;
+    border-radius: 8px;
+    background: var(--primary);
+    color: white;
+    font-size: 14px;
+    margin-right: 10px;
+    vertical-align: middle;
+  }
+  section h3 { font-size: 16px; font-weight: 600; margin: 20px 0 10px; color: var(--text); }
+
+  table { width: 100%; border-collapse: collapse; margin: 12px 0 20px; font-size: 14px; }
+  th {
+    background: #f1f5f9;
+    text-align: left;
+    padding: 10px 14px;
+    border: 1px solid var(--border);
+    font-weight: 600;
+    color: var(--text-2);
+    white-space: nowrap;
+  }
+  td { padding: 10px 14px; border: 1px solid var(--border); vertical-align: top; }
+  tr:nth-child(even) td { background: #fafbfc; }
+
+  code {
+    font-family: var(--mono);
+    font-size: 13px;
+    background: #f1f5f9;
+    color: var(--primary);
+    padding: 2px 6px;
+    border-radius: 4px;
+  }
+  pre {
+    background: var(--code-bg);
+    color: var(--code-text);
+    padding: 18px 20px;
+    border-radius: 10px;
+    overflow-x: auto;
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.6;
+    margin: 12px 0 20px;
+  }
+  pre code { background: transparent; color: inherit; padding: 0; }
+  .code-label {
+    display: inline-block;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-3);
+    margin-bottom: 4px;
+    font-family: var(--mono);
+  }
+
+  .callout {
+    border-radius: 10px;
+    padding: 14px 18px;
+    margin: 14px 0 20px;
+    font-size: 14px;
+  }
+  .callout strong { font-weight: 600; }
+  .callout.info { background: var(--primary-light); border-left: 4px solid var(--primary); color: #1e40af; }
+  .callout.warn { background: var(--orange-light); border-left: 4px solid var(--orange); color: #92400e; }
+  .callout.danger { background: var(--red-light); border-left: 4px solid var(--red); color: #991b1b; }
+  .callout.success { background: var(--green-light); border-left: 4px solid var(--green); color: #065f46; }
+
+  .tag {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .tag.req { background: var(--red-light); color: var(--red); }
+  .tag.opt { background: var(--text-3); color: white; opacity: 0.7; }
+  .tag.y { background: var(--green-light); color: var(--green); }
+  .tag.n { background: #f1f5f9; color: var(--text-3); }
+
+  .flow { display: flex; flex-direction: column; gap: 0; margin: 16px 0 20px; }
+  .flow-step {
+    display: flex;
+    gap: 14px;
+    align-items: flex-start;
+    padding: 12px 0;
+    border-left: 2px solid var(--border);
+    margin-left: 14px;
+    padding-left: 22px;
+    position: relative;
+  }
+  .flow-step:first-child { border-left-color: var(--primary); }
+  .flow-step::before {
+    content: '';
+    position: absolute;
+    left: -6px;
+    top: 18px;
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    background: var(--primary);
+  }
+  .flow-step .step-num {
+    font-weight: 700;
+    color: var(--primary);
+    font-family: var(--mono);
+    font-size: 13px;
+    min-width: 52px;
+    padding-top: 1px;
+  }
+  .flow-step .step-body { font-size: 14px; color: var(--text-2); }
+  .flow-step .step-body strong { color: var(--text); }
+
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 14px 0 20px; }
+  @media (max-width: 720px) { .grid-2 { grid-template-columns: 1fr; } }
+  .kv-card {
+    background: #fafbfc;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 18px;
+    font-size: 14px;
+  }
+  .kv-card .kv-title { font-weight: 600; color: var(--text-2); margin-bottom: 6px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.05em; }
+  .kv-card .kv-value { font-family: var(--mono); font-size: 14px; color: var(--text); word-break: break-all; }
+
+  .state-machine { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 14px 0 20px; }
+  .state {
+    padding: 8px 16px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    font-family: var(--mono);
+  }
+  .state.active { background: var(--green-light); color: var(--green); }
+  .state.processing { background: var(--orange-light); color: var(--orange); }
+  .state.used { background: var(--primary-light); color: var(--primary); }
+  .state.expired { background: #f1f5f9; color: var(--text-3); }
+  .state.revoked { background: var(--red-light); color: var(--red); }
+  .arrow { color: var(--text-3); font-size: 18px; }
+
+  footer {
+    text-align: center;
+    color: var(--text-3);
+    font-size: 13px;
+    padding: 24px 0;
+    border-top: 1px solid var(--border);
+    margin-top: 16px;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+<div class="doc-header">
+  <h1>获取到店购会员信息</h1>
+  <div class="subtitle">旅通协议入站适配器 · 供应链中台提供、旅通回调</div>
+  <div class="meta">
+    <div class="meta-item">版本 v1.0</div>
+    <div class="meta-item">更新日期 2026-08-26</div>
+    <div class="meta-item">环境 pro143 测试环境</div>
+    <div class="meta-item">状态 <strong style="color:#a7f3d0">已联调验证通过</strong></div>
+  </div>
+</div>
+
+<div class="toc">
+  <h2>目录</h2>
+  <ol>
+    <li><a href="#s1">接口概述</a></li>
+    <li><a href="#s2">请求规格</a></li>
+    <li><a href="#s3">签名规则（SHA1withRSA）</a></li>
+    <li><a href="#s4">响应规格</a></li>
+    <li><a href="#s5">错误码</a></li>
+    <li><a href="#s6">完整调用流程</a></li>
+    <li><a href="#s7">凭证状态机</a></li>
+    <li><a href="#s8">安全约束</a></li>
+    <li><a href="#s9">服务端配置</a></li>
+    <li><a href="#s10">实现代码索引</a></li>
+    <li><a href="#s11">联调验证记录（2026-08-26）</a></li>
+    <li><a href="#s12">附录：Python 调用示例</a></li>
+  </ol>
+</div>
+
+<!-- ================= 1 接口概述 ================= -->
+<section id="s1">
+  <h2><span class="num">1</span>接口概述</h2>
+  <p>本接口由供应链中台实现，供<strong>旅通（大润发到店购渠道）</strong>在用户打开入口页时回调，凭中台签发的短期授权 token 换取会员资料（会员编号、手机号、姓名、企业组编码）。</p>
+
+  <table>
+    <tr><th style="width:160px">项目</th><th>说明</th></tr>
+    <tr><td>接口地址</td><td><code>POST http://apitest.kalaiwang.com/api/rtmart/member/resolve</code><br><span style="color:var(--text-3);font-size:13px">base_url 为 <code>http://apitest.kalaiwang.com</code>（公网网关 nginx 反代 pro143:58190）；内网调试可用 <code>http://127.0.0.1:58190</code> 同路径</span></td></tr>
+    <tr><td>Content-Type</td><td><code>application/json</code></td></tr>
+    <tr><td>调用方</td><td>外部</td></tr>
+    <tr><td>认证方式</td><td>旅通协议 SHA1withRSA 签名（<code>app_key</code> + <code>sign</code>，标准 Base64），免登录端点</td></tr>
+    <tr><td>幂等性</td><td><strong>否</strong> — token 为一次性凭证，消费后转为 USED，不可重放</td></tr>
+    <tr><td>失败可重试</td><td>会员资料暂时不可用 / 并发冲突时可<strong>用同一 token 重试</strong>（凭证会被释放回 ACTIVE）</td></tr>
+    <tr><td>对应旅通文档</td><td>「接口① 获取会员信息 — 商户提供接口地址，旅通调用」</td></tr>
+  </table>
+
+  <div class="callout info">
+    <strong>协议要点：</strong>本接口的请求/响应字段命名、签名算法、错误码体系均遵循旅通协议（snake_case 字段、SHA1withRSA 签名、<code>E0000</code> 成功码），与中台内部 RPC（HMAC-SHA256 + CommonResult）完全不同。旅通侧无需理解中台内部协议。
+  </div>
+</section>
+
+<!-- ================= 2 请求规格 ================= -->
+<section id="s2">
+  <h2><span class="num">2</span>请求规格</h2>
+
+  <h3>2.1 请求体字段</h3>
+  <table>
+    <tr><th>参数名称</th><th>类型</th><th>必传</th><th>描述</th></tr>
+    <tr><td><code>app_key</code></td><td>String</td><td><span class="tag req">Y</span></td><td>授权 key。服务端将其与配置的期望值比对，同时映射为中台 <code>projectId + channelCode</code>，任何请求不得携带其他身份字段</td></tr>
+    <tr><td><code>version</code></td><td>String</td><td><span class="tag req">Y</span></td><td>协议等级/版本号，参与签名</td></tr>
+    <tr><td><code>timestamp</code></td><td>Integer</td><td><span class="tag req">Y</span></td><td>请求日期（Unix <strong>秒</strong>时间戳）。服务端校验与服务时钟偏差 ≤ 300 秒（可配置）</td></tr>
+    <tr><td><code>nonce_str</code></td><td>String</td><td><span class="tag req">Y</span></td><td>随机数，参与签名</td></tr>
+    <tr><td><code>sign</code></td><td>String</td><td><span class="tag req">Y</span></td><td>SHA1withRSA 签名（标准 Base64 编码，旅通 1024 位密钥约 172 字符），生成规则见第 3 节</td></tr>
+    <tr><td><code>token</code></td><td>String</td><td><span class="tag req">Y</span></td><td>授权 token。取自中台签发的 entryUrl 中 <code>token</code> 查询参数（<strong>含 <code>CXB_</strong></strong> 前缀，服务端会自动剥离）</td></tr>
+  </table>
+
+  <h3>2.2 完整请求示例</h3>
+  <div class="code-label">POST http://apitest.kalaiwang.com/api/rtmart/member/resolve</div>
+  <pre><code>Content-Type: application/json
+
+{
+  "app_key": "1G23d45P6",
+  "version": "1",
+  "timestamp": 1787727794,
+  "nonce_str": "ed7ea7ca83e93e9fe73a2432a7f575a0",
+  "sign": "P6chCCJENt9gF9DvUml5dzq6MzkeR/Ypqz1py/Qqv5yK1y++DbPYr72eR0/KTHu2/S4WVWFrqlD86vMAyevIu5yHFCwZavwo8zLOJsONTynztRlMj2VX7isKKD9vRGl13DAhTFqIKafr6DdxrO8Di9RuOPwh/pZMD3ctC5HLi2Q=",
+  "token": "tk-38efcf236aacdb0cfa5af080095090ff281f2d3bebe39831a6d44157ea5c6021"
+}</code></pre>
+
+  <div class="callout warn">
+    <strong>token 前缀注意：</strong>中台签发的 entryUrl 中 token 形如 <code>tk-xxxx</code>（旅通转发时加了 <code>CXB_</code> 前缀）。请求本接口时 <strong>原样携带完整值</strong>（含前缀）——签名计算使用原始值，服务端验签后才剥离前缀去匹配中台内部凭证（<code>tk-xxxx</code>）。两种写法签名串不同，切勿自行截断。
+  </div>
+</section>
+
+<!-- ================= 3 签名规则 ================= -->
+<section id="s3">
+  <h2><span class="num">3</span>签名规则（SHA1withRSA）</h2>
+
+  <p>签名对<strong>除 <code>sign</code> 外的全部非空请求字段</strong>计算，步骤如下：</p>
+
+  <div class="flow">
+    <div class="flow-step"><div class="step-num">Step 1</div><div class="step-body">取除 <code>sign</code> 外的所有字段：<code>app_key</code>、<code>version</code>、<code>timestamp</code>、<code>nonce_str</code>、<code>token</code>；<code>timestamp</code> 转为十进制字符串</div></div>
+    <div class="flow-step"><div class="step-num">Step 2</div><div class="step-body">按 <strong>字段名字典序</strong>升序排列：app_key &lt; nonce_str &lt; timestamp &lt; token &lt; version</div></div>
+    <div class="flow-step"><div class="step-num">Step 3</div><div class="step-body">依次拼接 <strong>key + value</strong>（无任何分隔符、无 <code>&amp;</code>/<code>=</code>、无换行）得到规范串</div></div>
+    <div class="flow-step"><div class="step-num">Step 4</div><div class="step-body">以<strong>旅通私钥</strong>对规范串 UTF-8 字节执行 <strong>SHA1withRSA</strong>（即 RSASSA-PKCS1-v1_5 + SHA-1）签名</div></div>
+    <div class="flow-step"><div class="step-num">Step 5</div><div class="step-body">签名字节以<strong>标准 Base64</strong> 编码（含填充，非 Base64URL）即 <code>sign</code></div></div>
+  </div>
+
+  <h3>3.1 签名串实例</h3>
+  <pre><code># 排序后拼接的规范串：
+app_key1G23d45P6nonce_stred7ea7ca83e93e9fe73a2432a7f575a0timestamp1787727794tokenCXB_tk-38efcf236aacdb0cfa5af080095090ff281f2d3bebe39831a6d44157ea5c6021version1
+
+# SHA1withRSA 签名后 Base64 编码的 sign（1024 位密钥，172 字符）：
+P6chCCJENt9gF9DvUml5dzq6MzkeR/Ypqz1py/Qqv5yK1y++DbPYr72eR0/KTHu2/S4WVWFrqlD86vMAyevIu5yHFCwZavwo8zLOJsONTynztRlMj2VX7isKKD9vRGl13DAhTFqIKafr6DdxrO8Di9RuOPwh/pZMD3ctC5HLi2Q=</code></pre>
+
+  <h3>3.2 验签密钥</h3>
+  <p>服务端使用<strong>旅通提供的测试公钥</strong>验签（对应旅通侧持有的私钥）。旅通测试公钥（X.509 裸 Base64）：</p>
+  <pre><code>MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQCk4jWIFcpjh8q2qOxGrJqHGFJr0teajiQZ0lmxM6ua2VEI6vJ1kieu6gmJkcj/44Ey9jba9UZnhaDjrlVCSiZoVzvJ6QiGSZJ7k3O4vG0ooiy3MThv7T3PKB4jmZU5bvZn8aDXdzyUrTiTvzbr8fDYmzuARXL17kwYSKO/kfAu4wIDAQAB</code></pre>
+
+  <div class="callout danger">
+    <strong>密钥方向：</strong>中台调用旅通（出站 <code>getRtPosUrl</code>）时以<strong>中台私钥</strong>签名、旅通用中台公钥验签；旅通回调本接口（入站）时以<strong>旅通私钥</strong>签名、中台用旅通公钥验签。两侧算法同为 SHA1withRSA + Base64、规范串同为字典序 key+value 拼接，但<strong>密钥对不同，不可混用</strong>。
+  </div>
+
+  <div class="callout warn">
+    <strong>常见签名失败原因：</strong>① 规范串末尾混入换行符（如 shell <code>echo</code> 追加的 <code>\n</code>，须用 <code>printf '%s'</code>）；② timestamp 参与签名时未转为字符串；③ 误用 MD5/SHA256 摘要代替 RSA 签名；④ 签名后误用 Base64URL 或漏掉填充。签名失败统一返回 <code>E4003 签名验证失败</code>，不区分具体原因。
+  </div>
+</section>
+
+<!-- ================= 4 响应规格 ================= -->
+<section id="s4">
+  <h2><span class="num">4</span>响应规格</h2>
+
+  <h3>4.1 成功响应</h3>
+  <pre><code>{
+  "result": "success",
+  "code": "E0000",
+  "msg": "",
+  "data": {
+    "user_code": "247",
+    "mobile": "15601691399",
+    "user_name": "啦啦啦",
+    "company_code": "X0000A"
+  }
+}</code></pre>
+
+  <h3>4.2 失败响应</h3>
+  <pre><code>{
+  "result": "fail",
+  "code": "E4003",
+  "msg": "app_key 不正确",
+  "data": []
+}</code></pre>
+
+  <h3>4.3 顶层字段</h3>
+  <table>
+    <tr><th>参数名称</th><th>类型</th><th>描述</th></tr>
+    <tr><td><code>result</code></td><td>String</td><td>接口状态，<code>success</code> 为成功</td></tr>
+    <tr><td><code>code</code></td><td>String</td><td>状态码，<code>E0000</code> 为成功，其余见第 5 节</td></tr>
+    <tr><td><code>msg</code></td><td>String</td><td>状态描述，成功时为空字符串</td></tr>
+    <tr><td><code>data</code></td><td>Object</td><td>返回数据；成功时为会员资料对象，失败时为空数组 <code>[]</code></td></tr>
+  </table>
+
+  <h3>4.4 data 字段（成功时）</h3>
+  <table>
+    <tr><th>参数名称</th><th>类型</th><th>描述</th></tr>
+    <tr><td><code>user_code</code></td><td>String</td><td>商户会员编号，等于中台签发凭证时固化的 <code>buyer_user_id</code></td></tr>
+    <tr><td><code>mobile</code></td><td>String</td><td>会员手机号，实时来自 SaaS 会员服务；中台<strong>不落库</strong>，仅在本次响应内存中短暂存在</td></tr>
+    <tr><td><code>user_name</code></td><td>String</td><td>会员姓名，<strong>可以为空</strong></td></tr>
+    <tr><td><code>company_code</code></td><td>String</td><td>企业组编码（如 <code>X0000A</code>），来自供应商渠道绑定表 <code>external_merchant_id</code></td></tr>
+  </table>
+</section>
+
+<!-- ================= 5 错误码 ================= -->
+<section id="s5">
+  <h2><span class="num">5</span>错误码</h2>
+
+  <h3>5.1 适配器层错误（协议校验阶段）</h3>
+  <table>
+    <tr><th>code</th><th>msg</th><th>触发条件</th></tr>
+    <tr><td><code>E4001</code></td><td>请求参数缺失</td><td>六个必填字段任一为空或缺失</td></tr>
+    <tr><td><code>E4002</code></td><td>请求已过期</td><td><code>timestamp</code> 与服务端时钟偏差超过容差（默认 ±300 秒）</td></tr>
+    <tr><td><code>E4003</code></td><td>app_key 不正确</td><td><code>app_key</code> 与服务端配置的期望值不匹配</td></tr>
+    <tr><td><code>E4004</code></td><td>签名验证失败</td><td>sign 缺失、为空或 SHA1withRSA 验签不通过（字段缺失、排序错误、规范串换行、篡改、密钥不配对）</td></tr>
+    <tr><td><code>E5000</code></td><td>服务未开启</td><td>服务端入站适配器开关为关闭状态（fail-closed）</td></tr>
+  </table>
+
+  <h3>5.2 业务层错误（中台错误码 → 旅通错误码映射）</h3>
+  <table>
+    <tr><th>code</th><th>msg</th><th>中台错误码</th><th>触发条件</th><th>可否重试</th></tr>
+    <tr><td><code>E4001</code></td><td>授权凭证或会员资料无效</td><td><code>1_050_001_036/037/038/043</code></td><td>凭证无效、过期、已消费或已撤销（终态）</td><td><span class="tag n">否（重新走入口）</span></td></tr>
+    <tr><td><code>E4001</code></td><td>授权凭证或会员资料无效</td><td><code>1_050_001_039</code></td><td>凭证租户作用域冲突</td><td><span class="tag n">否</span></td></tr>
+    <tr><td><code>E4001</code></td><td>授权凭证或会员资料无效</td><td><code>1_050_001_041</code></td><td>凭证 CAS 状态推进失败（并发抢占）</td><td><span class="tag y">同 token 重试</span></td></tr>
+    <tr><td><code>E4001</code></td><td>授权凭证或会员资料无效</td><td><code>1_050_001_044</code></td><td>会员解析 NOT_FOUND 或手机号为空；凭证已释放回 ACTIVE</td><td><span class="tag y">同 token 重试</span></td></tr>
+    <tr><td><code>E5000</code></td><td>会员资料暂时不可用</td><td><code>1_050_001_045</code></td><td>SaaS 会员服务外呼 UNAVAILABLE / 超时 / 网络异常；凭证已释放回 ACTIVE</td><td><span class="tag y">同 token 重试</span></td></tr>
+    <tr><td><code>E5000</code></td><td>系统错误</td><td>—</td><td>未分类的运行时异常（内部日志保留完整因果链）</td><td><span class="tag n">否</span></td></tr>
+  </table>
+
+  <div class="callout info">
+    <strong>重试语义：</strong>会员查询是只读操作。响应码已统一为六个确认码：凭证终态（无效/过期/已消费/已撤销）与租户作用域冲突均返回 <code>E4001</code>，重试必然失败，应引导用户重新走入口流程；并发冲突与会员资料无效同样返回 <code>E4001</code>，但中台已将凭证释放回 ACTIVE（未过期前提），<strong>允许旅通用同一 token 原样重试</strong>；<code>E5000</code>（会员资料暂时不可用）亦可同 token 重试。旅通无法仅凭 code 区分终态与可重试场景，建议对 <code>E4001</code> 优先引导重新走入口流程，确属并发或资料问题时再同 token 重试。
+  </div>
+</section>
+
+<!-- ================= 6 调用流程 ================= -->
+<section id="s6">
+  <h2><span class="num">6</span>完整调用流程</h2>
+
+  <div class="flow">
+    <div class="flow-step"><div class="step-num">①</div><div class="step-body"><strong>大润发调用 getHomeUrl</strong>（HMAC-SHA256 认证，BUYER_USER_ID scope）请求中台生成到店购入口</div></div>
+    <div class="flow-step"><div class="step-num">②</div><div class="step-body"><strong>中台签发短期凭证</strong> — 写入 <code>instore_entry_credential</code>（状态 ACTIVE），token 明文形如 <code>tk-xxxx</code>，有效期与用途（HOME）冻结</div></div>
+    <div class="flow-step"><div class="step-num">③</div><div class="step-body"><strong>中台外呼旅通 getRtPosUrl/home</strong> — 携带 token（SHA1withRSA 签名，出站协议）</div></div>
+    <div class="flow-step"><div class="step-num">④</div><div class="step-body"><strong>旅通返回 jump_url</strong> — token 被加上 <code>CXB_</code> 前缀拼入 entryUrl 查询参数</div></div>
+    <div class="flow-step"><div class="step-num">⑤</div><div class="step-body"><strong>用户浏览器打开 entryUrl</strong> — 旅通 H5 页面需要会员信息以继续扫码购流程</div></div>
+    <div class="flow-step"><div class="step-num">⑥</div><div class="step-body"><strong>旅通回调本接口</strong> — 从 entryUrl 取出 token，组装六字段请求并以旅通私钥计算 SHA1withRSA 签名</div></div>
+    <div class="flow-step"><div class="step-num">⑦</div><div class="step-body"><strong>适配器协议校验</strong> — 必填检查 → app_key 匹配 → 时间戳容差 → SHA1withRSA 验签（旅通公钥） → 剥离 <code>CXB_</code> 前缀</div></div>
+    <div class="flow-step"><div class="step-num">⑧</div><div class="step-body"><strong>凭证认领</strong> — 按 token SHA-256 摘要定位凭证，校验项目/渠道/用途后 CAS 抢占 ACTIVE → PROCESSING</div></div>
+    <div class="flow-step"><div class="step-num">⑨</div><div class="step-body"><strong>冻结路由解析</strong> — 使用凭证签发时冻结的 MEMBER_PROFILE 路由版本（不受后续档案变更影响）</div></div>
+    <div class="flow-step"><div class="step-num">⑩</div><div class="step-body"><strong>SaaS 会员外呼</strong> — Feign 调用会员服务，按 (sourceSystem, externalTenantId, buyerUserId) 三元组解析手机号/姓名</div></div>
+    <div class="flow-step"><div class="step-num">⑪</div><div class="step-body"><strong>凭证终态</strong> — 成功则 CAS 标记 USED；失败则释放回 ACTIVE（可重试）或转 EXPIRED/REVOKED</div></div>
+    <div class="flow-step"><div class="step-num">⑫</div><div class="step-body"><strong>返回旅通协议响应</strong> — 组装 <code>result/code/msg/data</code>（snake_case），user_code = buyer_user_id</div></div>
+  </div>
+</section>
+
+<!-- ================= 7 凭证状态机 ================= -->
+<section id="s7">
+  <h2><span class="num">7</span>凭证状态机</h2>
+
+  <div class="state-machine">
+    <span class="state active">ACTIVE</span>
+    <span class="arrow">→</span>
+    <span class="state processing">PROCESSING</span>
+    <span class="arrow">→</span>
+    <span class="state used">USED</span>
+  </div>
+
+  <table>
+    <tr><th>状态</th><th>数值</th><th>含义</th><th>允许的后续流转</th></tr>
+    <tr><td><code>ACTIVE</code></td><td>10</td><td>已签发待消费</td><td>认领为 PROCESSING；到期转 EXPIRED；档案退役转 REVOKED</td></tr>
+    <tr><td><code>PROCESSING</code></td><td>15</td><td>已被某次回调抢占，会员外呼进行中</td><td>成功 → USED；失败释放 → ACTIVE；释放时已过期 → EXPIRED</td></tr>
+    <tr><td><code>USED</code></td><td>20</td><td>消费成功，终态</td><td>无（一次性语义，重放返回 E4004）</td></tr>
+    <tr><td><code>EXPIRED</code></td><td>30</td><td>超过有效期，终态</td><td>无</td></tr>
+    <tr><td><code>REVOKED</code></td><td>40</td><td>冻结档案退役被撤销，终态</td><td>无</td></tr>
+  </table>
+
+  <div class="callout warn">
+    <strong>并发抢占：</strong>同一 token 的并发回调只有一个能完成 ACTIVE → PROCESSING 的 CAS 抢占，其余立即收到 E4001（并发冲突，映射为 INVALID_ARGUMENT）。抢占成功者超时未完成时凭证由释放路径恢复，不会永久卡在 PROCESSING。
+  </div>
+</section>
+
+<!-- ================= 8 安全约束 ================= -->
+<section id="s8">
+  <h2><span class="num">8</span>安全约束</h2>
+
+  <table>
+    <tr><th style="width:180px">约束</th><th>说明</th></tr>
+    <tr><td>token 一次性消费</td><td>凭证成功消费后转 USED 终态，任何重放请求返回 E4004，即使签名正确</td></tr>
+    <tr><td>时间戳容差</td><td>默认 ±300 秒（可配置），阻断过期请求重放；服务时钟需保持 NTP 同步</td></tr>
+    <tr><td>身份三元组不可注入</td><td>会员外呼的 (sourceSystem, externalTenantId, buyerUserId) 全部来自凭证签发时冻结的数据与冻结路由，请求方无法通过任何字段注入身份</td></tr>
+    <tr><td>个人信息不落库</td><td>mobile / userName 仅在本次调用内存中短暂存在并转发，中台数据库只存 token 的 SHA-256 摘要</td></tr>
+    <tr><td>日志脱敏</td><td>服务端日志禁止出现 token、手机号、姓名、userCode；仅记录路由摘要、结果分类与耗时；响应 DTO 以 <code>@ToString.Exclude</code> 防止意外输出</td></tr>
+    <tr><td>渠道隔离</td><td><code>app_key</code> 唯一映射到一个 projectId + channelCode，禁止跨项目共享；<code>company_code</code> 仅作为供应商绑定标识，不承担采购商身份识别</td></tr>
+    <tr><td>fail-closed</td><td>适配器开关关闭时所有请求返回 E5000，不会降级为跳过验签</td></tr>
+  </table>
+</section>
+
+<!-- ================= 9 服务端配置 ================= -->
+<section id="s9">
+  <h2><span class="num">9</span>服务端配置</h2>
+
+  <p>配置前缀 <code>aifuli.supply-chain.instore.rtmart.inbound</code>，以环境变量方式注入（pro143 部署于 <code>/data/aifuli-test/supply-chain/.env</code>）：</p>
+
+  <table>
+    <tr><th>环境变量</th><th>pro143 测试值</th><th>说明</th></tr>
+    <tr><td><code>AIFULI_SUPPLY_CHAIN_INSTORE_RTMART_INBOUND_ENABLED</code></td><td><code>true</code></td><td>入站适配器开关；false 时 fail-closed</td></tr>
+    <tr><td><code>AIFULI_SUPPLY_CHAIN_INSTORE_RTMART_INBOUND_APP_KEY</code></td><td><code>1G23d45P6</code></td><td>期望的旅通 app_key；与出站外呼共用同一旅通分配的 key</td></tr>
+    <tr><td><code>AIFULI_SUPPLY_CHAIN_INSTORE_RTMART_INBOUND_PUBLIC_KEY</code></td><td>旅通测试公钥（见 3.2 节）</td><td>SHA1withRSA 验签公钥（X.509 PEM 或裸 Base64）；旅通侧持有对应私钥</td></tr>
+    <tr><td><code>AIFULI_SUPPLY_CHAIN_INSTORE_RTMART_INBOUND_PROJECT_ID</code></td><td><code>201</code></td><td>app_key 映射的采购项目 ID</td></tr>
+    <tr><td><code>AIFULI_SUPPLY_CHAIN_INSTORE_RTMART_INBOUND_CHANNEL_CODE</code></td><td><code>RT_MART</code></td><td>app_key 映射的渠道编码</td></tr>
+    <tr><td><code>AIFULI_SUPPLY_CHAIN_INSTORE_RTMART_INBOUND_TIMESTAMP_TOLERANCE_SECONDS</code></td><td><code>300</code></td><td>时间戳容差（秒）</td></tr>
+  </table>
+
+  <div class="callout warn">
+    <strong>启用即校验：</strong><code>ENABLED=true</code> 时应用启动阶段 fail-fast 校验 appKey/publicKey/channelCode/projectId/容差合法性，且公钥立即解析为 <code>PublicKey</code> 常驻内存（不在请求路径上重复解析）；任何配置非法直接阻止应用启动。
+  </div>
+
+  <h3>9.1 对外网关（apitest.kalaiwang.com）</h3>
+  <p>旅通从公网访问的 base_url 为 <code>http://apitest.kalaiwang.com</code>，由卡管理平台网关机（公网 <code>47.116.31.140</code> / 内网 <code>172.19.64.45</code>）的 nginx 反向代理到 pro143：</p>
+  <table>
+    <tr><th>路径</th><th>转发目标</th><th>用途</th></tr>
+    <tr><td><code>^~ /api/rtmart/</code></td><td><code>http://172.19.64.105:58190</code></td><td>本接口（旅通入站回调）</td></tr>
+    <tr><td><code>^~ /rpc-api/supply-chain/</code></td><td><code>http://172.19.64.105:58190</code></td><td>供应链中台 RPC（HMAC 认证，大润发调用）</td></tr>
+  </table>
+  <p style="font-size:14px;color:var(--text-3)">配置文件：网关机 <code>/usr/local/nginx/conf/vhost/kalaiwang-apitest.conf</code>（同文件还承载 <code>/v1/cardapi/</code>、<code>/api/renyue/</code> 等既有路由，互不影响）。网关只做 TCP 转发，不解析/不改写 body，验签完全在 supply-chain-server 完成。备份：<code>kalaiwang-apitest.conf.bak.20260826160000</code>。</p>
+</section>
+
+<!-- ================= 10 实现代码索引 ================= -->
+<section id="s10">
+  <h2><span class="num">10</span>实现代码索引</h2>
+
+  <table>
+    <tr><th>文件（aifuli-module-supply-chain-server）</th><th>职责</th></tr>
+    <tr><td><code>border/rtmart/RtmartMemberCallbackController.java</code></td><td>HTTP 端点 <code>POST /api/rtmart/member/resolve</code>；协议校验编排、启动时解析验签公钥、CXB_ 前缀剥离、中台错误码 → 旅通错误码映射</td></tr>
+    <tr><td><code>border/rtmart/RtmartSignVerifier.java</code></td><td>SHA1withRSA 验签：字典序排序、key+value 拼接、标准 Base64 解码、公钥验签；任何失败统一返回 false</td></tr>
+    <tr><td><code>border/rtmart/RtmartPublicKeyParser.java</code></td><td>X.509 公钥解析（PEM 或裸 Base64），与出站 <code>RtmartPrivateKeyParser</code> 对称</td></tr>
+    <tr><td><code>border/rtmart/RtmartMemberRequest.java</code></td><td>旅通请求 DTO（snake_case 六字段）</td></tr>
+    <tr><td><code>border/rtmart/RtmartMemberResponse.java</code></td><td>旅通响应 DTO（result/code/msg/data 信封）</td></tr>
+    <tr><td><code>border/rtmart/RtmartMemberData.java</code></td><td>响应 data 部分（user_code/mobile/user_name/company_code，个人信息字段 <code>@ToString.Exclude</code>）</td></tr>
+    <tr><td><code>border/rtmart/RtmartInboundProperties.java</code></td><td>配置绑定与启动校验（含公钥必填校验）</td></tr>
+    <tr><td><code>application/facade/InstoreChannelMemberFacade.java</code></td><td>中台编排：凭证认领 → 冻结路由 → 会员外呼 → 凭证终态（被适配器调用）</td></tr>
+  </table>
+
+  <div class="callout info">
+    <strong>架构说明：</strong>按设计文档 <code>2026-08-18-rtmart-instore-channel-design.md</code> 第 6 节，旅通协议适配属渠道边界职责。当前实现落在 supply-chain-server 的 <code>border/rtmart</code> 包内（独立于领域核心），后续如需独立部署可平移至 <code>aifuli-channel-rtmart-server</code> 模块，验证逻辑与 Facade 契约不变。
+  </div>
+</section>
+
+<!-- ================= 11 联调验证记录 ================= -->
+<section id="s11">
+  <h2><span class="num">11</span>联调验证记录（2026-08-26）</h2>
+
+  <table>
+    <tr><th style="width:160px">项</th><th>值</th></tr>
+    <tr><td>环境</td><td>pro143（8.133.164.143），容器 <code>supply-chain-server-test</code>，host 网络，端口 58190</td></tr>
+    <tr><td>镜像</td><td><code>aifuli/supply-chain-server:rtmart-inbound</code></td></tr>
+    <tr><td>采购项目</td><td>projectId=201，channelCode=RT_MART，buyerId=2001</td></tr>
+    <tr><td>测试会员</td><td>member_user id=247（tenant_id=1），user_code=247</td></tr>
+    <tr><td>企业编码</td><td>X0000A（旅通唯一测试商品组）</td></tr>
+  </table>
+
+  <h3>11.1 验证方法</h3>
+  <p>SHA1withRSA 验签的正向链路以<strong>临时测试密钥对</strong>完成（模拟旅通持私钥签名、服务端持对应公钥验签），验证通过后已将服务端公钥切换为<strong>旅通真实测试公钥</strong>并重启，负向用例确认非法签名被拒绝。当前 pro143 部署配置即为旅通真实公钥。</p>
+
+  <h3>11.2 实测请求（临时密钥对，正向链路）</h3>
+  <pre><code># 1) 先经 getHomeUrl 取得新凭证 token（CXB_tk-673888a4eb0a205e7...，共 71 字符）
+# 2) 组装旅通请求并以私钥签名：
+canonical = "app_key1G23d45P6nonce_strcb241ecb89e7c6bf97871d7973d6bba5" \
+          + "timestamp1787729477" + "tokenCXB_tk-673888a4eb0a205e7..." + "version1"
+sign = base64( SHA1withRSA_sign(private_key, canonical) )   # 344 字符（2048 位测试密钥）
+
+curl -X POST http://127.0.0.1:58190/api/rtmart/member/resolve \
+  -H "Content-Type: application/json" \
+  -d '{
+    "app_key": "1G23d45P6",
+    "version": "1",
+    "timestamp": 1787729477,
+    "nonce_str": "cb241ecb89e7c6bf97871d7973d6bba5",
+    "sign": "UchVpE1LJGZZk/BRDKVWxmqt9hEKrF2z3AAfr4hI...（Base64）",
+    "token": "CXB_tk-673888a4eb0a205e7..."
+  }'</code></pre>
+
+  <h3>11.3 实测响应</h3>
+  <pre><code>{
+  "result": "success",
+  "code": "E0000",
+  "msg": "",
+  "data": {
+    "user_code": "247",
+    "mobile": "15601691399",
+    "user_name": "啦啦啦",
+    "company_code": "X0000A"
+  }
+}</code></pre>
+
+  <h3>11.4 负向用例</h3>
+  <table>
+    <tr><th>场景</th><th>实测结果</th></tr>
+    <tr><td>篡改签名末 8 字符（临时密钥对阶段）</td><td><code>E4003 签名验证失败</code></td></tr>
+    <tr><td>伪造签名 <code>INVALIDSIGNATURE==</code>（旅通真实公钥阶段）</td><td><code>E4003 签名验证失败</code></td></tr>
+    <tr><td>dummy app_key</td><td><code>E4003 app_key 不正确</code></td></tr>
+  </table>
+
+  <h3>11.5 验证结论</h3>
+  <table>
+    <tr><th>检查项</th><th>结果</th></tr>
+    <tr><td>端点可达（@PermitAll 免登录）</td><td><span class="tag y">通过</span></td></tr>
+    <tr><td>SHA1withRSA 验签（字典序 key+value 规范串 + 标准 Base64）</td><td><span class="tag y">通过</span></td></tr>
+    <tr><td>旅通真实公钥部署后应用正常启动（fail-fast 解析）</td><td><span class="tag y">通过</span></td></tr>
+    <tr><td>非法/篡改签名被拒绝（fail-closed）</td><td><span class="tag y">通过</span></td></tr>
+    <tr><td>app_key 错误 → E4003</td><td><span class="tag y">通过</span></td></tr>
+    <tr><td>CXB_ 前缀剥离后命中中台凭证</td><td><span class="tag y">通过</span></td></tr>
+    <tr><td>凭证认领 ACTIVE → PROCESSING → USED</td><td><span class="tag y">通过</span></td></tr>
+    <tr><td>SaaS 会员外呼返回真实手机号/姓名</td><td><span class="tag y">通过</span></td></tr>
+    <tr><td>user_code 等于 buyer_user_id（247）</td><td><span class="tag y">通过</span></td></tr>
+    <tr><td>company_code 返回 X0000A</td><td><span class="tag y">通过</span></td></tr>
+    <tr><td>响应格式符合旅通协议（snake_case + E0000）</td><td><span class="tag y">通过</span></td></tr>
+  </table>
+
+  <div class="callout info">
+    <strong>待真实联调确认：</strong>旅通以真实私钥发起的回调尚未接入（旅通测试服务器需能访问本端点）。正向链路已用等价密钥对验证机制正确；真实流量接入后若验签失败，优先核对 3.2 节公钥与旅通侧私钥是否配对、以及旅通签名规范串是否与本节一致。
+  </div>
+
+  <h3>11.6 对外网关域名链路验证（2026-08-26，apitest.kalaiwang.com）</h3>
+  <table>
+    <tr><th style="width:200px">项</th><th>值</th></tr>
+    <tr><td>网关入口</td><td><code>http://apitest.kalaiwang.com</code>（公网解析 <code>47.116.31.140</code>，网关机内网 <code>172.19.64.45</code>，与 pro143 同 VPC）</td></tr>
+    <tr><td>nginx 配置</td><td>网关机 <code>/usr/local/nginx/conf/vhost/kalaiwang-apitest.conf</code> 新增 <code>/api/rtmart/</code> 与 <code>/rpc-api/supply-chain/</code> 两个 location，反代 <code>http://172.19.64.105:58190</code>；修改前备份 <code>kalaiwang-apitest.conf.bak.20260826160000</code>，<code>nginx -t</code> 通过后平滑 reload</td></tr>
+    <tr><td>HMAC 正向（经域名）</td><td><code>POST http://apitest.kalaiwang.com/rpc-api/supply-chain/instore/buyer-entry/home</code>（appId=rtmart-home-test，HMAC-SHA256 签名）返回 <code>code=0</code> 与 entryUrl + <code>CXB_tk-</code> token ✅</td></tr>
+    <tr><td>入站接口负向（经域名）</td><td>非法签名 → <code>E4003 签名验证失败</code>；错误 app_key → <code>E4003 app_key 不正确</code> ✅</td></tr>
+    <tr><td>既有路由回归</td><td><code>/</code> 返回卡管理平台欢迎页、<code>/api/renyue/</code> 与 <code>/cardapi/order</code> 后端正常应答（404）；<code>/v1/cardapi/</code> 返回 502 系既有问题（pro143 10080 端口未监听），与本次改动无关</td></tr>
+    <tr><td>结论</td><td>base_url <code>http://apitest.kalaiwang.com</code> 对外链路可用，旅通回调地址为 <code>http://apitest.kalaiwang.com/api/rtmart/member/resolve</code></td></tr>
+  </table>
+</section>
+
+<!-- ================= 12 附录 ================= -->
+<section id="s12">
+  <h2><span class="num">12</span>附录：Python 调用示例</h2>
+
+  <p>Python 标准库不支持 RSA 签名，示例通过 <code>openssl</code> 命令行完成 SHA1withRSA 签名（对应 Java <code>Signature.getInstance("SHA1withRSA")</code>；注意输入必须无尾部换行）：</p>
+
+  <pre><code>import base64
+import json
+import secrets
+import subprocess
+import time
+import urllib.request
+
+BASE_URL = "http://apitest.kalaiwang.com"      # 对外网关（nginx 反代 pro143:58190）
+APP_KEY = "1G23d45P6"
+VERSION = "1"
+PRIVATE_KEY_PEM = "/path/to/rtmart-private.pem"   # 旅通侧私钥（测试模拟用）
+
+def sha1with_rsa_sign(canonical: str) -> str:
+    """对规范串执行 SHA1withRSA 签名并返回标准 Base64。"""
+    proc = subprocess.run(
+        ["openssl", "dgst", "-sha1", "-sign", PRIVATE_KEY_PEM],
+        input=canonical.encode("utf-8"),      # 无尾部换行，切勿用 echo 管道
+        capture_output=True, check=True,
+    )
+    return base64.b64encode(proc.stdout).decode("ascii")
+
+def resolve_member(token: str) -> dict:
+    """按旅通协议签名并调用获取会员信息接口。
+
+    token: entryUrl 查询参数中的原始值（含 CXB_ 前缀），原样参与签名。
+    """
+    timestamp = int(time.time())              # Unix 秒
+    nonce_str = secrets.token_hex(16)         # 32 位小写十六进制随机数
+
+    # 参与签名的字段：除 sign 外全部非空字段（timestamp 转字符串）
+    fields = {
+        "app_key": APP_KEY,
+        "nonce_str": nonce_str,
+        "timestamp": str(timestamp),
+        "token": token,
+        "version": VERSION,
+    }
+    # 按 key 字典序排序后 key+value 拼接（无分隔符），再 SHA1withRSA + Base64
+    canonical = "".join(k + v for k, v in sorted(fields.items()))
+    sign = sha1with_rsa_sign(canonical)
+
+    body = json.dumps({
+        "app_key": APP_KEY,
+        "version": VERSION,
+        "timestamp": timestamp,
+        "nonce_str": nonce_str,
+        "sign": sign,
+        "token": token,
+    }).encode("utf-8")
+
+    request = urllib.request.Request(
+        f"{BASE_URL}/api/rtmart/member/resolve",
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=15) as response:
+        return json.loads(response.read())
+
+if __name__ == "__main__":
+    token = "CXB_tk-38efcf236aacdb0cfa5af080095090ff281f2d3bebe39831a6d44157ea5c6021"
+    print(json.dumps(resolve_member(token), indent=2, ensure_ascii=False))</code></pre>
+
+  <div class="callout success">
+    <strong>预期输出：</strong><code>{"result": "success", "code": "E0000", "msg": "", "data": {"user_code": "247", ...}}</code>（示例需先经 getHomeUrl 换取有效 token，且签名私钥与服务端配置公钥配对）
+  </div>
+</section>
+
+<footer>
+  供应链中台 · 到店购渠道 · 旅通协议接口文档 — 生成于 2026-08-26，基于 pro143 联调实测
+</footer>
+
+</div>
+</body>
+</html>

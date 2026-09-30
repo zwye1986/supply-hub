@@ -1,0 +1,2 @@
+com.aifuli.framework.tenant.config.AifuliTenantRpcAutoConfiguration
+com.aifuli.framework.tenant.config.AifuliTenantAutoConfiguration

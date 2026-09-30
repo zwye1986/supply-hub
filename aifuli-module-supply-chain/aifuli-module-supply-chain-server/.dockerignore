@@ -1,0 +1,6 @@
+# 默认不发送构建上下文；仅放行 Dockerfile 和精确的运行产物。
+*
+!Dockerfile
+!target/
+target/*
+!target/aifuli-module-supply-chain-server.jar

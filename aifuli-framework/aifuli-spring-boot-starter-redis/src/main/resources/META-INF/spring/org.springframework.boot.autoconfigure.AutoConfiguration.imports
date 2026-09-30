@@ -1,0 +1,2 @@
+com.aifuli.framework.redis.config.AifuliRedisAutoConfiguration
+com.aifuli.framework.redis.config.AifuliCacheAutoConfiguration
