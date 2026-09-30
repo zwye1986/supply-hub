@@ -56,6 +56,9 @@ aifuli:
       - /admin-api/supply-chain/v3/api-docs/**
   supply-chain:
     enabled: true
+    recharge-frequency:
+      # 仅配置引用；32字节稳定Base64密钥由环境提供，变更须离线迁移队列身份。
+      identity-key-ref: ${AIFULI_SUPPLY_CHAIN_RECHARGE_FREQUENCY_IDENTITY_KEY_REF:env:AIFULI_SUPPLY_CHAIN_RECHARGE_FREQUENCY_IDENTITY_KEY}
     auth:
       enabled: ${AIFULI_SUPPLY_CHAIN_AUTH_ENABLED:true}
       timestamp-skew-minutes: ${AIFULI_SUPPLY_CHAIN_AUTH_TIMESTAMP_SKEW_MINUTES:5}

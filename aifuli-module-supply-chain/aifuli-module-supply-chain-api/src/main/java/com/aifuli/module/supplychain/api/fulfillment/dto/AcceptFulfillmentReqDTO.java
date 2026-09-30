@@ -7,6 +7,7 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.Size;
 import lombok.Data;
+import lombok.ToString;
 
 import java.io.Serializable;
 import java.time.OffsetDateTime;
@@ -43,6 +44,7 @@ public class AcceptFulfillmentReqDTO implements Serializable {
             requiredMode = Schema.RequiredMode.REQUIRED, example = "13800138000")
     @NotBlank(message = "采购商用户标识不能为空")
     @Size(max = 128, message = "采购商用户标识不能超过 128 个字符")
+    @ToString.Exclude
     private String buyerUserId;
 
     @Schema(description = "采购商商品编码", requiredMode = Schema.RequiredMode.REQUIRED,
@@ -73,6 +75,7 @@ public class AcceptFulfillmentReqDTO implements Serializable {
             requiredMode = Schema.RequiredMode.REQUIRED)
     @Valid
     @NotNull(message = "履约目标不能为空")
+    @ToString.Exclude
     private FulfillmentTargetDTO target;
 
     @Schema(description = "商城确认 C 端支付完成的时间；只作为业务时间，不代表中台参与支付",

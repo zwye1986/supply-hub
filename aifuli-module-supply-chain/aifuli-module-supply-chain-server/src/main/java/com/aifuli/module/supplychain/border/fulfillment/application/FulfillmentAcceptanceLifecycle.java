@@ -115,6 +115,7 @@ public class FulfillmentAcceptanceLifecycle {
     private final StandardPricingQuoteService pricingQuoteService;
     private final SupplierRoutingApplicationService routingService;
     private final FundReservationService fundReservationService;
+    private final RechargeFrequencyLifecycle rechargeFrequencyLifecycle;
     private final OutboxEventRepository outboxRepository;
     private final BusinessNoGenerator businessNoGenerator;
     private final ObjectMapper objectMapper;
@@ -335,6 +336,11 @@ public class FulfillmentAcceptanceLifecycle {
         FulfillmentOperationDO operation = createOperation(bOrder, listing.sku(), now);
         operationMapper.insert(operation);
         inject(AcceptanceFailureInjector.Stage.B_ORDER_CREATED);
+
+        rechargeFrequencyLifecycle.enqueue(new RechargeFrequencyLifecycle.EnqueueCommand(
+                order.getId(), order.getOrderNo(), fulfillmentRequest.getId(), operation.getOperationNo(),
+                command.buyerId(), command.projectId(), listing.sku().getId(),
+                command.targetAccountType(), command.fulfillmentAccountValue()));
 
         FundReservationService.ReservationSnapshot reservation;
         try {
@@ -715,6 +721,8 @@ public class FulfillmentAcceptanceLifecycle {
         private final String buyerOrderNo;
         private final String buyerUserId;
         private final String fulfillmentAccountValue;
+        /** 来自已校验实际target的账户类型，用于区分非MOBILE与非法MOBILE，不能从buyerUserId推断。 */
+        private final String targetAccountType;
         private final String buyerSkuCode;
         private final int listingVersionNo;
         private final long quantity;
@@ -735,7 +743,7 @@ public class FulfillmentAcceptanceLifecycle {
 
         public PreparedAcceptance(Long projectId, String projectCode, String projectName,
                                   Long buyerId, String buyerCode, String buyerName,
-                                  String buyerOrderNo, String buyerUserId, String fulfillmentAccountValue,
+                                  String buyerOrderNo, String buyerUserId, String fulfillmentAccountValue, String targetAccountType,
                                   String buyerSkuCode,
                                   int listingVersionNo, long quantity, String pricingQuoteToken,
                                   LocalDateTime paidAt, String targetSchemaCode,
@@ -752,6 +760,7 @@ public class FulfillmentAcceptanceLifecycle {
             this.buyerOrderNo = buyerOrderNo;
             this.buyerUserId = buyerUserId;
             this.fulfillmentAccountValue = fulfillmentAccountValue;
+            this.targetAccountType = targetAccountType;
             this.buyerSkuCode = buyerSkuCode;
             this.listingVersionNo = listingVersionNo;
             this.quantity = quantity;
@@ -779,6 +788,7 @@ public class FulfillmentAcceptanceLifecycle {
         public String buyerOrderNo() { return buyerOrderNo; }
         public String buyerUserId() { return buyerUserId; }
         public String fulfillmentAccountValue() { return fulfillmentAccountValue; }
+        public String targetAccountType() { return targetAccountType; }
         public String buyerSkuCode() { return buyerSkuCode; }
         public int listingVersionNo() { return listingVersionNo; }
         public long quantity() { return quantity; }

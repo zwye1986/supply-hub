@@ -8,6 +8,7 @@ import com.aifuli.module.supplychain.api.fulfillment.dto.FulfillmentReceiptStatu
 import com.aifuli.module.supplychain.api.fulfillment.dto.FulfillmentTargetDTO;
 import com.aifuli.module.supplychain.api.order.dto.SupplyChainOrderStatus;
 import com.aifuli.module.supplychain.border.fulfillment.application.FulfillmentAcceptanceLifecycle;
+import com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyAcceptanceCoordinator;
 import com.aifuli.module.supplychain.border.fulfillment.application.FulfillmentAcceptanceLifecycle.TargetSchemaSnapshot;
 import com.aifuli.module.supplychain.border.fulfillment.application.FulfillmentTargetSchemaRegistry;
 import com.aifuli.module.supplychain.border.fulfillment.domain.AcceptanceReceiptStatus;
@@ -57,6 +58,7 @@ public class BuyerFulfillmentCommandFacade {
     private final EnvelopeCryptoPort envelopeCrypto;
     private final HmacFingerprintPort hmacFingerprint;
     private final FulfillmentAcceptanceLifecycle lifecycle;
+    private final RechargeFrequencyAcceptanceCoordinator acceptanceCoordinator;
     private final BusinessNoGenerator businessNoGenerator;
     private final ObjectMapper objectMapper;
 
@@ -95,7 +97,7 @@ public class BuyerFulfillmentCommandFacade {
             return toResponse(requestId, lifecycle.replay(claim.receiptId()));
         }
         try {
-            FulfillmentAcceptanceReceiptRespDTO response = toResponse(requestId, lifecycle.accept(claim.receiptId(), prepared));
+            FulfillmentAcceptanceReceiptRespDTO response = toResponse(requestId, acceptanceCoordinator.accept(claim.receiptId(), prepared));
             log.info("[履约][facade] acceptFulfillment 完成 requestId={}, businessNo={}, receiptStatus={}, orderNo={}",
                     requestId, response.getBusinessNo(), response.getReceiptStatus(), response.getOrderNo());
             return response;
@@ -147,7 +149,8 @@ public class BuyerFulfillmentCommandFacade {
         return new FulfillmentAcceptanceLifecycle.PreparedAcceptance(
                 project.projectId(), project.projectCode(), project.projectName(),
                 buyer.id(), buyer.buyerCode(), buyer.buyerName(), request.getBuyerOrderNo(),
-                normalizedBuyerUserId, fulfillmentAccountValue, request.getBuyerSkuCode(),
+                normalizedBuyerUserId, fulfillmentAccountValue,
+                normalizedTargetValues.get(FulfillmentTargetFields.ACCOUNT_TYPE), request.getBuyerSkuCode(),
                 Math.toIntExact(request.getListingVersion()), request.getQuantity(),
                 request.getPricingQuoteToken(),
                 request.getPaidAt().atZoneSameInstant(java.time.ZoneId.of("Asia/Shanghai")).toLocalDateTime(),

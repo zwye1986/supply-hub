@@ -418,7 +418,7 @@ class FulfillmentAcceptanceIntegrationTest {
         }
     }
 
-    private Fixture seed(ConfigurableApplicationContext context) {
+    Fixture seed(ConfigurableApplicationContext context) {
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC).withNano(0);
         BuyerCommandService buyers = context.getBean(BuyerCommandService.class);
         ProductCatalogCommandService catalog = context.getBean(ProductCatalogCommandService.class);
@@ -561,7 +561,7 @@ class FulfillmentAcceptanceIntegrationTest {
         assertThat(mapper.updateById(availability)).isEqualTo(1);
     }
 
-    private static AcceptFulfillmentReqDTO request(String buyerOrderNo, long listingVersion) {
+    static AcceptFulfillmentReqDTO request(String buyerOrderNo, long listingVersion) {
         AcceptFulfillmentReqDTO request = new AcceptFulfillmentReqDTO();
         request.setSourceSystem("AIFULI_MALL");
         request.setExternalTenantId("tenant-wusheng");
@@ -735,7 +735,7 @@ class FulfillmentAcceptanceIntegrationTest {
         assertThat(mapper.insert(project)).isEqualTo(1);
     }
 
-    private ConfigurableApplicationContext applicationContext() {
+    ConfigurableApplicationContext applicationContext(Class<?>... additions) {
         Map<String, Object> properties = new LinkedHashMap<>();
         properties.put("aifuli.supply-chain.enabled", true);
         properties.put("aifuli.supply-chain.datasource.url", jdbcUrl());
@@ -745,7 +745,7 @@ class FulfillmentAcceptanceIntegrationTest {
         properties.put("aifuli.supply-chain.security.key-version", "test-v1");
         properties.put("aifuli.supply-chain.security.envelope-key-base64", KEY_BASE64);
         properties.put("aifuli.supply-chain.security.fingerprint-key-base64", KEY_BASE64);
-        return new SpringApplicationBuilder(TestConfiguration.class)
+        return new SpringApplicationBuilder(TestConfiguration.class).sources(additions)
                 .web(WebApplicationType.NONE).properties(properties).run();
     }
 
@@ -772,9 +772,18 @@ class FulfillmentAcceptanceIntegrationTest {
             RoutingPolicyPublicationService.class, SupplierRoutingApplicationService.class,
             ClosedJsonSchemaValidator.class, FulfillmentTargetSchemaRegistry.class,
             AesGcmEnvelopeCrypto.class, SkuPurchaseLimitService.class, FulfillmentAcceptanceLifecycle.class,
+            com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyLifecycle.class,
+            com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyIdentityService.class,
+            com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyAcceptanceCoordinator.class,
+            com.aifuli.module.supplychain.tradecore.catalog.application.RechargeFrequencyProductResolver.class,
             OrderSummaryPolicyRegistry.class, CardOrderSummaryPolicy.class,
             BuyerFulfillmentCommandFacade.class})
     static class TestConfiguration {
+        @Bean
+        com.aifuli.module.supplychain.infrastructure.security.RechargeFrequencyIdentityKeyProvider frequencyKey() {
+            return () -> new byte[32];
+        }
+
         @Bean
         ObjectMapper objectMapper() {
             return new ObjectMapper().findAndRegisterModules();
@@ -841,6 +850,6 @@ class FulfillmentAcceptanceIntegrationTest {
         T get(int index) throws Exception;
     }
 
-    private record Fixture(Long buyerId, String listingNo, SupplierDO supplier) {
+    record Fixture(Long buyerId, String listingNo, SupplierDO supplier) {
     }
 }
