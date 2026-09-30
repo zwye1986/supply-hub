@@ -184,10 +184,11 @@ public record RechargeFrequencyExecutionPermit(long queueId, long entryId,
 - 新建 `border/fulfillment/application/RechargeFrequencyQueryService.java`、`FulfillmentOperationTicketFactory.java`，后者抽取既有执行Handler的冻结配置/凭证装配以供发送和查询复用；查询不解密充值目标。修改 `FulfillmentOperationExecuteHandler.java` 委派装配，保留Task4发送资格校验。
 - 修改 `border/fulfillment/domain/FulfillmentTimerTaskTypes.java`，新增受控队列唤醒类型。
 - 新建 `border/fulfillment/application/RechargeFrequencyRecoveryConfiguration.java`，注册受控定期补偿，不改变Timer全局行为。
+- 新建 `RechargeFrequencyWakeScheduler.java`、`RechargeFrequencyTimerStartupCheck.java`，分别负责事务内调度和单例装配结束后的Timer完整性校验；启动校验不承载事务方法，避免JDK接口代理影响具体类注入。
 - 新建测试 `border/fulfillment/RechargeFrequencyTimerIntegrationTest.java`、`border/fulfillment/application/RechargeFrequencyRecoveryServiceTest.java`。
 
-- [ ] 写同代次重复安排只有一任务、上一代已完成仍能新唤醒、重启恢复队首、成功窗口不重置的失败测试。
-- [ ] Task载荷限定queueId/wakeGeneration/payloadVersion=1；新意图增wakeGeneration并同时安排任务。幂等键使用 `queueId:wakeGeneration`，不使用明文手机号。
+- [x] 写同代次重复安排只有一任务、上一代已完成仍能新唤醒、重启恢复队首、成功窗口不重置的失败测试。
+- [x] Task载荷限定queueId/wakeGeneration/payloadVersion=1；新意图增wakeGeneration并同时安排任务。幂等键使用 `queueId:wakeGeneration`，不使用明文手机号。
 
 ```java
 String key = queue.getId() + ":" + queue.getWakeGeneration();
@@ -195,11 +196,13 @@ timer.scheduleOnce(FulfillmentTimerTaskTypes.RECHARGE_FREQUENCY_WAKE,
         key, payload, databaseClock.toInstant(fireAt));
 ```
 
-- [ ] Handler委派队列应用入口。检查holder：未知只计划下一次观察/告警，成功在minimumHoldUntil释放；无holder选择FIFO队首并安排既有OPERATION_EXECUTE，由执行Handler取得资格，不预先claim后再二次claim。执行任务幂等键包含唤醒代次，旧任务完成后新意图仍可唤醒同一业务操作。Timer用延迟解析端口避免构造环，不把等待当失败。
-- [ ] 补全现有标准履约缺失的主动查单恢复：仅已配置支持QUERY_ORDER的供应商，在事务外以原operationNo和冻结配置查询，由统一可信结果入口收敛；处理中/未知沿用30秒恢复基线，查询失败或NOT_FOUND继续占用，MANUAL只接受可信终态恢复。无查询能力不能退化为SEND。测试查询不带目标账号、不新建资金预占或SEND、迟到结果不释放新holder。
-- [ ] 补偿扫描有next_check_at索引、批量上限、仅恢复缺失/死信唤醒；同队列有效未来任务不重复新增。扫描不直接删除holder，不使用Redis租约作为授权依据。
-- [ ] 30分钟占用与积压>5按组合聚合告警，首次跨阈值记录、受控重复与恢复记录，日志仅队列ID/SPU/订单号，监控查询异常不伪装0值。
-- [ ] 真实测试崩溃、死信补偿、窗口剩余时间、重复任务和UTC+8转换。提交：`实现直充队列Timer恢复与积压占用告警`。
+- [x] Handler委派队列应用入口。检查holder：未知只计划下一次观察/告警，成功在minimumHoldUntil释放；无holder选择FIFO队首并安排既有OPERATION_EXECUTE，由执行Handler取得资格，不预先claim后再二次claim。执行任务幂等键包含唤醒代次，旧任务完成后新意图仍可唤醒同一业务操作。Timer用延迟解析端口避免构造环，不把等待当失败。
+- [x] 补全现有标准履约缺失的主动查单恢复：仅已配置支持QUERY_ORDER的供应商，在事务外以原operationNo和冻结配置查询，由统一可信结果入口收敛；处理中/未知沿用30秒恢复基线，查询失败或NOT_FOUND继续占用，MANUAL只接受可信终态恢复。无查询能力不能退化为SEND。测试查询不带目标账号、不新建资金预占或SEND、迟到结果不释放新holder。
+- [x] 补偿扫描有next_check_at索引、批量上限、仅恢复缺失/死信唤醒；同队列有效未来任务不重复新增。扫描不直接删除holder，不使用Redis租约作为授权依据。
+- [x] 30分钟占用与积压>5按组合聚合告警，首次跨阈值记录、受控重复与恢复记录，日志仅队列ID/SPU/订单号，监控查询异常不伪装0值。
+- [x] 真实测试崩溃、死信补偿、窗口剩余时间、重复任务和UTC+8转换。提交：`实现直充队列Timer恢复与积压占用告警`。
+
+实施记录（2026-10-01）：`e583c3d` 实现代次唤醒、查单与补偿，`70e4984` 修复真实QNM鉴权错误与终态交叉导致误收敛，`3dfe337` 保留补偿循环安全因果链。独立规格与代码质量复评均通过。回归基础95项单测/架构+36项MySQL，最终告警修正8+2、查询鉴权修正74+1、循环日志修正9项单测分别全部通过；范围有重叠，不累加为去重总数。原始证据分别保存在 `/tmp/task5-final-gate2-reports`、`/tmp/task5-after-commit-green-reports`、`/tmp/task5-qnm-auth-green-reports`、`/tmp/task5-loop-cause-green-reports`。监控API/页面和迁移仍在后续任务中。
 
 ## Task 6：内部运营查询、重试、释放与审计
 
@@ -225,6 +228,7 @@ timer.scheduleOnce(FulfillmentTimerTaskTypes.RECHARGE_FREQUENCY_WAKE,
 
 **前端文件（相对前端仓库）：**
 - 新建 `src/api/order/rechargeFrequency.ts`：精确接口/类型，金额按已有分单位，不新增Mock。
+- 修改共享 `src/config/axios/service.ts`：仅显式选择的限频调用保留安全业务code/message，不丢为字符串；敏感请求调试日志不打印配置/正文，其他调用及认证刷新契约保持不变。
 - 新建 `src/views/supplier/order/recharge-frequency/index.vue`。
 - 新建 `src/views/supplier/order/recharge-frequency/components/FrequencyActionDialog.vue`。
 - 复用 `src/views/supplier/order/platform/detail/index.vue` 与 `src/api/order/index.ts`，不扩大资产权限。
