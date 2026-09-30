@@ -119,7 +119,9 @@ public class ProjectAppCredentialAdminService {
         return new IssuedCredential(app.getAppId(), nextVersion, material.appKey(), material.maskedHint());
     }
 
-    /** 吊销全部活动凭证；保留 appId 与版本行，后续由管理员轮换恢复。 */
+    /** 吊销全部活动凭证；停用项目也可清理，保留 appId 与版本行。
+     * 见 docs/superpowers/specs/2026-09-29-access-config-backend-impl-design.md#32-管理服务。
+     */
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public void revoke(String projectCode, boolean confirmed, String reason, Long operatorId) {
         log.info("[project-app] 吊销入口 projectCode={}, confirmed={}, operatorId={}",
@@ -127,7 +129,7 @@ public class ProjectAppCredentialAdminService {
         if (!confirmed || reason == null || reason.isBlank() || reason.trim().length() > 256) {
             throw exception(PROJECT_APP_CONFIRMATION_REQUIRED);
         }
-        BuyerProjectDO project = requireActiveProjectForUpdate(projectCode);
+        BuyerProjectDO project = requireProjectForUpdate(projectCode);
         ProjectApplicationDO app = requireApplicationForUpdate(project.getId());
         for (ProjectAppCredentialVersionDO credential : credentialMapper.selectByApplicationId(app.getId())) {
             if (ProjectAppCredentialStatus.isUsable(credential.getStatus())) {
@@ -160,12 +162,18 @@ public class ProjectAppCredentialAdminService {
     }
 
     private BuyerProjectDO requireActiveProjectForUpdate(String projectCode) {
+        BuyerProjectDO project = requireProjectForUpdate(projectCode);
+        if (project.getStatus() == null || project.getStatus() != BuyerProjectStatus.ACTIVE.getCode()) {
+            throw exception(PROJECT_STATUS_INVALID);
+        }
+        return project;
+    }
+
+    /** 清理性吊销沿用项目行锁顺序，但不限制项目状态；见 docs/superpowers/specs/2026-09-29-access-config-backend-impl-design.md#32-管理服务。 */
+    private BuyerProjectDO requireProjectForUpdate(String projectCode) {
         BuyerProjectDO project = projectMapper.selectByProjectCodeForUpdate(projectCode);
         if (project == null) {
             throw exception(PROJECT_NOT_FOUND);
-        }
-        if (project.getStatus() == null || project.getStatus() != BuyerProjectStatus.ACTIVE.getCode()) {
-            throw exception(PROJECT_STATUS_INVALID);
         }
         return project;
     }

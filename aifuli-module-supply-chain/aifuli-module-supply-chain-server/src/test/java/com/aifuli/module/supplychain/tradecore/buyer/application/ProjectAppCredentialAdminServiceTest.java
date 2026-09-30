@@ -16,6 +16,8 @@ import com.aifuli.module.supplychain.tradecore.buyer.domain.BuyerProjectStatus;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -131,6 +133,26 @@ class ProjectAppCredentialAdminServiceTest {
         assertThat(grace.getStatus()).isEqualTo("REVOKED");
         assertThat(current.getActiveSlot()).isNull();
         assertThat(grace.getActiveSlot()).isNull();
+        verify(auditMapper).insert(any(ProjectAppCredentialAuditDO.class));
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = BuyerProjectStatus.class, names = {"SUSPENDED", "CLOSED"})
+    void inactiveProjectCanRevokeButCannotIssueOrRotate(BuyerProjectStatus status) {
+        BuyerProjectDO project = projectMapper.selectByProjectCodeForUpdate("PRJ_01");
+        project.setStatus(status.getCode());
+        when(applicationMapper.selectByProjectIdForUpdate(20L)).thenReturn(application());
+        ProjectAppCredentialVersionDO current = credential(1, "CURRENT", "CURRENT");
+        when(credentialMapper.selectByApplicationId(30L)).thenReturn(List.of(current));
+        when(credentialMapper.updateById(current)).thenReturn(1);
+        when(auditMapper.insert(any(ProjectAppCredentialAuditDO.class))).thenReturn(1);
+
+        assertThatThrownBy(() -> service.enable("PRJ_01", 7L)).isInstanceOf(RuntimeException.class);
+        assertThatThrownBy(() -> service.rotate("PRJ_01", 7L)).isInstanceOf(RuntimeException.class);
+        service.revoke("PRJ_01", true, "停用期间吊销", 7L);
+
+        assertThat(current.getStatus()).isEqualTo("REVOKED");
+        assertThat(current.getActiveSlot()).isNull();
         verify(auditMapper).insert(any(ProjectAppCredentialAuditDO.class));
     }
 

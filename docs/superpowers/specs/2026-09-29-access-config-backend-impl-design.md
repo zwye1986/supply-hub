@@ -68,6 +68,8 @@ rotate(projectCode, operatorId):
 
 revoke(projectCode, confirmed, reason, operatorId):
     require confirmed && nonblank(reason)
+    project = buyerProjectMapper.selectByProjectCodeForUpdate(projectCode)
+    require project exists; do not require ACTIVE (SUSPENDED/CLOSED still permit cleanup)
     lock app; set CURRENT/GRACE to REVOKED and activeSlot=null
     append CredentialAudit(REVOKE, applicationId, reason, operatorId, now)
     publish disabled callback config version for future events
@@ -75,6 +77,8 @@ revoke(projectCode, confirmed, reason, operatorId):
 ~~~
 
 凭证表已有 masked_hint 和 active_slot；补全 ProjectAppCredentialVersionDO 字段及 Mapper 方法，不加重复 DDL。唯一键保护并发，锁顺序固定为 project → application → credential。现有 `ProjectAuthOperations` 只登记 INSTORE 操作；为每个登记操作显式声明所需项目能力，先保持既有 10 个操作的 INSTORE 授权行为。认证服务只负责应用/项目/凭证及解密，过滤器在签名通过后按注册操作的能力检查，不再在 `authenticate` 内无条件要求 INSTORE。新增标准商品项目 HMAC 操作须先明确其 HTTP 契约、登记路径及能力映射；现有 `BuyerFulfillmentCommandApi` RPC 不会仅因发码而自动受此过滤器保护。
+
+开通和轮换要求项目 ACTIVE；吊销是清理性操作，只要求项目存在并保持 project → application → credential 锁顺序。项目停用期间吊销后，即使重新启用，已吊销版本也不得恢复认证。
 
 ## 4. B 平台签名密钥
 

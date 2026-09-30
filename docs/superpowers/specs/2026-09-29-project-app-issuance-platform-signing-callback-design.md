@@ -30,7 +30,7 @@
 | --- | --- |
 | POST /supply-chain/projects/{projectCode}/application/enable | 项目启用且尚无应用时生成 appId 和第 1 版 CURRENT；重复开通返回冲突。响应一次性含 appId/keyVersion/appKey/maskedHint。 |
 | POST /supply-chain/projects/{projectCode}/application/rotate | 锁应用行，原子切换 CURRENT/GRACE；默认过渡窗口 24 小时，由 aifuli.supply-chain.auth.grace-window 配置。 |
-| POST /supply-chain/projects/{projectCode}/application/revoke | 要求确认标记与原因，吊销活动凭证，并停用该项目后续事件回调。 |
+| POST /supply-chain/projects/{projectCode}/application/revoke | 要求确认标记与原因；项目存在即可吊销活动凭证，包括 SUSPENDED/CLOSED 状态，并停用该项目后续事件回调。重新启用项目不会恢复已吊销凭证。 |
 | GET /supply-chain/projects/{projectCode}/application/credentials | 返回 appId、版本、状态、脱敏提示及生效时间；不返回明文或 secret_ref。 |
 
 appKey 用 32 字节 SecureRandom 生成并 Base64URL 编码。secret_ref 复用 LocalEnvelopeAppKeyCodec，AAD 绑定 appId 与 keyVersion。masterKey 按 ProjectAppAuthProperties 现有规则解析。应用行锁、版本唯一键和 active_slot 唯一键共同约束并发。发码响应设置 Cache-Control: no-store；日志、DTO toString、浏览器持久化存储均不得包含明文 appKey。管理接口全部带 @PreAuthorize；开通、轮换、吊销在凭证事务内追加 `sc_project_app_credential_audit`，记录动作、目标版本、操作人、吊销原因与时间，不存密钥明文或密文引用。
@@ -146,6 +146,8 @@ CREATE TABLE sc_project_app_credential_audit (
 迁移建表后插入 sc_platform_signing_control(id=1)。`sc_outbox_event.target_config_version_id` 已由 `009-buyer-integration.sql` 增加（`008-timer-inbox-outbox.sql` 的初始建表语句尚无此列），本次迁移不得重复 `ADD COLUMN`；其既有 COMMENT 为“创建事件时固化的目标配置版本内部主键”，在项目 HTTP 回调事件中逻辑引用 `sc_project_callback_config_version.id`。当前 `OutboxEventDO` 尚无对应 Java 字段，实施时须新增 `targetConfigVersionId` 并扩展 `appendBuyerEvent` 的持久化映射，确保写入及读取冻结版本 ID。事件正文不保存回调 URL 或私钥。
 
 ## 7. 管理端配套和安全边界
+
+项目详情中的一次性 appKey 只属于发码时的 projectCode。详情抽屉切换项目时立即关闭密钥弹窗并清除内存中的明文，同时清空旧项目详情状态；旧项目详情/凭证列表请求和开通/轮换响应晚于切换返回时，不得覆盖新项目视图或展示旧密钥。吊销确认框打开期间如切换项目，应取消后续提交；已经发出的吊销请求只作用于发起时的项目，返回后不得刷新新项目视图。所有异步响应写入均校验发起时 projectCode 与当前项目一致。
 
 supplychainhubweb 项目详情增加应用凭证、回调地址和通知记录：开通/轮换/吊销、一次性密钥展示与复制、脱敏凭证列表、回调配置、最近投递与死信入口。平台密钥管理页展示版本、公钥指纹、状态和保留截止时间；不回显 secret_ref 或私钥。菜单和权限由 script/deploy 写入 system 库，供应链进程不访问 system_*。
 

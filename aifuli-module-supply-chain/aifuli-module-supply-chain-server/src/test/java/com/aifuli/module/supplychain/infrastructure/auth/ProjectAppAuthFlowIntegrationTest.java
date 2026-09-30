@@ -46,6 +46,7 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.INSTORE_PAYMENT_FLOW_NOT_FOUND;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.INSTORE_SUPPLIER_CHANNEL_BINDING_NOT_FOUND;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * 项目应用认证真实 HTTP 门禁：完整应用、Spring Security、真实 Filter/Accessor/Facade、Liquibase
@@ -153,7 +154,7 @@ class ProjectAppAuthFlowIntegrationTest {
         cleanupResources();
     }
 
-    /** 真实 MySQL 唯一活动槽与审计表共同验证开通→轮换→吊销，密钥由生产发码器生成。 */
+    /** 真实 MySQL 验证开通→轮换→停用期间吊销→恢复启用后仍拒绝旧密钥；见 docs/superpowers/specs/2026-09-29-access-config-backend-impl-design.md#32-管理服务。 */
     @Test
     void projectCredentialLifecyclePersistsVersionSlotsAndAudit() {
         jdbc.update("""
@@ -185,7 +186,8 @@ class ProjectAppAuthFlowIntegrationTest {
                 WHERE a.project_id = ? AND c.active_slot IN ('CURRENT', 'GRACE')
                 """, Integer.class, ISSUANCE_PROJECT_ID)).isEqualTo(2);
 
-        admin.revoke(ISSUANCE_PROJECT_CODE, true, "联调吊销", 99L);
+        jdbc.update("UPDATE sc_buyer_project SET status = ? WHERE id = ?", PAUSED_STATUS, ISSUANCE_PROJECT_ID);
+        admin.revoke(ISSUANCE_PROJECT_CODE, true, "停用期间联调吊销", 99L);
         assertThat(jdbc.queryForObject("""
                 SELECT COUNT(*) FROM sc_project_app_credential_version c
                 JOIN sc_project_application a ON a.id = c.application_id
@@ -194,6 +196,12 @@ class ProjectAppAuthFlowIntegrationTest {
         assertThat(jdbc.queryForObject(
                 "SELECT COUNT(*) FROM sc_project_app_credential_audit WHERE project_id = ?",
                 Integer.class, ISSUANCE_PROJECT_ID)).isEqualTo(3);
+        jdbc.update("UPDATE sc_buyer_project SET status = ? WHERE id = ?", ENABLED_STATUS, ISSUANCE_PROJECT_ID);
+        ProjectAppCredentialService credentialService = server.getBean(ProjectAppCredentialService.class);
+        assertThatThrownBy(() -> credentialService.authenticate(issued.appId(), issued.keyVersion()))
+                .hasFieldOrPropertyWithValue("code", BUYER_AUTH_INVALID.getCode());
+        assertThatThrownBy(() -> credentialService.authenticate(rotated.appId(), rotated.keyVersion()))
+                .hasFieldOrPropertyWithValue("code", BUYER_AUTH_INVALID.getCode());
     }
 
     /** ChannelContext：合法命令必须越过认证与 Adapter，到达未配置渠道用户绑定的业务分支。 */
