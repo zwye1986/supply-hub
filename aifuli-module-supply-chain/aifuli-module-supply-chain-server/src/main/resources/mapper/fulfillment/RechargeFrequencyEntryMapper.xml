@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.aifuli.module.supplychain.border.fulfillment.dal.mysql.RechargeFrequencyEntryMapper">
+    <!-- 行锁查询仅针对已存在的业务行；统一先锁控制行。设计见 docs/superpowers/specs/2026-09-30-direct-recharge-mobile-spu-frequency-design.md#3-持久化模型与不变量 -->
+    <select id="selectByIdForUpdate" resultType="com.aifuli.module.supplychain.border.fulfillment.dal.dataobject.RechargeFrequencyEntryDO">
+        SELECT * FROM sc_recharge_frequency_entry WHERE id = #{id} FOR UPDATE
+    </select>
+    <select id="selectFirstWaitingForUpdate" resultType="com.aifuli.module.supplychain.border.fulfillment.dal.dataobject.RechargeFrequencyEntryDO">
+        SELECT * FROM sc_recharge_frequency_entry
+        WHERE queue_id = #{queueId} AND status = #{waitingStatus}
+        ORDER BY enqueue_sequence ASC LIMIT 1 FOR UPDATE
+    </select>
+</mapper>
