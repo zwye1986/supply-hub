@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.ProjectListingMapper">
+    <!--
+      项目商品类型来自平台 SPU。多表关联无法用 LambdaQueryWrapper 表达，须在分页前筛选。
+      设计见 docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#72-项目商品。
+    -->
+    <sql id="typeFilteredListings">
+        SELECT listing.*
+        FROM sc_project_listing listing
+        JOIN sc_buyer_product buyer_product ON buyer_product.id = listing.buyer_product_id
+        JOIN sc_platform_sku sku ON sku.id = buyer_product.platform_sku_id
+        JOIN sc_platform_spu spu ON spu.id = sku.spu_id
+        WHERE listing.project_id = #{projectId}
+          AND listing.status = #{availableStatus}
+          AND spu.product_type IN
+          <foreach collection="productTypes" item="productType" open="(" separator="," close=")">
+              #{productType}
+          </foreach>
+        ORDER BY listing.updated_at DESC
+    </sql>
+    <select id="selectPageByProductTypes" resultType="com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.ProjectListingDO">
+        <include refid="typeFilteredListings" />
+    </select>
+    <select id="selectAllByProductTypes" resultType="com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.ProjectListingDO">
+        <include refid="typeFilteredListings" />
+    </select>
+</mapper>

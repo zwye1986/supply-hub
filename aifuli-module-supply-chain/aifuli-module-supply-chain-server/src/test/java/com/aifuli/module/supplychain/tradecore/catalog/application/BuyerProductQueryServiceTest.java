@@ -20,6 +20,7 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSk
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSettlementPriceDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSettlementPriceVersionDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSpuDO;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProductCategoryDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerProductL2OverrideMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerProductL2OverrideVersionMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerSkuPricingMapper;
@@ -34,6 +35,7 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProjectListingV
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.junit.jupiter.api.BeforeEach;
@@ -62,6 +64,7 @@ class BuyerProductQueryServiceTest {
     private final BuyerProductMapper productMapper = mock(BuyerProductMapper.class);
     private final PlatformSkuMapper skuMapper = mock(PlatformSkuMapper.class);
     private final PlatformSpuMapper spuMapper = mock(PlatformSpuMapper.class);
+    private final ProductCategoryCoverageService categoryCoverageService = mock(ProductCategoryCoverageService.class);
     private final ProjectListingMapper listingMapper = mock(ProjectListingMapper.class);
     private final BuyerProjectMapper projectMapper = mock(BuyerProjectMapper.class);
     private final BuyerSkuPricingMapper buyerPricingMapper = mock(BuyerSkuPricingMapper.class);
@@ -79,7 +82,7 @@ class BuyerProductQueryServiceTest {
         TableInfoHelper.initTableInfo(assistant, ProjectListingDO.class);
         TableInfoHelper.initTableInfo(assistant, PlatformSpuDO.class);
         service = new BuyerProductQueryService(
-                buyerMapper, productMapper, skuMapper, spuMapper,
+                buyerMapper, productMapper, skuMapper, spuMapper, categoryCoverageService,
                 l1Mapper,
                 l1VersionMapper,
                 mock(BuyerProductL2OverrideMapper.class),
@@ -169,6 +172,47 @@ class BuyerProductQueryServiceTest {
 
         verify(projectMapper, never()).selectByProjectCode(any());
         verify(listingMapper, never()).selectList(any());
+    }
+
+    /** 父类目、下级类目与搜索词由数据库查询统一求交集，再计算 total 和分页。 */
+    @Test
+    @SuppressWarnings("unchecked")
+    void projectSelectionSearchIncludesDescendantsBeforePagination() {
+        when(projectMapper.selectByProjectCode("PRJ_A")).thenReturn(
+                BuyerProjectDO.builder().id(50L).buyerId(9L).build());
+        when(categoryCoverageService.loadResolver()).thenReturn(
+                new ProductCategoryCoverageService.CoverageResolver(List.of(
+                        ProductCategoryDO.builder().id(100L).categoryCode("CAT_ROOT").build(),
+                        ProductCategoryDO.builder().id(101L).categoryCode("CAT_CHILD").parentId(100L).build(),
+                        ProductCategoryDO.builder().id(102L).categoryCode("CAT_LEAF").parentId(101L).build())));
+        when(productMapper.selectPageForProjectSelection(any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new Page<BuyerProductDO>(1, 10).setTotal(1L));
+
+        var result = service.page("BYR_A", List.of("MOVIE"), "PRJ_A", " 电影%_! ", "CAT_ROOT", 1, 10);
+
+        assertThat(result.getTotal()).isEqualTo(1L);
+        ArgumentCaptor<List<Long>> categoryIds = ArgumentCaptor.forClass(List.class);
+        verify(productMapper).selectPageForProjectSelection(any(),
+                org.mockito.ArgumentMatchers.eq(9L), any(),
+                org.mockito.ArgumentMatchers.eq(List.of("MOVIE")),
+                org.mockito.ArgumentMatchers.eq("电影!%!_!!"), categoryIds.capture(),
+                org.mockito.ArgumentMatchers.eq(50L), any());
+        assertThat(categoryIds.getValue()).containsExactly(100L, 101L, 102L);
+        verify(productMapper, never()).selectPage(any(PageParam.class), any());
+        verify(listingMapper, never()).selectList(any());
+    }
+
+    @Test
+    void unknownCategoryReturnsEmptyPageAfterProjectValidation() {
+        when(projectMapper.selectByProjectCode("PRJ_A")).thenReturn(
+                BuyerProjectDO.builder().id(50L).buyerId(9L).build());
+        when(categoryCoverageService.loadResolver()).thenReturn(
+                new ProductCategoryCoverageService.CoverageResolver(List.of()));
+
+        var result = service.page("BYR_A", List.of(), "PRJ_A", null, "UNKNOWN", 1, 10);
+
+        assertThat(result.getTotal()).isZero();
+        verify(productMapper, never()).selectPageForProjectSelection(any(), any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test

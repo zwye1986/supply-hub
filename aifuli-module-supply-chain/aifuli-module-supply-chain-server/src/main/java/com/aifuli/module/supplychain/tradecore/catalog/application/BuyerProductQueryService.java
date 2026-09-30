@@ -3,6 +3,7 @@ package com.aifuli.module.supplychain.tradecore.catalog.application;
 import com.aifuli.framework.common.exception.ServiceException;
 import com.aifuli.framework.common.pojo.PageParam;
 import com.aifuli.framework.common.pojo.PageResult;
+import com.aifuli.framework.mybatis.core.util.MyBatisUtils;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerDO;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerProductDO;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerProjectDO;
@@ -43,6 +44,7 @@ import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericPricingCal
 import com.aifuli.module.supplychain.tradecore.profile.domain.L2AdjustMode;
 import com.aifuli.module.supplychain.tradecore.profile.domain.L3AdjustMode;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -85,6 +87,7 @@ public class BuyerProductQueryService {
     private final BuyerProductMapper productMapper;
     private final PlatformSkuMapper skuMapper;
     private final PlatformSpuMapper spuMapper;
+    private final ProductCategoryCoverageService categoryCoverageService;
     private final PlatformSettlementPriceMapper l1Mapper;
     private final PlatformSettlementPriceVersionMapper l1VersionMapper;
     private final BuyerProductL2OverrideMapper overrideMapper;
@@ -107,7 +110,7 @@ public class BuyerProductQueryService {
      */
     public PageResult<BuyerProductListItem> page(String buyerCode, List<String> productType,
                                                   Integer pageNo, Integer pageSize) {
-        return page(buyerCode, productType, null, pageNo, pageSize);
+        return page(buyerCode, productType, null, null, null, pageNo, pageSize);
     }
 
     /**
@@ -117,24 +120,49 @@ public class BuyerProductQueryService {
      */
     public PageResult<BuyerProductListItem> page(String buyerCode, List<String> productType,
                                                   String projectCode, Integer pageNo, Integer pageSize) {
+        return page(buyerCode, productType, projectCode, null, null, pageNo, pageSize);
+    }
+
+    /**
+     * 项目新增商品弹窗的名称/编号与主类目（含后代）条件，连同类型和项目排除条件在数据库分页前求交集。
+     * 无新增条件时继续使用既有分销商品查询路径，保持其他调用方的请求口径。
+     * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#63-分销商品}。
+     */
+    public PageResult<BuyerProductListItem> page(String buyerCode, List<String> productType,
+                                                  String projectCode, String keyword, String categoryCode,
+                                                  Integer pageNo, Integer pageSize) {
         List<String> productTypes = normalizeProductTypes(productType);
-        log.info("分页查询分销商品 buyerCode={} projectCode={} productTypes={} pageNo={} pageSize={}",
-                buyerCode, projectCode, productTypes, pageNo, pageSize);
+        String searchKeyword = trimToNull(keyword);
+        String searchCategoryCode = trimToNull(categoryCode);
+        log.info("分页查询分销商品 buyerCode={} projectCode={} productTypes={} keyword={} categoryCode={} pageNo={} pageSize={}",
+                buyerCode, projectCode, productTypes, searchKeyword, searchCategoryCode, pageNo, pageSize);
         BuyerDO buyer = buyerMapper.selectByBuyerCode(buyerCode);
         if (buyer == null) {
             throw exception(BUYER_PROFILE_NOT_FOUND);
         }
-        LambdaQueryWrapper<BuyerProductDO> wrapper = new LambdaQueryWrapper<BuyerProductDO>()
-                .eq(BuyerProductDO::getBuyerId, buyer.getId())
-                .eq(BuyerProductDO::getStatus, BuyerProductStatus.ACTIVE.getCode())
-                .orderByDesc(BuyerProductDO::getUpdatedAt);
+        Long projectId = null;
         if (projectCode != null && !projectCode.isBlank()) {
             BuyerProjectDO project = projectMapper.selectByProjectCode(projectCode);
             if (project == null || !Objects.equals(project.getBuyerId(), buyer.getId())) {
                 throw exception(PROJECT_NOT_FOUND);
             }
+            projectId = project.getId();
+        }
+        PageParam pageParam = new PageParam();
+        pageParam.setPageNo(pageNo == null ? DEFAULT_PAGE_NO : pageNo);
+        pageParam.setPageSize(pageSize == null ? DEFAULT_PAGE_SIZE : pageSize);
+        if (searchKeyword != null || searchCategoryCode != null) {
+            return pageForProjectSelection(buyer.getId(), projectId, productTypes,
+                    searchKeyword, searchCategoryCode, pageParam);
+        }
+        LambdaQueryWrapper<BuyerProductDO> wrapper = new LambdaQueryWrapper<BuyerProductDO>()
+                .eq(BuyerProductDO::getBuyerId, buyer.getId())
+                .eq(BuyerProductDO::getStatus, BuyerProductStatus.ACTIVE.getCode())
+                .orderByDesc(BuyerProductDO::getUpdatedAt);
+        if (projectId != null) {
+            Long selectedProjectId = projectId;
             List<Long> listedProductIds = listingMapper.selectList(new LambdaQueryWrapper<ProjectListingDO>()
-                            .eq(ProjectListingDO::getProjectId, project.getId())
+                            .eq(ProjectListingDO::getProjectId, selectedProjectId)
                             .eq(ProjectListingDO::getStatus, ProjectListingStatus.AVAILABLE.getCode()))
                     .stream().map(ProjectListingDO::getBuyerProductId).filter(Objects::nonNull).distinct().toList();
             if (!listedProductIds.isEmpty()) {
@@ -148,10 +176,40 @@ public class BuyerProductQueryService {
             }
             wrapper.in(BuyerProductDO::getPlatformSkuId, skuIds);
         }
-        PageParam pageParam = new PageParam();
-        pageParam.setPageNo(pageNo == null ? DEFAULT_PAGE_NO : pageNo);
-        pageParam.setPageSize(pageSize == null ? DEFAULT_PAGE_SIZE : pageSize);
         PageResult<BuyerProductDO> page = productMapper.selectPage(pageParam, wrapper);
+        return toListPage(page);
+    }
+
+    private PageResult<BuyerProductListItem> pageForProjectSelection(Long buyerId, Long projectId,
+            List<String> productTypes, String keyword, String categoryCode, PageParam pageParam) {
+        List<Long> categoryIds = categoryCode == null ? null
+                : categoryCoverageService.loadResolver().descendantIdsOf(categoryCode);
+        if (categoryIds != null && categoryIds.isEmpty()) {
+            return new PageResult<>(List.of(), 0L);
+        }
+        String escapedKeyword = keyword == null ? null : keyword.replace("!", "!!")
+                .replace("%", "!%").replace("_", "!_");
+        Short activeStatus = BuyerProductStatus.ACTIVE.getCode();
+        Short availableStatus = ProjectListingStatus.AVAILABLE.getCode();
+        PageResult<BuyerProductDO> page;
+        if (PageParam.PAGE_SIZE_NONE.equals(pageParam.getPageSize())) {
+            List<BuyerProductDO> all = productMapper.selectAllForProjectSelection(buyerId, activeStatus,
+                    productTypes, escapedKeyword, categoryIds, projectId, availableStatus);
+            page = new PageResult<>(all, (long) all.size());
+        } else {
+            IPage<BuyerProductDO> filtered = productMapper.selectPageForProjectSelection(
+                    MyBatisUtils.buildPage(pageParam), buyerId, activeStatus, productTypes,
+                    escapedKeyword, categoryIds, projectId, availableStatus);
+            page = new PageResult<>(filtered.getRecords(), filtered.getTotal());
+        }
+        return toListPage(page);
+    }
+
+    private static String trimToNull(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    private PageResult<BuyerProductListItem> toListPage(PageResult<BuyerProductDO> page) {
         List<BuyerProductListItem> items = new ArrayList<>();
         for (BuyerProductDO product : page.getList()) {
             items.add(toListItem(product));

@@ -2,20 +2,26 @@ package com.aifuli.module.supplychain.tradecore.buyer.application;
 
 import com.aifuli.framework.common.pojo.PageParam;
 import com.aifuli.framework.common.pojo.PageResult;
+import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerAdminQueryService.ProductTypeItem;
+import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerCategoryScopeDO;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerDO;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerProjectDO;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.ProjectListingDO;
+import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerCategoryScopeMapper;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerMapper;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerProjectMapper;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.ProjectListingMapper;
 import com.aifuli.module.supplychain.tradecore.buyer.domain.BuyerProjectStatus;
+import com.aifuli.module.supplychain.tradecore.buyer.domain.BuyerScopeKind;
 import com.aifuli.module.supplychain.tradecore.buyer.domain.ProjectListingStatus;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProductTypeDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProjectListingVersionDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProjectSkuPricingDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProjectSkuPricingVersionDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProjectListingVersionMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProjectSkuPricingMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProjectSkuPricingVersionMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProductTypeMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericBatchPricingService.ProjectOverrides;
 import com.aifuli.module.supplychain.tradecore.profile.domain.PriceSource;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
@@ -31,6 +37,7 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -54,6 +61,8 @@ public class ProjectAdminQueryService {
 
     private final BuyerProjectMapper projectMapper;
     private final BuyerMapper buyerMapper;
+    private final BuyerCategoryScopeMapper categoryScopeMapper;
+    private final ProductTypeMapper productTypeMapper;
     private final ProjectListingMapper listingMapper;
     private final ProjectListingVersionMapper listingVersionMapper;
     private final ProjectSkuPricingMapper projectPricingMapper;
@@ -112,7 +121,7 @@ public class ProjectAdminQueryService {
     }
 
     /**
-     * 项目详情。含内部主键与只读 SKU 统计；不返回 appId/appKey。
+     * 项目详情。含内部主键、只读 SKU 统计与关联分销商已配置的商品类型；不返回 appId/appKey。
      * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#71-档案}。
      */
     public ProjectDetail get(String projectCode) {
@@ -138,7 +147,32 @@ public class ProjectAdminQueryService {
                 project.getDescription(),
                 project.getCatalogMode(),
                 stats.skuCount(),
-                stats.projectPriceSkuCount());
+                stats.projectPriceSkuCount(),
+                buyer == null ? List.of() : productTypes(buyer.getId()));
+    }
+
+    /**
+     * 项目详情只投影关联分销商已配置的商品类型，不读取分销商详情敏感字段；
+     * 类型编码和名称与分销商详情使用同一范围表、商品类型主数据。
+     * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#72-项目商品}。
+     */
+    private List<ProductTypeItem> productTypes(Long buyerId) {
+        LinkedHashSet<String> codes = new LinkedHashSet<>();
+        for (BuyerCategoryScopeDO scope : categoryScopeMapper.selectByBuyerId(buyerId)) {
+            if (BuyerScopeKind.PRODUCT_TYPE.name().equals(scope.getScopeKind())
+                    && scope.getScopeCode() != null && !scope.getScopeCode().isBlank()) {
+                codes.add(scope.getScopeCode());
+            }
+        }
+        if (codes.isEmpty()) {
+            return List.of();
+        }
+        Map<String, ProductTypeDO> typesByCode = productTypeMapper.selectList(
+                new LambdaQueryWrapper<ProductTypeDO>().in(ProductTypeDO::getTypeCode, codes))
+                .stream().collect(Collectors.toMap(ProductTypeDO::getTypeCode, type -> type));
+        return codes.stream().map(typesByCode::get).filter(type -> type != null)
+                .map(type -> new ProductTypeItem(type.getTypeCode(), type.getTypeName()))
+                .toList();
     }
 
     private ProjectListItem toListItem(BuyerProjectDO project, ListingStats stats) {
@@ -307,6 +341,8 @@ public class ProjectAdminQueryService {
             @Schema(description = "项目说明") String description,
             @Schema(description = "目录模式：MANAGED中台管理，INDEPENDENT项目独立") String catalogMode,
             @Schema(description = "未移除项目商品数量") int skuCount,
-            @Schema(description = "当前 listing 中项目通用分销价覆盖或旧 L3 冻结覆盖的数量") int projectPriceSkuCount) {
+            @Schema(description = "当前 listing 中项目通用分销价覆盖或旧 L3 冻结覆盖的数量") int projectPriceSkuCount,
+            @Schema(description = "关联分销商档案配置的商品类型，id 为类型业务编码，name 为类型名称")
+            List<ProductTypeItem> productTypes) {
     }
 }

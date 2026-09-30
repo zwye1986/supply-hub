@@ -451,6 +451,7 @@ Springdoc `components.schemas` 中冲突的通用简单类名。生成契约必�
 
 - `GET /supply-chain/buyers/{buyerCode}/products` 分页。可选查询参数 `productType`（动态商品类型编码，可多选）。兼容单个值；重复键 `productType=A&productType=B` 或逗号拼接 `productType=A,B` 均表示命中任一类型。省略、空白或拆分后无有效编码时不筛选；传入后只返回该分销商未移除、且关联平台 SPU 的 `productType` 落在入参集合内的分销商品。无命中返回空页。筛选不改变按 `updatedAt` 倒序，分页默认仍为 `pageNo=1`、`pageSize=20`。命中字段取列表行同源的平台 SPU，而不是供货配置。
 - 项目新增商品弹窗调用同一分页接口时传可选 `projectCode`。后端先校验项目存在且归属路径中的 `buyerCode`；项目不存在或不属于该分销商均返回 `PROJECT_NOT_FOUND`。只排除**该项目** `sc_project_listing.status=AVAILABLE` 所引用的 `buyer_product_id`，不排除同一分销商其它项目的商品；已移除 listing 对应商品重新可选。排除条件与 `productType` 一起在数据库分页前生效，`total` 为过滤后数量。省略或空白 `projectCode` 保持原有分销商品列表语义及响应字段，不从请求来源或会话推断项目。项目商品详情列表仍走项目商品接口。
+- 同一分页接口为项目新增商品弹窗增加可选 `keyword`（页面「商品 名称/编号」）和 `categoryCode`（页面「商品分类」）。`keyword` 去首尾空格后，对当前平台 SPU 的 `spu_name`、`spu_code` 及 SKU 的 `sku_name`、`sku_code` 做大小写不敏感的字面子串匹配，任一字段命中即可；空白不筛选，`%`、`_` 等输入按普通字符处理。`categoryCode` 是 `sc_product_category.category_code`；由 catalog 应用层的 `ProductCategoryCoverageService` 解析该类目及全部下级类目的 ID，分销商品查询不直接访问类目 Mapper，只匹配 `sc_platform_spu.primary_category_id` 落在此集合的商品。未知类目返回空页，不把类目编码当 `product_classification` 比较。两项条件与 `productType`、项目已加入商品排除条件取交集，均在数据库分页与计数前生效；`total` 为最终命中数量，排序沿用分销商品 `updated_at` 倒序。无新增条件的旧请求与金额响应保持原义。前端搜索、重置及分页直接传 `keyword`/`categoryCode`，停止对当前页做本地筛选。
 - `POST /supply-chain/buyers/{buyerCode}/products` body `{ items: [...] }` 从标品关联；已存在则 `BUYER_PRODUCT_DUPLICATE`。新增分销商品弹窗的选品列表走 `GET /supply-chain/products/management-page`，并传入 `buyerCode` 排除未移除商品；「全部商品」由调用方把该分销商档案中的商品类型编码放进 `productType`。每行可带可选 `pricing`，字段与 `PUT /buyers/{buyerCode}/products/pricing` 的覆盖组相同。`pricing` 省略时只关联并按商品默认定价初始化；传入时在同一事务内保存分销商通用定价。任一条缺少平台默认定价时整单回滚，返回 `PLATFORM_DEFAULT_PRICING_MISSING`。销售价与服务费仍可标记继承。
 - `PATCH /supply-chain/buyers/{buyerCode}/products/{buyerProductCode}` 改价（写/清 L2 覆盖，body 含 `l2AdjustMode` 等）
 - `DELETE /supply-chain/buyers/{buyerCode}/products/{buyerProductCode}` 逻辑移除（不再出现在列表；已发布项目目录不回放删除，新项目不得再选）
@@ -492,14 +493,15 @@ Springdoc `components.schemas` 中冲突的通用简单类名。生成契约必�
 
 即 `ProjectListing` + L3 覆盖。
 
-- `GET /supply-chain/projects/{projectCode}/products`
+- `GET /supply-chain/projects/{projectCode}` 详情增加关联分销商档案配置的 `productTypes[]`（`{id,name}`），名称与分销商详情同源；由项目查询权限返回，避免项目页面额外依赖分销商查询权限。项目详情「分销商品」展示「全部商品」及这些商品类型 Tab。「全部商品」传全部非空类型编码，档案未配置类型时省略筛选参数。切换 Tab 时重置到第一页，说明区、商品列表及新增按钮仍在原位置；本次不改新增商品弹窗。
+- 项目商品分页新增可选 `productType`（动态类型编码，单值、重复键或逗号拼接均可，命中任一类型）；省略、空白或拆分后无有效编码时不筛选。服务端先限定当前项目未移除 listing，再沿 `buyer_product_id → platform_sku_id → platform_spu.product_type` 在数据库分页前筛选，`total` 与分页均按筛选后的集合计算，排序仍按 listing `updated_at` 倒序；沿用 `pageSize=-1` 不分页时返回全部命中行及其真实 `total`。类型来自平台 SPU，不使用分销商档案类型替代商品真实类型；无命中返回空页。不传类型时筛选、分页和原有金额字段口径保持不变。
 - 项目新增商品待选分页使用 `GET /supply-chain/buyers/{buyerCode}/products?projectCode={projectCode}`；由服务端按项目排除已加入商品并保持当前分销价等列表字段，不在前端用当前页项目商品过滤。
 - `POST /supply-chain/projects/{projectCode}/products` body `{ items: [...] }`：SKU 必须已是所属 Buyer 的未移除分销商品，否则 `PROJECT_SKU_NOT_IN_BUYER_CATALOG`。默认 `l3AdjustMode=FOLLOW_L2`（不写 L3）。批量配置可同时带 L3。
 - 每个 `items[]` 可选带 `pricing`，字段沿用新增分销商品的五组继承/覆盖请求，含 `distributionHideThresholdPercent` 与税务字段；省略时初始化全继承项目通用定价，传入时在新增 listing 的同一供应链事务内保存项目通用定价，任一行定价失败整批回滚。`pricing.distributionInherited=false` 且规则完整时，当前项目通用定价版本的 `distribution_price_cents` 是该 SKU 的项目专属价。旧 `l3AdjustMode` 与行内通用定价不得在同一行同时使用，避免两套 L3 来源冲突。
 - `PATCH /supply-chain/projects/{projectCode}/products/{listingCode}` 改价（写/清 L3，发新 `ProjectListingVersion`）
 - `DELETE /supply-chain/projects/{projectCode}/products/{listingCode}` 逻辑移除（目录项不再可采购；历史订单仍读冻结版本）
 
-新增即对项目可采购（等价上架）。列表金额：`suggestPriceCents`（历史 L1 兼容）、`suggestedSalePriceCents`（C 端 SKU 建议价）、`platformBasePriceCents`（B 端项目调价基数）、`distPriceCents`（当前有效分销价）、`projectPriceCents`、`finalPriceCents`、`priceSource`、`projectPriceCovered`。保留 `l3AdjustMode=EQUAL_L1` 请求枚举，但页面文案改为“等于平台默认分销价”；`CUSTOM` 以同一 B 端基数计算。
+新增即对项目可采购（等价上架）。项目商品行沿 `listing.buyer_product_id → sc_buyer_product.platform_sku_id → sc_platform_sku.spu_id → sc_platform_spu` 增补 `spuCode`、`spuName`、`productType`、`productTypeName`、`productClassification`、`categoryName`、`marketPriceCents`：SPU 编码、名称、类型编码、供货命中分类码取当前 SPU 主数据；类型名称取 `sc_product_type.type_name`；分类显示名称取 SPU 主类目 `sc_product_category.category_name`；市场价取当前 SKU 的 `market_price`（市场划线价/吊牌价，CNY 分），不得由 `suggested_sale_price`、旧 L1 或 B 端分销价推算。关联主数据缺失时对应展示字段返回空值，0 分市场价是有效值；类型名称或类目名称缺失时保留编码供页面兜底显示。只增加列表展示字段，不改价格计算和冻结版本。列表原有金额：`suggestPriceCents`（历史 L1 兼容）、`suggestedSalePriceCents`（C 端 SKU 建议价）、`platformBasePriceCents`（B 端项目调价基数）、`distPriceCents`（当前有效分销价）、`projectPriceCents`、`finalPriceCents`、`priceSource`、`projectPriceCovered`。保留 `l3AdjustMode=EQUAL_L1` 请求枚举，但页面文案改为“等于平台默认分销价”；`CUSTOM` 以同一 B 端基数计算。
 
 项目商品当前通用定价版本明确覆盖分销价（`distributionInherited=false`）时，列表 `projectPriceCents` 与 `finalPriceCents` 取该版本的 `distribution_price_cents`，`priceSource=L3`、`projectPriceCovered=true`；若计算结果因依赖缺失为空，金额保持空值，不回退旧冻结价。通用版本全继承时，旧冻结金额字段仍按原语义读取，旧 L3 覆盖仍显示为专属价。`projectPriceSkuCount` 与列表采用同一覆盖判断，对通用覆盖与旧 L3 取并集，每个 listing 只计一次。此处读取版本快照，不重算价格或改写历史订单。
 

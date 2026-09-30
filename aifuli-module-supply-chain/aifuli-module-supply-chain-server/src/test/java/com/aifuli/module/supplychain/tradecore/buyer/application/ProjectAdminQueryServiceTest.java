@@ -3,11 +3,17 @@ package com.aifuli.module.supplychain.tradecore.buyer.application;
 import com.aifuli.framework.common.pojo.PageResult;
 import com.aifuli.framework.common.pojo.PageParam;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerProjectDO;
+import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerDO;
+import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerCategoryScopeDO;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.ProjectListingDO;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerMapper;
+import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerCategoryScopeMapper;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerProjectMapper;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.ProjectListingMapper;
 import com.aifuli.module.supplychain.tradecore.buyer.domain.BuyerProjectStatus;
+import com.aifuli.module.supplychain.tradecore.buyer.domain.BuyerScopeKind;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProductTypeDO;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProductTypeMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProjectListingVersionDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProjectSkuPricingDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProjectSkuPricingVersionDO;
@@ -41,6 +47,7 @@ class ProjectAdminQueryServiceTest {
         ProjectSkuPricingVersionMapper pricingVersionMapper = mock(ProjectSkuPricingVersionMapper.class);
         ObjectMapper objectMapper = new ObjectMapper();
         ProjectAdminQueryService service = new ProjectAdminQueryService(projectMapper, mock(BuyerMapper.class),
+                mock(BuyerCategoryScopeMapper.class), mock(ProductTypeMapper.class),
                 listingMapper, listingVersionMapper, pricingMapper, pricingVersionMapper, objectMapper);
         when(projectMapper.selectByProjectCode("PRJ_1")).thenReturn(BuyerProjectDO.builder()
                 .id(1L).projectCode("PRJ_1").status(BuyerProjectStatus.ACTIVE.getCode()).build());
@@ -73,6 +80,7 @@ class ProjectAdminQueryServiceTest {
         ProjectListingVersionMapper listingVersionMapper = mock(ProjectListingVersionMapper.class);
         ObjectMapper objectMapper = new ObjectMapper();
         ProjectAdminQueryService service = new ProjectAdminQueryService(projectMapper, mock(BuyerMapper.class),
+                mock(BuyerCategoryScopeMapper.class), mock(ProductTypeMapper.class),
                 listingMapper, listingVersionMapper, pricingMapper, pricingVersionMapper, objectMapper);
         when(projectMapper.selectPage(any(PageParam.class), any(Wrapper.class))).thenReturn(new PageResult<>(List.of(
                 BuyerProjectDO.builder().id(1L).status(BuyerProjectStatus.ACTIVE.getCode()).build(),
@@ -98,5 +106,36 @@ class ProjectAdminQueryServiceTest {
 
         assertThat(rows).extracting(row -> row.skuCount()).containsExactly(2, 1, 0);
         assertThat(rows).extracting(row -> row.projectPriceSkuCount()).containsExactly(1, 0, 0);
+    }
+
+    /** 项目详情只取关联分销商的商品类型范围，保持与分销商详情相同的类型名称。 */
+    @Test
+    void detailProjectsBuyersConfiguredProductTypes() {
+        BuyerProjectMapper projectMapper = mock(BuyerProjectMapper.class);
+        BuyerMapper buyerMapper = mock(BuyerMapper.class);
+        BuyerCategoryScopeMapper scopeMapper = mock(BuyerCategoryScopeMapper.class);
+        ProductTypeMapper typeMapper = mock(ProductTypeMapper.class);
+        ProjectListingMapper listingMapper = mock(ProjectListingMapper.class);
+        ProjectAdminQueryService service = new ProjectAdminQueryService(projectMapper, buyerMapper,
+                scopeMapper, typeMapper, listingMapper, mock(ProjectListingVersionMapper.class),
+                mock(ProjectSkuPricingMapper.class), mock(ProjectSkuPricingVersionMapper.class), new ObjectMapper());
+        when(projectMapper.selectByProjectCode("PRJ_1")).thenReturn(BuyerProjectDO.builder()
+                .id(1L).buyerId(2L).status(BuyerProjectStatus.ACTIVE.getCode()).build());
+        when(buyerMapper.selectById(2L)).thenReturn(BuyerDO.builder().id(2L).build());
+        when(scopeMapper.selectByBuyerId(2L)).thenReturn(List.of(
+                BuyerCategoryScopeDO.builder().scopeKind(BuyerScopeKind.SELLABLE.name()).scopeCode("MOVIE").build(),
+                BuyerCategoryScopeDO.builder().scopeKind(BuyerScopeKind.PRODUCT_TYPE.name()).scopeCode("MOVIE").build(),
+                BuyerCategoryScopeDO.builder().scopeKind(BuyerScopeKind.PRODUCT_TYPE.name()).scopeCode("EQUITY_PRODUCT").build()));
+        when(typeMapper.selectList(any())).thenReturn(List.of(
+                ProductTypeDO.builder().typeCode("EQUITY_PRODUCT").typeName("虚拟权益商品").build(),
+                ProductTypeDO.builder().typeCode("MOVIE").typeName("电影票").build()));
+        when(listingMapper.selectList(any())).thenReturn(List.of());
+
+        var detail = service.get("PRJ_1");
+
+        assertThat(detail.productTypes()).extracting(type -> type.id())
+                .containsExactly("MOVIE", "EQUITY_PRODUCT");
+        assertThat(detail.productTypes()).extracting(type -> type.name())
+                .containsExactly("电影票", "虚拟权益商品");
     }
 }

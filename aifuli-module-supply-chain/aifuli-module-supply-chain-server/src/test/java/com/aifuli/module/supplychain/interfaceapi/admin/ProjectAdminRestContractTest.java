@@ -27,6 +27,7 @@ import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 
 import java.lang.reflect.Method;
 import java.time.LocalDate;
@@ -44,6 +45,18 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#71-档案}。
  */
 class ProjectAdminRestContractTest {
+
+    /** 项目商品的类型筛选必须由服务端分页接口接收，不能只过滤当前页。 */
+    @Test
+    void projectProductsAcceptProductTypeFilter() {
+        Method method = Arrays.stream(ProjectAdminController.class.getDeclaredMethods())
+                .filter(candidate -> candidate.getName().equals("pageProducts"))
+                .findFirst().orElseThrow();
+        assertThat(method.getParameters()).anySatisfy(parameter -> {
+            assertThat(parameter.getType()).isEqualTo(List.class);
+            assertThat(parameter.getAnnotation(RequestParam.class)).isNotNull();
+        });
+    }
 
     private static final Set<String> FORBIDDEN_FRAGMENTS =
             Set.of("invoice", "create", "page", "appKey");
@@ -90,7 +103,7 @@ class ProjectAdminRestContractTest {
         ProjectDetail detail = new ProjectDetail(
                 1L, "PRJ_1", "福利项目", "ACTIVE", "BYR_A", "一级",
                 "EMPLOYEE_BENEFIT", LocalDate.of(2026, 9, 1), LocalDate.of(2026, 9, 30),
-                "DISTRIBUTOR", "说明", "MANAGED", 0, 0);
+                "DISTRIBUTOR", "说明", "MANAGED", 0, 0, List.of());
         String json = mapper.writeValueAsString(detail);
         assertThat(json).doesNotContain("appKey", "appId");
         assertThat(json).contains("projectCode").contains("skuCount").contains("projectPriceSkuCount");
@@ -107,6 +120,17 @@ class ProjectAdminRestContractTest {
         assertThat(propertyNames).contains("skuCount", "projectPriceSkuCount");
     }
 
+    /** 项目查询权限即可获取关联分销商的类型按钮选项。 */
+    @Test
+    void projectDetailExposesBuyerProductTypes() {
+        ObjectMapper mapper = new ObjectMapper();
+        Set<String> propertyNames = mapper.getSerializationConfig()
+                .introspect(mapper.constructType(ProjectDetail.class))
+                .findProperties().stream().map(property -> property.getName())
+                .collect(Collectors.toSet());
+        assertThat(propertyNames).contains("productTypes");
+    }
+
     /** 项目商品列表将 SKU 销售建议价与 B 端项目调价基数分开回显。 */
     @Test
     void productPageHasDistinctSaleSuggestionAndPlatformBaseFields() {
@@ -116,7 +140,9 @@ class ProjectAdminRestContractTest {
                 .findProperties().stream().map(property -> property.getName())
                 .collect(Collectors.toSet());
 
-        assertThat(propertyNames).contains("suggestPriceCents", "suggestedSalePriceCents",
+        assertThat(propertyNames).contains("spuCode", "spuName", "productType", "productTypeName",
+                "productClassification", "categoryName", "marketPriceCents",
+                "suggestPriceCents", "suggestedSalePriceCents",
                 "platformBasePriceCents", "distPriceCents", "finalPriceCents", "projectPricingConfig");
     }
 
@@ -125,7 +151,7 @@ class ProjectAdminRestContractTest {
     @SuppressWarnings("rawtypes")
     void productPageDocumentsConcreteResponseAndEveryNestedField() throws Exception {
         Method method = ProjectAdminController.class.getDeclaredMethod("pageProducts",
-                String.class, Integer.class, Integer.class);
+                String.class, Integer.class, Integer.class, List.class);
         Operation operation = method.getAnnotation(Operation.class);
         assertThat(operation.responses()).hasSize(1);
         assertThat(operation.responses()[0].content()[0].schema().implementation())
@@ -138,6 +164,8 @@ class ProjectAdminRestContractTest {
         assertDescriptions(schemas, page, "total", "list");
         Schema<?> row = referencedSchema(schemas, page.getProperties().get("list").getItems());
         assertThat(row.getProperties()).containsKeys("listingCode", "platformSkuCode", "skuName",
+                "spuCode", "spuName", "productType", "productTypeName",
+                "productClassification", "categoryName", "marketPriceCents",
                 "suggestPriceCents", "suggestedSalePriceCents", "platformBasePriceCents",
                 "distPriceCents", "projectPriceCents", "finalPriceCents", "priceSource",
                 "projectPriceCovered", "projectPricingConfig");
@@ -198,7 +226,7 @@ class ProjectAdminRestContractTest {
     @Test
     void productPageResponseExampleContainsEveryField() throws Exception {
         Method method = ProjectAdminController.class.getDeclaredMethod("pageProducts",
-                String.class, Integer.class, Integer.class);
+                String.class, Integer.class, Integer.class, List.class);
         var content = method.getAnnotation(Operation.class).responses()[0].content()[0];
         assertThat(content.mediaType()).isEqualTo("application/json");
         assertThat(content.examples()).isEmpty();

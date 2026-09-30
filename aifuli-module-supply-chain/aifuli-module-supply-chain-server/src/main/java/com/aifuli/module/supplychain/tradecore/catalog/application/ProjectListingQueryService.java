@@ -2,6 +2,7 @@ package com.aifuli.module.supplychain.tradecore.catalog.application;
 
 import com.aifuli.framework.common.pojo.PageParam;
 import com.aifuli.framework.common.pojo.PageResult;
+import com.aifuli.framework.mybatis.core.util.MyBatisUtils;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerProductDO;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerProjectDO;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.ProjectListingDO;
@@ -11,10 +12,16 @@ import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.ProjectListingMap
 import com.aifuli.module.supplychain.tradecore.buyer.domain.ProjectListingStatus;
 import com.aifuli.module.supplychain.tradecore.catalog.application.ProjectListingPriceSource.PriceBasis;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuDO;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSpuDO;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProductCategoryDO;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProductTypeDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProjectListingVersionDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProjectSkuPricingDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProjectSkuPricingVersionDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSpuMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProductCategoryMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProductTypeMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProjectListingVersionMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProjectSkuPricingMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProjectSkuPricingVersionMapper;
@@ -25,6 +32,7 @@ import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericPricingCal
 import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericPricingCalculator.TaxMetadata;
 import com.aifuli.module.supplychain.tradecore.profile.domain.PriceSource;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -35,9 +43,12 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -65,6 +76,9 @@ public class ProjectListingQueryService {
     private final ProjectSkuPricingVersionMapper projectPricingVersionMapper;
     private final BuyerProductMapper productMapper;
     private final PlatformSkuMapper skuMapper;
+    private final PlatformSpuMapper spuMapper;
+    private final ProductTypeMapper productTypeMapper;
+    private final ProductCategoryMapper categoryMapper;
     private final ProjectListingPriceSource priceSource;
     private final ObjectMapper objectMapper;
 
@@ -75,7 +89,20 @@ public class ProjectListingQueryService {
      */
     @Transactional(transactionManager = "supplyChainTransactionManager", readOnly = true)
     public PageResult<ProjectListingListItem> page(String projectCode, Integer pageNo, Integer pageSize) {
-        log.info("分页查询项目商品 projectCode={} pageNo={} pageSize={}", projectCode, pageNo, pageSize);
+        return page(projectCode, List.of(), pageNo, pageSize);
+    }
+
+    /**
+     * 按平台 SPU 的动态商品类型过滤项目现有商品；过滤与总数统计均在数据库分页前完成。
+     * 省略或空白类型时沿用原分页查询，不改变历史接口口径。
+     * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#72-项目商品}。
+     */
+    @Transactional(transactionManager = "supplyChainTransactionManager", readOnly = true)
+    public PageResult<ProjectListingListItem> page(String projectCode, List<String> productType,
+                                                    Integer pageNo, Integer pageSize) {
+        List<String> productTypes = normalizeProductTypes(productType);
+        log.info("分页查询项目商品 projectCode={} productTypes={} pageNo={} pageSize={}",
+                projectCode, productTypes, pageNo, pageSize);
         BuyerProjectDO project = projectMapper.selectByProjectCode(projectCode);
         if (project == null) {
             throw exception(PROJECT_NOT_FOUND);
@@ -83,16 +110,104 @@ public class ProjectListingQueryService {
         PageParam pageParam = new PageParam();
         pageParam.setPageNo(pageNo == null ? DEFAULT_PAGE_NO : pageNo);
         pageParam.setPageSize(pageSize == null ? DEFAULT_PAGE_SIZE : pageSize);
-        PageResult<ProjectListingDO> page = listingMapper.selectPage(pageParam, new LambdaQueryWrapper<ProjectListingDO>()
-                .eq(ProjectListingDO::getProjectId, project.getId())
-                .eq(ProjectListingDO::getStatus, ProjectListingStatus.AVAILABLE.getCode())
-                .orderByDesc(ProjectListingDO::getUpdatedAt));
+        PageResult<ProjectListingDO> page;
+        if (productTypes.isEmpty()) {
+            page = listingMapper.selectPage(pageParam, new LambdaQueryWrapper<ProjectListingDO>()
+                    .eq(ProjectListingDO::getProjectId, project.getId())
+                    .eq(ProjectListingDO::getStatus, ProjectListingStatus.AVAILABLE.getCode())
+                    .orderByDesc(ProjectListingDO::getUpdatedAt));
+        } else if (PageParam.PAGE_SIZE_NONE.equals(pageParam.getPageSize())) {
+            List<ProjectListingDO> all = listingMapper.selectAllByProductTypes(project.getId(),
+                    ProjectListingStatus.AVAILABLE.getCode(), productTypes);
+            page = new PageResult<>(all, (long) all.size());
+        } else {
+            IPage<ProjectListingDO> filtered = listingMapper.selectPageByProductTypes(
+                    MyBatisUtils.buildPage(pageParam), project.getId(),
+                    ProjectListingStatus.AVAILABLE.getCode(), productTypes);
+            page = new PageResult<>(filtered.getRecords(), filtered.getTotal());
+        }
         Map<Long, ProjectSkuPricingVersionDO> pricingVersions = currentPricingVersions(page.getList());
+        Map<Long, ProductContext> products = loadProducts(page.getList());
+        Map<Long, PlatformSpuDO> spus = loadSpus(products.values());
+        Map<String, String> typeNames = loadTypeNames(spus.values());
+        Map<Long, String> categoryNames = loadCategoryNames(spus.values());
         List<ProjectListingListItem> items = new ArrayList<>();
         for (ProjectListingDO listing : page.getList()) {
-            items.add(toListItem(listing, pricingVersions.get(listing.getId())));
+            ProductContext product = products.get(listing.getId());
+            PlatformSpuDO spu = product == null || product.sku() == null ? null
+                    : spus.get(product.sku().getSpuId());
+            items.add(toListItem(listing, pricingVersions.get(listing.getId()), product, spu,
+                    typeNames, categoryNames));
         }
         return new PageResult<>(items, page.getTotal());
+    }
+
+    /**
+     * 先限定当前页 listing，再批量读取 SPU、类型和主类目展示主数据；缺失关联只影响展示，不推算价格。
+     * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#72-项目商品}。
+     */
+    private Map<Long, ProductContext> loadProducts(List<ProjectListingDO> listings) {
+        Map<Long, ProductContext> result = new HashMap<>();
+        for (ProjectListingDO listing : listings) {
+            BuyerProductDO product = listing.getBuyerProductId() == null
+                    ? null : productMapper.selectById(listing.getBuyerProductId());
+            PlatformSkuDO sku = product == null || product.getPlatformSkuId() == null
+                    ? null : skuMapper.selectById(product.getPlatformSkuId());
+            result.put(listing.getId(), new ProductContext(product, sku));
+        }
+        return result;
+    }
+
+    private Map<Long, PlatformSpuDO> loadSpus(Collection<ProductContext> products) {
+        List<Long> ids = products.stream().map(ProductContext::sku).filter(Objects::nonNull)
+                .map(PlatformSkuDO::getSpuId).filter(Objects::nonNull).distinct().toList();
+        if (ids.isEmpty()) {
+            return Map.of();
+        }
+        return spuMapper.selectBatchIds(ids).stream()
+                .collect(Collectors.toMap(PlatformSpuDO::getId, Function.identity()));
+    }
+
+    private Map<String, String> loadTypeNames(Collection<PlatformSpuDO> spus) {
+        List<String> codes = spus.stream().map(PlatformSpuDO::getProductType)
+                .filter(Objects::nonNull).distinct().toList();
+        if (codes.isEmpty()) {
+            return Map.of();
+        }
+        return productTypeMapper.selectList(new LambdaQueryWrapper<ProductTypeDO>()
+                        .in(ProductTypeDO::getTypeCode, codes)).stream()
+                .collect(Collectors.toMap(ProductTypeDO::getTypeCode, ProductTypeDO::getTypeName));
+    }
+
+    private Map<Long, String> loadCategoryNames(Collection<PlatformSpuDO> spus) {
+        List<Long> ids = spus.stream().map(PlatformSpuDO::getPrimaryCategoryId)
+                .filter(Objects::nonNull).distinct().toList();
+        if (ids.isEmpty()) {
+            return Map.of();
+        }
+        return categoryMapper.selectBatchIds(ids).stream()
+                .collect(Collectors.toMap(ProductCategoryDO::getId, ProductCategoryDO::getCategoryName));
+    }
+
+    private record ProductContext(BuyerProductDO product, PlatformSkuDO sku) { }
+
+    private static List<String> normalizeProductTypes(List<String> raw) {
+        if (raw == null || raw.isEmpty()) {
+            return List.of();
+        }
+        LinkedHashSet<String> codes = new LinkedHashSet<>();
+        for (String item : raw) {
+            if (item == null || item.isBlank()) {
+                continue;
+            }
+            for (String part : item.split(",")) {
+                String code = part.trim();
+                if (!code.isEmpty()) {
+                    codes.add(code);
+                }
+            }
+        }
+        return List.copyOf(codes);
     }
 
     /**
@@ -132,11 +247,11 @@ public class ProjectListingQueryService {
         return byListing;
     }
 
-    private ProjectListingListItem toListItem(ProjectListingDO listing, ProjectSkuPricingVersionDO pricingVersion) {
-        BuyerProductDO product = listing.getBuyerProductId() == null
-                ? null : productMapper.selectById(listing.getBuyerProductId());
-        PlatformSkuDO sku = product == null || product.getPlatformSkuId() == null
-                ? null : skuMapper.selectById(product.getPlatformSkuId());
+    private ProjectListingListItem toListItem(ProjectListingDO listing, ProjectSkuPricingVersionDO pricingVersion,
+                                              ProductContext context, PlatformSpuDO spu,
+                                              Map<String, String> typeNames, Map<Long, String> categoryNames) {
+        BuyerProductDO product = context == null ? null : context.product();
+        PlatformSkuDO sku = context == null ? null : context.sku();
         PriceBasis basis = product == null ? null : priceSource.resolve(product);
         Long suggestPriceCents = sku == null ? null : priceSource.legacyPlatformPrice(sku.getId());
         Long platformBasePriceCents = basis == null ? null : basis.platformBaseCents();
@@ -152,6 +267,14 @@ public class ProjectListingQueryService {
                 listing.getListingCode(),
                 sku == null ? null : sku.getSkuCode(),
                 sku == null ? null : sku.getSkuName(),
+                spu == null ? null : spu.getSpuCode(),
+                spu == null ? null : spu.getSpuName(),
+                spu == null ? null : spu.getProductType(),
+                spu == null || spu.getProductType() == null ? null : typeNames.get(spu.getProductType()),
+                spu == null ? null : spu.getProductClassification(),
+                spu == null || spu.getPrimaryCategoryId() == null
+                        ? null : categoryNames.get(spu.getPrimaryCategoryId()),
+                sku == null ? null : sku.getMarketPrice(),
                 suggestPriceCents,
                 sku == null ? null : sku.getSuggestedSalePrice(),
                 platformBasePriceCents,
@@ -188,6 +311,13 @@ public class ProjectListingQueryService {
             @Schema(description = "项目商品稳定业务编码") String listingCode,
             @Schema(description = "平台 SKU 永久业务编码；平台 SKU 缺失时为空") String platformSkuCode,
             @Schema(description = "平台 SKU 名称；平台 SKU 缺失时为空") String skuName,
+            @Schema(description = "平台SPU永久业务编码；关联 SPU 缺失时为空") String spuCode,
+            @Schema(description = "平台SPU标准名称；关联 SPU 缺失时为空") String spuName,
+            @Schema(description = "平台 SPU 动态商品类型编码；关联 SPU 缺失时为空") String productType,
+            @Schema(description = "平台 SPU 动态商品类型名称；类型主数据缺失时为空") String productTypeName,
+            @Schema(description = "平台 SPU 商品分类供货命中码；关联 SPU 缺失时为空") String productClassification,
+            @Schema(description = "平台主类目的类目名称；主类目缺失时为空") String categoryName,
+            @Schema(description = "市场划线价/吊牌价，单位为分；平台 SKU 缺失时为空，0 为有效值") Long marketPriceCents,
             @Schema(description = "历史 L1 建议结算价兼容字段，单位 CNY 分；无旧 L1 时为空") Long suggestPriceCents,
             @Schema(description = "平台 SKU 销售建议价，单位 CNY 分；平台 SKU 缺失时为空") Long suggestedSalePriceCents,
             @Schema(description = "旧 L3 调价模式使用的 B 端平台基价，单位 CNY 分；无有效基价时为空") Long platformBasePriceCents,

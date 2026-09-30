@@ -1,6 +1,7 @@
 package com.aifuli.module.supplychain.tradecore.buyer;
 
 import com.aifuli.framework.common.exception.ServiceException;
+import com.aifuli.framework.common.pojo.PageParam;
 import com.aifuli.module.supplychain.infrastructure.configuration.SupplyChainDataSourceConfiguration;
 import com.aifuli.module.supplychain.infrastructure.identity.BusinessNoGenerator;
 import com.aifuli.module.supplychain.infrastructure.identity.UlidGenerator;
@@ -164,6 +165,8 @@ class ProjectAdminIntegrationTest {
                     LocalDate.of(2026, 9, 1), LocalDate.of(2026, 12, 31),
                     null, "说明", "ACTIVE", 1L));
             assertThat(projectQueries.get(projectCode).status()).isEqualTo("ACTIVE");
+            assertThat(projectQueries.get(projectCode).productTypes())
+                    .containsExactlyElementsOf(buyerQueries.get(buyerA).productTypes());
 
             var buyerPage = buyerQueries.page(new BuyerAdminQueryService.BuyerPageQuery(
                     null, buyerA, List.of(), List.of(), List.of(), List.of(), null, null, 1, 20));
@@ -200,6 +203,25 @@ class ProjectAdminIntegrationTest {
             assertThat(buyerProductQuery.page(buyerA, List.of(), projectCode, 1, 1).getTotal()).isZero();
             var initialListingPage = listingQuery.page(projectCode, 1, 20).getList();
             assertThat(initialListingPage).hasSize(1);
+            var displayRow = initialListingPage.getFirst();
+            assertThat(displayRow.spuCode()).isEqualTo("SPU_001");
+            assertThat(displayRow.spuName()).isEqualTo("电影票");
+            assertThat(displayRow.productType()).isEqualTo("MOVIE");
+            assertThat(displayRow.productTypeName()).isNotBlank();
+            assertThat(displayRow.productClassification()).isEqualTo("MOVIE_TICKET");
+            assertThat(displayRow.categoryName()).isEqualTo("电影快充");
+            assertThat(displayRow.marketPriceCents()).isEqualTo(0L);
+            var moviePage = listingQuery.page(projectCode, List.of("MOVIE"), 1, 1);
+            assertThat(moviePage.getTotal()).isEqualTo(1L);
+            assertThat(moviePage.getList()).extracting(ProjectListingQueryService.ProjectListingListItem::listingCode)
+                    .containsExactly(listingCode);
+            assertThat(listingQuery.page(projectCode, List.of("EQUITY_PRODUCT"), 1, 1).getTotal())
+                    .isZero();
+            assertThat(listingQuery.page(projectCode, List.of("  ", "MOVIE,EQUITY_PRODUCT"), 1, 1)
+                    .getTotal()).isEqualTo(1L);
+            assertThat(listingQuery.page(projectCode, List.of("MOVIE"), 2, 1).getList()).isEmpty();
+            assertThat(listingQuery.page(projectCode, List.of("MOVIE"), 1, PageParam.PAGE_SIZE_NONE)
+                    .getTotal()).isEqualTo(1L);
             assertThat(initialListingPage.getFirst().distPriceCents()).isEqualTo(L1_CENTS);
             assertThat(initialListingPage.getFirst().finalPriceCents()).isEqualTo(L1_CENTS);
             assertThat(initialListingPage.getFirst().priceSource()).isEqualTo(PriceSource.L1.name());
@@ -493,6 +515,18 @@ class ProjectAdminIntegrationTest {
                 new ProductLine("SKU_001_200", L2AdjustMode.FOLLOW_TEMPLATE, null, null, null, null)), 1L).getFirst();
         String buyerProductB100Code = products.addProducts(buyerB, List.of(
                 new ProductLine("SKU_001_100", L2AdjustMode.FOLLOW_TEMPLATE, null, null, null, null)), 1L).getFirst();
+        BuyerProductQueryService buyerProductQuery = context.getBean(BuyerProductQueryService.class);
+        var selection = buyerProductQuery.page(buyerA, List.of("MOVIE"), projectA,
+                "电影票", "CAT_001", 1, 1);
+        assertThat(selection.getTotal()).isEqualTo(1L);
+        assertThat(selection.getList()).extracting(BuyerProductQueryService.BuyerProductListItem::buyerProductCode)
+                .containsExactly(buyerProductA200Code);
+        assertThat(buyerProductQuery.page(buyerA, List.of("MOVIE"), projectA,
+                "SKU_001_200", "CAT_002_001", 1, 1).getTotal()).isEqualTo(1L);
+        assertThat(buyerProductQuery.page(buyerA, List.of("MOVIE"), projectA,
+                "电影票", "CAT_001", 2, 1).getList()).isEmpty();
+        assertThat(buyerProductQuery.page(buyerA, List.of("MOVIE"), projectA,
+                "电影票", "UNKNOWN", 1, 1).getTotal()).isZero();
         BuyerProductDO buyerProductA100 = productMapper.selectByCode(buyerProductA100Code);
         BuyerProductDO buyerProductA200 = productMapper.selectByCode(buyerProductA200Code);
 
