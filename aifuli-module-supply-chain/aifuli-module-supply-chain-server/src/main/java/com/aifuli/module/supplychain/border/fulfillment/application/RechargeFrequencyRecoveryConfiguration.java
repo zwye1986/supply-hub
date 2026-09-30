@@ -40,9 +40,12 @@ public class RechargeFrequencyRecoveryConfiguration {
                     long count = failures.incrementAndGet(); long now = System.nanoTime(); long previous = lastLog.get();
                     if (count == 1 || now-previous >= TimeUnit.SECONDS.toNanos(ALERT_REPEAT_SECONDS)) {
                         lastLog.set(now);
-                        log.error("[直充限频补偿] event={}, failedBatches={}, failureType={}, causeType={}, failedQueues={}",
-                                RechargeFrequencyRecoveryCodes.STORAGE_FAILED, count, exception.getClass().getSimpleName(),
-                                exception.getCause() == null ? null : exception.getCause().getClass().getSimpleName(), exception.getSuppressed().length+1);
+                        // 扫描原异常与逐队列安全异常在最终日志边界统一处理，保留完整安全因果与失败队列引用。
+                        // 设计见 docs/superpowers/specs/2026-09-30-direct-recharge-mobile-spu-frequency-design.md#9-告警与观测。
+                        var safe = RechargeFrequencyRecoveryService.safeFailure(RechargeFrequencyRecoveryCodes.STORAGE_FAILED, exception);
+                        var queueIds = RechargeFrequencyRecoveryService.failedQueueIds(safe);
+                        log.error("[直充限频补偿] event={}, failedBatches={}, failedQueues={}, queueIds={}",
+                                RechargeFrequencyRecoveryCodes.STORAGE_FAILED, count, queueIds.size(), queueIds, safe);
                     }
                 }
             }, RECOVERY_CHECK_SECONDS, RECOVERY_CHECK_SECONDS, TimeUnit.SECONDS);

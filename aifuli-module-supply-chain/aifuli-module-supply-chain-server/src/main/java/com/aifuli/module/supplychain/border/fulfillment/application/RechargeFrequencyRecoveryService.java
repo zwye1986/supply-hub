@@ -17,6 +17,11 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import java.time.LocalDateTime;
 import java.util.Objects;
+import java.util.List;
+import java.util.Set;
+import java.util.LinkedHashSet;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import static com.aifuli.module.supplychain.border.fulfillment.domain.RechargeFrequencyConstants.*;
 import static com.aifuli.module.supplychain.infrastructure.timer.dal.mysql.TimerTaskMapper.*;
 
@@ -48,7 +53,7 @@ public class RechargeFrequencyRecoveryService {
             try { if (self.getObject().repair(queue.getId())) { repaired++; } }
             catch (RuntimeException exception) {
                 // 保留首个安全因果，单个异常不阻断其他队列，也不伪装为成功；日志由批次调度器限频。
-                var safe = safeFailure(RechargeFrequencyRecoveryCodes.RECOVERY_FAILED, exception);
+                var safe = new SafeRecoveryFailure(RechargeFrequencyRecoveryCodes.RECOVERY_FAILED, exception, List.of(queue.getId()));
                 if (failure == null) { failure = safe; }
                 else { failure.addSuppressed(safe); }
             }
@@ -182,14 +187,43 @@ public class RechargeFrequencyRecoveryService {
     static boolean alarmDue(boolean active, Boolean previous, LocalDateTime last, LocalDateTime now) {
         return active != Boolean.TRUE.equals(previous) || (active && (last == null || !now.isBefore(last.plusSeconds(ALERT_REPEAT_SECONDS))));
     }
+    /** 安全异常载体只保存错误类型、代码位置与已知队列ID，原始异常正文不进入日志。
+     * 私有类型标记已安全化因果，循环边界再次包装时保留真实类型及suppressed，而非擦除为包装类名。
+     * 设计见 docs/superpowers/specs/2026-09-30-direct-recharge-mobile-spu-frequency-design.md#9-告警与观测。 */
     static IllegalStateException safeFailure(String code, Throwable cause) {
-        return new IllegalStateException(code, sanitizedCause(cause, 0));
+        return new SafeRecoveryFailure(code, cause, List.of());
+    }
+    static List<Long> failedQueueIds(Throwable failure) {
+        var ids = new LinkedHashSet<Long>();
+        collectQueueIds(failure, ids, Collections.newSetFromMap(new IdentityHashMap<>()));
+        return List.copyOf(ids);
+    }
+    private static void collectQueueIds(Throwable failure, Set<Long> ids, Set<Throwable> seen) {
+        if (failure == null || !seen.add(failure)) { return; }
+        if (failure instanceof SafeRecoveryFailure safe) { ids.addAll(safe.queueIds); }
+        collectQueueIds(failure.getCause(), ids, seen);
+        for (var suppressed : failure.getSuppressed()) { collectQueueIds(suppressed, ids, seen); }
     }
     private static Throwable sanitizedCause(Throwable cause, int depth) {
         if (cause == null || depth >= 8) { return null; }
-        var safe = new IllegalStateException(cause.getClass().getName(), sanitizedCause(cause.getCause(), depth+1));
+        if (cause instanceof SafeRecoveryFailure || cause instanceof SanitizedCause) { return cause; }
+        var safe = new SanitizedCause(cause.getClass().getName(), sanitizedCause(cause.getCause(), depth+1));
         safe.setStackTrace(cause.getStackTrace());
+        for (var suppressed : cause.getSuppressed()) {
+            var sanitized = sanitizedCause(suppressed, depth+1);
+            if (sanitized != null) { safe.addSuppressed(sanitized); }
+        }
         return safe;
+    }
+    private static final class SafeRecoveryFailure extends IllegalStateException {
+        private final List<Long> queueIds;
+        private SafeRecoveryFailure(String code, Throwable cause, List<Long> queueIds) {
+            super(code, sanitizedCause(cause, 0));
+            this.queueIds = List.copyOf(queueIds);
+        }
+    }
+    private static final class SanitizedCause extends IllegalStateException {
+        private SanitizedCause(String originalType, Throwable cause) { super(originalType, cause); }
     }
     /** 快照不输出DO的toString（其持有加密目标等内部字段）。 */
     public record QueryWork(RechargeFrequencyLifecycle.LockedExecution locked, RechargeFrequencyExecutionPermit permit) {
