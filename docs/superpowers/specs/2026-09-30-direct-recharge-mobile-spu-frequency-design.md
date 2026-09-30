@@ -29,6 +29,8 @@
 
 专用摘要密钥由 `aifuli.supply-chain.recharge-frequency.identity-key-ref` 配置引用。本期默认解析器只支持 `env:环境变量名`，读取该环境变量的32字节Base64密钥并在独立供应链进程启动时固定快照；部署配置填写引用，仓库不保存密钥或测试默认值。推荐引用 `env:AIFULI_SUPPLY_CHAIN_RECHARGE_FREQUENCY_IDENTITY_KEY`。引用缺失、格式错误、密钥不可解析或长度不符时供应链进程启动失败，不能关闭队列绕过。该配置不改变其他独立进程；测试上下文显式注入测试密钥端口。返回密钥字节时防御性复制，异常和日志不包含引用所指的密钥值。所有节点必须使用同一稳定密钥，在线更新环境变量不改变已有进程快照，变更密钥需要离线迁移全部队列身份，不作为普通凭证轮换操作。
 
+内部 PreparedAcceptance 同时保存已校验目标的 accountType 与实际手机号值。仅手机号值为空不能区分非MOBILE与非法MOBILE，因此由 Facade 传递内部 targetAccountType，供受理事务判定适用范围与失败关闭；该字段不新增到外部下单契约。
+
 队列编排放在 `border.fulfillment.application`，领域规则与枚举放在对应 domain，存储放在对应 dal。Facade 委派应用服务，不访问 DAL；Timer Handler 调用 Lifecycle/恢复入口，不直接写领域表。资金动作只经既有应用服务，border 不访问账户/账本 DAL。所有数据位于供应链独立库，无物理外键；菜单与权限部署 SQL 位于 script/deploy 并由部署过程写入 system 库。
 
 ## 3. 持久化模型与不变量
@@ -110,6 +112,7 @@ dispatch_phase 区分 PREPARED（本次外呼资格已取得但尚未越过发�
 - 可信成功：经既有履约与资金状态机确认；达到 acquired_at+5 秒才释放队列，未到则安排剩余窗口唤醒。重复事实不刷新时间。
 - 可信失败且本订单履约结束：经既有流程释放资金与占用，推进下一项。若同订单还有合法继续履约的操作，仅更新该订单操作引用，不能把某一次供应商尝试失败当作总订单结束。
 - MANUAL：不代表供应商已结束。现有 transition 将 MANUAL 提前作为终态返回，实施须增加受控核实/恢复入口接收可信后续事实；不允许将所有 MANUAL 直接改成可重发。
+- 查单 NOT_FOUND、HTTP 404 或查询鉴权/协议故障：不等于可信从未发送或可信终态，继续占用。仅可据此记录观察与安排核实，不能自动重发、释放队列或释放资金。
 
 释放和调度下一项使用 holder_entry_id+occupancy_generation+version 条件，迟到回调不得清除新持有者。相互矛盾的供应商终态进入异常核实和审计，不覆盖已确认事实或对新订单产生资金动作。
 
