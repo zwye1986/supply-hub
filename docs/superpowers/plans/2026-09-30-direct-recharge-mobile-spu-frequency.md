@@ -163,6 +163,7 @@ public record RechargeFrequencyExecutionPermit(long queueId, long entryId,
 ```
 
 - [ ] 先用真实MySQL并发测试：多个节点只能认领队首一项，同手机号不同SPU可并发；非队首正常返回等待、不调用适配器、不增加外呼失败次数。
+- [ ] 验证历史MOBILE直充缺队列项、目标类型无法可靠解析时不能走普通claim绕过限频；仅可靠确认不适用的目标走普通执行，已冻结队列项不因商品后续变更而失效。
 - [ ] 完成同事务QUEUE+ENTRY+Operation认领，状态PREPARED。执行/结果/恢复锁序统一QUEUE→ENTRY→Request/Order→BOrder/Operation→既有资金服务，加锁后重新校验关联，不在结果处理入口取得商品限购写锁。
 - [ ] 实现外呼前事务 PREPARED→SEND_POSSIBLE，条件包含首次资格全部字段。必须返回成功才执行适配器；失败返回稳定跳过结果。
 - [ ] 加两线程屏障测试：人工撤销先提交则旧外呼0次；标记可能发送先提交则释放失败，节点失联仍保留占用。不靠sleep判定先后。
