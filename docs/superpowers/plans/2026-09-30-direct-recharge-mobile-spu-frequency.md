@@ -159,7 +159,7 @@ byte[] digest = mac.doFinal(normalizedMobile.getBytes(StandardCharsets.UTF_8));
 
 ```java
 public record RechargeFrequencyExecutionPermit(long queueId, long entryId,
-        String operationNo, long generation, long entryVersion) { }
+        String operationNo, long generation, long entryVersion, long operationVersion) { }
 ```
 
 - [ ] 先用真实MySQL并发测试：多个节点只能认领队首一项，同手机号不同SPU可并发；非队首正常返回等待、不调用适配器、不增加外呼失败次数。
