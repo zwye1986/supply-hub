@@ -1,6 +1,8 @@
 package com.aifuli.module.supplychain.infrastructure.security;
 
 import com.aifuli.framework.security.config.AuthorizeRequestsCustomizer;
+import com.aifuli.module.supplychain.api.movie.MovieSupplierConfigApi;
+import org.springframework.http.HttpMethod;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -30,6 +32,8 @@ public class SupplyChainSecurityConfiguration {
             public void customize(
                     AuthorizeHttpRequestsConfigurer<HttpSecurity>.AuthorizationManagerRequestMatcherRegistry
                             registry) {
+                // 只取消电影配置RPC的登录前置要求，方法上的独立服务令牌鉴权仍失败关闭。
+                registry.requestMatchers(HttpMethod.GET, MovieSupplierConfigApi.PATH).permitAll();
                 registry.requestMatchers("/v3/api-docs/**").permitAll()
                         .requestMatchers("/webjars/**").permitAll()
                         .requestMatchers("/swagger-ui").permitAll()
