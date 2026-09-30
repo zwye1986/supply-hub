@@ -1,0 +1,189 @@
+# 项目签名标准商品下单、查单与资产查询设计
+
+日期：2026-09-30
+
+状态：业务决策已确认，书面设计待评审。本文是后续实施依据，接口尚未实现。
+
+## 1. 目标与范围
+
+项目方完成 C 端收款后，通过项目应用凭证调用供应链中台。中台提供标准商品下单、订单摘要查询和卡券资产查询三个 HTTP 接口，覆盖虚拟卡券和直充订单；下单数量固定为 1。
+
+当前报价由已有内部系统取得并交给项目方。本期不开放对外报价 HTTP 接口，不要求项目方提交报价凭证、商品版本、支付时间或实际收款金额。内部报价适配是下单上线依赖，边界见 §8。
+
+本文替代此前标准商品流程中依赖 `buyerUserId` 的设计决策：标准商品的报价绑定、受理回执、订单、限购、资产及查询均移除该用户标识，不从手机号、报价或其他数据补出一个同义身份字段。INSTORE/O2O 的会员身份与授权仍遵循其既有设计。
+
+参考设计：
+
+- `2026-08-23-project-app-auth-design.md`：项目应用 HMAC、nonce 与可信上下文。
+- `2026-09-29-project-app-issuance-platform-signing-callback-design.md`：应用发码、轮换、吊销与订单通知。
+- `2026-09-24-standard-order-routing-execution-design.md`：标准订单路由、履约执行与资金职责。
+- `2026-09-15-generic-batch-pricing-design.md`：既有内部报价，冲突与适配边界见 §8。
+- `2026-09-11-supply-chain-product-center-design.md`：商品目标 Schema 与限购；标准商品每人限购语义以本文 §6 为准。
+
+`cardshop` 仅提供旧系统行为参考。其取卡接口拒绝直充商品、未就绪时提示等待、结果包含平台订单号；新中台的卡券待交付响应采用成功加空数组和提示文案。
+
+## 2. 接口、身份与操作授权
+
+三个接口均使用 HTTPS、POST、JSON 请求体；查询参数不承载业务字段。精确路径与唯一 operationCode 注册到 `ProjectAuthOperations`：
+
+- `POST /open-api/supply-chain/project/v1/orders`：`STANDARD_ORDER_CREATE`，项目必须 ACTIVE。
+- `POST /open-api/supply-chain/project/v1/orders/query`：`STANDARD_ORDER_QUERY`，项目可为 ACTIVE 或 SUSPENDED。
+- `POST /open-api/supply-chain/project/v1/orders/assets/query`：`STANDARD_ORDER_ASSET_QUERY`，项目必须 ACTIVE。
+
+三个操作均要求启用 `STANDARD_PRODUCT` 能力，使用项目 scope。应用未启用、凭证已吊销或过期、项目 CLOSED/ARCHIVED 时全部拒绝。SUSPENDED 只允许历史订单摘要查询，不允许新下单或读取卡密；卡密由管理端有权限的人员处理。
+
+`appId` 验签成功后产出可信 `projectId`、`buyerId` 和应用身份。请求体不接受 `projectId`、`projectCode`、`buyerId`、`sourceSystem`、`externalTenantId`；不得由普通请求头、调用方参数或外部租户映射覆盖项目归属。同一分销商的不同项目彼此隔离。
+
+复用既有 HMAC-SHA256 协议：签名绑定 operationCode、凭证版本、时间戳、nonce 和原始 body 字节摘要。重发业务请求必须使用新 nonce。标准商品操作不提供用户或渠道 scope 值；共用协议为 INSTORE 保留的 scope 签名位置固定为空，标准商品 SDK 不输出用户身份头。改变 body 格式或字段后须重新签名。
+
+项目状态授权按服务端登记操作执行，不能为了允许 SUSPENDED 查单而放宽其他操作。凭证服务的当前 ACTIVE 前置判断需调整为按操作授权，并测试既有 INSTORE 操作仍执行原状态要求。
+
+安全配置仅为这三条路径绕过管理端登录，业务访问由 HMAC 过滤器保护。过滤器覆盖受保护前缀，前缀内未登记操作一律拒绝；Gateway 与供应链独立进程必须保持相同路径。标准商品外部 HTTP 不能复用内部 RPC 的信任入口。
+
+## 3. 下单请求
+
+必填字段只有 `buyerOrderNo`、`buyerSkuCode`、`quantity`、`target`；`previousReceiptVersion` 仅用于明确的条件重试。
+
+- `buyerOrderNo`：项目方订单号，非空，最多 128 个字符；与可信 projectId 构成永久业务键。业务号保留既有数据库的等价比较规则，大小写变体不得创建第二笔订单；请求指纹仍检查字段是否被修改。
+- `buyerSkuCode`：分销商品编码，非空，最多 64 个字符。服务端同时确认该商品属于认证项目、分销商及已绑定的报价商品。
+- `quantity`：必填整数，必须等于 1。虚拟卡券与直充都执行；缺失、0、负数、大于 1、字符串和小数形式均在受理前拒绝。
+- `target`：项目方提供的实际履约目标。目标 Schema 编码、版本和商品类型由服务端解析，不由调用方声明。
+- `previousReceiptVersion`：可选正整数；仅上一回执为 REJECTED_RETRYABLE 时用于 CAS 重试，不属于永久请求不变量。
+
+外部目标采用平铺 JSON，外部 DTO 转换为现有封闭目标值映射。手机号直充示例：
+
+```json
+{
+  "buyerOrderNo": "P202609300001",
+  "buyerSkuCode": "TELCO-100",
+  "quantity": 1,
+  "target": {
+    "accountType": "MOBILE",
+    "accountValue": "13800138000"
+  }
+}
+```
+
+非手机号直充使用 `accountType: EXTERNAL_ACCOUNT` 和实际账号；卡券目标为 `{"deliveryMode":"BUYER_ASSET_QUERY"}`。仅允许对应 Schema 的准确键集合，禁止额外手机号、URL、Header 或供应商私有参数。
+
+手机号接受已有裸号码、+86、0086 规范化规则，规范化后校验。目标加密存储，指纹使用规范化目标摘要；完整目标、手机号、卡密及密钥不进入业务日志。
+
+下单不接受 `buyerUserId`、`limitMobile`、`listingVersion`、`pricingQuoteToken`、`paidAt`、`paidAmountCents`，也不接受调用方身份字段。新外部 DTO 对未知字段报参数错误，避免项目方误以为被忽略的字段有业务作用。
+
+签名下单表示项目方授权中台履约。项目方自行处理收款、优惠与 C 端退款，中台不通过支付时间或收款金额校验其支付事实。
+
+## 4. 永久幂等、条件重试与受理结果
+
+永久幂等键为 `(projectId, buyerOrderNo)`；同一分销商的两个项目使用相同订单号可以形成两笔独立订单。凭证轮换或 appId 的不同密钥版本不改变永久业务键。
+
+第一次受理保存规范化请求的不变量：项目、分销商、商品身份、数量、目标 Schema 和目标摘要；选定冻结报价后固化该报价身份。既有回执的重放先查永久键及请求指纹，再决定是否执行新的校验，不因商品配置后来变动而否定已受理订单。
+
+完全相同的重复请求返回已有回执与相同 orderNo，不重复路由、扣款、发码或创建备注。相同永久键修改 SKU、数量或目标时，返回稳定的幂等冲突错误。没有用户身份字段，也不把可变的当前 Listing 版本纳入永久不变量。
+
+外部请求重放比较与服务端尝试快照分开：当前 Listing 版本、nonce、CAS 参数和接口调用时间不改变外部请求身份。回执指纹增加格式版本，迁移时用项目、商品、数量与已保存的目标摘要重建无用户标识的不变量；不能将旧格式中包含用户/支付时间的指纹直接与新格式比较。无法确认项目/目标/报价绑定的历史回执不得开放新的条件重试。
+
+REJECTED_RETRYABLE 回执只有携带当前 `previousReceiptVersion` 才可重新尝试；CAS 失败返回原状态或版本冲突。普通重发只重放，不自行开启新的尝试。REJECTED_FINAL 不能重试；ACCEPTED 后不能以条件重试再次下单。条件重试仍使用原冻结报价和原目标，若需要新价格或新目标，必须使用新 buyerOrderNo。
+
+服务端解析当前已发布 Listing 版本。报价后 Listing 版本改变时，只要同一商品身份仍可售且目标 Schema 兼容，继续使用冻结价格；下架、身份变更或 Schema 不兼容须明确拒绝，不能悄悄切换商品。
+
+下单响应复用 `CommonResult` 外层，data 提供 `requestId`（稳定受理回执号）、`buyerOrderNo`、`receiptStatus`、`receiptVersion`、`orderNo`、`orderStatus`、`rejectionCode`、`acceptedAt`、`idempotentReplay`。未建单字段显式为 null。
+
+回执状态为 PROCESSING、ACCEPTED、REJECTED_RETRYABLE、REJECTED_FINAL。ACCEPTED 表示中台承担履约责任，不表示供应商已充值或发卡。订单一旦生成，下单与查单都返回字符串 `orderNo`，它是分销方使用的中台订单标识；数据库数字主键不进入外部响应。生成前 orderNo 为 null，项目方可用 buyerOrderNo 查受理进度。
+
+## 5. 订单摘要查询与卡券资产查询
+
+两个查询请求都只有必填 `buyerOrderNo`。服务端以可信项目和该订单号定位，不要求用户标识、中台订单号、履约请求号或调用方 scopeCode。
+
+### 5.1 订单摘要
+
+查询同一项目下的回执、订单及履约详情，在一致的读视图中组装结果。回执存在但订单尚未生成时也正常返回 PROCESSING 或拒绝信息，不把受理中误报为不存在。若回执与订单引用关系不一致，报告内部故障，不拼接其他订单。
+
+响应 data 提供：
+
+- `buyerOrderNo`、`requestId`、`receiptStatus`、`receiptVersion`、`rejectionCode`。
+- `orderNo`、`orderStatus`、`fulfillmentStatus`；未建单时为 null。
+- `requestedQuantity`、`deliveredQuantity`、`assetAvailable`。
+- `acceptedAt`、`completedAt`、`updatedAt`；时间为带偏移量的 ISO 8601。
+
+总订单状态沿用 CREATED、PROCESSING、PARTIALLY_SUCCEEDED、SUCCEEDED、FAILED、CANCELLED、MANUAL；履约状态沿用 ACCEPTED、PROCESSING、SUCCEEDED、FAILED、MANUAL。采用现有投影状态，不以“受理成功”代替“履约成功”。
+
+`assetAvailable` 只有卡券存在可授权交付资产时才为 true，不能直接用 deliveredQuantity > 0 推断；直充即使成功也为 false。响应不包含供应商名称/编码、路由、目标账号、订单内部备注或明文卡券。
+
+本项目找不到回执和订单时返回统一订单不存在业务错误。其他项目同号、只有中台订单号相似、历史 NULL projectId 行均不能作为兜底；不存在与项目归属不符采用相同外部错误，避免泄漏其他项目订单。
+
+### 5.2 资产查询
+
+启用 STANDARD_PRODUCT 能力的 ACTIVE 项目应用可读取本项目订单的可交付卡券，不新增 FULFILLMENT_ASSET_READ 开关或 C 端 token。授权边界是项目，应用凭证持有人可查询该项目的订单资产。资产查询仍校验分销商、项目、总订单、履约详情的引用一致性；所有解密访问记录应用身份、项目、订单、资产、结果与时间，记录中不含明文卡密。
+
+虚拟卡券响应 data 为 `buyerOrderNo`、`orderNo`、`assets`、`hint`。assets 使用现有资产类型的封闭字段（卡号、卡密、券码、券链接、有效期、生命周期状态等），只交付符合既有生命周期规则的资产，隔离、撤销或无权交付资产不解密输出。
+
+- 尚在受理/履约处理中且没有可交付资产：成功返回 `assets: []`，hint 为“请等待，稍后重新获卡”或“订单延迟，请等待重试”；未建单时 orderNo 为 null。
+- 已有可交付资产：成功返回资产，hint 为 null。
+- 卡券订单已失败或取消：返回明确业务错误，提示通过查单接口获取订单结果，不给等待重试提示。
+- 回执已拒绝且尚未建单：返回订单未受理业务错误；MANUAL 状态无可交付资产时，成功空数组并提示“订单正在人工处理中，请通过查单接口查看进度”。
+- 直充及其他不交付卡券的商品：返回 `ASSET_QUERY_UNSUPPORTED_PRODUCT_TYPE` 业务错误，提示“此类商品不能查询资产，请通过查单接口获取订单信息”。
+- 订单不存在/项目不符：统一订单不存在业务错误。尚未建单的回执若无法确认其商品为卡券，不能直接假定可查询资产。
+
+卡券订单已成功却没有应交付资产，属于数据一致性故障，记录异常并返回系统错误，不用成功空列表掩盖。解密、解析或审计失败不返回明文资产。审计失败与拒绝审计须采用能独立提交的事务边界，防止业务异常回滚掉审计记录。
+
+资产响应设置 `Cache-Control: no-store`，入口与第三方调用日志均脱敏；高频查询采取已有采样或 debug 策略。外部调用只读快照与本地已交付资产，不在用户查单/查资产请求中同步调用供应商或触发履约重试。
+
+## 6. 手机号限购与订单备注
+
+标准商品每单请求数量始终为 1，现有 SKU 每订单限购独立执行。
+
+“每人每周期限购”的新统计身份仅为 `accountType=MOBILE` 的实际充值目标手机号。按 `(projectId, platformSkuId, 规范化 target.accountValue, 周期窗口)` 聚合有效标准商品订单；失败、取消、全部退款按既有规则释放额度。统计读取 `fulfillment_account_value`，不得回退到历史 buyer_user_id。
+
+卡券和非手机号直充直接忽略“每人每周期限购”。不增加 limitMobile、buyerMobile 或任何其他手机号参数。商品若开启该规则，中台建单时向内部订单备注追加一次“该商品无可用手机号，本单未执行每人每周期限购”；不改变受理结果，也不在下单/查询响应增加提示。未开启该规则时不写这条备注。
+
+备注与订单在同一事务写入，条件重试或幂等重放不得重复追加，也不能覆盖其他备注。当前 `sc_supply_chain_order` 没有该备注字段，实施时新增 `remark VARCHAR(1024) NULL COMMENT '中台订单内部业务备注，不向项目接口返回'`；备注只含业务原因，不含手机号或密钥。
+
+既有“绑定手机号限购”保留独立配置与算法，仍按目标手机号执行，不能因为跳过每人限购而跳过它。两个规则同时启用时分别校验，任一不满足则拒绝；缺少目标手机号时按该规则既有要求处理。
+
+管理端商品表单和详情需要配套解释每人限购仅对手机号直充有效。实际前端位置为 `src/views/supplier/product/list/form/index.vue` 与 `detail/index.vue`；当前表单对所有商品显示“每人限购”，实施时增加适用范围说明，保持卡券/非手机号直充可配置且按上述规则忽略。
+
+## 7. 分层、共享流程与数据迁移
+
+外部 Controller 和 DTO 单独定义，Controller 获取可信项目上下文后委托 Facade；Facade 不能直接依赖 DAL。项目商品/冻结报价解析交由有数据所有权的应用服务返回不可变快照，再进入共享受理与查询核心。内部 RPC 的身份解析适配与外部 HMAC 适配分别提供可信命令，不允许用伪造 sourceSystem、externalTenantId、用户手机号或 paidAt 拼装旧 DTO 绕过校验。
+
+复用 `FulfillmentAcceptanceLifecycle` 的受理、事务、路由、资金和 Outbox；新增传输方式不复制状态机。移除标准商品 buyerUserId 必须覆盖 API DTO、PreparedAcceptance、指纹、报价绑定、限购统计、资产生产/读取与审计。标准内部 RPC 的字段删除须协调调用方发布，不能宣称原契约完全兼容；报价具体过渡方案按 §8 单独设计。
+
+数据库通过新的 Liquibase changeset 迁移，不修改已执行的 004、032、033、035：
+
+1. `sc_fulfillment_acceptance_receipt`：移除标准流程 buyer_user_id；projectId 新受理必填，历史无法确认归属的 NULL 保留且不对外开放。永久唯一键调整为项目+订单号；另用仅在 projectId 为 NULL 时非空的生成列保留历史 buyer+订单号唯一性。
+2. `sc_supply_chain_order`：它是 CARD、INSTORE/O2O 共用表，buyer_user_id 改为可空并限定 CARD 不使用；标准商品历史行也清为 NULL，INSTORE/O2O 仍写原身份。项目标准商品唯一键只作用于 CARD 且 projectId 非空；生成列为其他/历史场景保留 buyer+订单号唯一性，不能简单删除原唯一键后放开所有订单。新增内部 remark。
+3. `sc_fulfillment_asset` 与 `sc_standard_pricing_quote`：标准专用的 buyer_user_id 字段及依赖索引移除。资产审计以已认证应用/项目为 principal，不构造用户摘要占位。
+4. 每人限购索引与聚合查询改为项目+SKU+目标手机号+时间。历史手机号只能从已验证的 MOBILE 履约目标恢复，不能从原购买人手机号推导充值目标；当前窗口无法可靠恢复的历史数据必须在发布检查中报告并处理后才启用该 SKU 限购。
+5. 回执 listing_version_no 的注释改为“服务端解析的本次尝试商品业务版本号”；为校验前失败/处理中允许无已解析版本，配套调整 CHECK 与重试字段，不以人为版本 1 占位。
+6. 回执增加指纹格式版本并按 §4 迁移；涉及标准商品用户标识的历史指纹与原始请求快照也纳入清理检查，不能仅删除显式列后留下可恢复的身份副本。
+7. `sc_supplier_routing_round` 的现有唯一键包含 `(buyer_id, routing_subject_type, routing_subject_key, round_sequence)`，当前 STANDARD_REQUEST 的 routing_subject_key 是 buyerOrderNo。新标准路由改用全局 orderNo 作为 subject key，避免同一分销商不同项目同号时路由轮次撞键；历史路由按其 order_id 关联中台 orderNo 迁移，所有后续重路由沿用该值。不能只调整回执和订单唯一键。
+
+迁移前检查重复项目业务键、孤立引用、NULL 项目归属、标准商品历史目标及所有 buyer_user_id 消费点。标准商品写入需要在升级窗口暂停、全节点切换和内部调用方协调，避免旧节点仍向已删除的字段写入。共享 INSTORE/O2O 表、认证 scope 和调用契约必须保留并回归测试。
+
+## 8. 内部报价依赖与实施边界
+
+HTTP 契约要求中台按 `(projectId, buyerOrderNo)` 找到已有内部系统形成的唯一冻结报价，校验项目、分销商、商品和 quantity=1，并固化所选报价身份。缺少报价明确拒绝，不在项目收款后重新计算价格。不绑定用户标识，也不要求或补造 paidAt。
+
+已确认的目标语义：本流程不以 expiresAt 限制下单；同一项目订单号使用首次冻结报价，重复内部取报价不会改变其价格，需要新价格时使用新订单号。
+
+现有实现存在三项冲突：`StandardPricingQuoteService` 强制购买人手机号；15 分钟后同一内部订单键可生成新报价；`requireForFulfillment` 要求 token、buyerUserId 和 paidAt 有效期校验。现有报价查询键还不是 projectId+buyerOrderNo。不能直接调用现有方法并忽略异常，或从多个报价中任取“最新一条”。
+
+本轮按用户要求暂不展开内部报价 API 的过渡方案。实施下单前必须完成独立报价适配设计，落实唯一绑定、历史多报价处理、移除用户标识及兼容调用方；通过门禁后才开放真实下单。查单、资产查询、认证注册和迁移准备可先实施。此依赖不增加对外请求字段，也不能在落地时重新要求项目方传报价 token 或支付时间。
+
+## 9. 错误与验证
+
+沿用项目认证现有 `CommonResult` 外层和业务错误约定；不能把 HTTP 成功或 code=0 等同于订单履约成功，项目方必须读取 receiptStatus/orderStatus。外层错误用于认证、参数、归属、幂等冲突、CAS 冲突、资产类型不支持和系统故障；已有回执的业务拒绝返回 data 中的回执状态和 rejectionCode。
+
+新增稳定业务错误名称登记到统一错误码常量，禁止散落字面量。待交付是卡券资产查询的成功空结果；FAILED/CANCELLED 和商品不支持资产查询是明确业务错误。客户端不依赖提示文案做状态判断。
+
+实施验证至少覆盖：
+
+- 契约：三条 POST 精确注册、原始 body 签名、未知字段拒绝、quantity 必填且整数 1、目标封闭 Schema、响应不泄漏供应商/数据库主键/账号。
+- 归属与状态：跨项目同号隔离、ACTIVE/SUSPENDED/CLOSED/ARCHIVED、STANDARD_PRODUCT 能力、吊销/轮换凭证；查询无用户字段也不能越过项目边界。
+- 幂等：并发同键只建一单、不同项目同号各建一单、参数冲突、普通重放、条件重试 CAS、配置版本变动后已有回执重放。
+- 限购：手机号规范化、项目隔离、周期边界、并发、失败/取消/全退款释放；卡券与 EXTERNAL_ACCOUNT 跳过每人限购且备注一次；两种手机号限购分别执行。
+- 资产：处理中空数组加提示、失败/取消错误、直充不支持、可交付资产解密、隔离资产不返回、审计成功/拒绝/失败持久化、响应 no-store。
+- 迁移：真实 MySQL/Liquibase 验证新唯一键、历史 NULL 项目键、INSTORE/O2O 原唯一性、标准身份移除、备注及 Listing 版本约束。
+- 架构：`SupplyChainModuleArchitectureTest`；Facade 无 DAL、路由纯领域、border 无账户 DAL/账本、供应链独立数据所有权；认证改动回归既有 INSTORE 操作。
+
+联调步骤与发布前检查写入 `docs/集成测试.md#774-项目签名标准商品-http-闭环设计待实现2026-09-30`。本次设计文档变更不代表任何接口测试已通过。
