@@ -153,6 +153,46 @@ class RechargeFrequencyTimerIntegrationTest {
         } finally { fixture.stopContainer(); }
     }
 
+    @Test void realQnmHttp200AuthenticationErrorsKeepHolderAndFrozenFunds() throws Exception {
+        var fixture=new FulfillmentAcceptanceIntegrationTest(); fixture.startContainer();
+        try(var server=new okhttp3.mockwebserver.MockWebServer(); var context=fixture.applicationContext()) {
+            server.start(); fixture.seed(context);
+            context.getBean(BuyerFulfillmentCommandFacade.class).acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("QNM-AUTH",1L));
+            var jdbc=jdbc(context); var operation=RechargeFrequencyExecutionIntegrationTest.operations(jdbc).getFirst();
+            var frequency=context.getBean(com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyLifecycle.class);
+            var permit=frequency.claim(operation); assertThat(frequency.markSendPossible(permit)).isTrue();
+            jdbc.update("UPDATE sc_fulfillment_request SET target_ciphertext=X'00'");
+            var resolver=context.getBean(com.aifuli.module.supplychain.supplieradapter.metadata.PublishedConnectorConfigurationResolver.class);
+            long version=jdbc.queryForObject("SELECT id FROM sc_supplier_connector_version LIMIT 1",Long.class);
+            var original=resolver.resolve(version);
+            org.mockito.Mockito.when(resolver.resolve(version)).thenReturn(new com.aifuli.module.supplychain.supplieradapter.metadata.PublishedConnectorConfigurationResolver.PublishedConnectorConfiguration(
+                    original.connectorNo(),original.connectorVersionId(),original.versionNo(),com.aifuli.module.supplychain.supplieradapter.metadata.QnmGameOrderV1Metadata.TYPE,
+                    server.url("/").toString(),original.merchantAccount(),original.credentialSlotId(),original.callbackPath(),java.util.Set.of(com.aifuli.module.supplychain.supplieradapter.metadata.Capability.QUERY_ORDER)));
+            var adapter=new com.aifuli.module.supplychain.supplieradapter.qnm.QnmSupplierAdapter(new com.aifuli.module.supplychain.supplieradapter.qnm.QnmHttpExecutor(),context.getBean(com.fasterxml.jackson.databind.ObjectMapper.class));
+            var query=new com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyQueryService(resolver,
+                    context.getBean(com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierMapper.class),
+                    context.getBean(com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferVersionMapper.class),
+                    context.getBean(com.aifuli.module.supplychain.border.fulfillment.application.FulfillmentOperationTicketFactory.class),adapter,
+                    context.getBean(com.aifuli.module.supplychain.border.fulfillment.application.SupplierOrderLifecycle.class));
+            long frozen=jdbc.queryForObject("SELECT frozen FROM sc_buyer_account",Long.class);
+            for(String code:java.util.List.of("-100","-101","SIGN_ERROR")) {
+                for(int status:java.util.List.of(1,2)) {
+                    server.enqueue(new okhttp3.mockwebserver.MockResponse().setResponseCode(200).setBody("{\"ResCode\":\""+code+"\",\"orderStatus\":"+status+"}"));
+                    query.query(dueWork(context),"QNM-AUTH");
+                    assertThat(jdbc.queryForObject("SELECT holder_entry_id FROM sc_recharge_frequency_queue",Long.class)).isEqualTo(permit.entryId());
+                    assertThat(jdbc.queryForObject("SELECT frozen FROM sc_buyer_account",Long.class)).isEqualTo(frozen);
+                    assertThat(RechargeFrequencyLifecycleIntegrationTest.ledger(jdbc,"RELEASE")).isZero();
+                    assertThat(RechargeFrequencyLifecycleIntegrationTest.ledger(jdbc,"COMMIT")).isZero();
+                    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_fulfillment_operation",Long.class)).isEqualTo(1L);
+                    var request=server.takeRequest(5,java.util.concurrent.TimeUnit.SECONDS);
+                    assertThat(request).isNotNull(); assertThat(request.getPath()).isEqualTo("/GameOrder/Query");
+                    assertThat(request.getBody().readUtf8()).doesNotContain("account=","13800138000");
+                }
+            }
+            assertThat(frozen).isEqualTo(9800L);
+        } finally { fixture.stopContainer(); }
+    }
+
     @Test void alarmsAreStrictPersistentRateLimitedAndRecoverAcrossContainerRestart() {
         var fixture=new FulfillmentAcceptanceIntegrationTest(); fixture.startContainer();
         try {

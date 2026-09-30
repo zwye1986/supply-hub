@@ -404,7 +404,14 @@ public class QnmSupplierAdapter implements OperationExecutorPort {
         OperationOutcomeClass outcomeClass;
         List<OperationAssetFact> assets = List.of();
 
-        if (orderStatus != null && orderStatus == QnmEndpointConstants.QUERY_STATUS_SUCCESS) {
+        // 查单已知配置/鉴权错误必须优先处理，即使HTTP 200附带终态也没有可信订单结果。
+        // 不推断缺省或其它ResCode语义；保留既有合法订单状态映射，原始响应用于观察审计。
+        // 设计：docs/superpowers/specs/2026-09-30-direct-recharge-mobile-spu-frequency-design.md#6-timer-与补偿。
+        if (QnmEndpointConstants.RES_CODE_AUTH_ERROR.equals(resCode)
+                || QnmEndpointConstants.RES_CODE_MERCHANT_ERROR.equals(resCode)
+                || QnmEndpointConstants.RES_CODE_SIGN_ERROR.equalsIgnoreCase(resCode)) {
+            outcomeClass = OperationOutcomeClass.MANUAL_REQUIRED;
+        } else if (orderStatus != null && orderStatus == QnmEndpointConstants.QUERY_STATUS_SUCCESS) {
             outcomeClass = OperationOutcomeClass.SUCCEEDED;
             JsonNode cardsNode = root.get(QnmEndpointConstants.FIELD_CARDS);
             if (cardsNode == null || cardsNode.isNull()) {
@@ -419,13 +426,8 @@ public class QnmSupplierAdapter implements OperationExecutorPort {
         } else if (orderStatus != null && orderStatus == QnmEndpointConstants.QUERY_STATUS_FAILED) {
             outcomeClass = OperationOutcomeClass.REJECTED;
         } else {
-            // orderStatus 为空或未知状态码
-            // 检查 ResCode：若 ResCode 明确是签名/商户等配置鉴权错误，映射为 MANUAL_REQUIRED
-            if ("-100".equals(resCode) || "-101".equals(resCode) || "SIGN_ERROR".equalsIgnoreCase(resCode)) {
-                outcomeClass = OperationOutcomeClass.MANUAL_REQUIRED;
-            } else {
-                outcomeClass = OperationOutcomeClass.RESULT_UNKNOWN;
-            }
+            // orderStatus 为空或未知状态码，不产生可信终态。
+            outcomeClass = OperationOutcomeClass.RESULT_UNKNOWN;
         }
 
         boolean isFinalSuccess = (outcomeClass == OperationOutcomeClass.SUCCEEDED || outcomeClass == OperationOutcomeClass.ACCEPTED);

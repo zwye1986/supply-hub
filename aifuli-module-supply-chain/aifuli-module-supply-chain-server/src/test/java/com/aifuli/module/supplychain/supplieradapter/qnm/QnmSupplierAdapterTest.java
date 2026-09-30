@@ -732,6 +732,19 @@ class QnmSupplierAdapterTest {
         assertThat(outcome.outcomeClass()).isEqualTo(OperationOutcomeClass.ACCEPTED);
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({"-100,1", "-100,2", "-101,1", "-101,2", "SIGN_ERROR,1", "SIGN_ERROR,2"})
+    void queryAuthenticationErrorOverridesTerminalStatus(String code, int status) {
+        String body = "{\"ResCode\":\"" + code + "\",\"orderStatus\":" + status + ",\"cards\":[\"unsafe-asset\"]}";
+        server.enqueue(new MockResponse().setResponseCode(200).setBody(body));
+        var outcome = adapter.execute(createQueryTicket("BILL_AUTH", null));
+        assertThat(outcome.outcomeClass()).isEqualTo(OperationOutcomeClass.MANUAL_REQUIRED);
+        assertThat(outcome.externalErrorCode()).isEqualTo(code);
+        assertThat(outcome.assets()).isEmpty();
+        assertThat(outcome.rawObservation().rawPayload()).isEqualTo(body);
+        assertThat(outcome.callDigest().httpStatus()).isEqualTo(200);
+    }
+
     private OperationTicket createBaseTicket(FulfillmentOperationKind kind, AdapterStepCode stepCode,
                                             String billno, String account) {
         return OperationTicket.builder()

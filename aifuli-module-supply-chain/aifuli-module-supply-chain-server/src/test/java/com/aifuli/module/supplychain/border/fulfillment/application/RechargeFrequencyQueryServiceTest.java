@@ -68,6 +68,26 @@ class RechargeFrequencyQueryServiceTest {
                 .satisfies(error -> assertThat(error.getCause().getMessage()).isEqualTo(IllegalStateException.class.getName()));
         verifyNoInteractions(lifecycle);
     }
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({"-100,1", "-100,2", "-101,1", "-101,2", "SIGN_ERROR,1", "SIGN_ERROR,2"})
+    void realQnmProtocolAuthenticationErrorCannotReachLifecycleAsTerminal(String code, int status) {
+        var http=mock(com.aifuli.module.supplychain.supplieradapter.qnm.QnmHttpExecutor.class);
+        String body="{\"ResCode\":\""+code+"\",\"orderStatus\":"+status+"}";
+        when(http.postForm(anyString(),anyMap(),anyInt(),anyString())).thenReturn(
+                new com.aifuli.module.supplychain.supplieradapter.qnm.QnmHttpExecutor.HttpExecutionResult(200,body,null,null,1,false,false,null));
+        var adapter=new com.aifuli.module.supplychain.supplieradapter.qnm.QnmSupplierAdapter(http,new com.fasterxml.jackson.databind.ObjectMapper());
+        var factory=mock(FulfillmentOperationTicketFactory.class);
+        when(factory.create(any(),any(),any(),any(),nullable(com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierOfferVersionDO.class),any(),any(),isNull(),nullable(String.class),anyString()))
+                .thenReturn(OperationTicket.builder().operationNo("OP_ORIGINAL").bOrderNo("BO_ORIGINAL").adapterType(QnmGameOrderV1Metadata.TYPE).operationKind(FulfillmentOperationKind.QUERY_ORDER)
+                        .baseUrl("https://supplier.invalid").merchantAccount("merchant").secretKey("secret").billno("BO_ORIGINAL").build());
+        when(connectors.resolve(7L)).thenReturn(new PublishedConnectorConfigurationResolver.PublishedConnectorConfiguration("CON",7L,1,
+                QnmGameOrderV1Metadata.TYPE,"https://supplier.invalid","merchant",null,null,Set.of(Capability.QUERY_ORDER)));
+        new RechargeFrequencyQueryService(connectors,suppliers,offers,factory,adapter,lifecycle).query(work,"AUTH");
+        var outcome=fact();
+        assertThat(outcome.outcomeClass()).isEqualTo(OperationOutcomeClass.RESULT_UNKNOWN);
+        assertThat(outcome.rawObservation().rawPayload()).isEqualTo(body);
+    }
+
     private OperationOutcome fact() {
         var outcome=ArgumentCaptor.forClass(OperationOutcome.class);
         verify(lifecycle).confirmTrustedOutcome(eq("OP_ORIGINAL"),outcome.capture(),anyString(),same(work.permit()));

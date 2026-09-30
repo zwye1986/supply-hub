@@ -76,6 +76,11 @@ public final class QnmEndpointConstants {
     /** 成功响应码：字符串 OK。 */
     public static final String RES_CODE_OK = "OK";
 
+    /** 查单已知配置/鉴权错误码，错误事实优先于订单状态。 */
+    public static final String RES_CODE_AUTH_ERROR = "-100";
+    public static final String RES_CODE_MERCHANT_ERROR = "-101";
+    public static final String RES_CODE_SIGN_ERROR = "SIGN_ERROR";
+
     /** 查单订单状态：0 - 处理中。 */
     public static final int QUERY_STATUS_PROCESSING = 0;
 
