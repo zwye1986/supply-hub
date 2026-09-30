@@ -1,6 +1,6 @@
 # 直充手机号与 SPU 限频及运营监控设计
 
-日期：2026-09-30。状态：已确认业务决策的汇总设计，待用户评审全文；尚未实现。
+日期：2026-09-30。状态：用户已确认全文，进入实施。当前尚未实现。
 
 关联：[项目签名标准商品 HTTP 设计 §10](2026-09-30-project-signed-standard-order-http-design.md#10-本期新增直充手机号与-spu-限频及管理端监控)、`docs/集成测试.md#774-项目签名标准商品-http-闭环设计待实现2026-09-30`。
 
@@ -44,12 +44,14 @@
 - next_enqueue_sequence：下一次入队可分配的队列序号。
 - holder_entry_id：当前持有占用的队列项内部主键，可空。
 - occupancy_generation：每次取得新占用递增的占用代次。
-- acquired_at：当前占用取得时间，UTC；释放后可空。
-- minimum_hold_until：本次成功最短占用截止时间，UTC；取 acquired_at+5 秒。
+- acquired_at：当前占用取得时间，Asia/Shanghai；释放后可空。
+- minimum_hold_until：本次成功最短占用截止时间，Asia/Shanghai；取 acquired_at+5 秒。
 - wake_generation：每次安排新的唤醒意图递增的任务代次。
-- next_check_at：下一次队列补偿检查时间，UTC，可空。
+- next_check_at：下一次队列补偿检查时间，Asia/Shanghai，可空。
 - blocked_reason：队列阻塞原因，可空；存量并发外呼冲突等需要核实的状态不得认领新项。
-- version：乐观锁版本；created_at/updated_at 统一 UTC。
+- version：乐观锁版本；created_at/updated_at 统一 Asia/Shanghai。
+
+沿用 022 数据库时间迁移及 SupplyChainDatabaseClock，持久化 DATETIME(3) 全部为 Asia/Shanghai；5 秒窗口、30 分钟阈值与扫描条件使用数据库时钟。Timer 接受 Instant 时通过 databaseClock.toInstant 转换，不直接将本地时间当 UTC。
 
 唯一键 `(mobile_digest, platform_spu_id)`；补偿扫描索引覆盖 next_check_at 和 id。同一队列最多一个 holder，且 holder 对应冻结身份一致的队列项。摘要密钥专用于稳定队列身份，不使用项目应用密钥、nonce 或可随凭证轮换变化的密钥。上线前配置独立密钥引用，缺失则失败关闭；摘要算法或密钥变更须暂停相关写入、统一迁移存量队列后切换，不能在线生成两个身份并绕过占用。
 
@@ -67,7 +69,7 @@ dispatch_phase 区分 PREPARED（本次外呼资格已取得但尚未越过发�
 
 ### 3.3 运营审计：sc_recharge_frequency_action_audit
 
-追加记录 action_no、请求指纹、action_type（RETRY/RELEASE）、queue_id、entry_id、order_no、expected_generation、expected_version、真实内部操作用户、原因、结果、前后状态、trace_id 与 UTC 时间；action_no 唯一。成功操作同业务事务保存审计；拒绝和冲突通过独立审计事务保留，不能随业务回滚丢失。并发同 actionNo 仅一个事务能成功，冲突事务回滚后在新事务读取原结果，不在已失败事务里继续写业务。审计不含明文手机号、目标密文、供应商凭证或任意 Redis key。
+追加记录 action_no、请求指纹、action_type（RETRY/RELEASE）、queue_id、entry_id、order_no、expected_generation、expected_version、真实内部操作用户、原因、结果、前后状态、trace_id 与 Asia/Shanghai 时间；action_no 唯一。成功操作同业务事务保存审计；拒绝和冲突通过独立审计事务保留，不能随业务回滚丢失。并发同 actionNo 仅一个事务能成功，冲突事务回滚后在新事务读取原结果，不在已失败事务里继续写业务。审计不含明文手机号、目标密文、供应商凭证或任意 Redis key。
 
 客户端 actionNo 只用于管理操作幂等，不能替代身份认证。同一 actionNo 的不同参数拒绝；成功重放返回原审计结果，不再次释放后来的持有者。
 
