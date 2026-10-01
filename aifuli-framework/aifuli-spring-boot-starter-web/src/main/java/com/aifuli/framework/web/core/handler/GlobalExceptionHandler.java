@@ -65,6 +65,13 @@ public class GlobalExceptionHandler {
      */
     public static final Set<String> IGNORE_ERROR_MESSAGES = SetUtils.asSet("无效的刷新令牌");
 
+    /**
+     * 限频错误日志存储失败独立计数；与访问日志API失败计数分开，首次及每100次保留安全因果位置。
+     * 设计见 {@code docs/superpowers/specs/2026-09-30-direct-recharge-mobile-spu-frequency-design.md#7-管理端契约与权限}。
+     */
+    private static final long SENSITIVE_ERROR_LOG_FAILURE_SAMPLE_INTERVAL = 100L;
+    private static final java.util.concurrent.atomic.AtomicLong SENSITIVE_ERROR_LOG_FAILURES = new java.util.concurrent.atomic.AtomicLong();
+
     @SuppressWarnings("SpringJavaInjectionPointsAutowiringInspection")
     private final String applicationName;
 
@@ -394,7 +401,12 @@ public class GlobalExceptionHandler {
             apiErrorLogApi.createApiErrorLogAsync(errorLog);
         } catch (Throwable th) {
             if (isFrequencyRequest(req)) {
-                log.error("[限频管理异常日志存储失败] types={}, traceId={}, safeStack={}", SensitiveExceptionLogUtils.types(th), TracerUtils.getTraceId(), SensitiveExceptionLogUtils.stack(th));
+                long failures = SENSITIVE_ERROR_LOG_FAILURES.incrementAndGet();
+                if (failures == 1 || failures % SENSITIVE_ERROR_LOG_FAILURE_SAMPLE_INTERVAL == 0) {
+                    log.error("[限频管理异常日志存储失败] failureCount={}, types={}, traceId={}, safeStack={}", failures,
+                            SensitiveExceptionLogUtils.types(th), TracerUtils.getTraceId(), SensitiveExceptionLogUtils.stack(th));
+                }
+                // 平台错误日志兜底不覆盖原系统异常500响应；采样仍保留安全cause与位置，禁止输出原正文或DTO。
                 return;
             }
             log.error("[createExceptionLog][url({}) log({}) 发生异常]", req.getRequestURI(),  JsonUtils.toJsonString(errorLog), th);

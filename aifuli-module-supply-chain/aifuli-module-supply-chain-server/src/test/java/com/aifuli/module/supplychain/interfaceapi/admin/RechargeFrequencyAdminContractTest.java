@@ -50,6 +50,7 @@ class RechargeFrequencyAdminContractTest {
     private static final ThreadLocal<Set<String>> GRANTED=ThreadLocal.withInitial(Set::of);
     private static final ThreadLocal<List<com.aifuli.framework.common.biz.infra.logger.dto.ApiAccessLogCreateReqDTO>> ACCESSES=ThreadLocal.withInitial(ArrayList::new);
     private static final ThreadLocal<Boolean> ACCESS_FAILURE=ThreadLocal.withInitial(()->false);
+    private static final ThreadLocal<Boolean> ERROR_FAILURE=ThreadLocal.withInitial(()->false);
     private static final ThreadLocal<List<ApiErrorLogCreateReqDTO>> ERRORS=ThreadLocal.withInitial(ArrayList::new);
     private ListAppender<ILoggingEvent> logs;
     private final String prefix="/admin-api/supply-chain/recharge-frequency";
@@ -67,7 +68,7 @@ class RechargeFrequencyAdminContractTest {
         ((Logger)LoggerFactory.getLogger(ApiAccessLogInterceptor.class)).detachAppender(logs);
         ((Logger)LoggerFactory.getLogger(GlobalExceptionHandler.class)).detachAppender(logs);
         ((Logger)LoggerFactory.getLogger(com.aifuli.framework.apilog.core.filter.ApiAccessLogFilter.class)).detachAppender(logs);
-        logs.stop(); context.close(); SecurityContextHolder.clearContext(); GRANTED.remove();ERRORS.remove();ACCESSES.remove();ACCESS_FAILURE.remove();
+        logs.stop(); context.close(); SecurityContextHolder.clearContext(); GRANTED.remove();ERRORS.remove();ACCESSES.remove();ACCESS_FAILURE.remove();ERROR_FAILURE.remove();
     }
     @Test void statisticsAndAllPagesPreserveCommonResultPageShapeAndNoStore() throws Exception {
         when(query.statistics(anyLong())).thenReturn(new RechargeFrequencyMonitorQueryService.Statistics());
@@ -160,6 +161,41 @@ class RechargeFrequencyAdminContractTest {
         assertThat(dto.getExceptionStackTrace()).contains("DataAccessResourceFailureException","SQLException","RechargeFrequencyAdminController");
         assertSafeLogs();
     }
+    @Test void errorLogApiFailuresAreSampledIndependentlyAndPreserveSafeHttpResult() throws Exception {
+        ERROR_FAILURE.set(true);
+        when(query.page(anyLong(),any(),any(),anyString())).thenThrow(new org.springframework.dao.DataAccessResourceFailureException(
+                "body=13800138000 secret-value",new java.sql.SQLException("credential=secret-value")));
+        for(int i=0;i<201;i++) {
+            var response=mvc.perform(post(prefix+"/search").contentType("application/json").content("{\"mobile\":\"13800138000\",\"view\":\"WAITING\"}"))
+                    .andExpect(jsonPath("$.code").value(500)).andExpect(header().string("Cache-Control","no-store")).andReturn().getResponse();
+            assertThat(response.getContentAsString()).doesNotContain("13800138000","secret-value");
+        }
+        assertThat(ERRORS.get()).hasSize(201);assertThat(ACCESSES.get()).hasSize(201);
+        assertSafeLogs();
+        for(var dto:ERRORS.get()) {
+            assertThat(new ObjectMapper().findAndRegisterModules().writeValueAsString(dto)).doesNotContain("13800138000","secret-value");
+            assertThat(dto.getRequestParams()).isEqualTo("{}");
+        }
+        var failures=logs.list.stream().filter(event->event.getFormattedMessage().contains("限频管理异常日志存储失败")).toList();
+        assertThat(failures).hasSize(3);
+        assertThat(failures.stream().map(ILoggingEvent::getFormattedMessage).toList())
+                .satisfiesExactly(first->assertThat(first).contains("failureCount=1,"),
+                        hundred->assertThat(hundred).contains("failureCount=100,"),
+                        twoHundred->assertThat(twoHundred).contains("failureCount=200,"));
+        for(var event:failures) {
+            assertThat(event.getFormattedMessage()).contains("DataAccessResourceFailureException","SQLException","RechargeFrequencyAdminContractTest","traceId=");
+            assertThat(event.getThrowableProxy()).isNull();
+        }
+        // 普通路径继续既有完整日志行为，不进入限频计数或脱敏分支。
+        var ordinary=new MockHttpServletRequest("POST","/admin-api/ordinary");ordinary.setContentType("application/json");
+        ordinary.setContent("{\"marker\":\"ordinary-body\"}".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        var result=context.getBean(GlobalExceptionHandler.class).defaultExceptionHandler(ordinary,new IllegalStateException("ordinary-primary"));
+        assertThat(result.getCode()).isEqualTo(500);
+        assertThat(ERRORS.get().getLast().getRequestParams()).contains("ordinary-body");
+        assertThat(logs.list.stream().filter(event->event.getFormattedMessage().startsWith("[createExceptionLog]")).toList())
+                .singleElement().satisfies(event->{assertThat(event.getFormattedMessage()).contains("/admin-api/ordinary","ordinary-primary");assertThat(event.getThrowableProxy()).isNotNull();});
+        assertThat(logs.list.stream().filter(event->event.getFormattedMessage().contains("限频管理异常日志存储失败"))).hasSize(3);
+    }
     @Test void accessFilterUpstreamAndLoggerFailureKeepSafeCausesAndBusinessResult() throws Exception {
         var request=new MockHttpServletRequest("POST",prefix+"/search");request.setContentType("application/json");
         request.setContent("{mobile:13800138000, secret:secret-value}".getBytes(java.nio.charset.StandardCharsets.UTF_8));
@@ -229,7 +265,15 @@ class RechargeFrequencyAdminContractTest {
             when(api.hasAnyPermissions(anyLong(),any(String[].class))).thenAnswer(invocation->success(Arrays.stream((String[])invocation.getRawArguments()[1]).anyMatch(GRANTED.get()::contains)));
             return new SecurityFrameworkServiceImpl(api);
         }
-        @Bean GlobalExceptionHandler exceptions(){return new GlobalExceptionHandler("contract", dto->{ERRORS.get().add(dto);return success(true);});}
+        @Bean GlobalExceptionHandler exceptions(){return new GlobalExceptionHandler("contract", dto->{
+            ERRORS.get().add(dto);
+            if(ERROR_FAILURE.get()) {
+                throw new org.springframework.dao.DataAccessResourceFailureException(
+                        dto.getRequestUrl().contains("recharge-frequency") ? "mobile=13800138000 secret-value" : "ordinary-log-api-error",
+                        new java.sql.SQLException(dto.getRequestUrl().contains("recharge-frequency") ? "credential=secret-value" : "ordinary-log-api-cause"));
+            }
+            return success(true);
+        });}
         @Bean com.aifuli.framework.web.core.util.WebFrameworkUtils webFrameworkUtils() {return new com.aifuli.framework.web.core.util.WebFrameworkUtils(new WebProperties());}
         @Bean cn.hutool.extra.spring.SpringUtil springUtil(){return new cn.hutool.extra.spring.SpringUtil();}
         @Override protected RequestMappingHandlerMapping createRequestMappingHandlerMapping() {
