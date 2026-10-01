@@ -36,7 +36,7 @@ Server目录`aifuli-module-supply-chain/aifuli-module-supply-chain-server/src/ma
 - [ ] 封闭解码现有真实密文格式，保持AAD，旧cardCode映射券码/链接兼容；未知字段不直接转交付字段、非字符串不asText吞掉，冲突同义字段失败。字节finally清零、cause保留但不日志原始异常/明文，无部分交付。资产DTO安全toString。
 - [ ] 审计独立REQUIRES_NEW批量追加，实际app/project/buyer/keyVersion/订单/资源，用户摘要NULL。每调用查询事件+每实际解密事件，拒绝与失败持久化。audit故障拒绝明文，保留双重故障cause/suppressed。
 - [ ] 实施050增量、DO注释和主changelog，旧审计主体约束不丢失；新列COMMENT逐字匹配设计，无跨库/外键。
-- [ ] 单元/Contract/架构门禁先绿，再真实MySQL门禁：同买方跨项目同号、NULL归属、所有引用错配、并发一致快照、审计外层回滚不丢/故障无明文、过期隔离不解密、无资金/Timer/供应商副作用。不得只用Mock验证事务。
+- [ ] 单元/Contract/架构门禁先绿，再真实MySQL门禁：同买方另一项目同号不可读、不同买方项目各有同号不串、NULL归属、所有引用错配、并发一致快照、审计外层回滚不丢/故障无明文、过期隔离不解密、无资金/Timer/供应商副作用。不得只用Mock验证事务。同买方两项目同时存同号正向场景因旧唯一键仍在，需052后补，不删旧键来制造本阶段假证据。
 
 API门禁按实际类名指定，命名Contract不会自动跑：
 
