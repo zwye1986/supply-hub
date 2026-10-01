@@ -276,6 +276,10 @@ pnpm build:dev
 
 迁移细化依据为设计§10.1：新增独立Liquibase增量为队列项保存migration_acquired_at/migration_time_basis及DO注释，不能改048旧变更集；离线预检全候选再按可信受理时间+orderId稳定入队，已有冻结项复用/更早漏项拒绝。可靠解密与关联缺失、同单多未决操作拒绝，禁止旧购买人兜底。多单风险无任意holder，受控可信结果仅结束对应项并沿既有资金生命周期，全部风险结束且最大成功窗口到期后才由离线CAS清阻塞；未知/旧代次不放行。单风险无发送时间按迁移时钟持久化依据，不冒用QUERY/回调审计时间。阻塞队列超时只告警。全节点停止/版本/密钥部署检查须真实记录，未执行不得宣称通过。
 
+发布风险补充：同增量新增sc_recharge_frequency_migration_gate单行CLOSED/READY、verified_artifact/identity_key_fingerprint/verified_at/version及Mapper/应用门禁，普通MOBILE入队和发送marker控制行前核对READY与启动key指纹。离线部署证据端口无默认通过，先真实证据委派，再独立短事务CLOSED，全候选覆盖与READY同事务提交；失败不回滚恢复旧READY。空库也需空候选核验；已完整冻结的blocked组合仍由自身禁SEND，不新增长期暂停政策。表/时间列基线预计121/291，必须按真实Liquibase结果确认，旧checksum保持。
+
+受理与密钥核验补充：claim在写回执前核对门禁，enqueue再次核对，临时关闭拒绝不留下受理副作用，READY后同单可重试；accepted幂等重放复用既有结果。已绑定指纹不可被不同当前密钥覆盖；首次绑定且已有活跃冻结项时，仅为密钥一致性核验可信target的HMAC与既有摘要，不重新分配身份/SPU/序号，无法核验或不符则保持关闭。
+
 - [ ] 先写已有多单可能外呼的迁移必须阻塞、历史无法可靠解密不能从旧购买人手机号回填的失败测试。
 - [ ] 暂停新受理和SEND后扫描存量，恢复可信MOBILE目标与SPU，按可信受理顺序+orderId稳定入队；已发送或未知置SEND_POSSIBLE，无法证明未发不写PREPARED。同组合多可能处理中订单置blocked_reason并保留每单事实。
 - [ ] 迁移不新建资金预占、账本或供应商请求；幂等重跑不改已冻结SPU/序号。数据库无状态冲突且全节点版本已切换才恢复受理；密钥缺失、节点旧版本或未处理迁移冲突不得绕过队列。
