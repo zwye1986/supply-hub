@@ -78,6 +78,48 @@ class RechargeFrequencyAdminContractTest {
                     .andExpect(jsonPath("$.data.observedAt").exists()).andExpect(jsonPath("$.data.page").doesNotExist()).andExpect(header().string("Cache-Control","no-store"));
         }
     }
+    @Test void occupancyDisplayStatesRemainExplicitInHttpAndInternalProofFieldsAreHidden() throws Exception {
+        var rows=new ArrayList<RechargeFrequencyMonitorQueryService.Occupancy>();
+        var observed=java.time.LocalDateTime.of(2026,10,1,10,0);
+        var request=com.aifuli.module.supplychain.border.fulfillment.domain.FulfillmentRequestStatus.FULFILLING;
+        var operation=com.aifuli.module.supplychain.border.order.domain.SupplierOrderOperationStatus.RESULT_UNKNOWN;
+        for(String expected:List.of("RESULT_UNKNOWN","MANUAL","SUCCESS_HOLD","SUCCEEDED","BLOCKED","EXECUTING","MANUAL","FAILED")) {
+            var row=new RechargeFrequencyMonitorQueryService.Occupancy();row.setQueueId((long)rows.size()+1);
+            row.setRequestStatus(request.getCode());row.setOperationStatus(operation.getCode());
+            if(rows.size()==1) {row.setOperationStatus(com.aifuli.module.supplychain.border.order.domain.SupplierOrderOperationStatus.MANUAL.getCode());}
+            if(rows.size()>=2 && rows.size()<=4) {
+                row.setRequestStatus(com.aifuli.module.supplychain.border.fulfillment.domain.FulfillmentRequestStatus.SUCCEEDED.getCode());
+                row.setOperationStatus(com.aifuli.module.supplychain.border.order.domain.SupplierOrderOperationStatus.SUCCEEDED.getCode());
+                row.setTerminalEvidence(true);row.setAcquiredAt(observed.minusSeconds(rows.size()==2 ? 4 : 5));
+            }
+            if(rows.size()==4) {row.setBlockedReason("MIGRATION_UNKNOWN");}
+            if(rows.size()==5) {row.setOperationStatus(com.aifuli.module.supplychain.border.order.domain.SupplierOrderOperationStatus.EXECUTING.getCode());}
+            if(rows.size()==6) {row.setRequestStatus(com.aifuli.module.supplychain.border.fulfillment.domain.FulfillmentRequestStatus.MANUAL.getCode());}
+            if(rows.size()==7) {
+                row.setRequestStatus(com.aifuli.module.supplychain.border.fulfillment.domain.FulfillmentRequestStatus.FAILED.getCode());
+                row.setOperationStatus(com.aifuli.module.supplychain.border.order.domain.SupplierOrderOperationStatus.FAILED.getCode());row.setTerminalEvidence(true);
+            }
+            rows.add(row);
+        }
+        var mapper=mock(com.aifuli.module.supplychain.border.fulfillment.dal.mysql.RechargeFrequencyMonitorMapper.class);
+        when(mapper.occupancies(any())).thenReturn(rows);when(mapper.occupancyCount(any())).thenReturn(8L);
+        var clock=mock(com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock.class);when(clock.now()).thenReturn(observed);
+        var realQuery=new RechargeFrequencyMonitorQueryService(mapper,mock(RechargeFrequencyIdentityService.class),clock);
+        doAnswer(invocation->realQuery.page(invocation.getArgument(0),invocation.getArgument(1),invocation.getArgument(2),invocation.getArgument(3)))
+                .when(query).page(anyLong(),eq(RechargeFrequencyMonitorQueryService.View.OCCUPANCIES),any(),isNull());
+        var response=mvc.perform(get(prefix+"/occupancies")).andExpect(jsonPath("$.data.list[0].displayStatus").value("RESULT_UNKNOWN"))
+                .andExpect(jsonPath("$.data.list[1].displayStatus").value("MANUAL"))
+                .andExpect(jsonPath("$.data.list[2].displayStatus").value("SUCCESS_HOLD"))
+                .andExpect(jsonPath("$.data.list[3].displayStatus").value("SUCCEEDED"))
+                .andExpect(jsonPath("$.data.list[4].displayStatus").value("BLOCKED"))
+                .andExpect(jsonPath("$.data.list[5].displayStatus").value("EXECUTING"))
+                .andExpect(jsonPath("$.data.list[6].displayStatus").value("MANUAL"))
+                .andExpect(jsonPath("$.data.list[7].displayStatus").value("FAILED"))
+                .andExpect(jsonPath("$.data.list[2].canRelease").value(false))
+                .andExpect(jsonPath("$.data.list[3].canRelease").value(true)).andReturn().getResponse();
+        assertThat(response.getContentAsString()).doesNotContain("requestStatus","operationStatus","terminalEvidence","preparedSafe");
+        assertSafeLogs();
+    }
     @Test void separatePermissionsAndRealAdminIdentityPrecedeServiceAndAuditLookup() throws Exception {
         GRANTED.set(Set.of(ORDER_QUERY));
         mvc.perform(get(prefix+"/statistics")).andExpect(jsonPath("$.code").value(403));

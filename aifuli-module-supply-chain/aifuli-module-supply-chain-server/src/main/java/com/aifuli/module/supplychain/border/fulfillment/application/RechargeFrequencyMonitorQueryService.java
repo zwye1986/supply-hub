@@ -4,6 +4,7 @@ import com.aifuli.framework.common.pojo.PageResult;
 import com.aifuli.module.supplychain.border.fulfillment.dal.mysql.RechargeFrequencyMonitorMapper;
 import com.aifuli.module.supplychain.border.fulfillment.domain.*;
 import com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock;
+import com.aifuli.module.supplychain.border.order.domain.SupplierOrderOperationStatus;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonUnwrapped;
 import lombok.*;
@@ -22,7 +23,8 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
  */
 @Service @RequiredArgsConstructor @Slf4j
 public class RechargeFrequencyMonitorQueryService {
-    private static final String BLOCKED_DISPLAY_STATUS="BLOCKED";
+    /** 集中展示码；可信终态/窗口与当前操作事实分开判断，不由展示码授予释放许可。 */
+    public enum DisplayStatus { BLOCKED, SUCCESS_HOLD, SUCCEEDED, FAILED, MANUAL, RESULT_UNKNOWN, EXECUTING }
     public enum ReleaseBlockedReason { MIGRATION_BLOCKED, SUCCESS_WINDOW, UNCONFIRMED_SEND_RISK }
     private final RechargeFrequencyMonitorMapper mapper;
     private final RechargeFrequencyIdentityService identity;
@@ -150,7 +152,7 @@ public class RechargeFrequencyMonitorQueryService {
         /** 平台SPU永久业务编码。 */ private String platformSpuCode;
         /** 平台SPU标准名称。 */ private String platformSpuName;
         /** 供应链总订单号。 */ private String holderOrderNo;
-        /** 履约请求状态名称；迁移阻塞单独展示BLOCKED。 */ private String displayStatus;
+        /** 占用展示状态；按迁移阻塞、可信终态及窗口、当前操作事实优先级映射。 */ private String displayStatus;
         /** 当前占用取得时间，Asia/Shanghai。 */ private LocalDateTime acquiredAt;
         /** 本次成功最短占用截止时间，Asia/Shanghai。 */ private LocalDateTime minimumHoldUntil;
         /** 截至observedAt已占用秒数；迁移无取得时间时为空。 */ private Long heldSeconds;
@@ -162,15 +164,32 @@ public class RechargeFrequencyMonitorQueryService {
         /** 迁移阻塞队列的待核实供应链总订单号列表。 */ private List<String> riskOrderNos;
         /** 队列阻塞原因；内部投影，不能回显未校验原文。 */ @JsonIgnore private String blockedReason;
         /** 履约请求状态；内部投影。 */ @JsonIgnore private Short requestStatus;
+        /** 当前操作状态；内部投影，未知结果不能被履约请求的FULFILLING遮蔽。 */ @JsonIgnore private Short operationStatus;
         /** 同单同请求的可信终态证据；内部投影。 */ @JsonIgnore private boolean terminalEvidence;
         /** 所有关联操作无未确认发送风险且当前仍PREPARED；内部投影。 */ @JsonIgnore private boolean preparedSafe;
+        /**
+         * 展示状态优先反映阻塞、可信整单终态/成功窗口，其次人工与当前操作风险事实；
+         * canRelease独立采用既有完整证明，不能从displayStatus推导或扩大PREPARED撤销条件。
+         * 设计见 {@code docs/superpowers/specs/2026-09-30-direct-recharge-mobile-spu-frequency-design.md#32-队列项sc_recharge_frequency_entry}。
+         */
         void describeRelease(LocalDateTime now) {
-            if (blockedReason != null) { displayStatus=BLOCKED_DISPLAY_STATUS; releaseBlockedReason=ReleaseBlockedReason.MIGRATION_BLOCKED.name(); return; }
-            if (requestStatus != null) { displayStatus = FulfillmentRequestStatus.fromCode(requestStatus).name(); }
-            if (terminalEvidence && requestStatus != null && requestStatus == FulfillmentRequestStatus.SUCCEEDED.getCode()
-                    && (acquiredAt == null || now.isBefore(acquiredAt.plusSeconds(RechargeFrequencyConstants.SUCCESS_MINIMUM_HOLD_SECONDS)))) {
-                releaseBlockedReason=ReleaseBlockedReason.SUCCESS_WINDOW.name(); return;
+            if (blockedReason != null) {
+                displayStatus=DisplayStatus.BLOCKED.name();canRelease=false;
+                releaseBlockedReason=ReleaseBlockedReason.MIGRATION_BLOCKED.name();return;
             }
+            var request=requestStatus == null ? null : FulfillmentRequestStatus.fromCode(requestStatus);
+            var operation=operationStatus == null ? null : SupplierOrderOperationStatus.fromCode(operationStatus);
+            if (terminalEvidence && request == FulfillmentRequestStatus.SUCCEEDED
+                    && (acquiredAt == null || now.isBefore(acquiredAt.plusSeconds(RechargeFrequencyConstants.SUCCESS_MINIMUM_HOLD_SECONDS)))) {
+                displayStatus=DisplayStatus.SUCCESS_HOLD.name();canRelease=false;
+                releaseBlockedReason=ReleaseBlockedReason.SUCCESS_WINDOW.name();return;
+            }
+            if (terminalEvidence && request == FulfillmentRequestStatus.SUCCEEDED) { displayStatus=DisplayStatus.SUCCEEDED.name(); }
+            else if (terminalEvidence && request == FulfillmentRequestStatus.FAILED) { displayStatus=DisplayStatus.FAILED.name(); }
+            else if (request == FulfillmentRequestStatus.MANUAL || operation == SupplierOrderOperationStatus.MANUAL) { displayStatus=DisplayStatus.MANUAL.name(); }
+            else if (operation == SupplierOrderOperationStatus.RESULT_UNKNOWN) { displayStatus=DisplayStatus.RESULT_UNKNOWN.name(); }
+            else if (operation == SupplierOrderOperationStatus.EXECUTING) { displayStatus=DisplayStatus.EXECUTING.name(); }
+            else { displayStatus=request == null ? null : request.name(); }
             canRelease = terminalEvidence || preparedSafe;
             releaseBlockedReason=canRelease ? null : ReleaseBlockedReason.UNCONFIRMED_SEND_RISK.name();
         }

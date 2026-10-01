@@ -145,7 +145,11 @@ public class RechargeFrequencyAdminCommandService {
     }
     private ActionResult replay(RechargeFrequencyActionAuditDO original,RechargeFrequencyActionAuditDO command) {
         if(!java.security.MessageDigest.isEqual(original.getRequestFingerprint(),command.getRequestFingerprint())) {
-            log.warn("[限频管理幂等冲突] actor={}, actionType={}, traceId={}",command.getOperatorUserId(),command.getActionType(),TracerUtils.getTraceId());
+            // 操作号也可能包含手机号，仅日志复用脱敏；原号/指纹/审计保持完整，不能覆盖原动作结果。
+            // 设计见 docs/superpowers/specs/2026-09-30-direct-recharge-mobile-spu-frequency-design.md#7-管理端契约与权限。
+            log.warn("[限频管理幂等冲突] actor={}, actionType={}, actionNo={}, code={}, traceId={}",
+                    command.getOperatorUserId(),command.getActionType(),RechargeFrequencyActionAuditService.maskReason(command.getActionNo()),
+                    FREQUENCY_ACTION_CONFLICT.getCode(),TracerUtils.getTraceId());
             throw exception(FREQUENCY_ACTION_CONFLICT);
         }
         return result(original);

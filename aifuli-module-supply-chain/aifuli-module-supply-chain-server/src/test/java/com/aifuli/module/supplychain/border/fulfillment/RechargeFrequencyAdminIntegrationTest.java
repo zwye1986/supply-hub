@@ -61,16 +61,34 @@ class RechargeFrequencyAdminIntegrationTest {
     }
     @Test void retryPersistsNewWakeGenerationAndReplaysWithoutMutationOrFunds() {
         long entry=firstEntry(); var row=jdbc.queryForMap("SELECT * FROM sc_recharge_frequency_entry WHERE id=?",entry);
-        long wake=queueLong("wake_generation"); var command=new RetryCommand("RETRY-1",((Number)row.get("version")).longValue(),"核查 13800138000");
+        long wake=queueLong("wake_generation"); var command=new RetryCommand("a77edc40-8139-4b37-b1b4-c22ca1fb06c3",((Number)row.get("version")).longValue(),"核查 13800138000");
         var result=commands.retry(7L,entry,command);
         assertThat(result.resultCode()).isEqualTo("RETRY_SCHEDULED");
         assertThat(queueLong("wake_generation")).isEqualTo(wake+1);
         assertThat(commands.retry(7L,entry,command)).isEqualTo(result);
         assertThat(queueLong("wake_generation")).isEqualTo(wake+1);
         assertThat(jdbc.queryForObject("SELECT reason FROM sc_recharge_frequency_action_audit",String.class)).isEqualTo("核查 138****8000");
-        assertThatThrownBy(()->commands.retry(8L,entry,command)).isInstanceOf(ServiceException.class)
-                .extracting("code").isEqualTo(SupplyChainErrorCodeConstants.FREQUENCY_ACTION_CONFLICT.getCode());
-        assertThat(auditCount()).isEqualTo(1);
+        var logger=(ch.qos.logback.classic.Logger)org.slf4j.LoggerFactory.getLogger(RechargeFrequencyAdminCommandService.class);
+        var conflictLogs=new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();conflictLogs.start();logger.addAppender(conflictLogs);
+        try {
+            assertThatThrownBy(()->commands.retry(8L,entry,command)).isInstanceOf(ServiceException.class)
+                    .extracting("code").isEqualTo(SupplyChainErrorCodeConstants.FREQUENCY_ACTION_CONFLICT.getCode());
+            var conflict=conflictLogs.list.stream().filter(event->event.getFormattedMessage().contains("幂等冲突")).findFirst().orElseThrow();
+            assertThat(conflict.getFormattedMessage()).contains("actor=8","actionNo=a77edc40-8139-4b37-b1b4-c22ca1fb06c3",
+                    "code="+SupplyChainErrorCodeConstants.FREQUENCY_ACTION_CONFLICT.getCode(),"traceId=")
+                    .doesNotContain("13800138000","核查");
+            assertThat(conflict.getThrowableProxy()).isNull();
+            var phoneAction=new RetryCommand("RETRY-13800138000",jdbc.queryForObject("SELECT version FROM sc_recharge_frequency_entry WHERE id=?",Long.class,entry),"secret-value 13800138000");
+            commands.retry(7L,entry,phoneAction);
+            assertThatThrownBy(()->commands.retry(8L,entry,phoneAction)).isInstanceOf(ServiceException.class)
+                    .extracting("code").isEqualTo(SupplyChainErrorCodeConstants.FREQUENCY_ACTION_CONFLICT.getCode());
+            var phoneConflict=conflictLogs.list.stream().filter(event->event.getFormattedMessage().contains("幂等冲突")).reduce((first,last)->last).orElseThrow();
+            assertThat(phoneConflict.getFormattedMessage()).contains("actor=8","actionNo=RETRY-138****8000",
+                    "code="+SupplyChainErrorCodeConstants.FREQUENCY_ACTION_CONFLICT.getCode(),"traceId=")
+                    .doesNotContain("13800138000","secret-value");
+            assertThat(jdbc.queryForObject("SELECT operator_user_id FROM sc_recharge_frequency_action_audit WHERE action_no=?",Long.class,phoneAction.actionNo())).isEqualTo(7L);
+        } finally { logger.detachAppender(conflictLogs);conflictLogs.stop(); }
+        assertThat(auditCount()).isEqualTo(2);
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_fulfillment_operation",Long.class)).isEqualTo(2);
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_account_ledger WHERE entry_type IN ('COMMIT','RELEASE')",Long.class)).isZero();
     }
@@ -91,16 +109,27 @@ class RechargeFrequencyAdminIntegrationTest {
     @Test void unsafeUnknownManualAndSuccessWindowAreRejectedAndAuditedAfterRollback() {
         var permit=frequency.claim(operations().getFirst()); frequency.markSendPossible(permit);
         var lifecycle=context.getBean(SupplierOrderLifecycle.class);
+        assertThat(occupancy().getDisplayStatus()).isEqualTo("EXECUTING");
         lifecycle.transition(permit.operationNo(),RechargeFrequencyLifecycleIntegrationTest.fact(com.aifuli.module.supplychain.border.fulfillment.domain.OperationOutcomeClass.RESULT_UNKNOWN),"ADMIN");
+        assertThat(jdbc.queryForObject("SELECT status FROM sc_fulfillment_request WHERE id=(SELECT fulfillment_request_id FROM sc_recharge_frequency_entry WHERE id=?)",Short.class,permit.entryId()))
+                .isEqualTo(com.aifuli.module.supplychain.border.fulfillment.domain.FulfillmentRequestStatus.FULFILLING.getCode());
+        assertThat(occupancy().getDisplayStatus()).isEqualTo("RESULT_UNKNOWN");
+        assertThat(occupancy().isCanRelease()).isFalse();
         rejectRelease("UNKNOWN",permit,SupplyChainErrorCodeConstants.FREQUENCY_RELEASE_UNSAFE.getCode());
         lifecycle.transition(permit.operationNo(),RechargeFrequencyLifecycleIntegrationTest.fact(com.aifuli.module.supplychain.border.fulfillment.domain.OperationOutcomeClass.MANUAL_REQUIRED),"ADMIN");
+        assertThat(occupancy().getDisplayStatus()).isEqualTo("MANUAL");
+        assertThat(occupancy().isCanRelease()).isFalse();
         rejectRelease("MANUAL",permit,SupplyChainErrorCodeConstants.FREQUENCY_RELEASE_UNSAFE.getCode());
         jdbc.update("UPDATE sc_recharge_frequency_queue SET acquired_at='2099-01-01 00:00:00',minimum_hold_until='2099-01-01 00:00:05'");
         lifecycle.confirmTrustedOutcome(permit.operationNo(),RechargeFrequencyLifecycleIntegrationTest.observedSuccess(),"TRUSTED",permit);
+        assertThat(occupancy().getDisplayStatus()).isEqualTo("SUCCESS_HOLD");
+        assertThat(occupancy().isCanRelease()).isFalse();
         rejectRelease("WINDOW",permit,SupplyChainErrorCodeConstants.FREQUENCY_SUCCESS_WINDOW.getCode());
         assertThat(auditCount()).isEqualTo(3);
         assertThat(queueLong("holder_entry_id")).isEqualTo(permit.entryId());
         jdbc.update("UPDATE sc_recharge_frequency_queue SET acquired_at=NOW()-INTERVAL 10 SECOND,minimum_hold_until=NOW()-INTERVAL 5 SECOND");
+        assertThat(occupancy().getDisplayStatus()).isEqualTo("SUCCEEDED");
+        assertThat(occupancy().isCanRelease()).isTrue();
         assertThat(commands.release(7L,permit.queueId(),release("FINISHED",permit)).resultCode()).isEqualTo("RELEASED");
         assertThat(jdbc.queryForObject("SELECT status FROM sc_recharge_frequency_entry WHERE id=?",Short.class,permit.entryId())).isEqualTo((short)20);
     }
@@ -237,12 +266,17 @@ class RechargeFrequencyAdminIntegrationTest {
         var blocked=monitor.page(7L,View.OCCUPANCIES,new Filter(1,20,null,null,null,null,null,null,null,null,null),null);
         assertThat(blocked.page().getList()).hasSize(1);
         assertThat(((Occupancy)blocked.page().getList().getFirst()).isCanRelease()).isFalse();
+        assertThat(((Occupancy)blocked.page().getList().getFirst()).getDisplayStatus()).isEqualTo("BLOCKED");
         assertThat(((Occupancy)blocked.page().getList().getFirst()).getRiskOrderNos()).containsExactly("MIGRATION-RISK");
         jdbc.update("UPDATE sc_recharge_frequency_entry SET buyer_id=99 WHERE queue_id=? AND status=0",queue);
         var waitingOwner=monitor.page(7L,View.OCCUPANCIES,new Filter(1,20,99L,null,null,null,null,null,null,null,null),null);
         assertThat(waitingOwner.page().getTotal()).isZero();
         var json=context.getBean(com.fasterxml.jackson.databind.ObjectMapper.class).writeValueAsString(blocked);
         assertThat(json).contains("observedAt","\"list\"","\"total\":1").doesNotContain("mobileDigest","13800138000");
+    }
+    private Occupancy occupancy() {
+        return (Occupancy)context.getBean(RechargeFrequencyMonitorQueryService.class).page(7L,View.OCCUPANCIES,
+                new Filter(1,20,null,null,null,null,null,null,null,null,null),null).page().getList().getFirst();
     }
     private void rejectRelease(String action,RechargeFrequencyExecutionPermit permit,int code) {
         assertThatThrownBy(()->commands.release(7L,permit.queueId(),release(action,permit))).isInstanceOf(ServiceException.class).extracting("code").isEqualTo(code);

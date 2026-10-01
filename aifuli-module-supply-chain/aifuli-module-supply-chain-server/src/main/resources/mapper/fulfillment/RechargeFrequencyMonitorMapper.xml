@@ -61,7 +61,7 @@
                h.order_no holder_order_no, q.acquired_at, q.minimum_hold_until,
                GREATEST(0,TIMESTAMPDIFF(SECOND,q.acquired_at,#{f.observedAt})) held_seconds,
                (q.acquired_at &lt; TIMESTAMPADD(SECOND,-#{f.getOccupiedAlertSeconds},#{f.observedAt})) overdue,
-               q.occupancy_generation generation, q.version, q.blocked_reason, r.status request_status,
+               q.occupancy_generation generation, q.version, q.blocked_reason, r.status request_status, op.status operation_status,
                (bo.order_id=h.order_id AND bo.fulfillment_request_id=h.fulfillment_request_id
                  AND h.occupancy_generation=q.occupancy_generation
                  AND ((r.status=#{f.getSuccessStatus} AND op.status=#{f.getOperationSuccessStatus} AND op.result_class=#{f.getSuccessResult})
