@@ -1,6 +1,7 @@
 package com.aifuli.module.supplychain.infrastructure.auth;
 
 import com.aifuli.framework.common.exception.ServiceException;
+import com.aifuli.module.supplychain.api.auth.ProjectAuthOperations;
 import com.aifuli.module.supplychain.infrastructure.auth.dal.dataobject.AuthBuyerProjectDO;
 import com.aifuli.module.supplychain.infrastructure.auth.dal.dataobject.ProjectAppCredentialVersionDO;
 import com.aifuli.module.supplychain.infrastructure.auth.dal.dataobject.ProjectApplicationDO;
@@ -21,6 +22,9 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.NullSource;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.Arguments;
+import java.util.stream.Stream;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -34,6 +38,8 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowableOfType;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -287,6 +293,89 @@ class ProjectAppCredentialServiceTest {
 
         assertThat(credential.getSecretRef()).isEqualTo(SECRET_REF_SENTINEL);
         assertThat(credential.toString()).doesNotContain("secretRef", SECRET_REF_SENTINEL);
+    }
+
+    @ParameterizedTest(name = "project status {0}, operation {1}, allowed {2}")
+    @MethodSource("operationProjectStates")
+    void registeredOperationEnforcesClosedProjectStatePolicy(Short projectStatus, String operation, boolean allowed) {
+        when(applicationMapper.selectByAppId(APP_ID)).thenReturn(application(ProjectAuthStatus.ENABLED.code()));
+        AuthBuyerProjectDO project = project(ProjectAuthStatus.ENABLED.code());
+        project.setStatus(projectStatus);
+        when(buyerProjectMapper.selectById(20L)).thenReturn(project);
+        if (allowed) {
+            lenient().when(credentialMapper.selectByApplicationIdAndKeyVersion(30L, 1))
+                    .thenReturn(credential(ProjectAppCredentialStatus.CURRENT));
+            lenient().when(secretResolver.resolveAppKey(APP_ID, 1, SECRET_REF_SENTINEL))
+                    .thenReturn(APP_KEY_SENTINEL);
+            org.assertj.core.api.Assertions.assertThatCode(() -> authenticateOperation(operation))
+                    .doesNotThrowAnyException();
+            assertThat(authenticateOperation(operation).projectId()).isEqualTo(20L);
+        } else {
+            ServiceException failure = catchThrowableOfType(() -> authenticateOperation(operation), ServiceException.class);
+            assertThat(failure).isNotNull();
+            assertThat(failure.getCode()).isEqualTo(BUYER_AUTH_INVALID.getCode());
+            verifyNoInteractions(credentialMapper, secretResolver);
+        }
+    }
+
+    static Stream<Arguments> operationProjectStates() {
+        return java.util.Arrays.asList((Short) null, (short) 0, (short) 10, (short) 20, (short) 30,
+                        (short) 90, (short) 99).stream()
+                .flatMap(status -> ProjectAuthOperations.OPERATIONS.stream().map(op -> Arguments.of(status,
+                        op.operationCode(), ProjectAuthStatus.ENABLED.matches(status)
+                                || (ProjectAuthStatus.SUSPENDED.matches(status)
+                                && ProjectAuthOperations.STANDARD_ORDER_QUERY.equals(op.operationCode())))));
+    }
+
+    @ParameterizedTest
+    @NullSource
+    @ValueSource(strings = {"", " ", "UNKNOWN_OPERATION"})
+    void unknownOperationCannotDeclareItsOwnStatePolicy(String operation) {
+        ServiceException failure = catchThrowableOfType(() -> authenticateOperation(operation), ServiceException.class);
+        assertThat(failure).isNotNull();
+        assertThat(failure.getCode()).isEqualTo(BUYER_AUTH_INVALID.getCode());
+        verifyNoInteractions(applicationMapper, buyerProjectMapper, credentialMapper, secretResolver);
+    }
+
+    @Test
+    void suspendedQueryCannotBypassDisabledApplication() {
+        when(applicationMapper.selectByAppId(APP_ID)).thenReturn(application(ProjectAuthStatus.SUSPENDED.code()));
+        assertStandardQueryInvalid();
+        verifyNoInteractions(buyerProjectMapper, credentialMapper, secretResolver);
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = ProjectAppCredentialStatus.class, names = {"REVOKED", "EXPIRED"})
+    void suspendedQueryCannotBypassUnavailableCredential(ProjectAppCredentialStatus status) {
+        stubSuspendedQueryCredential(credential(status));
+        assertStandardQueryInvalid();
+        verifyNoInteractions(secretResolver);
+    }
+
+    @Test
+    void suspendedQueryCannotBypassCredentialWindow() {
+        ProjectAppCredentialVersionDO credential = credential(ProjectAppCredentialStatus.CURRENT);
+        credential.setValidTo(NOW);
+        stubSuspendedQueryCredential(credential);
+        assertStandardQueryInvalid();
+        verifyNoInteractions(secretResolver);
+    }
+
+    private void stubSuspendedQueryCredential(ProjectAppCredentialVersionDO credential) {
+        when(applicationMapper.selectByAppId(APP_ID)).thenReturn(application(ProjectAuthStatus.ENABLED.code()));
+        when(buyerProjectMapper.selectById(20L)).thenReturn(project(ProjectAuthStatus.SUSPENDED.code()));
+        lenient().when(credentialMapper.selectByApplicationIdAndKeyVersion(30L, 1)).thenReturn(credential);
+    }
+
+    private void assertStandardQueryInvalid() {
+        ServiceException failure = catchThrowableOfType(
+                () -> authenticateOperation(ProjectAuthOperations.STANDARD_ORDER_QUERY), ServiceException.class);
+        assertThat(failure).isNotNull();
+        assertThat(failure.getCode()).isEqualTo(BUYER_AUTH_INVALID.getCode());
+    }
+
+    private ProjectAppCredentialService.AuthenticatedApp authenticateOperation(String operation) {
+        return service.authenticate(APP_ID, 1, operation);
     }
 
     private void stubFullChain(ProjectAppCredentialStatus status) {

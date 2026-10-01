@@ -1,6 +1,7 @@
 package com.aifuli.module.supplychain.infrastructure.auth;
 
 import com.aifuli.framework.common.exception.ServiceException;
+import com.aifuli.module.supplychain.api.auth.ProjectAuthOperations;
 import com.aifuli.module.supplychain.infrastructure.security.ProjectCallContextAccessor;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -240,6 +241,73 @@ class ProjectCallContextAccessorImplTest {
         assertBuyerAuthInvalid(accessor::requireBuyerContext);
         assertBuyerAuthInvalid(accessor::requireChannelContext);
         assertBuyerAuthInvalid(accessor::requireProjectContext);
+    }
+
+    @Test
+    void standardAccessorRequiresExactAuthenticatedStandardOperation() {
+        for (String operation : java.util.List.of(ProjectAuthOperations.STANDARD_ORDER_CREATE,
+                ProjectAuthOperations.STANDARD_ORDER_QUERY, ProjectAuthOperations.STANDARD_ORDER_ASSET_QUERY)) {
+            ProjectAuthContextHolder.set(new ProjectAuthContext(1L, 2L, APP_ID_SENTINEL, 3, operation, null, null));
+            org.assertj.core.api.Assertions.assertThatCode(() -> standardContext(operation)).doesNotThrowAnyException();
+            ProjectCallContextAccessor.StandardProductContext context = standardContext(operation);
+            assertThat(context.projectId()).isEqualTo(1L);
+            assertThat(context.buyerId()).isEqualTo(2L);
+            assertThat(context.appId()).isEqualTo(APP_ID_SENTINEL);
+            assertThat(context.keyVersion()).isEqualTo(3);
+            assertThat(context.operationCode()).isEqualTo(operation);
+            assertThat(context.toString()).contains("projectId=1", "buyerId=2", "keyVersion=3", operation)
+                    .doesNotContain(APP_ID_SENTINEL, "appId", "buyerUserId", "channelCode", "appKey");
+            assertBuyerAuthInvalid(() -> standardContext(operation.equals(ProjectAuthOperations.STANDARD_ORDER_QUERY)
+                    ? ProjectAuthOperations.STANDARD_ORDER_CREATE : ProjectAuthOperations.STANDARD_ORDER_QUERY));
+        }
+    }
+
+    @Test
+    void standardAccessorFailsClosedForMissingLegacyOrInvalidExpectedOperation() {
+        assertBuyerAuthInvalid(() -> standardContext(ProjectAuthOperations.STANDARD_ORDER_QUERY));
+        for (ProjectAuthContext legacy : java.util.List.of(projectContext(null, null),
+                buyerContext(null), channelContext(null))) {
+            ProjectAuthContextHolder.set(legacy);
+            assertBuyerAuthInvalid(() -> standardContext(ProjectAuthOperations.STANDARD_ORDER_QUERY));
+        }
+        ProjectAuthContextHolder.set(new ProjectAuthContext(1L, 2L, APP_ID_SENTINEL, 1,
+                ProjectAuthOperations.STANDARD_ORDER_QUERY, null, null));
+        for (String invalid : java.util.Arrays.asList(null, "", " ", "UNKNOWN", "INSTORE_CONFIRM_PAYMENT_CALLBACK")) {
+            assertBuyerAuthInvalid(() -> standardContext(invalid));
+        }
+    }
+
+    @Test
+    void legacySpiDefaultFailsClosedAndSnapshotRejectsInvalidCoreIdentity() {
+        ProjectCallContextAccessor legacy = new ProjectCallContextAccessor() {
+            @Override public BuyerContext requireBuyerContext() { return new BuyerContext(1L, 2L, "legacy"); }
+            @Override public ChannelContext requireChannelContext() { return new ChannelContext(1L, "legacy"); }
+            @Override public ProjectContext requireProjectContext() { return new ProjectContext(1L); }
+        };
+        assertThat(ProjectCallContextAccessor.StandardProductContext.class.getRecordComponents())
+                .extracting(java.lang.reflect.RecordComponent::getName)
+                .containsExactly("projectId", "buyerId", "appId", "keyVersion", "operationCode");
+        assertBuyerAuthInvalid(() -> legacy.requireStandardProductContext(ProjectAuthOperations.STANDARD_ORDER_QUERY));
+        for (Long id : java.util.Arrays.asList(null, 0L, -1L)) {
+            assertInvalidContext(() -> new ProjectCallContextAccessor.StandardProductContext(id, 2L,
+                    APP_ID_SENTINEL, 1, ProjectAuthOperations.STANDARD_ORDER_QUERY));
+            assertInvalidContext(() -> new ProjectCallContextAccessor.StandardProductContext(1L, id,
+                    APP_ID_SENTINEL, 1, ProjectAuthOperations.STANDARD_ORDER_QUERY));
+        }
+        for (int version : new int[]{0, -1}) {
+            assertInvalidContext(() -> new ProjectCallContextAccessor.StandardProductContext(1L, 2L,
+                    APP_ID_SENTINEL, version, ProjectAuthOperations.STANDARD_ORDER_QUERY));
+        }
+        for (String invalid : java.util.Arrays.asList(null, "", " ")) {
+            assertInvalidContext(() -> new ProjectCallContextAccessor.StandardProductContext(1L, 2L,
+                    invalid, 1, ProjectAuthOperations.STANDARD_ORDER_QUERY));
+            assertInvalidContext(() -> new ProjectCallContextAccessor.StandardProductContext(1L, 2L,
+                    APP_ID_SENTINEL, 1, invalid));
+        }
+    }
+
+    private ProjectCallContextAccessor.StandardProductContext standardContext(String operation) {
+        return accessor.requireStandardProductContext(operation);
     }
 
     private static ProjectAuthContext buyerContext(String unusedChannelCode) {

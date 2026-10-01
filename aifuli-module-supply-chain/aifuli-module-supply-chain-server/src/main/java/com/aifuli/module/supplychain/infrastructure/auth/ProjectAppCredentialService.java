@@ -1,6 +1,7 @@
 package com.aifuli.module.supplychain.infrastructure.auth;
 
 import com.aifuli.framework.common.exception.ServiceException;
+import com.aifuli.module.supplychain.api.auth.ProjectAuthOperations;
 import com.aifuli.module.supplychain.infrastructure.auth.dal.dataobject.AuthBuyerProjectDO;
 import com.aifuli.module.supplychain.infrastructure.auth.dal.dataobject.ProjectAppCredentialVersionDO;
 import com.aifuli.module.supplychain.infrastructure.auth.dal.dataobject.ProjectApplicationDO;
@@ -91,6 +92,24 @@ public class ProjectAppCredentialService {
      * @return 含项目、采购商与本次验签 appKey 的认证快照
      */
     public AuthenticatedApp authenticate(String appId, int keyVersion) {
+        return authenticateWithPolicy(appId, keyVersion, ProjectAuthOperations.ProjectStatePolicy.ACTIVE_ONLY);
+    }
+
+    /**
+     * 按服务端不可变注册表的操作授权项目状态；调用方只能传操作码，不能声明放宽策略。
+     * 应用启用、密钥状态、有效窗口和解密链保持相同顺序，能力仍在签名成功后单独校验。
+     * 详见 {@code docs/superpowers/specs/2026-09-30-project-signed-standard-order-http-design.md#21-认证实施边界}。
+     */
+    public AuthenticatedApp authenticate(String appId, int keyVersion, String operationCode) {
+        log.debug("[project-auth] 按操作凭证认证开始 appId={}, keyVersion={}, operationCode={}",
+                appId, keyVersion, operationCode);
+        ProjectAuthOperations.Operation operation = ProjectAuthOperations.findByOperationCode(operationCode)
+                .orElseThrow(() -> authInvalid(appId, keyVersion, "操作未登记"));
+        return authenticateWithPolicy(appId, keyVersion, operation.projectStatePolicy());
+    }
+
+    private AuthenticatedApp authenticateWithPolicy(String appId, int keyVersion,
+                                                    ProjectAuthOperations.ProjectStatePolicy policy) {
         log.debug("[project-auth] 凭证链认证开始 appId={}, keyVersion={}", appId, keyVersion);
         ProjectApplicationDO application = applicationMapper.selectByAppId(appId);
         if (application == null || !ProjectAuthStatus.ENABLED.matches(application.getStatus())) {
@@ -98,7 +117,9 @@ public class ProjectAppCredentialService {
         }
 
         AuthBuyerProjectDO project = buyerProjectMapper.selectById(application.getProjectId());
-        if (project == null || !ProjectAuthStatus.ENABLED.matches(project.getStatus())) {
+        if (project == null || !(ProjectAuthStatus.ENABLED.matches(project.getStatus())
+                || (policy == ProjectAuthOperations.ProjectStatePolicy.ACTIVE_OR_SUSPENDED
+                && ProjectAuthStatus.SUSPENDED.matches(project.getStatus())))) {
             throw authInvalid(appId, keyVersion, "项目不存在或未启用");
         }
 

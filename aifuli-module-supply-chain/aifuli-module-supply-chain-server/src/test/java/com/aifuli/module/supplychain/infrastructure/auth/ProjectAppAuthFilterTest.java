@@ -88,7 +88,8 @@ class ProjectAppAuthFilterTest {
         properties.setMaxRequestBodyBytes(ProjectAppAuthProperties.HARD_MAX_REQUEST_BODY_BYTES);
         properties.setTimestampSkewMinutes(5);
         filter = new ProjectAppAuthFilter(credentialService, nonceStore, properties, OBJECT_MAPPER, CLOCK);
-        lenient().when(credentialService.authenticate(APP_ID, 1))
+        lenient().when(credentialService.authenticate(org.mockito.ArgumentMatchers.eq(APP_ID),
+                org.mockito.ArgumentMatchers.eq(1), anyString()))
                 .thenReturn(new ProjectAppCredentialService.AuthenticatedApp(11L, 22L, APP_ID, 1, APP_KEY));
     }
 
@@ -112,7 +113,7 @@ class ProjectAppAuthFilterTest {
             assertThat(servletRequest.getInputStream().readAllBytes()).isEqualTo(BODY);
         });
 
-        verify(credentialService).authenticate(APP_ID, 1);
+        verify(credentialService).authenticate(APP_ID, 1, CHANNEL_OPERATION.operationCode());
         verify(credentialService).requireCapability(11L, "INSTORE");
         verify(nonceStore).ensureUnique(APP_ID, "nonce-filter-test");
         assertThat(ProjectAuthContextHolder.get()).isNull();
@@ -217,7 +218,7 @@ class ProjectAppAuthFilterTest {
             runWithOldContext(request, new MockHttpServletResponse(), (servletRequest, servletResponse) -> {
             });
         }
-        verify(credentialService, org.mockito.Mockito.times(2)).authenticate(APP_ID, 1);
+        verify(credentialService, org.mockito.Mockito.times(2)).authenticate(APP_ID, 1, CHANNEL_OPERATION.operationCode());
         verify(nonceStore, org.mockito.Mockito.times(2)).ensureUnique(APP_ID, "nonce-filter-test");
     }
 
@@ -251,7 +252,7 @@ class ProjectAppAuthFilterTest {
 
         assertRejected(runRejectedWithOldContext(tamperedBody));
         assertRejected(runRejectedWithOldContext(tamperedHash));
-        verify(credentialService, org.mockito.Mockito.times(2)).authenticate(APP_ID, 1);
+        verify(credentialService, org.mockito.Mockito.times(2)).authenticate(APP_ID, 1, CHANNEL_OPERATION.operationCode());
         verify(nonceStore, never()).ensureUnique(anyString(), anyString());
     }
 
@@ -261,14 +262,14 @@ class ProjectAppAuthFilterTest {
         replaceHeader(request, ProjectAppAuthSigner.HEADER_SIGNATURE, "A".repeat(43));
 
         assertRejected(runRejectedWithOldContext(request));
-        verify(credentialService).authenticate(APP_ID, 1);
+        verify(credentialService).authenticate(APP_ID, 1, CHANNEL_OPERATION.operationCode());
         verifyNoInteractions(nonceStore);
     }
 
     @Test
     void credentialFailureReturnsUniformAuthErrorWithoutNonceWrite() throws Exception {
         ServiceException credentialFailure = exception(BUYER_AUTH_INVALID);
-        when(credentialService.authenticate(APP_ID, 1)).thenThrow(credentialFailure);
+        when(credentialService.authenticate(APP_ID, 1, CHANNEL_OPERATION.operationCode())).thenThrow(credentialFailure);
 
         assertRejected(runRejectedWithOldContext(validChannelRequest()));
         verifyNoInteractions(nonceStore);
@@ -281,7 +282,7 @@ class ProjectAppAuthFilterTest {
 
         assertRejected(runRejectedWithOldContext(validChannelRequest()));
         InOrder order = inOrder(credentialService, nonceStore);
-        order.verify(credentialService).authenticate(APP_ID, 1);
+        order.verify(credentialService).authenticate(APP_ID, 1, CHANNEL_OPERATION.operationCode());
         order.verify(nonceStore).ensureUnique(APP_ID, "nonce-filter-test");
     }
 
@@ -299,7 +300,7 @@ class ProjectAppAuthFilterTest {
 
     @Test
     void mapsContextDefensiveIllegalArgumentExceptionToAuthInvalidWithCause() throws Exception {
-        when(credentialService.authenticate(APP_ID, 1))
+        when(credentialService.authenticate(APP_ID, 1, CHANNEL_OPERATION.operationCode()))
                 .thenReturn(new ProjectAppCredentialService.AuthenticatedApp(0L, 22L, APP_ID, 1, APP_KEY));
         CachedBodyHttpServletRequestWrapper request =
                 new CachedBodyHttpServletRequestWrapper(validChannelRequest(), properties.getMaxRequestBodyBytes());
@@ -313,7 +314,7 @@ class ProjectAppAuthFilterTest {
 
     @Test
     void contextConstructionFailureReturnsAuthErrorAndClearsPreexistingHolder() throws Exception {
-        when(credentialService.authenticate(APP_ID, 1))
+        when(credentialService.authenticate(APP_ID, 1, CHANNEL_OPERATION.operationCode()))
                 .thenReturn(new ProjectAppCredentialService.AuthenticatedApp(0L, 22L, APP_ID, 1, APP_KEY));
 
         assertRejected(runRejectedWithOldContext(validChannelRequest()));
@@ -421,6 +422,56 @@ class ProjectAppAuthFilterTest {
         });
         assertThat(ProjectAuthContextHolder.get()).isNull();
         return response;
+    }
+
+    @Test
+    void filterPassesExactRegisteredStandardOperationToCredentialService() throws Exception {
+        ProjectAuthOperations.Operation operation = ProjectAuthOperations
+                .findByOperationCode(ProjectAuthOperations.STANDARD_ORDER_QUERY).orElseThrow();
+        MockHttpServletRequest request = signedRequest(operation, projectCredentials(), BODY, NOW.toEpochMilli());
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        filter.doFilter(request, response, (req, resp) -> {
+            assertThat(ProjectAuthContextHolder.get().operationCode()).isEqualTo(operation.operationCode());
+        });
+        verify(credentialService).authenticate(APP_ID, 1, operation.operationCode());
+        verify(credentialService, never()).authenticate(APP_ID, 1);
+        verify(credentialService).requireCapability(11L, ProjectAuthOperations.CAPABILITY_STANDARD_PRODUCT);
+        verify(nonceStore).ensureUnique(APP_ID, "nonce-filter-test");
+        assertThat(ProjectAuthContextHolder.get()).isNull();
+    }
+
+    @ParameterizedTest
+    @MethodSource("standardOperations")
+    void standardCapabilityFailureAndInvalidSignatureCannotConsumeNonce(ProjectAuthOperations.Operation operation)
+            throws Exception {
+        MockHttpServletRequest invalidSignature = signedRequest(operation, projectCredentials(), BODY, NOW.toEpochMilli());
+        invalidSignature.setContent("tampered".getBytes(StandardCharsets.UTF_8));
+        assertRejected(runRejectedWithOldContext(invalidSignature));
+        verify(credentialService, never()).requireCapability(org.mockito.ArgumentMatchers.any(), anyString());
+        verifyNoInteractions(nonceStore);
+
+        doThrow(exception(BUYER_AUTH_INVALID)).when(credentialService)
+                .requireCapability(11L, ProjectAuthOperations.CAPABILITY_STANDARD_PRODUCT);
+        assertRejected(runRejectedWithOldContext(signedRequest(operation, projectCredentials(), BODY, NOW.toEpochMilli())));
+        verify(credentialService).requireCapability(11L, ProjectAuthOperations.CAPABILITY_STANDARD_PRODUCT);
+        verifyNoInteractions(nonceStore);
+    }
+
+    @ParameterizedTest
+    @MethodSource("standardOperations")
+    void standardScopeDeclarationIsRejectedAfterNonceWithHolderCleared(ProjectAuthOperations.Operation operation)
+            throws Exception {
+        MockHttpServletRequest request = signedRequest(operation, projectCredentials(), BODY, NOW.toEpochMilli());
+        request.addHeader(ProjectAppAuthSigner.HEADER_CHANNEL_CODE, CHANNEL_CODE);
+        resign(request, BODY);
+        assertRejected(runRejectedWithOldContext(request));
+        verify(nonceStore).ensureUnique(APP_ID, "nonce-filter-test");
+        assertThat(ProjectAuthContextHolder.get()).isNull();
+    }
+
+    private static Stream<ProjectAuthOperations.Operation> standardOperations() {
+        return ProjectAuthOperations.OPERATIONS.stream()
+                .filter(op -> ProjectAuthOperations.CAPABILITY_STANDARD_PRODUCT.equals(op.requiredCapability()));
     }
 
     private void runWithOldContext(MockHttpServletRequest request, MockHttpServletResponse response,

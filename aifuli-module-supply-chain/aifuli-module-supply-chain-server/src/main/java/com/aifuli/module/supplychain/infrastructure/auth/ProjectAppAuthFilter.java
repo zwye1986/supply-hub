@@ -111,7 +111,11 @@ public final class ProjectAppAuthFilter extends OncePerRequestFilter {
         }
     }
 
-    /** 固定认证顺序；包级可见仅用于证明上下文防御性异常保留 cause。 */
+    /**
+     * 固定认证顺序；注册表匹配后使用按操作状态策略的凭证入口，签名→能力→nonce→scope顺序不变。
+     * 包级可见仅用于证明上下文防御性异常保留 cause。
+     * 详见 docs/superpowers/specs/2026-09-30-project-signed-standard-order-http-design.md#21-认证实施边界。
+     */
     ProjectAuthContext authenticate(CachedBodyHttpServletRequestWrapper request) {
         ParsedHeaders headers = parseHeaders(request);
         String path = pathWithoutContext(request);
@@ -127,7 +131,7 @@ public final class ProjectAppAuthFilter extends OncePerRequestFilter {
 
         validateTimestamp(headers.timestamp());
         ProjectAppCredentialService.AuthenticatedApp app =
-                credentialService.authenticate(headers.appId(), headers.keyVersion());
+                credentialService.authenticate(headers.appId(), headers.keyVersion(), operation.operationCode());
         validateAuthenticatedSnapshot(app, headers);
 
         String actualHash = ProjectAppAuthSigner.sha256Hex(request.bodyForDigest());

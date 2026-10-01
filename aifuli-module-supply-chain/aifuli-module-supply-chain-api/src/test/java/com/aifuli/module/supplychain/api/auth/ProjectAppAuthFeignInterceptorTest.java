@@ -139,6 +139,27 @@ class ProjectAppAuthFeignInterceptorTest {
     }
 
     @Test
+    void applySignsStandardTemplateWithEightHeadersAndRemovesStaleScopeHeaders() {
+        RequestTemplate template = new RequestTemplate();
+        template.method(Request.HttpMethod.POST);
+        template.uri(ProjectAuthOperations.STANDARD_ORDERS_PATH + "/query");
+        byte[] body = "{}".getBytes(StandardCharsets.UTF_8);
+        template.body(body, StandardCharsets.UTF_8);
+        AUTH_HEADER_NAMES.forEach(name -> template.header(name, "stale-" + name));
+        new ProjectAppAuthFeignInterceptor(() ->
+                new ProjectAppAuthCredentials(APP_ID, APP_KEY, 1, null, null)).apply(template);
+        Map<String, Collection<String>> headers = template.headers();
+        assertExpectedAuthenticationHeadersPresentExactlyOnce(headers);
+        String canonical = ProjectAppAuthSigner.canonicalString(APP_ID, "1", "1.0.0",
+                ProjectAuthOperations.STANDARD_ORDER_QUERY,
+                first(headers, ProjectAppAuthSigner.HEADER_TIMESTAMP),
+                first(headers, ProjectAppAuthSigner.HEADER_NONCE),
+                first(headers, ProjectAppAuthSigner.HEADER_REQUEST_SHA256), "", "");
+        assertThat(first(headers, ProjectAppAuthSigner.HEADER_SIGNATURE).equals(
+                ProjectAppAuthSigner.hmacSha256Base64Url(APP_KEY, canonical))).isTrue();
+    }
+
+    @Test
     void applyRejectsUnregisteredPath() {
         RequestTemplate template = new RequestTemplate();
         template.method(Request.HttpMethod.POST);
