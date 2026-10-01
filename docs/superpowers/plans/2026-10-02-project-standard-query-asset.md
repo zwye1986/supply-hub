@@ -30,13 +30,13 @@ Server目录`aifuli-module-supply-chain/aifuli-module-supply-chain-server/src/ma
 
 ### 实施与验证
 
-- [ ] 先写可编译的项目查询/审计行为RED，验证旧语义无法按项目隔离/审计独立保存，不以missing-class编译错误当RED。新类可先最小failclosed骨架，然后运行行为测试。记录命令和原始新鲜报告。
-- [ ] 实现查询§2：RR同一读视图，严格项目/分销商/CARD与所有双向引用，NULL/其他项目统一不存在；ACCEPTED缺订单、孤立订单、非法状态内部故障。未建单PROCESSING/拒绝可返回真实回执。
-- [ ] 实现§3/§4：直充assetAvailable=false；按可交付资产真实元数据判定卡券，全部引用校验。待交付空数组hint、MANUAL提示、终态/不支持/未受理明确业务错误；SUCCEEDED无资产内部故障。
-- [ ] 封闭解码现有真实密文格式，保持AAD，旧cardCode映射券码/链接兼容；未知字段不直接转交付字段、出现的全部已知载荷字段必须为字符串，显式JSON null及非当前类型字段的数组/对象也拒绝；非字符串不asText吞掉，冲突同义字段失败。字节finally清零、cause保留但不日志原始异常/明文，无部分交付。资产DTO安全toString。
-- [ ] 审计独立REQUIRES_NEW批量追加，实际app/project/buyer/keyVersion/订单/资源，用户摘要NULL。每调用查询事件+每实际解密事件，拒绝与失败持久化。audit故障拒绝明文，保留双重故障cause/suppressed。
-- [ ] 实施050增量、DO注释和主changelog，旧审计主体约束不丢失；新列COMMENT逐字匹配设计，050同时对齐accessed_at上海时间COMMENT而不改旧010或历史数据，无跨库/外键。
-- [ ] 单元/Contract/架构门禁先绿，再真实MySQL门禁：同买方另一项目同号不可读、不同买方项目各有同号不串、NULL归属、所有引用错配、并发一致快照、审计外层回滚不丢/故障无明文、过期隔离不解密、无资金/Timer/供应商副作用。不得只用Mock验证事务。同买方两项目同时存同号正向场景因旧唯一键仍在，需052后补，不删旧键来制造本阶段假证据。
+- [x] 先写可编译的项目查询/审计行为RED，验证旧语义无法按项目隔离/审计独立保存，不以missing-class编译错误当RED。新类可先最小failclosed骨架，然后运行行为测试。记录命令和原始新鲜报告。
+- [x] 实现查询§2：RR同一读视图，严格项目/分销商/CARD与所有双向引用，NULL/其他项目统一不存在；ACCEPTED缺订单、孤立订单、非法状态内部故障。未建单PROCESSING/拒绝可返回真实回执。
+- [x] 实现§3/§4：直充assetAvailable=false；按可交付资产真实元数据判定卡券，全部引用校验。待交付空数组hint、MANUAL提示、终态/不支持/未受理明确业务错误；SUCCEEDED无资产内部故障。
+- [x] 封闭解码现有真实密文格式，保持AAD，旧cardCode映射券码/链接兼容；未知字段不直接转交付字段、出现的全部已知载荷字段必须为字符串，显式JSON null及非当前类型字段的数组/对象也拒绝；非字符串不asText吞掉，冲突同义字段失败。字节finally清零、cause保留但不日志原始异常/明文，无部分交付。资产DTO安全toString。
+- [x] 审计独立REQUIRES_NEW批量追加，实际app/project/buyer/keyVersion/订单/资源，用户摘要NULL。每调用查询事件+每实际解密事件，拒绝与失败持久化。audit故障拒绝明文，保留双重故障cause/suppressed。
+- [x] 实施050增量、DO注释和主changelog，旧审计主体约束不丢失；新列COMMENT逐字匹配设计，050同时对齐accessed_at上海时间COMMENT而不改旧010或历史数据，无跨库/外键。
+- [x] 单元/Contract/架构门禁先绿，再真实MySQL门禁：同买方另一项目同号不可读、不同买方项目各有同号不串、NULL归属、所有引用错配、并发一致快照、审计外层回滚不丢/故障无明文、过期隔离不解密、无资金/Timer/供应商副作用。不得只用Mock验证事务。同买方两项目同时存同号正向场景因旧唯一键仍在，需052后补，不删旧键来制造本阶段假证据。
 
 API门禁按实际类名指定，命名Contract不会自动跑：
 
@@ -60,10 +60,15 @@ JAVA_HOME=/Library/Java/JavaVirtualMachines/jdk-21.jdk/Contents/Home \
 
 完整应用若依赖限频密钥，测试运行进程注入随机32B测试密钥，不写生产默认/持久化密钥/输出指纹；本阶段只读功能不能为方便测试绕过频率CLOSED门禁。Maven串行；仅跳过供应链之外单测，禁止-DskipTests。
 
-- [ ] 证据保存`/tmp/project-standard-query-asset`：RED/GREEN命令、实际新鲜XML/count/hash、源提交及DDL基线hash。只记已执行测试，不把核心应用测试称为真实外部HTTP/供应商联调。
-- [ ] 中文注释带设计章节链接，入口debug采样、无吞异常/魔法值，自审并仅提交owned代码/测试/050文件，中文提交。
+- [x] 证据保存`/tmp/project-standard-query-asset`：RED/GREEN命令、实际新鲜XML/count/hash、源提交及DDL基线hash。只记已执行测试，不把核心应用测试称为真实外部HTTP/供应商联调。
+- [x] 中文注释带设计章节链接，入口debug采样、无吞异常/魔法值，自审并仅提交owned代码/测试/050文件，中文提交。
 - [ ] 规格审查通过→质量审查通过，有问题由原实施者修复并复评；root记录计划和`docs/集成测试.md`。随后进入报价/身份移除与共享受理阶段。
 
 ### 本阶段范围
 
 不新增Controller或测试Controller、Gateway/共享Web日志、不改报价/受理/资金/路由/限购、不改旧标准buyerUserId列/DTO、不改前端。HTTP no-store和全链日志保护作为后续开放必需门禁，未完成前不得宣称资产HTTP可对外使用。root编辑设计/待办/集成文档，实施者不暂存这些文件。
+
+
+### 实施进度（2026-10-02）
+
+代码fc4fd44（23文件），最终107 API＋94逻辑/架构＋19真实MySQL=220，零失败/错误/跳过，规格独立复评通过。质量审查进行中，完成前不进入Task3实现。证据`/tmp/project-standard-query-asset/README.md`与manifest明确记录原RED/首轮权限错误XML的保留限制，以及新修复RED和最终源码报告。详细执行记录见`docs/集成测试.md#775-标准订单http主线实施记录2026-10-02`。本阶段没有外部业务HTTP。
