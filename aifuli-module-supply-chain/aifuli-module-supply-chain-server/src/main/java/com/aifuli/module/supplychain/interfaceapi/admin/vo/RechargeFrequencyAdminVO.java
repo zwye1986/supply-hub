@@ -1,6 +1,8 @@
 package com.aifuli.module.supplychain.interfaceapi.admin.vo;
 
 import jakarta.validation.constraints.*;
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
+import com.aifuli.module.supplychain.infrastructure.time.ShanghaiEpochMillisDeserializer;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.ToString;
@@ -32,8 +34,10 @@ public final class RechargeFrequencyAdminVO {
         /** 采购商侧C端订单号，CARD场景必填。 */
         @Size(max=128) private String buyerOrderNo;
         /** 首次入队时间，Asia/Shanghai。 */
+        @JsonDeserialize(using=ShanghaiEpochMillisDeserializer.class)
         @DateTimeFormat(iso=DateTimeFormat.ISO.DATE_TIME) private LocalDateTime enqueuedFrom;
         /** 首次入队时间范围截止，Asia/Shanghai，包含边界。 */
+        @JsonDeserialize(using=ShanghaiEpochMillisDeserializer.class)
         @DateTimeFormat(iso=DateTimeFormat.ISO.DATE_TIME) private LocalDateTime enqueuedTo;
     }
     @Data @EqualsAndHashCode(callSuper=true)

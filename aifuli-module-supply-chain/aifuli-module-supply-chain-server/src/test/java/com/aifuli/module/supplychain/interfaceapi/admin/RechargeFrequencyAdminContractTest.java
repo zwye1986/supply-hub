@@ -79,6 +79,102 @@ class RechargeFrequencyAdminContractTest {
                     .andExpect(jsonPath("$.data.observedAt").exists()).andExpect(jsonPath("$.data.page").doesNotExist()).andExpect(header().string("Cache-Control","no-store"));
         }
     }
+    /** 前端使用真实应用时间格式与安全长整型，避免默认MockMvc序列化掩盖契约差异。 */
+    @Test void frontendFieldsUseApplicationWireTypesAndActionResult() throws Exception {
+        var original=TimeZone.getDefault();
+        try {
+            for(String zone:List.of("UTC","Asia/Shanghai")) {
+                TimeZone.setDefault(TimeZone.getTimeZone(zone));
+                assertFrontendWireContract();
+            }
+        } finally { TimeZone.setDefault(original); }
+    }
+    private void assertFrontendWireContract() throws Exception {
+        var observed=java.time.LocalDateTime.of(2026,10,1,10,0);
+        long epoch=observed.atZone(com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock.DATABASE_ZONE).toInstant().toEpochMilli();
+        var waiting=new RechargeFrequencyMonitorQueryService.WaitingOrder();
+        waiting.setEntryId(Long.MAX_VALUE);waiting.setQueueId(2L);waiting.setVersion(3L);
+        waiting.setMaskedMobile("138****8000");waiting.setPlatformSpuCode("SPU");waiting.setPlatformSpuName("直充商品");
+        waiting.setOrderNo("ORD");waiting.setBuyerOrderNo("BUYER-ORD");waiting.setBuyerId(4L);waiting.setBuyerCode("B");waiting.setBuyerName("分销商");
+        waiting.setProjectId(5L);waiting.setProjectCode("P");waiting.setProjectName("项目");waiting.setEnqueuedAt(observed);waiting.setWaitSeconds(12);waiting.setQueueSequence(6);
+        doReturn(new RechargeFrequencyMonitorQueryService.ObservedPage<>(new PageResult<>(List.of(waiting),207L),observed))
+                .when(query).page(anyLong(),eq(RechargeFrequencyMonitorQueryService.View.WAITING),any(),isNull());
+        mvc.perform(get(prefix+"/waiting-orders").param("pageNo","2").param("pageSize","20"))
+                .andExpect(jsonPath("$.data.observedAt").value(epoch)).andExpect(jsonPath("$.data.list[0].enqueuedAt").value(epoch))
+                .andExpect(jsonPath("$.data.list[0].entryId").value(Long.toString(Long.MAX_VALUE)))
+                .andExpect(jsonPath("$.data.list[0].version").value(3)).andExpect(jsonPath("$.data.total").value(207))
+                .andExpect(jsonPath("$.data.list[0].buyerName").value("分销商")).andExpect(jsonPath("$.data.list[0].projectName").value("项目"))
+                .andExpect(jsonPath("$.data.list[0].maskedMobile").value("138****8000")).andExpect(jsonPath("$.data.list[0].waitSeconds").value(12));
+        var stats=new RechargeFrequencyMonitorQueryService.Statistics();stats.setWaitingOrderCount(207);stats.setOccupiedQueueCount(3);
+        stats.setOverThresholdQueueCount(2);stats.setOverdueQueueCount(1);stats.setSuccessMinimumHoldSeconds(5);stats.setOccupiedAlertSeconds(1800);stats.setBacklogThreshold(5);stats.setObservedAt(observed);
+        when(query.statistics(anyLong())).thenReturn(stats);
+        mvc.perform(get(prefix+"/statistics")).andExpect(jsonPath("$.data.observedAt").value(epoch))
+                .andExpect(jsonPath("$.data.waitingOrderCount").value(207)).andExpect(jsonPath("$.data.occupiedQueueCount").value(3))
+                .andExpect(jsonPath("$.data.overThresholdQueueCount").value(2)).andExpect(jsonPath("$.data.overdueQueueCount").value(1))
+                .andExpect(jsonPath("$.data.successMinimumHoldSeconds").value(5)).andExpect(jsonPath("$.data.occupiedAlertSeconds").value(1800)).andExpect(jsonPath("$.data.backlogThreshold").value(5));
+        when(commands.retry(eq(71L),eq(1L),any())).thenReturn(new RechargeFrequencyAdminCommandService.ActionResult("A","RETRY_SCHEDULED","已触发检查"));
+        mvc.perform(post(prefix+"/entries/1/retry").contentType("application/json").content("{\"actionNo\":\"A\",\"expectedVersion\":0,\"reason\":\"核查\"}"))
+                .andExpect(jsonPath("$.data.actionNo").value("A")).andExpect(jsonPath("$.data.resultCode").value("RETRY_SCHEDULED")).andExpect(jsonPath("$.data.message").value("已触发检查"));
+        when(commands.release(eq(71L),eq(2L),any())).thenReturn(new RechargeFrequencyAdminCommandService.ActionResult("R","RELEASED","已释放"));
+        mvc.perform(post(prefix+"/queues/2/release").contentType("application/json").content("{\"actionNo\":\"R\",\"expectedHolderOrderNo\":\"ORD\",\"expectedGeneration\":1,\"expectedVersion\":3,\"reason\":\"核查\"}"))
+                .andExpect(jsonPath("$.data.resultCode").value("RELEASED"));
+    }
+    @Test void occupancyAndBacklogFieldsPreserveNullableMigrationAndShanghaiTimes() throws Exception {
+        var original=TimeZone.getDefault();
+        var observed=java.time.LocalDateTime.of(2026,10,1,10,0);
+        long epoch=observed.atZone(com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock.DATABASE_ZONE).toInstant().toEpochMilli();
+        var occupancy=new RechargeFrequencyMonitorQueryService.Occupancy();occupancy.setQueueId(2L);occupancy.setMaskedMobile("138****8000");
+        occupancy.setPlatformSpuCode("SPU");occupancy.setPlatformSpuName("直充商品");occupancy.setHolderOrderNo("ORD");
+        occupancy.setAcquiredAt(observed);occupancy.setMinimumHoldUntil(observed.plusSeconds(5));occupancy.setHeldSeconds(1801L);occupancy.setOverdue(true);
+        occupancy.setDisplayStatus("RESULT_UNKNOWN");occupancy.setGeneration(Long.MAX_VALUE);occupancy.setVersion(9L);occupancy.setCanRelease(false);
+        occupancy.setReleaseBlockedReason("UNCONFIRMED_SEND_RISK");occupancy.setRiskOrderNos(List.of("RISK"));
+        var migration=new RechargeFrequencyMonitorQueryService.Occupancy();migration.setQueueId(3L);migration.setDisplayStatus("BLOCKED");migration.setRiskOrderNos(List.of("MIGRATION-RISK"));
+        doReturn(new RechargeFrequencyMonitorQueryService.ObservedPage<>(new PageResult<>(List.of(occupancy,migration),2L),observed))
+                .when(query).page(anyLong(),eq(RechargeFrequencyMonitorQueryService.View.OCCUPANCIES),any(),isNull());
+        var backlog=new RechargeFrequencyMonitorQueryService.Backlog();backlog.setQueueId(2L);backlog.setMaskedMobile("138****8000");backlog.setPlatformSpuCode("SPU");backlog.setPlatformSpuName("直充商品");
+        backlog.setWaitingCount(6);backlog.setEarliestEnqueuedAt(observed);backlog.setOverThreshold(true);
+        doReturn(new RechargeFrequencyMonitorQueryService.ObservedPage<>(new PageResult<>(List.of(backlog),1L),observed))
+                .when(query).page(anyLong(),eq(RechargeFrequencyMonitorQueryService.View.BACKLOGS),any(),isNull());
+        try {
+            for(String zone:List.of("UTC","Asia/Shanghai")) {
+                TimeZone.setDefault(TimeZone.getTimeZone(zone));
+                var result=mvc.perform(get(prefix+"/occupancies")).andExpect(jsonPath("$.data.list[0].acquiredAt").value(epoch))
+                        .andExpect(jsonPath("$.data.list[0].minimumHoldUntil").value(epoch+5000))
+                        .andExpect(jsonPath("$.data.list[0].generation").value(Long.toString(Long.MAX_VALUE)))
+                        .andExpect(jsonPath("$.data.list[0].version").value(9)).andExpect(jsonPath("$.data.list[0].canRelease").value(false))
+                        .andExpect(jsonPath("$.data.list[0].heldSeconds").value(1801)).andExpect(jsonPath("$.data.list[0].overdue").value(true))
+                        .andExpect(jsonPath("$.data.list[0].displayStatus").value("RESULT_UNKNOWN"))
+                        .andExpect(jsonPath("$.data.list[0].releaseBlockedReason").value("UNCONFIRMED_SEND_RISK"))
+                        .andExpect(jsonPath("$.data.list[0].riskOrderNos[0]").value("RISK")).andReturn();
+                var json=new ObjectMapper().readTree(result.getResponse().getContentAsString());
+                assertThat(json.at("/data/list/1/holderOrderNo").isNull()).isTrue();
+                assertThat(json.at("/data/list/1/acquiredAt").isNull()).isTrue();assertThat(json.at("/data/list/1/heldSeconds").isNull()).isTrue();
+                mvc.perform(get(prefix+"/backlogs")).andExpect(jsonPath("$.data.list[0].earliestEnqueuedAt").value(epoch))
+                        .andExpect(jsonPath("$.data.list[0].waitingCount").value(6)).andExpect(jsonPath("$.data.list[0].overThreshold").value(true));
+            }
+        } finally { TimeZone.setDefault(original); }
+    }
+    @Test void postEpochAndGetIsoFiltersHaveSameShanghaiWallTime() throws Exception {
+        var original=TimeZone.getDefault();
+        var expected=java.time.LocalDateTime.of(2026,10,1,10,0);
+        long epoch=expected.atZone(com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock.DATABASE_ZONE).toInstant().toEpochMilli();
+        doReturn(new RechargeFrequencyMonitorQueryService.ObservedPage<>(new PageResult<>(List.of(),0L),expected))
+                .when(query).page(anyLong(),any(),any(),any());
+        try {
+            for(String zone:List.of("UTC","Asia/Shanghai")) {
+                TimeZone.setDefault(TimeZone.getTimeZone(zone));clearInvocations(query);
+                mvc.perform(get(prefix+"/waiting-orders").param("enqueuedFrom","2026-10-01T10:00:00").param("enqueuedTo","2026-10-01T10:00:00"))
+                        .andExpect(jsonPath("$.code").value(0));
+                mvc.perform(post(prefix+"/search").contentType("application/json").content("{\"view\":\"WAITING\",\"mobile\":\"13800138000\",\"enqueuedFrom\":"+epoch+",\"enqueuedTo\":"+epoch+"}"))
+                        .andExpect(jsonPath("$.code").value(0));
+                var captor=org.mockito.ArgumentCaptor.forClass(RechargeFrequencyMonitorQueryService.Filter.class);
+                verify(query,times(2)).page(eq(71L),eq(RechargeFrequencyMonitorQueryService.View.WAITING),captor.capture(),any());
+                assertThat(captor.getAllValues()).allSatisfy(filter->{assertThat(filter.enqueuedFrom()).isEqualTo(expected);assertThat(filter.enqueuedTo()).isEqualTo(expected);});
+            }
+            mvc.perform(post(prefix+"/search").contentType("application/json").content("{\"view\":\"WAITING\",\"mobile\":\"13800138000\",\"enqueuedFrom\":\"2026-10-01T10:00:00\"}"))
+                    .andExpect(jsonPath("$.code").value(400));
+        } finally { TimeZone.setDefault(original); }
+    }
     @Test void occupancyDisplayStatesRemainExplicitInHttpAndInternalProofFieldsAreHidden() throws Exception {
         var rows=new ArrayList<RechargeFrequencyMonitorQueryService.Occupancy>();
         var observed=java.time.LocalDateTime.of(2026,10,1,10,0);
@@ -276,6 +372,14 @@ class RechargeFrequencyAdminContractTest {
         });}
         @Bean com.aifuli.framework.web.core.util.WebFrameworkUtils webFrameworkUtils() {return new com.aifuli.framework.web.core.util.WebFrameworkUtils(new WebProperties());}
         @Bean cn.hutool.extra.spring.SpringUtil springUtil(){return new cn.hutool.extra.spring.SpringUtil();}
+        /** 与运行应用相同的Jackson定制；MVC默认findModules不是业务wire配置。 */
+        @Override protected void configureMessageConverters(List<org.springframework.http.converter.HttpMessageConverter<?>> converters) {
+            var appJackson=new com.aifuli.framework.jackson.config.AifuliJacksonAutoConfiguration();
+            var builder=org.springframework.http.converter.json.Jackson2ObjectMapperBuilder.json();
+            appJackson.ldtEpochMillisCustomizer().customize(builder);
+            ObjectMapper mapper=builder.build();mapper.registerModule(appJackson.timestampSupportModuleBean());
+            converters.add(new org.springframework.http.converter.json.MappingJackson2HttpMessageConverter(mapper));
+        }
         @Override protected RequestMappingHandlerMapping createRequestMappingHandlerMapping() {
             var properties=new WebProperties();properties.setAdminApi(new WebProperties.Api("/admin-api","**.interfaceapi.admin.**"));
             return new AifuliWebAutoConfiguration().webMvcRegistrations(properties).getRequestMappingHandlerMapping();

@@ -6,6 +6,8 @@ import com.aifuli.module.supplychain.border.fulfillment.domain.*;
 import com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock;
 import com.aifuli.module.supplychain.border.order.domain.SupplierOrderOperationStatus;
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.databind.annotation.JsonSerialize;
+import com.aifuli.module.supplychain.infrastructure.time.ShanghaiEpochMillisSerializer;
 import com.fasterxml.jackson.annotation.JsonUnwrapped;
 import lombok.*;
 import lombok.extern.slf4j.Slf4j;
@@ -107,7 +109,7 @@ public class RechargeFrequencyMonitorQueryService {
     /** JSON展开已有PageResult以保持管理端data.list/data.total契约。 */
     public record ObservedPage<T>(
             /** 数据库分页结果，JSON展开为list与total。 */ @JsonUnwrapped PageResult<T> page,
-            /** 本次查询观察时间，Asia/Shanghai，来自数据库时钟。 */ LocalDateTime observedAt) { }
+            /** 本次查询观察时间，Asia/Shanghai，来自数据库时钟。 */ @JsonSerialize(using=ShanghaiEpochMillisSerializer.class) LocalDateTime observedAt) { }
     @Data public static class Statistics {
         /** 全中台WAITING订单数。 */ private long waitingOrderCount;
         /** 持有占用或迁移阻塞的队列数。 */ private long occupiedQueueCount;
@@ -116,7 +118,7 @@ public class RechargeFrequencyMonitorQueryService {
         /** 成功最短占用秒数，按原acquiredAt计算。 */ private long successMinimumHoldSeconds;
         /** 持续占用告警阈值秒数。 */ private long occupiedAlertSeconds;
         /** 队列积压阈值，严格超过才告警。 */ private long backlogThreshold;
-        /** 本次查询观察时间，Asia/Shanghai，来自数据库时钟。 */ private LocalDateTime observedAt;
+        /** 本次查询观察时间，Asia/Shanghai，来自数据库时钟。 */ @JsonSerialize(using=ShanghaiEpochMillisSerializer.class) private LocalDateTime observedAt;
     }
     @Data public static class WaitingOrder {
         /** 直充限频队列项内部主键。 */ private Long entryId;
@@ -133,7 +135,7 @@ public class RechargeFrequencyMonitorQueryService {
         /** 采购项目内部主键；存量订单可空。 */ private Long projectId;
         /** 采购项目全局永久编码。 */ private String projectCode;
         /** 采购项目名称。 */ private String projectName;
-        /** 首次入队时间，Asia/Shanghai。 */ private LocalDateTime enqueuedAt;
+        /** 首次入队时间，Asia/Shanghai。 */ @JsonSerialize(using=ShanghaiEpochMillisSerializer.class) private LocalDateTime enqueuedAt;
         /** 截至observedAt已等待秒数，不小于零。 */ private long waitSeconds;
         /** 本订单首次入队分配的队列序号。 */ private long queueSequence;
     }
@@ -143,7 +145,7 @@ public class RechargeFrequencyMonitorQueryService {
         /** 平台SPU永久业务编码。 */ private String platformSpuCode;
         /** 平台SPU标准名称。 */ private String platformSpuName;
         /** 本队列WAITING项数量。 */ private long waitingCount;
-        /** 本队列WAITING项最早首次入队时间，Asia/Shanghai。 */ private LocalDateTime earliestEnqueuedAt;
+        /** 本队列WAITING项最早首次入队时间，Asia/Shanghai。 */ @JsonSerialize(using=ShanghaiEpochMillisSerializer.class) private LocalDateTime earliestEnqueuedAt;
         /** WAITING项数量是否严格超过积压阈值。 */ private boolean overThreshold;
     }
     @Data public static class Occupancy {
@@ -153,8 +155,8 @@ public class RechargeFrequencyMonitorQueryService {
         /** 平台SPU标准名称。 */ private String platformSpuName;
         /** 供应链总订单号。 */ private String holderOrderNo;
         /** 占用展示状态；按迁移阻塞、可信终态及窗口、当前操作事实优先级映射。 */ private String displayStatus;
-        /** 当前占用取得时间，Asia/Shanghai。 */ private LocalDateTime acquiredAt;
-        /** 本次成功最短占用截止时间，Asia/Shanghai。 */ private LocalDateTime minimumHoldUntil;
+        /** 当前占用取得时间，Asia/Shanghai。 */ @JsonSerialize(using=ShanghaiEpochMillisSerializer.class) private LocalDateTime acquiredAt;
+        /** 本次成功最短占用截止时间，Asia/Shanghai。 */ @JsonSerialize(using=ShanghaiEpochMillisSerializer.class) private LocalDateTime minimumHoldUntil;
         /** 截至observedAt已占用秒数；迁移无取得时间时为空。 */ private Long heldSeconds;
         /** 是否严格超过持续占用告警时长。 */ private boolean overdue;
         /** 每次取得新占用递增的占用代次。 */ private Long generation;
