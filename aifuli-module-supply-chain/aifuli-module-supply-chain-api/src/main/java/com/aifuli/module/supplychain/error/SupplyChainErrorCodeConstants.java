@@ -203,6 +203,14 @@ public interface SupplyChainErrorCodeConstants {
     ErrorCode PROJECT_APP_CONFIRMATION_REQUIRED = error(1_050_001_149, "吊销项目应用凭证须确认并填写原因");
     ErrorCode PROJECT_APP_CREDENTIAL_STATE_INVALID = error(1_050_001_150, "项目应用凭证状态异常");
 
+    // 项目标准资产查询稳定错误，设计见 docs/superpowers/specs/2026-10-02-project-standard-query-asset-design.md#4-资产结果与封闭载荷。
+    ErrorCode ASSET_QUERY_UNSUPPORTED_PRODUCT_TYPE =
+            error(1_050_001_158, "此类商品不能查询资产，请通过查单接口获取订单信息");
+    ErrorCode ASSET_QUERY_ORDER_NOT_ACCEPTED =
+            error(1_050_001_159, "订单未受理，请通过查单接口获取订单信息");
+    ErrorCode ASSET_QUERY_ORDER_TERMINATED =
+            error(1_050_001_160, "订单已失败或取消，请通过查单接口获取订单结果");
+
     ErrorCode FREQUENCY_RESOURCE_NOT_FOUND = error(1_050_001_151, "限频资源不存在");
     ErrorCode FREQUENCY_VERSION_CONFLICT = error(1_050_001_152, "限频资源版本或持有者已变化");
     ErrorCode FREQUENCY_STATE_INVALID = error(1_050_001_153, "限频状态不允许该操作");
@@ -330,6 +338,9 @@ public interface SupplyChainErrorCodeConstants {
             entry(PRODUCT_SKU_CODE_DUPLICATE, RetryDirective.DO_NOT_RETRY),
             entry(PRODUCT_SKU_FIELD_INVALID, RetryDirective.DO_NOT_RETRY),
             entry(PRODUCT_CURRENCY_INVALID, RetryDirective.DO_NOT_RETRY),
+            entry(ASSET_QUERY_UNSUPPORTED_PRODUCT_TYPE, RetryDirective.DO_NOT_RETRY),
+            entry(ASSET_QUERY_ORDER_NOT_ACCEPTED, RetryDirective.DO_NOT_RETRY),
+            entry(ASSET_QUERY_ORDER_TERMINATED, RetryDirective.DO_NOT_RETRY),
             entry(SUPPLY_CHAIN_ORDER_NOT_FOUND, RetryDirective.DO_NOT_RETRY),
             entry(ORDER_QUERY_TIME_RANGE_INVALID, RetryDirective.DO_NOT_RETRY),
             entry(ORDER_EXPORT_EXCEED_LIMIT, RetryDirective.DO_NOT_RETRY),

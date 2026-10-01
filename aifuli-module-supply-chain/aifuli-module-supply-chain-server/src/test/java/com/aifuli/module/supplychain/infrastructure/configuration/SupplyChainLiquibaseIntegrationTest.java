@@ -76,7 +76,10 @@ class SupplyChainLiquibaseIntegrationTest {
                 .doesNotContain("sc_inventory_asset", "sc_supply_reservation",
                         "sc_standard_product_routing_rule", "sc_standard_product_routing_candidate");
         assertThat(firstStartup.columnNames())
-                .contains("sc_instore_channel_user_binding.source_system",
+                .contains("sc_sensitive_access_audit.project_id",
+                        "sc_sensitive_access_audit.order_no",
+                        "sc_sensitive_access_audit.app_key_version",
+                        "sc_instore_channel_user_binding.source_system",
                         "sc_instore_channel_user_binding.external_tenant_id",
                         "sc_instore_channel_user_binding.project_id",
                         "sc_instore_channel_order.source_system",
@@ -163,7 +166,7 @@ class SupplyChainLiquibaseIntegrationTest {
                 "expire_at:DATETIME:-:3:NO");
         assertThat(firstStartup.projectAuthNoncePrimaryKeyColumns())
                 .containsExactly("app_id", "nonce");
-        assertThat(firstStartup.changeSetCount()).isEqualTo(51L);
+        assertThat(firstStartup.changeSetCount()).isEqualTo(52L);
         assertThat(firstStartup.uniqueIndexes())
                 .contains("sc_instore_payment_flow.uk_sc_instore_flow_order",
                         "sc_instore_channel_user_binding.uk_sc_instore_user_binding_project",
