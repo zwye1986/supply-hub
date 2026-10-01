@@ -73,6 +73,8 @@ dispatch_phase 区分 PREPARED（本次外呼资格已取得但尚未越过发�
 
 状态封闭为 WAITING（等待）、HOLDING（占用）、FINISHED（本订单排队流程已结束）。HOLDING 下另依据可信履约事实展示执行中、结果未知、待核实或成功等待窗口；不将这些展示状态直接等同于释放许可。订单自身终态和队列状态分别记录。
 
+占用列表的displayStatus为集中定义的展示码，不能仅以Request的FULFILLING代替Operation事实。优先级为：迁移阻塞BLOCKED；同单关联和代次核对成立的可信成功且原acquiredAt起5秒窗口未到为SUCCESS_HOLD，窗口已到为SUCCEEDED，可信整单失败为FAILED；其余Request或当前Operation为MANUAL时展示MANUAL（待核实），当前Operation为RESULT_UNKNOWN时展示RESULT_UNKNOWN，当前Operation为EXECUTING时展示EXECUTING；其他状态保留已存在Request状态名。缺失关联证据不产生可信终态或释放许可。Operation状态仅作内部SQL投影，不额外回显凭证或目标；canRelease仍按原完整释放证明独立计算。真实MySQL和HTTP契约测试覆盖未知结果仍保持FULFILLING的请求、MANUAL、成功窗口内外与迁移阻塞。
+
 唯一键 order_id 与 `(queue_id, enqueue_sequence)`；队首查询索引 `(queue_id, status, enqueue_sequence)`，归属/时间分页索引按实际 SQL 补齐。入队序号在锁定控制行的事务内递增，FIFO 以持久化序号定义；不得仅用数据库自增 id 或客户端时间推断并发提交顺序。
 
 一个订单只建一项。同单重试/重路由保留序号，更新当前合法操作引用。失效队列项的跳过必须有持久化终态或可信未发送事实；不能因为任务失败便跳过仍有效订单。
@@ -86,6 +88,8 @@ dispatch_phase 区分 PREPARED（本次外呼资格已取得但尚未越过发�
 请求指纹包含真实操作用户与完整命令参数；鉴权发生在幂等查询之前，不允许失去权限或换用户后读到原结果。一个 actionNo 只保存首个已确定的成功或业务拒绝结果，同参数重放也复用该拒绝结果；异参重放不覆盖原审计，另记含 actionNo、真实用户、traceId 与安全错误码的冲突日志，不在唯一 actionNo 表中伪造第二条同号记录。独立审计事务针对已认证且具备相应权限、参数可形成有效命令的业务拒绝；登录/权限拒绝以及无法形成有效命令的绑定/解析错误由平台安全/访问日志记录，不虚构用户或把空 actionNo/空原因塞入业务审计表。普通错误记录也必须遵循上述正文脱敏要求。
 
 运营原因文本持久化和展示前脱敏其中的手机号，不能因原因是自由文本而把实际手机号写入审计；请求指纹仍以完整原命令计算，原文只作为内存输入，不落普通日志。前后状态快照使用显式安全字段白名单，不直接序列化含摘要或目标的DO。
+
+冲突日志的actionNo也按既有手机号脱敏规则处理其中的手机号片段，普通UUID操作号保持可定位；不因此限制合法actionNo格式，不修改数据库原幂等号或完整请求指纹。错误码、真实用户和traceId仍单独记录。
 
 ## 4. 入队、认领和执行
 
@@ -179,13 +183,27 @@ Request已有activeBOrderId非空时必须指向旧当前活动BOrder；为空�
 - `GET /statistics`：返回全局 waitingOrderCount、occupiedQueueCount、overThresholdQueueCount、overdueQueueCount、successMinimumHoldSeconds=5、occupiedAlertSeconds=1800、backlogThreshold=5、observedAt。超阈值指单队列 WAITING 数>5，超时指未释放占用超过 30 分钟。
 - `GET /waiting-orders`：PageResult，展示 entryId、queueId、version、maskedMobile、SPU 名称/编码、订单号、归属、enqueuedAt、waitSeconds 与原入队序号；同队列按原序号排序，全列表按入队时间、queueId、序号稳定排序。支持分销商、项目、SPU 编码、中台/项目订单号、入队时间范围等适用筛选。
 - `GET /occupancies`：PageResult，展示 queueId、maskedMobile、平台 SPU 名称/编码、holderOrderNo、履约展示状态、acquiredAt、minimumHoldUntil、heldSeconds、overdue、generation、version、canRelease/releaseBlockedReason。包含 holder 非空或 blocked_reason 非空的队列；迁移阻塞行允许 holderOrderNo/占用时间为空，展示阻塞原因与待核实订单引用，canRelease 为 false，不能将其隐藏为“无占用、可发送”。
+
+迁移阻塞行的待核实订单引用仅取同队列尚为HOLDING且dispatch_phase为SEND_POSSIBLE的项；WAITING及已可信结束的FINISHED不作为风险引用展示。Mapper接收queueId及HOLDING/SEND_POSSIBLE枚举码参数，按原入队序号稳定返回，不在SQL散落状态字面量。
 - `GET /backlogs`：PageResult，按手机号+SPU 聚合，按等待数量降序、最早等待时间及队列主键稳定排序；返回等待数、最早等待时间、超阈值标识。
 
+实施待确认（2026-10-01）：积压排行按分销商/项目/订单/入队时间筛选时，是仅定位匹配队列后仍展示整队列积压，还是只统计筛选范围内等待项，尚待用户确认。该项级筛选暂不启用，带此类筛选的BACKLOGS请求明确返回参数业务错误，不能静默忽略；无项级筛选及手机号/SPU精确定位的全队列积压查询可独立实现。该临时门禁不代表Task6已全部完成，确认后先更新本节口径，再完成筛选实现及测试。
+
 列表都由数据库分页/聚合，默认 pageSize=20、最大100，不使用截断前200条计算统计。统计卡片全局口径，列表筛选不悄悄改变卡片口径，页面明确“全局统计”；每次响应给 observedAt，不承诺不同 HTTP 请求共享同一快照。列表不返回明文手机号或摘要密钥。
+
+既有PageResult为final，列表响应由应用层观察分页模型包装并展开PageResult，保持CommonResult.data.list、data.total，新增同层data.observedAt；不修改共享PageResult或让应用层依赖HTTP VO。管理入口只使用既有安全框架验证真实ADMIN LoginUser及正数用户ID，不跨层直接读取项目认证内部上下文。
 
 手机号精确筛选使用 `POST /search`，请求体携带 mobile、view（WAITING/OCCUPANCIES/BACKLOGS）与上述筛选/分页字段；后端规范化并计算摘要后查询，不支持手机号模糊检索。该入口具有 query 权限，body 不进入普通请求日志/审计明文，响应 no-store；避免把手机号放在 URL。其他无手机号查询仍使用上述 GET。
 
 现有通用 ApiAccessLogInterceptor 在非生产环境会直接记录正文，GlobalExceptionHandler 也会将异常请求正文写入错误记录，因此仅在Controller关闭访问日志不充分。本期将管理端限频路径登记为通用敏感路径；访问日志/错误记录省略参数，敏感路径的参数绑定、JSON解析与校验错误日志只记录安全错误类别、字段名和traceId，不打印包含 rejectedValue/原始JSON的异常报文。共享框架修改只改变明确敏感路径的日志行为，不改变认证、业务错误码、事务或其他普通路径，并以供应链HTTP契约测试覆盖正常、非法手机号、非法JSON和存储故障时的日志脱敏。
+
+访问拦截器先判定敏感路径，再决定是否读取请求参数；敏感路径不读取正文流，避免日志提前消费下游JSON解析所需的数据。限频管理路径在MVC参数绑定前设置Cache-Control: no-store，使正常响应及参数/权限错误均禁止缓存；该响应头变更只作用于限频管理路径。
+
+通用ApiAccessLogFilter的过滤器异常兜底与访问日志存储失败也纳入限频路径保护：该路径不提前读取正文，未形成CommonResult时的resultMsg使用安全错误类别，不保存原始rootCause报文；日志存储失败不打印完整DTO或原异常。通过安全因果链、调用位置和受控失败计数/采样事件处理日志故障，沿用平台访问日志故障不覆盖已确定业务结果的语义；业务操作审计仍必须与命令事务原子保存，不能用此平台日志兜底代替。其他路径的既有结果契约保持不变，真实过滤器组合的HTTP测试覆盖正文可读、异常及日志API故障脱敏。
+
+共享SensitiveExceptionLogUtils仅提取白名单异常类型、cause/suppressed关系及StackTraceElement调用位置，不读取原message；供GlobalExceptionHandler与访问日志Filter复用，避免重复脱敏逻辑。限频路径的平台访问日志存储失败记录累积计数，仅首次及每100次输出安全因果/调用位置/计数/trace，采样间隔集中常量，业务异常仍按原过滤器链上抛。
+
+GlobalExceptionHandler的限频路径错误日志API故障采用同样首次及每100次采样，并单独记录其失败计数，不与访问日志API计数混用；只记录安全类型/因果/调用位置/trace。错误日志存储故障不覆盖原业务错误响应；契约测试连续注入错误日志API故障，验证采样次数、计数与正文脱敏，普通路径保持既有处理行为。
 
 命令接口：
 
@@ -202,6 +220,7 @@ Request已有activeBOrderId非空时必须指向旧当前活动BOrder；为空�
 
 - 顶部全局统计：等待订单数、活跃占用队列数、积压超阈值队列数、占用超时队列数；旁边显示5秒窗口/30分钟告警/积压>5的含义与刷新时间。
 - 三个页签：等待订单、活跃占用、手机号+SPU 积压排行。展示脱敏手机号、SPU 编码/名称、归属、业务单号、等待/占用时长；支持分页、适用筛选和手动刷新。
+- 积压项级筛选决策确认前，积压页签仅启用手机号/SPU定位；其他页签已有的分销商/项目/订单/入队时间条件不能随切页传入积压请求。对应控件补齐仍是未完成项，不以隐藏控件视为业务决策已确认。
 - 等待订单允许“触发重试”，要求 reason，提示按原顺序检查；活跃占用只对后端 canRelease 允许“释放”，确认弹窗展示脱敏队列身份与持有订单。结果未知提示先查单核实，不显示强制释放选项。
 - 操作成功后刷新相关列表与全局卡片；版本冲突提示数据已变化并刷新，不静默重复命令。请求进行中防重复点击，切换页签/筛选后的迟到响应不能覆盖当前结果。
 - 订单详情复用已有抽屉和订单查询权限；没有订单权限时隐藏详情入口，监控权限不自动授予详情/资产访问。
@@ -238,6 +257,6 @@ Request已有activeBOrderId非空时必须指向旧当前活动BOrder；为空�
 - *ContractTest：管理端路径与权限、分页/统计口径、字段和错误、手机号搜索不入URL、无强制释放、项目HMAC不能访问全局接口。
 - *ArchitectureTest：Facade/DAL、border资金边界、纯领域依赖、管理映射授权、独立数据所有权。前端运行改动文件检查、类型检查、构建与页面验收。
 
-人工联调清单维护在 docs/集成测试.md §7.74，不替代自动化门禁。本次只有设计变更，不表示代码或联调已通过。
+人工联调清单维护在 docs/集成测试.md §7.74，不替代自动化门禁。代码实现及各次自动化测试进展以计划和该节实施记录为准，不将设计确认或局部测试结果表述为真实环境联调全部通过。
 
 限频组件可通过既有内部受理入口与可控供应商联调；对外标准下单开放仍受主设计 §8 的内部报价适配门禁约束。报价依赖不因完成限频设计而自动解决，也不能向项目方重新增加报价token或paidAt。

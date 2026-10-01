@@ -206,6 +206,10 @@ timer.scheduleOnce(FulfillmentTimerTaskTypes.RECHARGE_FREQUENCY_WAKE,
 
 ## Task 6：内部运营查询、重试、释放与审计
 
+待确认项（2026-10-01）：积压排行的项级筛选口径已向用户询问，尚未答复；只影响BACKLOGS的分销商/项目/订单/入队时间筛选。其他统计、查询、命令与审计先独立实现和验证，该筛选维持显式错误门禁及关联设计TODO。完整Task6仍未完成，不宣称业务闭环。独立范围完成规格与质量两级审查后，可继续Task7的已确定页面/权限与Task8的迁移门禁；积压页面暂仅展示手机号/SPU筛选，不启用待确认控件。待确认项仍作为最终完成门禁保留，答复后先更新设计，再补实现和跨项目筛选测试。
+
+独立范围实施记录：`8f6861b` 提供监控与受控命令，`3b28e9d` 修正未知结果展示和脱敏幂等冲突定位，`42ff463` 为错误日志API增加独立失败计数与采样。当前独立范围规格、代码质量复评均通过；BACKLOGS待确认项不计完成。各次验证分别为基础86项单测/架构+10项MySQL+7项Contract、共享Web31+8Contract、风险投影31+2MySQL、展示/冲突修复31+3MySQL+9Contract、错误日志修复31+10Contract，均零失败/错误/跳过；重叠范围不累计。证据目录见集成文档§7.74。继续Task7已确定范围，最终完成门禁仍保留待确认项。
+
 **文件：**
 - 新建 `border/fulfillment/application/RechargeFrequencyMonitorQueryService.java`、`RechargeFrequencyAdminCommandService.java`、`RechargeFrequencyActionAuditService.java`。
 - 新建 `interfaceapi/admin/RechargeFrequencyAdminController.java`、`interfaceapi/admin/vo/RechargeFrequencyAdminVO.java`。
@@ -213,6 +217,9 @@ timer.scheduleOnce(FulfillmentTimerTaskTypes.RECHARGE_FREQUENCY_WAKE,
 - 修改 API 模块 `src/main/java/com/aifuli/module/supplychain/error/SupplyChainErrorCodeConstants.java`，登记稳定错误和RetryDirective。
 - 新建资源 `src/main/resources/mapper/fulfillment/RechargeFrequencyMonitorMapper.xml` 与DAL Mapper，复杂聚合仅XML。
 - 修改共享web框架 `ApiAccessLogPathUtils` 登记限频管理端敏感路径，以及 `GlobalExceptionHandler` 的敏感路径请求参数/校验与解析异常日志；影响评估限定明确敏感路径，普通路径行为保持既有契约。供应链ContractTest覆盖正常、非法JSON/手机号、存储故障的日志与错误记录不含正文/手机号。
+- 修改 `ApiAccessLogInterceptor`：敏感路径在读取参数前分流，限频管理路径在MVC绑定前设置no-store，避免日志消费正文及错误响应缓存。
+- 修改 `ApiAccessLogFilter`：限频路径的过滤器异常resultMsg及日志存储失败记录只保留安全类别/因果/调用位置，使用受控失败计数与采样；真实CacheRequestBodyFilter+访问日志Filter契约测试验证不消费正文或泄漏日志DTO。
+- 新建共享 `web/apilog/core/util/SensitiveExceptionLogUtils`，复用安全异常类型与调用位置提取，不输出原message，限定既有敏感路径调用。
 - 新建测试 `interfaceapi/admin/RechargeFrequencyAdminControllerTest.java`、`RechargeFrequencyAdminContractTest.java`、`border/fulfillment/RechargeFrequencyAdminIntegrationTest.java`。
 
 - [ ] 先测试GET statistics/waiting-orders/occupancies/backlogs、POST search、POST entries/{id}/retry、POST queues/{id}/release全部有独立授权；query不能替代retry/release，项目HMAC上下文不能调用。
@@ -225,6 +232,8 @@ timer.scheduleOnce(FulfillmentTimerTaskTypes.RECHARGE_FREQUENCY_WAKE,
 - [ ] Failsafe运行契约/真实审计事务测试，提交：`提供内部运营直充限频监控与受控操作接口`。
 
 ## Task 7：监控前端与部署权限
+
+执行范围补充（2026-10-01）：依赖已通过两级审查的Task6独立接口范围；BACKLOGS项级筛选不提前选择业务口径，暂不显示相关筛选控件，并保留指向设计§7的TODO。切换页签必须清空或按视图排除不适用的筛选参数，不能把WAITING/OCCUPANCIES的项目条件带入BACKLOGS造成参数错误。该部分不影响其他页面功能与权限实施，但完整业务验收仍待筛选决策补齐。
 
 **前端文件（相对前端仓库）：**
 - 新建 `src/api/order/rechargeFrequency.ts`：精确接口/类型，金额按已有分单位，不新增Mock。
