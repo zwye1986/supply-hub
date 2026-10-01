@@ -33,9 +33,9 @@ Server目录`aifuli-module-supply-chain/aifuli-module-supply-chain-server/src/ma
 - [ ] 先写可编译的项目查询/审计行为RED，验证旧语义无法按项目隔离/审计独立保存，不以missing-class编译错误当RED。新类可先最小failclosed骨架，然后运行行为测试。记录命令和原始新鲜报告。
 - [ ] 实现查询§2：RR同一读视图，严格项目/分销商/CARD与所有双向引用，NULL/其他项目统一不存在；ACCEPTED缺订单、孤立订单、非法状态内部故障。未建单PROCESSING/拒绝可返回真实回执。
 - [ ] 实现§3/§4：直充assetAvailable=false；按可交付资产真实元数据判定卡券，全部引用校验。待交付空数组hint、MANUAL提示、终态/不支持/未受理明确业务错误；SUCCEEDED无资产内部故障。
-- [ ] 封闭解码现有真实密文格式，保持AAD，旧cardCode映射券码/链接兼容；未知字段不直接转交付字段、非字符串不asText吞掉，冲突同义字段失败。字节finally清零、cause保留但不日志原始异常/明文，无部分交付。资产DTO安全toString。
+- [ ] 封闭解码现有真实密文格式，保持AAD，旧cardCode映射券码/链接兼容；未知字段不直接转交付字段、出现的全部已知载荷字段必须为字符串，显式JSON null及非当前类型字段的数组/对象也拒绝；非字符串不asText吞掉，冲突同义字段失败。字节finally清零、cause保留但不日志原始异常/明文，无部分交付。资产DTO安全toString。
 - [ ] 审计独立REQUIRES_NEW批量追加，实际app/project/buyer/keyVersion/订单/资源，用户摘要NULL。每调用查询事件+每实际解密事件，拒绝与失败持久化。audit故障拒绝明文，保留双重故障cause/suppressed。
-- [ ] 实施050增量、DO注释和主changelog，旧审计主体约束不丢失；新列COMMENT逐字匹配设计，无跨库/外键。
+- [ ] 实施050增量、DO注释和主changelog，旧审计主体约束不丢失；新列COMMENT逐字匹配设计，050同时对齐accessed_at上海时间COMMENT而不改旧010或历史数据，无跨库/外键。
 - [ ] 单元/Contract/架构门禁先绿，再真实MySQL门禁：同买方另一项目同号不可读、不同买方项目各有同号不串、NULL归属、所有引用错配、并发一致快照、审计外层回滚不丢/故障无明文、过期隔离不解密、无资金/Timer/供应商副作用。不得只用Mock验证事务。同买方两项目同时存同号正向场景因旧唯一键仍在，需052后补，不删旧键来制造本阶段假证据。
 
 API门禁按实际类名指定，命名Contract不会自动跑：
