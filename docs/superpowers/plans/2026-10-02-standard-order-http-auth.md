@@ -40,7 +40,7 @@ Server根目录：`aifuli-module-supply-chain/aifuli-module-supply-chain-server/
 
 ### 1. 先写真实失败测试
 
-- [ ] 在现有可编译契约测试中，先断言三路径存在，观察旧注册表返回空造成业务断言失败。另验证旧十操作集合独立精确覆盖全部INSTORE接口，不再把整个注册表强制等同于INSTORE集合。
+- [x] 在现有可编译契约测试中，先断言三路径存在，观察旧注册表返回空造成业务断言失败。另验证旧十操作集合独立精确覆盖全部INSTORE接口，不再把整个注册表强制等同于INSTORE集合。
 
 ```java
 assertThat(ProjectAuthOperations.findByMethodAndPath("POST",
@@ -51,7 +51,7 @@ assertThat(ProjectAuthOperations.findByMethodAndPath("GET",
 
 新增测试矩阵：三操作POST、精确路径、1.0.0、NONE、STANDARD_PRODUCT；未知子路径/错误方法不存在；13个码/路径唯一且索引不可变，所有路径被前缀覆盖。原十操作逐字段保持原值。标准签名8个头、签名串scope空、body字节改变签名变化，非空用户/渠道scope拒绝；旧INSTORE仍10个头。
 
-- [ ] 运行API RED并归档新鲜XML和原日志，不能将旧target报告或编译错误算业务RED。
+- [x] 运行API RED并归档新鲜XML和原日志，不能将旧target报告或编译错误算业务RED。
 
 ```bash
 JAVA_HOME=/Library/Java/JavaVirtualMachines/jdk-21.jdk/Contents/Home \
@@ -62,7 +62,7 @@ JAVA_HOME=/Library/Java/JavaVirtualMachines/jdk-21.jdk/Contents/Home \
 
 ### 2. 统一登记与签名输出
 
-- [ ] 在注册表定义下列稳定契约及默认策略，避免在过滤器或访问器重复维护路径/操作字面量。
+- [x] 在注册表定义下列稳定契约及默认策略，避免在过滤器或访问器重复维护路径/操作字面量。
 
 ```java
 public static final String STANDARD_ORDERS_PATH = "/open-api/supply-chain/project/v1/orders";
@@ -79,7 +79,7 @@ SDK通过注册操作的STANDARD_PRODUCT能力决定标准scope头省略；不�
 
 ### 3. 凭证服务与过滤器
 
-- [ ] 补充服务端状态与过滤器行为测试后实现三参数入口。完整状态矩阵：ACTIVE三标准操作允许认证，SUSPENDED仅QUERY允许；DRAFT/CLOSED/ARCHIVED/null及未知编码全部拒绝。旧两参数与原INSTORE任何操作在SUSPENDED仍拒绝。应用停用、凭证吊销/过期、能力停用不因QUERY策略放宽。
+- [x] 补充服务端状态与过滤器行为测试后实现三参数入口。完整状态矩阵：ACTIVE三标准操作允许认证，SUSPENDED仅QUERY允许；DRAFT/CLOSED/ARCHIVED/null及未知编码全部拒绝。旧两参数与原INSTORE任何操作在SUSPENDED仍拒绝。应用停用、凭证吊销/过期、能力停用不因QUERY策略放宽。
 
 三参数入口用`findByOperationCode`解析不可变定义，未知操作返回既有BUYER_AUTH_INVALID；内部复用既有认证链，将项目ACTIVE检查替换为封闭策略。允许ACTIVE或策略允许的SUSPENDED；其他状态一律失败。旧两参数入口走ACTIVE_ONLY，不暴露外部自选策略。
 
@@ -93,7 +93,7 @@ credentialService.authenticate(headers.appId(), headers.keyVersion(), operation.
 
 ### 4. 标准可信上下文
 
-- [ ] 先测试无认证、旧NONE回调上下文、其他标准操作、无效expectedOperation均失败；正确当前操作返回五项可信值，没有用户/渠道字段。
+- [x] 先测试无认证、旧NONE回调上下文、其他标准操作、无效expectedOperation均失败；正确当前操作返回五项可信值，没有用户/渠道字段。
 
 在ProjectCallContextAccessor增加默认失败关闭方法（便于保留原SPI实现的编译兼容性），并由真实实现覆盖：
 
@@ -110,7 +110,7 @@ record StandardProductContext(Long projectId, Long buyerId, String appId,
 
 ### 5. 验证与范围限制
 
-- [ ] 串行执行下面逻辑/架构与真实MySQL认证回归；API ContractTest命名按Maven现有配置单独用`-Dtest`指定，不遗漏。
+- [x] 串行执行下面逻辑/架构与真实MySQL认证回归；API ContractTest命名按Maven现有配置单独用`-Dtest`指定，不遗漏。
 
 ```bash
 JAVA_HOME=/Library/Java/JavaVirtualMachines/jdk-21.jdk/Contents/Home \
@@ -129,6 +129,11 @@ JAVA_HOME=/Library/Java/JavaVirtualMachines/jdk-21.jdk/Contents/Home \
 
 ### 6. 自审、提交与两级审查
 
-- [ ] 重要中文注释链接主设计§2.1，核对新增操作与三种状态策略没有散落字面量；无无上下文TODO或吞异常。
-- [ ] 仅暂存上述生产/测试文件，以中文提交，例如`建立标准订单HTTP项目认证与操作上下文`；不暂存root正在更新的设计/待办/集成文档。
-- [ ] 规格独立审查通过后再做质量独立审查；有问题由原实施者修复并复评。root按实际证据更新计划与`docs/集成测试.md`，随后进入查询与资产阶段。
+- [x] 重要中文注释链接主设计§2.1，核对新增操作与三种状态策略没有散落字面量；无无上下文TODO或吞异常。
+- [x] 仅暂存上述生产/测试文件，以中文提交，例如`建立标准订单HTTP项目认证与操作上下文`；不暂存root正在更新的设计/待办/集成文档。
+- [x] 规格独立审查通过后再做质量独立审查；有问题由原实施者修复并复评。root按实际证据更新计划与`docs/集成测试.md`，随后进入查询与资产阶段。
+
+
+## 实施结果（2026-10-02）
+
+实现055ced5，中文注释补正94b118a；API31、server262（含架构27）、实际生产应用HTTP/MySQL32，共325项，全部零失败/错误/跳过。功能测试对应055ced5，后续94b118a仅3行注释，未额外重跑。独立规格与质量审查均通过。标准Feign为真实模板清除残留buyer/channel头，纳入本阶段签名语义必需修复。证据`/tmp/standard-order-http-auth`，首轮注册RED源码准确重建且标注事后重建，原始失败XML/日志保留。Controller/Gateway/业务流程尚未完成，不能把认证门禁称为HTTP闭环。进入`2026-10-02-project-standard-query-asset.md`Task2。
