@@ -51,9 +51,9 @@ JAVA_HOME=/Library/Java/JavaVirtualMachines/jdk-21.jdk/Contents/Home \
 JAVA_HOME=/Library/Java/JavaVirtualMachines/jdk-21.jdk/Contents/Home \
 /opt/homebrew/bin/mvn -pl aifuli-module-supply-chain/aifuli-module-supply-chain-server -am \
 -Psupply-chain-integration \
--Dtest=StandardPricingQuoteServiceTest,FulfillmentAcceptanceLifecycleTest,SupplyChainModuleArchitectureTest \
+-Dtest=StandardPricingQuoteServiceTest,SupplyChainModuleArchitectureTest \
 -Dsurefire.failIfNoSpecifiedTests=false \
--Dit.test=StandardPricingQuoteConcurrencyIntegrationTest,StandardPricingQuotePermanentKeyIntegrationTest,SupplyChainLiquibaseIntegrationTest \
+-Dit.test=StandardPricingQuoteConcurrencyIntegrationTest,StandardPricingQuotePermanentKeyIntegrationTest,FulfillmentAcceptanceIntegrationTest,RechargeFrequencyAcceptanceIntegrationTest,SupplyChainLiquibaseIntegrationTest \
 -Dfailsafe.failIfNoSpecifiedTests=false verify
 ```
 
