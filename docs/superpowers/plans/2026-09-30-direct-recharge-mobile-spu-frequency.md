@@ -206,7 +206,7 @@ timer.scheduleOnce(FulfillmentTimerTaskTypes.RECHARGE_FREQUENCY_WAKE,
 
 ## Task 6：内部运营查询、重试、释放与审计
 
-积压项级筛选已确认（2026-10-01）：定位存在匹配WAITING项的队列，展示整条队列数量与最早等待时间；同一等待项满足全部项级条件。详见设计§7。此前独立范围已通过两级审查，临时参数错误门禁/隐藏控件需补齐；Task8两级审查关闭后，顺序补后端SQL/GET与POST契约/真实跨项目筛选测试，再补前端控件及口径说明，两级审查均通过后才标记完整Task6/7完成。
+积压项级筛选已确认（2026-10-01）：定位存在匹配WAITING项的队列，展示整条队列数量与最早等待时间；同一等待项满足全部项级条件。详见设计§7。Task8两级审查关闭后，后端补齐提交`9f9e5d2`，规格与质量独立审查均通过：共享EXISTS仅定位队列，完整聚合不裁剪，GET/POST契约一致；72项逻辑/架构/真实MySQL/Contract全绿，来源`/tmp/frequency-backlog/green-manifest.json`。后端Task6代码范围完成；前端控件与说明仍在Task7实施，人工环境验收单列。
 
 独立范围实施记录：`8f6861b` 提供监控与受控命令，`3b28e9d` 修正未知结果展示和脱敏幂等冲突定位，`42ff463` 为错误日志API增加独立失败计数与采样。当前独立范围规格、代码质量复评均通过；BACKLOGS待确认项不计完成。各次验证分别为基础86项单测/架构+10项MySQL+7项Contract、共享Web31+8Contract、风险投影31+2MySQL、展示/冲突修复31+3MySQL+9Contract、错误日志修复31+10Contract，均零失败/错误/跳过；重叠范围不累计。证据目录见集成文档§7.74。继续Task7已确定范围，最终完成门禁仍保留待确认项。
 
@@ -222,14 +222,14 @@ timer.scheduleOnce(FulfillmentTimerTaskTypes.RECHARGE_FREQUENCY_WAKE,
 - 新建共享 `web/apilog/core/util/SensitiveExceptionLogUtils`，复用安全异常类型与调用位置提取，不输出原message，限定既有敏感路径调用。
 - 新建测试 `interfaceapi/admin/RechargeFrequencyAdminControllerTest.java`、`RechargeFrequencyAdminContractTest.java`、`border/fulfillment/RechargeFrequencyAdminIntegrationTest.java`。
 
-- [ ] 先测试GET statistics/waiting-orders/occupancies/backlogs、POST search、POST entries/{id}/retry、POST queues/{id}/release全部有独立授权；query不能替代retry/release，项目HMAC上下文不能调用。
-- [ ] 实现统计全表聚合、分页最大100、observedAt；展示脱敏手机号/冻结SPU，活跃按队列计，积压按WAITING项计。POST search body精确手机号，禁止URL/mobile模糊查询，响应no-store，搜索body不进入普通日志。
-- [ ] 所有命令获取内部登录用户，不接受客户端operatorId。actionNo全局唯一并记录请求指纹；同号异参冲突，同号同参返回原结果。
-- [ ] retry仅WAITING+正确entryVersion，持久化新唤醒代次后返回触发检查；不得跳过队首或重复建立Operation。
-- [ ] release校验holderOrderNo/generation/queueVersion及可信依据。PREPARED撤销资格并恢复原序号WAITING；可信结束置FINISHED，成功不足5秒拒绝提前释放，SEND_POSSIBLE未知拒绝。
-- [ ] 成功审计与命令事务同时保存；失败/冲突独立事务审计，保留因果异常。客户端actionNo并发冲突先回滚再新事务查原结果。
-- [ ] 用两线程验证旧版本释放不能清除新holder、重放命令不重做操作、拒绝审计不随回滚丢失；查询故障向客户端报错，不返回空集合。
-- [ ] Failsafe运行契约/真实审计事务测试，提交：`提供内部运营直充限频监控与受控操作接口`。
+- [x] 先测试GET statistics/waiting-orders/occupancies/backlogs、POST search、POST entries/{id}/retry、POST queues/{id}/release全部有独立授权；query不能替代retry/release，项目HMAC上下文不能调用。
+- [x] 实现统计全表聚合、分页最大100、observedAt；展示脱敏手机号/冻结SPU，活跃按队列计，积压按WAITING项计。POST search body精确手机号，禁止URL/mobile模糊查询，响应no-store，搜索body不进入普通日志。
+- [x] 所有命令获取内部登录用户，不接受客户端operatorId。actionNo全局唯一并记录请求指纹；同号异参冲突，同号同参返回原结果。
+- [x] retry仅WAITING+正确entryVersion，持久化新唤醒代次后返回触发检查；不得跳过队首或重复建立Operation。
+- [x] release校验holderOrderNo/generation/queueVersion及可信依据。PREPARED撤销资格并恢复原序号WAITING；可信结束置FINISHED，成功不足5秒拒绝提前释放，SEND_POSSIBLE未知拒绝。
+- [x] 成功审计与命令事务同时保存；失败/冲突独立事务审计，保留因果异常。客户端actionNo并发冲突先回滚再新事务查原结果。
+- [x] 用两线程验证旧版本释放不能清除新holder、重放命令不重做操作、拒绝审计不随回滚丢失；查询故障向客户端报错，不返回空集合。
+- [x] Failsafe运行契约/真实审计事务测试，提交：`提供内部运营直充限频监控与受控操作接口`。
 
 ## Task 7：监控前端与部署权限
 
