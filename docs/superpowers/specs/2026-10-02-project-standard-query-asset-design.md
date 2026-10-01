@@ -22,7 +22,7 @@
 
 1. 回执项目/分销商/订单号与可信身份一致；回执结果orderId、orderNo、fulfillmentRequestNo与实际总订单/请求一致。
 2. 总订单为CARD，projectId/buyerId/buyerOrderNo一致，acceptanceReceiptId指回该回执，detailType是既有标准履约详情类型，detailId指向本订单履约请求。
-3. 请求orderId/buyerId及requestNo与上述引用一致。缺失请求、单边引用、非法状态、无法识别的冻结目标Schema均失败关闭，不能拼接另一项目订单。
+3. 请求orderId/buyerId及requestNo与上述引用一致，platformSkuId与总订单非空商品身份相同，requestedQuantity与总单/回执quantity一致，冻结目标Schema/targetDigest与回执一致。缺失请求、单边引用、非法状态、无法识别的已建单冻结目标Schema均失败关闭，不能拼接另一项目订单或另一商品快照。
 4. 未建单PROCESSING或已拒绝回执的三个结果引用必须为空；ACCEPTED回执缺订单不是等待状态。孤立总订单或孤立引用不合成虚构回执，返回一致性故障，待修复数据后开放查询。
 
 数量和状态读取真实投影：有请求时使用requestedQuantity/fulfilledQuantity；尚未建单使用回执quantity、deliveredQuantity=0。未建单摘要不依赖尚未解析的目标Schema，PROCESSING/拒绝回执仍正常返回，assetAvailable=false；此时资产接口必须另行确认类别，未知类别按§4失败关闭。未建单orderNo/orderStatus/fulfillmentStatus/completedAt为null；requestId始终为实际receiptNo。updatedAt使用同一读视图的实际最后更新时间。时间通过`SupplyChainDatabaseClock`转换为带偏移ISO8601，不把数据库上海时间当UTC。
