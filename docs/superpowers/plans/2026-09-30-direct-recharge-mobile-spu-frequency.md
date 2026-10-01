@@ -235,18 +235,24 @@ timer.scheduleOnce(FulfillmentTimerTaskTypes.RECHARGE_FREQUENCY_WAKE,
 
 执行范围补充（2026-10-01）：依赖已通过两级审查的Task6独立接口范围；BACKLOGS项级筛选不提前选择业务口径，暂不显示相关筛选控件，并保留指向设计§7的TODO。切换页签必须清空或按视图排除不适用的筛选参数，不能把WAITING/OCCUPANCIES的项目条件带入BACKLOGS造成参数错误。该部分不影响其他页面功能与权限实施，但完整业务验收仍待筛选决策补齐。
 
+独立范围实施记录：后端`b72eaf2`提供局部上海时间编码、实际应用Jackson字段契约和菜单；前端`1d50a11`提供真实监控/操作页面，`3b6cd8d`修复权限撤销与同路由更新丢失未知意图。规格及质量两级独立复评通过，真实SFC/Router探针9项通过，旧SHA复现7项失败。13项Contract+27项Architecture全零失败/错误/跳过；前端语法、ESLint、Prettier与构建通过。全仓类型检查仍失败：基线13350到13349，归一化无新增；最终修复前后13349精确无新增，新文件零报错。证据见集成文档§7.74。真实登录页面、system SQL实库执行及BACKLOGS待确认控件不计完成。
+
 **前端文件（相对前端仓库）：**
 - 新建 `src/api/order/rechargeFrequency.ts`：精确接口/类型，金额按已有分单位，不新增Mock。
 - 修改共享 `src/config/axios/service.ts`：仅显式选择的限频调用保留安全业务code/message，不丢为字符串；敏感请求调试日志不打印配置/正文，其他调用及认证刷新契约保持不变。
 - 新建 `src/views/supplier/order/recharge-frequency/index.vue`。
 - 新建 `src/views/supplier/order/recharge-frequency/components/FrequencyActionDialog.vue`。
 - 复用 `src/views/supplier/order/platform/detail/index.vue` 与 `src/api/order/index.ts`，不扩大资产权限。
+- 新建轻量回归脚本 `scripts/recharge-frequency-intent-probe.cjs`：仅使用现有Vue/compiler-sfc/TypeScript和真实memory Router，编译实际SFC并验证权限撤销、同路由fullPath变化的未知意图保护，不新增测试框架、网络或敏感存储；该逻辑探针不替代真实登录页面联调。
 
 **后端部署文件：**修改 `script/deploy/aifuli-test/sql/system-supply-chain-admin-menus.sql`，菜单组件 `supplier/order/recharge-frequency/index`，组件名 `RechargeFrequencyMonitor`；三个权限独立，幂等插入。
+
+HTTP字段对齐补充：共享LocalDateTime时间戳转换依赖JVM默认区域，与供应链固定上海时钟不一致，Task7在供应链infrastructure/time新增局部JSON时间序列化/反序列化器，显式注解到限频响应时间和搜索时间字段；不修改其他进程或共享配置。应用Jackson契约测试验证UTC/上海JVM下相同epoch与相同GET/POST筛选边界，前端上海展示。结果字段使用实际resultCode；Long主键/版本/代次保留number|string以支持现有安全数字/字符串序列化。
 
 - [ ] 先补后端HTTP契约测试覆盖前端消费字段/分页/操作返回，冻结TypeScript对应接口，不引入新的前端测试框架。
 - [ ] 页面顶部四卡全局统计，三页签等待/占用/积压，表格显示maskedMobile、SPU、归属、单号、时长、状态。筛选结果不改变“全局统计”口径。
 - [ ] 请求序号或AbortController阻止迟到响应覆盖当前页签/筛选；失败显示错误并标识旧数据过期，不能赋正常零值。
+- [ ] 未知意图承载弹窗持续挂载，不随query权限条件卸载；权限撤销仅停止新读取/操作。保护route leave和同路由query/hash/params update，覆盖AppView以fullPath为key的重新挂载；使用现有Vue/Router依赖实际行为探针验证，不新增测试框架或以源码字符串断言冒充行为测试。
 - [ ] reason必填，actionNo每次意图固定直至结果确定，等待项触发重试不承诺已发送；释放弹窗携带期望holder/generation/version，仅canRelease允许。未知状态提示查单核实，无force按钮。
 - [ ] 权限指令分别控制query/retry/release，详情单独校验既有订单权限；手机号不写URL、localStorage或复制明文。
 - [ ] 执行以下改动文件检查及构建，全仓类型既有错误与新文件错误分别记录：
@@ -267,6 +273,8 @@ pnpm build:dev
 - 新建 `script/deploy/aifuli-test/sql/supply-chain-recharge-frequency-preflight.sql`，只读预检，用于列出非终态手机号直充候选和冲突。
 - 新建测试 `border/fulfillment/RechargeFrequencyMigrationIntegrationTest.java`。
 - 更新 `docs/集成测试.md` §7.74 和已确认设计的实现状态。
+
+迁移细化依据为设计§10.1：新增独立Liquibase增量为队列项保存migration_acquired_at/migration_time_basis及DO注释，不能改048旧变更集；离线预检全候选再按可信受理时间+orderId稳定入队，已有冻结项复用/更早漏项拒绝。可靠解密与关联缺失、同单多未决操作拒绝，禁止旧购买人兜底。多单风险无任意holder，受控可信结果仅结束对应项并沿既有资金生命周期，全部风险结束且最大成功窗口到期后才由离线CAS清阻塞；未知/旧代次不放行。单风险无发送时间按迁移时钟持久化依据，不冒用QUERY/回调审计时间。阻塞队列超时只告警。全节点停止/版本/密钥部署检查须真实记录，未执行不得宣称通过。
 
 - [ ] 先写已有多单可能外呼的迁移必须阻塞、历史无法可靠解密不能从旧购买人手机号回填的失败测试。
 - [ ] 暂停新受理和SEND后扫描存量，恢复可信MOBILE目标与SPU，按可信受理顺序+orderId稳定入队；已发送或未知置SEND_POSSIBLE，无法证明未发不写PREPARED。同组合多可能处理中订单置blocked_reason并保留每单事实。

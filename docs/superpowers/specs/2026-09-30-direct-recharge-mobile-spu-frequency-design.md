@@ -79,6 +79,8 @@ dispatch_phase 区分 PREPARED（本次外呼资格已取得但尚未越过发�
 
 一个订单只建一项。同单重试/重路由保留序号，更新当前合法操作引用。失效队列项的跳过必须有持久化终态或可信未发送事实；不能因为任务失败便跳过仍有效订单。
 
+存量迁移追加migration_acquired_at（迁移恢复的原占用取得时间，Asia/Shanghai；非迁移项为空）与migration_time_basis（迁移占用时间依据；非迁移项为空）。时间依据集中为VERIFIED_SEND与MIGRATION_CLOCK；前者必须具有可核实的原发送时间，后者为本次数据库迁移时间，不能把操作创建时间、查询或回调审计时间冒充发送时间。独立新增Liquibase增量，不能改已执行048变更集。正常入队字段为空，迁移后的冻结依据不因重跑或后续正常占用覆盖。
+
 ### 3.3 运营审计：sc_recharge_frequency_action_audit
 
 追加记录 action_no、请求指纹、action_type（RETRY/RELEASE）、queue_id、entry_id、order_no、expected_generation、expected_version、真实内部操作用户、原因、结果、前后状态、trace_id 与 Asia/Shanghai 时间；action_no 唯一。成功操作同业务事务保存审计；拒绝和冲突通过独立审计事务保留，不能随业务回滚丢失。并发同 actionNo 仅一个事务能成功，冲突事务回滚后在新事务读取原结果，不在已失败事务里继续写业务。审计不含明文手机号、目标密文、供应商凭证或任意 Redis key。
@@ -193,6 +195,8 @@ Request已有activeBOrderId非空时必须指向旧当前活动BOrder；为空�
 
 既有PageResult为final，列表响应由应用层观察分页模型包装并展开PageResult，保持CommonResult.data.list、data.total，新增同层data.observedAt；不修改共享PageResult或让应用层依赖HTTP VO。管理入口只使用既有安全框架验证真实ADMIN LoginUser及正数用户ID，不跨层直接读取项目认证内部上下文。
 
+管理端限频时间契约沿用毫秒时间戳，但转换时区明确为Asia/Shanghai，不依赖JVM默认时区。该接口observedAt、enqueuedAt、earliestEnqueuedAt、acquiredAt、minimumHoldUntil采用供应链局部JSON序列化器，把数据库本地时间按SupplyChainDatabaseClock.DATABASE_ZONE编码为epoch millis；POST搜索的enqueuedFrom/enqueuedTo接受JSON整数毫秒时间戳，经局部反序列化器按同一区域恢复数据库本地时间，GET筛选仍使用ISO本地日期时间。前端统一按上海时区展示，GET/POST相同输入产生相同筛选边界。局部实现放在供应链infrastructure/time，显式注解到本接口字段，不修改共享Jackson、全局JVM时区或其他进程。契约测试使用应用Jackson配置，在JVM UTC与Asia/Shanghai下对比数值及搜索过滤参数，并恢复测试全局时区。Long主键/版本/代次依已有NumberSerializer线缆规则可能为安全数字或十进制字符串，前端保留原值，不能先转Number丢失精度。命令结果字段为实际既有actionNo、resultCode、message。
+
 手机号精确筛选使用 `POST /search`，请求体携带 mobile、view（WAITING/OCCUPANCIES/BACKLOGS）与上述筛选/分页字段；后端规范化并计算摘要后查询，不支持手机号模糊检索。该入口具有 query 权限，body 不进入普通请求日志/审计明文，响应 no-store；避免把手机号放在 URL。其他无手机号查询仍使用上述 GET。
 
 现有通用 ApiAccessLogInterceptor 在非生产环境会直接记录正文，GlobalExceptionHandler 也会将异常请求正文写入错误记录，因此仅在Controller关闭访问日志不充分。本期将管理端限频路径登记为通用敏感路径；访问日志/错误记录省略参数，敏感路径的参数绑定、JSON解析与校验错误日志只记录安全错误类别、字段名和traceId，不打印包含 rejectedValue/原始JSON的异常报文。共享框架修改只改变明确敏感路径的日志行为，不改变认证、业务错误码、事务或其他普通路径，并以供应链HTTP契约测试覆盖正常、非法手机号、非法JSON和存储故障时的日志脱敏。
@@ -228,6 +232,8 @@ GlobalExceptionHandler的限频路径错误日志API故障采用同样首次及�
 
 现有Axios拦截器把普通业务拒绝丢弃为字符串 `error`，本页面需要显式选择保留安全的结构化业务错误（code、message），用于识别版本冲突而非解析文案；共享客户端仅增加该显式选项，其他调用与认证刷新行为保持原契约。网络/超时及无法确定执行结果的故障保留本次actionNo，不能自动换号重做。敏感请求的客户端调试日志只输出安全错误类别，不输出Axios配置/正文。监控菜单禁用路由KeepAlive，页面离开时清除手机号输入并废弃迟到查询响应。
 
+未知命令意图的弹窗生命周期不能依赖query权限条件容器：查询权限撤销只停止新增读取并隐藏查询区域，已有未知意图继续保留，操作权限变化禁止新增发送，不以卸载弹窗清空原actionNo。现有AppView按route.fullPath作为组件key，同一匹配路由的query/hash/params变化也可能重新挂载；页面同时通过route leave和route update守卫保护未知意图，不能仅保护离开到另一个路由。实际组件脚本与真实路由行为验证权限变化及同路由切换后的意图/守卫仍存在，不以源码字符串断言替代行为验证。
+
 菜单、三个权限按钮由 script/deploy 的 system 库部署 SQL 配套，供应链程序不写 system_menu。
 
 ## 9. 告警与观测
@@ -249,6 +255,20 @@ GlobalExceptionHandler的限频路径错误日志API故障采用同样首次及�
 迁移控制行需要支持冲突阻塞原因；有冲突时不认领新项，监控展示需人工核实。先部署新表和任务注册、完成存量检查，全节点切换后恢复受理/发送；禁止旧节点绕过新队列继续 SEND。摘要密钥在所有节点一致，部署检查验证；无密钥或迁移未完成失败关闭。
 
 存在多个存量可能已发送订单时，控制行以 blocked_reason 阻塞且不任选 holder；各风险队列项按 HOLDING+SEND_POSSIBLE 保存已有操作引用，并标记迁移占用代次，不作为新执行资格。可信结果可结束其对应旧队列项，但不能据此清除其他风险项；全部存量风险经核实结束后，迁移恢复入口才清除阻塞并唤醒正常等待项。正常运行只允许控制行 holder 对应的一项获得新发送资格，迁移例外不能作为并行执行途径。
+
+### 10.1 迁移执行与核实边界
+
+受控离线入口先核对部署前置条件：所有受理调用方停止写入、所有旧SEND节点退出、定时执行停止、全节点目标版本与专用摘要密钥一致。入口不提供公开HTTP，也不接受运营释放按钮绕过这些条件；部署清单记录实际检查，不能把布尔声明当作已经执行过的环境验收。现有执行入口对手机号直充缺少冻结队列项继续失败关闭。
+
+预检先覆盖全部候选，再写迁移数据。可信身份仅从原Request密文及原关联AAD恢复实际target，并经服务端SKU解析SPU；卡券和可验证非手机号目标排除。解密、SKU/关联、原受理时间或唯一当前风险操作无法可靠恢复时输出安全单号/错误类别并停止，不从buyerUserId或旧展示手机号回填。受理顺序使用正确关联回执的acceptedAt；没有回执的历史单使用持久化总单创建时间，均以orderId打破同刻并列。已有冻结队列项直接复用，不重解算其身份、SPU或序号；部分迁移后的幂等重跑不能向已冻结队列前方插入新的更早历史项，存在这种顺序缺口时拒绝并要求离线核对。
+
+同一订单若有多个尚未核实的充值副作用操作，不能任选一个activeOperationNo来隐藏其他操作；预检拒绝该订单，先完成受控核实再迁移。可以证实未发的待执行项才迁为WAITING；可能已发、未知、待核实项迁为HOLDING+SEND_POSSIBLE。状态缺失或证据不完整不能降为PREPARED；本次迁移不认领新操作、调用供应商或改动资金。
+
+每个风险项保存原取得时间及依据，单风险控制行沿用该时间和原时间+5秒窗口；多风险控制行无holder，acquiredAt取风险项最早取得时间用于观测，minimumHoldUntil取所有风险项窗口截止最大值。缺可信发送时间的项使用迁移数据库时间并持久化MIGRATION_CLOCK。阻塞风险只能经受控可信终态入口核对队列、项、原操作、迁移代次与完整关联后结束对应项；不得将普通旧执行资格或非当前操作的迟到事实赋予新发送许可。既有资金生命周期对对应订单只执行一次扣款/释放，未知仍保留预占。
+
+清除迁移阻塞仅由离线恢复入口执行：锁定控制行并核对期望版本/迁移代次、全部迁移风险已可信结束及成功窗口已到；任何未决风险、状态矛盾或旧版本均拒绝。解封窗口重新依据已可信成功项的migration_acquired_at+5秒计算最大值，可信失败项不额外等待5秒；全部风险结束时同步收敛minimumHoldUntil，避免初始保守窗口误延迟全失败队列。清除后安排正常FIFO新唤醒，不新建业务副作用号或资金动作。阻塞队列有取得时间时纳入占用超时观测，超过30分钟仍只告警，不自动清阻塞；全部风险完成也不由回调自动解封。
+
+只读SQL预检只能列出候选、缺关联/状态风险，不在SQL中解密或输出手机号、目标密文、凭证；手机号+SPU最终组合冲突必须由使用专用HMAC的离线预检确认，不能将展示手机号的SQL分组视为可信身份判断。
 
 自动化门禁：
 
