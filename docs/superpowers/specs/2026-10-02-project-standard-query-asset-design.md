@@ -25,7 +25,7 @@
 3. 请求orderId/buyerId及requestNo与上述引用一致。缺失请求、单边引用、非法状态、无法识别的冻结目标Schema均失败关闭，不能拼接另一项目订单。
 4. 未建单PROCESSING或已拒绝回执的三个结果引用必须为空；ACCEPTED回执缺订单不是等待状态。孤立总订单或孤立引用不合成虚构回执，返回一致性故障，待修复数据后开放查询。
 
-数量和状态读取真实投影：有请求时使用requestedQuantity/fulfilledQuantity；尚未建单使用回执quantity、deliveredQuantity=0。未建单orderNo/orderStatus/fulfillmentStatus/completedAt为null；requestId始终为实际receiptNo。updatedAt使用同一读视图的实际最后更新时间。时间通过`SupplyChainDatabaseClock`转换为带偏移ISO8601，不把数据库上海时间当UTC。
+数量和状态读取真实投影：有请求时使用requestedQuantity/fulfilledQuantity；尚未建单使用回执quantity、deliveredQuantity=0。未建单摘要不依赖尚未解析的目标Schema，PROCESSING/拒绝回执仍正常返回，assetAvailable=false；此时资产接口必须另行确认类别，未知类别按§4失败关闭。未建单orderNo/orderStatus/fulfillmentStatus/completedAt为null；requestId始终为实际receiptNo。updatedAt使用同一读视图的实际最后更新时间。时间通过`SupplyChainDatabaseClock`转换为带偏移ISO8601，不把数据库上海时间当UTC。
 
 ## 3. 摘要资产标志
 
