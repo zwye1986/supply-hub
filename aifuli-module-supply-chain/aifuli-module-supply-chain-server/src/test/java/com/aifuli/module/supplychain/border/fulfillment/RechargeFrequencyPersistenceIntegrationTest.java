@@ -159,6 +159,20 @@ class RechargeFrequencyPersistenceIntegrationTest {
     }
 
     @Test
+    void clearingMigrationBlockPersistsNullThroughRealMapper() {
+        var mapper = context.getBean(RechargeFrequencyQueueMapper.class);
+        var now = LocalDateTime.now();
+        byte[] digest = new byte[32]; digest[0] = 7;
+        var queue = RechargeFrequencyQueueDO.builder().mobileDigest(digest).mobileMasked("139****0000")
+                .platformSpuId(470L).blockedReason("MIGRATION_CONFLICT").createdAt(now).updatedAt(now).build();
+        mapper.insert(queue);
+        queue = mapper.selectById(queue.getId());
+        queue.setBlockedReason(null);
+        assertThat(mapper.updateById(queue)).isEqualTo(1);
+        assertThat(mapper.selectById(queue.getId()).getBlockedReason()).isNull();
+    }
+
+    @Test
     void entryMapperOptimisticVersionPreventsStaleOrderStateChanges() throws Exception {
         try (Connection connection = dataSource.getConnection()) {
             insertQueue(connection, 450, 450);
@@ -207,6 +221,26 @@ class RechargeFrequencyPersistenceIntegrationTest {
         assertRowLockBlocks(() -> entries.selectByIdForUpdate(501L));
         assertRowLockBlocks(() -> entries.selectFirstWaitingForUpdate(500L,
                 RechargeFrequencyEntryStatus.WAITING.getCode()));
+    }
+
+    @Test
+    void migrationTimeCannotExistWithoutNonNullBasis() throws Exception {
+        try (var connection = dataSource.getConnection()) {
+            insertQueue(connection, 810, 810); insertEntry(connection, 811, 810, 8101, 1);
+            assertThatThrownBy(() -> execute(connection,
+                    "UPDATE sc_recharge_frequency_entry SET migration_acquired_at=NOW(3),migration_time_basis=NULL WHERE id=811"))
+                    .isInstanceOf(SQLException.class);
+        }
+    }
+
+    @Test
+    void noHolderAcquisitionCannotExistWithoutNonNullMigrationBlock() throws Exception {
+        try (var connection = dataSource.getConnection()) {
+            insertQueue(connection, 820, 820);
+            assertThatThrownBy(() -> execute(connection,
+                    "UPDATE sc_recharge_frequency_queue SET occupancy_generation=1,acquired_at=NOW(3),minimum_hold_until=DATE_ADD(NOW(3),INTERVAL 5 SECOND),blocked_reason=NULL WHERE id=820"))
+                    .isInstanceOf(SQLException.class);
+        }
     }
 
     private static void assertRowLockBlocks(Runnable lockingQuery) throws Exception {

@@ -15,6 +15,7 @@ import com.aifuli.module.supplychain.border.fulfillment.dal.mysql.FulfillmentOpe
 import com.aifuli.module.supplychain.border.fulfillment.dal.mysql.FulfillmentRequestMapper;
 import com.aifuli.module.supplychain.border.fulfillment.dal.mysql.RawStatusObservationMapper;
 import com.aifuli.module.supplychain.border.fulfillment.domain.AdapterStepCode;
+import com.aifuli.module.supplychain.border.fulfillment.domain.RechargeFrequencyEntryStatus;
 import com.aifuli.module.supplychain.border.fulfillment.domain.CallDigestFact;
 import com.aifuli.module.supplychain.border.fulfillment.domain.FulfillmentAssetStatus;
 import com.aifuli.module.supplychain.border.fulfillment.domain.FulfillmentCallDirection;
@@ -171,10 +172,20 @@ public class SupplierOrderLifecycle {
                 || operation.getStatus() == SupplierOrderOperationStatus.FAILED.getCode());
         boolean authoritativeTerminal = outcome.outcomeClass() == OperationOutcomeClass.SUCCEEDED
                 || outcome.outcomeClass() == OperationOutcomeClass.REJECTED;
-        boolean late = locked != null && locked.entry() != null && (!RechargeFrequencyLifecycle.isCurrentHolder(locked)
-                || (permit != null && (permit.queueId() != locked.queue().getId() || permit.entryId() != locked.entry().getId()
-                || permit.generation() != locked.entry().getOccupancyGeneration()
-                || !permit.operationNo().equals(operationNo))));
+        // 原迁移风险仅接受无发送permit的可信终态；任何旧资格或新出现的同单风险均只能留观察。
+        // 设计见 docs/superpowers/specs/2026-09-30-direct-recharge-mobile-spu-frequency-design.md#101-迁移执行与核实边界。
+        boolean migrationRecovery = trustedRecovery && authoritativeTerminal && permit == null
+                && RechargeFrequencyLifecycle.isMigrationRisk(locked);
+        boolean legacyRiskWithoutTrustedTerminal = locked != null && locked.entry() != null
+                && locked.entry().getMigrationAcquiredAt() != null
+                && locked.entry().getStatus() == RechargeFrequencyEntryStatus.HOLDING.getCode()
+                && !migrationRecovery;
+        boolean late = legacyRiskWithoutTrustedTerminal || (locked != null && locked.entry() != null
+                && ((!RechargeFrequencyLifecycle.isCurrentHolder(locked) && !migrationRecovery)
+                    || (permit != null && (permit.queueId() != locked.queue().getId()
+                        || permit.entryId() != locked.entry().getId()
+                        || permit.generation() != locked.entry().getOccupancyGeneration()
+                        || !permit.operationNo().equals(operationNo)))));
         if (terminal) {
             if (authoritativeTerminal && ((operation.getStatus() == SupplierOrderOperationStatus.SUCCEEDED.getCode())
                     != (outcome.outcomeClass() == OperationOutcomeClass.SUCCEEDED))) {
@@ -192,7 +203,7 @@ public class SupplierOrderLifecycle {
 
         OperationOutcomeClass outcomeClass = outcome.outcomeClass();
 
-        boolean frequencyHolding = RechargeFrequencyLifecycle.isCurrentHolder(locked);
+        boolean frequencyHolding = RechargeFrequencyLifecycle.isCurrentHolder(locked) || migrationRecovery;
         switch (outcomeClass) {
             case SUCCEEDED -> handleSucceeded(operation, bOrder, request, order, outcome, traceId, now, frequencyHolding);
             case REJECTED -> {

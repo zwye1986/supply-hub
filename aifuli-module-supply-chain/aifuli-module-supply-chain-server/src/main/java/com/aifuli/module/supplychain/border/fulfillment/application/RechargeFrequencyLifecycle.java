@@ -44,6 +44,7 @@ public class RechargeFrequencyLifecycle {
     private final BOrderMapper bOrderMapper;
     private final SupplyChainOrderMapper orderMapper;
     private final RechargeFrequencyWakeScheduler wakeScheduler;
+    private final RechargeFrequencyMigrationGateService migrationGate;
 
     /**
      * 当前事务独占的新订单先入队、后预占资金；同单重放复用冻结队列，不能重新解析可变SPU。
@@ -57,6 +58,7 @@ public class RechargeFrequencyLifecycle {
         if (entryMapper.selectByOrderId(command.orderId()) != null) { return; }
         var product = productResolver.resolve(command.platformSkuId());
         if (!product.directRecharge() || !FulfillmentTargetFields.ACCOUNT_TYPE_MOBILE.equals(command.targetAccountType())) { return; }
+        migrationGate.requireReady();
         var identity = identityService.identify(command.actualMobile());
         var now = databaseClock.now();
         var queue = queueMapper.selectByIdentity(identity.mobileDigest(), product.platformSpuId());
@@ -87,6 +89,13 @@ public class RechargeFrequencyLifecycle {
         wakeScheduler.schedule(queue);
         log.info("[直充限频] 入队成功 orderNo={}, queueId={}, platformSpuId={}, sequence={}, wakeGeneration={}",
                 command.orderNo(), queue.getId(), product.platformSpuId(), sequence, queue.getWakeGeneration());
+    }
+
+    /** 回执抢占之前核验可恢复的MOBILE发布门禁，不把暂时发布条件固化成业务终拒。 */
+    public void requireAcceptanceReady(Long platformSkuId, String actualTargetType) {
+        if (FulfillmentTargetFields.ACCOUNT_TYPE_MOBILE.equals(actualTargetType) && productResolver.resolve(platformSkuId).directRecharge()) {
+            migrationGate.requireReady();
+        }
     }
 
     /**
@@ -149,6 +158,7 @@ public class RechargeFrequencyLifecycle {
     @Transactional(transactionManager = "supplyChainTransactionManager", propagation = Propagation.REQUIRES_NEW, rollbackFor = Exception.class)
     public boolean markSendPossible(RechargeFrequencyExecutionPermit permit) {
         log.info("[直充限频] 发送边界 operationNo={}, queueId={}, generation={}", permit.operationNo(), permit.queueId(), permit.generation());
+        migrationGate.requireReady();
         var locked = lockForResult(permit.operationNo());
         if (!matches(locked, permit) || locked.entry().getVersion() != permit.entryVersion()
                 || locked.operation().getVersion() != permit.operationVersion()
@@ -266,6 +276,10 @@ public class RechargeFrequencyLifecycle {
         if (locator != null) {
             var headLocator = locateWaitingHead ? entryMapper.selectFirstWaiting(locator.getQueueId()) : null;
             var ids = new java.util.TreeSet<Long>(); ids.add(locator.getId());
+            if (queue != null && RechargeFrequencyMigrationCodes.MIGRATION_CONFLICT.name().equals(queue.getBlockedReason())) {
+                entryMapper.selectList(new LambdaQueryWrapper<RechargeFrequencyEntryDO>().eq(RechargeFrequencyEntryDO::getQueueId, queue.getId())
+                        .isNotNull(RechargeFrequencyEntryDO::getMigrationAcquiredAt)).forEach(row -> ids.add(row.getId()));
+            }
             if (headLocator != null) { ids.add(headLocator.getId()); }
             for (Long id : ids) {
                 var row = entryMapper.selectByIdForUpdate(id);
@@ -295,7 +309,11 @@ public class RechargeFrequencyLifecycle {
     /** 可信业务终态后处理队列，资金动作仍由SupplierOrderLifecycle先完成。重复成功不刷新acquiredAt。 */
     @Transactional(transactionManager = "supplyChainTransactionManager", propagation = Propagation.MANDATORY, rollbackFor = Exception.class)
     public void reconcile(LockedExecution locked) {
-        if (locked == null || !isCurrentHolder(locked)) { return; }
+        if (locked == null) { return; }
+        if (isMigrationRisk(locked) && RechargeFrequencyMigrationCodes.MIGRATION_CONFLICT.name().equals(locked.queue().getBlockedReason())) {
+            reconcileBlockedMigration(locked); return;
+        }
+        if (!isCurrentHolder(locked)) { return; }
         var now = databaseClock.now();
         boolean failed = locked.request().getStatus() == FulfillmentRequestStatus.FAILED.getCode();
         boolean success = locked.request().getStatus() == FulfillmentRequestStatus.SUCCEEDED.getCode();
@@ -309,6 +327,57 @@ public class RechargeFrequencyLifecycle {
         }
         locked.entry().setStatus(RechargeFrequencyEntryStatus.FINISHED.getCode());
         locked.entry().setCompletedAt(now); saveEntry(locked.entry()); clearHolder(locked.queue());
+    }
+
+    /**
+     * 只原迁移风险、原操作及迁移代次拥有受控可信结果权限；不是发送资格，不允许影响后续正常holder。
+     * 锁上下文已重新核对同Order/Request/BO/Op完整关联。
+     * 设计见 docs/superpowers/specs/2026-09-30-direct-recharge-mobile-spu-frequency-design.md#101-迁移执行与核实边界。
+     */
+    public static boolean isMigrationRisk(LockedExecution locked) {
+        return locked != null && locked.entry() != null && locked.queue() != null
+                && locked.entry().getMigrationAcquiredAt() != null && locked.entry().getMigrationTimeBasis() != null
+                && locked.entry().getStatus() == RechargeFrequencyEntryStatus.HOLDING.getCode()
+                && Objects.equals(locked.entry().getDispatchPhase(), RechargeFrequencyDispatchPhase.SEND_POSSIBLE.getCode())
+                && Objects.equals(locked.queue().getOccupancyGeneration(), locked.entry().getOccupancyGeneration())
+                && Objects.equals(locked.entry().getActiveOperationNo(), locked.operation().getOperationNo())
+                && locked.relatedOperations().stream().filter(RechargeFrequencyLifecycle::isRechargeSideEffect)
+                    .allMatch(other -> other.getId().equals(locked.operation().getId()) || isStrictlyLaterUnsent(locked, other)
+                        || (Objects.equals(other.getStatus(), SupplierOrderOperationStatus.FAILED.getCode())
+                            && OperationOutcomeClass.REJECTED.name().equals(other.getResultClass())))
+                && (isCurrentHolder(locked) || (locked.queue().getHolderEntryId() == null
+                    && RechargeFrequencyMigrationCodes.MIGRATION_CONFLICT.name().equals(locked.queue().getBlockedReason())));
+    }
+
+    /**
+     * 多风险可信终态仅结束自身，保留阻塞直到离线CAS解封；全部结束时按成功项冻结时间重算窗口。
+     * 全失败minimumHoldUntil清空，不保留迁移时的保守5秒；超时从不代替可信核实。
+     * 设计见 docs/superpowers/specs/2026-09-30-direct-recharge-mobile-spu-frequency-design.md#101-迁移执行与核实边界。
+     */
+    private void reconcileBlockedMigration(LockedExecution locked) {
+        boolean success = locked.request().getStatus() == FulfillmentRequestStatus.SUCCEEDED.getCode()
+                && locked.operation().getStatus() == SupplierOrderOperationStatus.SUCCEEDED.getCode()
+                && OperationOutcomeClass.SUCCEEDED.name().equals(locked.operation().getResultClass());
+        boolean failure = locked.request().getStatus() == FulfillmentRequestStatus.FAILED.getCode()
+                && locked.operation().getStatus() == SupplierOrderOperationStatus.FAILED.getCode()
+                && OperationOutcomeClass.REJECTED.name().equals(locked.operation().getResultClass());
+        if (!success && !failure) { return; }
+        locked.entry().setStatus(RechargeFrequencyEntryStatus.FINISHED.getCode());
+        locked.entry().setCompletedAt(databaseClock.now()); saveEntry(locked.entry());
+        var risks = entryMapper.selectList(new LambdaQueryWrapper<RechargeFrequencyEntryDO>().eq(RechargeFrequencyEntryDO::getQueueId, locked.queue().getId())
+                .eq(RechargeFrequencyEntryDO::getOccupancyGeneration, locked.queue().getOccupancyGeneration())
+                .isNotNull(RechargeFrequencyEntryDO::getMigrationAcquiredAt));
+        if (risks.stream().anyMatch(e -> e.getStatus() != RechargeFrequencyEntryStatus.FINISHED.getCode())) { return; }
+        java.time.LocalDateTime until = null;
+        for (var risk : risks) {
+            var op = findOperation(risk.getActiveOperationNo());
+            if (op != null && op.getStatus() == SupplierOrderOperationStatus.SUCCEEDED.getCode()
+                    && OperationOutcomeClass.SUCCEEDED.name().equals(op.getResultClass())) {
+                var candidate = risk.getMigrationAcquiredAt().plusSeconds(RechargeFrequencyConstants.SUCCESS_MINIMUM_HOLD_SECONDS);
+                if (until == null || candidate.isAfter(until)) { until = candidate; }
+            }
+        }
+        locked.queue().setMinimumHoldUntil(until); saveQueue(locked.queue());
     }
 
     public static boolean isCurrentHolder(LockedExecution locked) {

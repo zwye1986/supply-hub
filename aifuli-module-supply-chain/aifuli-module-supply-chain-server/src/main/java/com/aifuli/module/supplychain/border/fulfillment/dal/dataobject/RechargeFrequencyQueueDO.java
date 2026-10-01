@@ -47,6 +47,7 @@ public class RechargeFrequencyQueueDO {
     /** 每次安排新的唤醒意图递增的任务代次。 */
     private Long wakeGeneration;
     /** 队列阻塞原因。 */
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private String blockedReason;
     /** 占用超时告警是否处于活跃状态。 */
     private Boolean occupiedAlertActive;

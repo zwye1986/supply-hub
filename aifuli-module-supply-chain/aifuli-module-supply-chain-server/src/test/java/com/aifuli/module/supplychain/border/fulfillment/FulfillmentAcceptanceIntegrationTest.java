@@ -419,6 +419,12 @@ class FulfillmentAcceptanceIntegrationTest {
     }
 
     Fixture seed(ConfigurableApplicationContext context) {
+        // 普通流程fixture明确建立已核验READY（测试密钥端口仅返回测试专用32字节key），不改变生产初始CLOSED。
+        // 真实离线覆盖验收由RechargeFrequencyMigrationIntegrationTest独立执行。
+        var gateJdbc = new JdbcTemplate(context.getBean("supplyChainDataSource", DataSource.class));
+        byte[] gateFingerprint = context.getBean(com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyMigrationGateService.class).currentKeyFingerprint();
+        gateJdbc.update("UPDATE sc_recharge_frequency_migration_gate SET state='READY',verified_artifact=?,identity_key_fingerprint=?,verified_at=NOW(3) WHERE id=1", "a".repeat(40), gateFingerprint);
+
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC).withNano(0);
         BuyerCommandService buyers = context.getBean(BuyerCommandService.class);
         ProductCatalogCommandService catalog = context.getBean(ProductCatalogCommandService.class);
@@ -773,6 +779,7 @@ class FulfillmentAcceptanceIntegrationTest {
             ClosedJsonSchemaValidator.class, FulfillmentTargetSchemaRegistry.class,
             AesGcmEnvelopeCrypto.class, SkuPurchaseLimitService.class, FulfillmentAcceptanceLifecycle.class,
             com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyLifecycle.class,
+            com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyMigrationGateService.class,
             com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyIdentityService.class,
             com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyAcceptanceCoordinator.class,
             com.aifuli.module.supplychain.tradecore.catalog.application.RechargeFrequencyProductResolver.class,

@@ -90,6 +90,11 @@ public class RechargeFrequencyRecoveryService {
         var currentTask = tasks.selectByTypeAndKey(FulfillmentTimerTaskTypes.RECHARGE_FREQUENCY_WAKE, key(queue));
         // nextCheckAt可因补偿扫描公平性前移；业务到期依据当前代Timer，不能被扫描与执行竞速延期。
         if (queue.getNextCheckAt() == null || currentTask == null || currentTask.getNextFireAt().isAfter(now)) { return null; }
+        if (queue.getHolderEntryId() == null && queue.getBlockedReason() != null) {
+            // 多风险无holder只能观测，周期保留检查意图，不能因无WAITING项停止30分钟告警。
+            // 设计见 docs/superpowers/specs/2026-09-30-direct-recharge-mobile-spu-frequency-design.md#101-迁移执行与核实边界。
+            alarms(queue, now); newIntent(queue, now.plusSeconds(RECOVERY_CHECK_SECONDS)); return null;
+        }
         var locator = queue.getHolderEntryId() == null ? entries.selectFirstWaiting(queueId)
                 : entries.selectById(queue.getHolderEntryId());
         if (locator == null) {
@@ -157,7 +162,7 @@ public class RechargeFrequencyRecoveryService {
                 .eq(RechargeFrequencyEntryDO::getQueueId, queue.getId())
                 .eq(RechargeFrequencyEntryDO::getStatus, RechargeFrequencyEntryStatus.WAITING.getCode()));
         boolean backlog = RechargeFrequencyPolicy.isBacklogged(waiting);
-        boolean occupied = queue.getHolderEntryId() != null && RechargeFrequencyPolicy.isOverdue(queue.getAcquiredAt(), now);
+        boolean occupied = (queue.getHolderEntryId() != null || queue.getBlockedReason() != null) && RechargeFrequencyPolicy.isOverdue(queue.getAcquiredAt(), now);
         if (alarmDue(backlog, queue.getBacklogAlertActive(), queue.getLastBacklogAlertAt(), now)) {
             emitAfterCommit(backlog ? RechargeFrequencyRecoveryCodes.BACKLOG_ACTIVE : RechargeFrequencyRecoveryCodes.BACKLOG_RECOVERED,
                     queue, waiting);

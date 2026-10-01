@@ -159,6 +159,15 @@ public class FulfillmentAcceptanceLifecycle {
         // 会让并发首请求同时持有间隙锁，再插入时形成死锁。唯一索引才是创建竞争裁决者。
         FulfillmentAcceptanceReceiptDO existing = receiptMapper.selectByBusinessKey(
                 command.buyerId(), command.buyerOrderNo());
+        if (existing == null || existing.getStatus() != AcceptanceReceiptStatus.ACCEPTED.getCode()
+                || !Arrays.equals(existing.getRequestFingerprint(), command.requestFingerprint())) {
+            // 已接受同指纹请求只回放；其余MOBILE写路径先核验门禁，暂时关闭不固化为业务终拒。
+            // 设计见 docs/superpowers/specs/2026-09-30-direct-recharge-mobile-spu-frequency-design.md#101-迁移执行与核实边界。
+            var gateListing = listingMapper.selectByBuyerAndSkuCode(command.buyerId(), command.buyerSkuCode());
+            if (gateListing != null) {
+                rechargeFrequencyLifecycle.requireAcceptanceReady(gateListing.getPlatformSkuId(), command.targetAccountType());
+            }
+        }
         if (existing == null) {
             LocalDateTime now = now();
             FulfillmentAcceptanceReceiptDO receipt = FulfillmentAcceptanceReceiptDO.builder()

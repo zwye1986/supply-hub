@@ -163,7 +163,7 @@ class SupplyChainLiquibaseIntegrationTest {
                 "expire_at:DATETIME:-:3:NO");
         assertThat(firstStartup.projectAuthNoncePrimaryKeyColumns())
                 .containsExactly("app_id", "nonce");
-        assertThat(firstStartup.changeSetCount()).isEqualTo(50L);
+        assertThat(firstStartup.changeSetCount()).isEqualTo(51L);
         assertThat(firstStartup.uniqueIndexes())
                 .contains("sc_instore_payment_flow.uk_sc_instore_flow_order",
                         "sc_instore_channel_user_binding.uk_sc_instore_user_binding_project",
@@ -231,14 +231,14 @@ class SupplyChainLiquibaseIntegrationTest {
                         FROM information_schema.COLUMNS
                         WHERE TABLE_SCHEMA = DATABASE()
                           AND TABLE_NAME LIKE 'sc\\_%'
-                        """)).isEqualTo(120L);
+                        """)).isEqualTo(121L);
                 assertThat(queryLong(connection, """
                         SELECT COUNT(*)
                         FROM information_schema.COLUMNS
                         WHERE TABLE_SCHEMA = DATABASE()
                           AND TABLE_NAME LIKE 'sc\\_%'
                           AND DATA_TYPE = 'datetime'
-                        """)).isEqualTo(289L);
+                        """)).isEqualTo(291L);
                 assertThat(queryLong(connection, """
                         SELECT COUNT(*)
                         FROM information_schema.COLUMNS

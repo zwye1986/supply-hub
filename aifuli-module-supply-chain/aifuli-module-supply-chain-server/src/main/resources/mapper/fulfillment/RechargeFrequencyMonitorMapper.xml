@@ -28,7 +28,7 @@
                (SELECT COUNT(*) FROM sc_recharge_frequency_queue WHERE holder_entry_id IS NOT NULL OR blocked_reason IS NOT NULL) occupied_queue_count,
                (SELECT COUNT(*) FROM (SELECT queue_id FROM sc_recharge_frequency_entry WHERE status=#{f.getWaitingStatus}
                    GROUP BY queue_id HAVING COUNT(*) &gt; #{f.getBacklogThreshold}) backlog) over_threshold_queue_count,
-               (SELECT COUNT(*) FROM sc_recharge_frequency_queue WHERE holder_entry_id IS NOT NULL
+               (SELECT COUNT(*) FROM sc_recharge_frequency_queue WHERE (holder_entry_id IS NOT NULL OR blocked_reason IS NOT NULL)
                    AND acquired_at &lt; TIMESTAMPADD(SECOND,-#{f.getOccupiedAlertSeconds},#{f.observedAt})) overdue_queue_count,
                #{f.getSuccessMinimumHoldSeconds} success_minimum_hold_seconds, #{f.getOccupiedAlertSeconds} occupied_alert_seconds,
                #{f.getBacklogThreshold} backlog_threshold, #{f.observedAt} observed_at
