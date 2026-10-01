@@ -4,22 +4,31 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.aifuli.module.supplychain.application.facade.BuyerFulfillmentCommandFacade;
+import com.aifuli.module.supplychain.border.fulfillment.application.FulfillmentOperationExecuteHandler;
 import com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyExecutionPermit;
 import com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyLifecycle;
 import com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyMigrationService;
 import com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyMonitorQueryService;
+import com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyQueryService;
 import com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyRecoveryService;
 import com.aifuli.module.supplychain.border.fulfillment.application.SupplierOrderLifecycle;
 import com.aifuli.module.supplychain.border.fulfillment.dal.mysql.RechargeFrequencyMonitorMapper;
+import com.aifuli.module.supplychain.border.fulfillment.domain.FulfillmentOperationKind;
 import com.aifuli.module.supplychain.border.fulfillment.domain.OperationOutcome;
 import com.aifuli.module.supplychain.border.fulfillment.domain.OperationOutcomeClass;
+import com.aifuli.module.supplychain.border.order.domain.SupplierOrderOperationStatus;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
 
+import java.security.MessageDigest;
 import java.time.LocalDateTime;
 
 import javax.sql.DataSource;
@@ -776,7 +785,7 @@ class RechargeFrequencyMigrationIntegrationTest {
                     var before = jdbc.queryForMap("SELECT * FROM sc_recharge_frequency_entry");
                     jdbc.update(
                             "UPDATE sc_fulfillment_operation SET"
-                                + " status=30,result_class='RESULT_UNKNOWN',attempt_count=1");
+                                    + " status=30,result_class='RESULT_UNKNOWN',attempt_count=1");
                     assertThatThrownBy(
                                     () ->
                                             context.getBean(RechargeFrequencyMigrationService.class)
@@ -785,7 +794,7 @@ class RechargeFrequencyMigrationIntegrationTest {
                     assertThat(
                                     jdbc.queryForObject(
                                             "SELECT state FROM"
-                                                + " sc_recharge_frequency_migration_gate",
+                                                    + " sc_recharge_frequency_migration_gate",
                                             String.class))
                             .isEqualTo("CLOSED");
                     assertThat(jdbc.queryForMap("SELECT * FROM sc_recharge_frequency_entry"))
@@ -804,7 +813,7 @@ class RechargeFrequencyMigrationIntegrationTest {
                     frequency.markSendPossible(permit);
                     jdbc.update(
                             "UPDATE sc_fulfillment_operation SET"
-                                + " status=30,result_class='RESULT_UNKNOWN',attempt_count=1");
+                                    + " status=30,result_class='RESULT_UNKNOWN',attempt_count=1");
                     long id =
                             jdbc.queryForObject(
                                     "SELECT id FROM sc_fulfillment_operation", Long.class);
@@ -827,9 +836,245 @@ class RechargeFrequencyMigrationIntegrationTest {
                     assertThat(
                                     jdbc.queryForObject(
                                             "SELECT state FROM"
-                                                + " sc_recharge_frequency_migration_gate",
+                                                    + " sc_recharge_frequency_migration_gate",
                                             String.class))
                             .isEqualTo("CLOSED");
+                });
+    }
+
+    @ParameterizedTest
+    @EnumSource(
+            value = SupplierOrderOperationStatus.class,
+            names = {"PENDING", "CLAIMED"})
+    void migratedPossibleSendCannotRefreshPermitOrExecuteAgain(
+            SupplierOrderOperationStatus status) {
+        withFixture(
+                (context, jdbc) -> {
+                    accept(context, "MIGRATED-SEND-" + status.name());
+                    var op = RechargeFrequencyExecutionIntegrationTest.operations(jdbc).getFirst();
+                    clearFrequency(jdbc);
+                    jdbc.update(
+                            "UPDATE sc_fulfillment_operation SET status=?,attempt_count=1",
+                            status.getCode());
+                    context.getBean(RechargeFrequencyMigrationService.class).migrate();
+                    var entry = jdbc.queryForMap("SELECT * FROM sc_recharge_frequency_entry");
+                    var queue = queueSnapshot(jdbc);
+                    byte[] digest =
+                            jdbc.queryForObject(
+                                    "SELECT mobile_digest FROM sc_recharge_frequency_queue",
+                                    byte[].class);
+                    var effects = moneyAndEffects(jdbc);
+                    assertThat(context.getBean(RechargeFrequencyLifecycle.class).claim(op))
+                            .isNull();
+                    context.getBean(FulfillmentOperationExecuteHandler.class)
+                            .handle(
+                                    RechargeFrequencyExecutionIntegrationTest.timer(),
+                                    context.getBean(ObjectMapper.class)
+                                            .createObjectNode()
+                                            .put("operationNo", op));
+                    assertThat(
+                                    context.getBean(
+                                                    RechargeFrequencyExecutionIntegrationTest
+                                                            .CountingExecutor.class)
+                                            .calls
+                                            .get())
+                            .isZero();
+                    assertThat(jdbc.queryForMap("SELECT * FROM sc_recharge_frequency_entry"))
+                            .isEqualTo(entry);
+                    assertThat(
+                                    jdbc.queryForObject(
+                                            "SELECT status FROM sc_fulfillment_operation",
+                                            Short.class))
+                            .isEqualTo(status.getCode());
+                    assertThat(
+                                    MessageDigest.isEqual(
+                                            digest,
+                                            jdbc.queryForObject(
+                                                    "SELECT mobile_digest FROM"
+                                                            + " sc_recharge_frequency_queue",
+                                                    byte[].class)))
+                            .isTrue();
+                    assertThat(queueSnapshot(jdbc)).isEqualTo(queue);
+                    assertThat(moneyAndEffects(jdbc)).isEqualTo(effects);
+                });
+    }
+
+    @ParameterizedTest
+    @CsvSource({"PENDING,SUCCEEDED", "CLAIMED,REJECTED", "RESULT_UNKNOWN,SUCCEEDED"})
+    void migratedPendingEvidenceQueriesOriginalOperationAndTrustedResultConverges(
+            String status, String result) {
+        withFixture(
+                (context, jdbc) -> {
+                    accept(context, "MIGRATED-QUERY-" + status);
+                    var op = RechargeFrequencyExecutionIntegrationTest.operations(jdbc).getFirst();
+                    accept(context, "MIGRATED-QUERY-TAIL-" + status);
+                    var tail = RechargeFrequencyExecutionIntegrationTest.operations(jdbc).getLast();
+                    clearFrequency(jdbc);
+                    jdbc.update(
+                            "UPDATE sc_fulfillment_operation SET status=?,attempt_count=1 WHERE"
+                                    + " operation_no=?",
+                            SupplierOrderOperationStatus.valueOf(status).getCode(),
+                            op);
+                    context.getBean(RechargeFrequencyMigrationService.class).migrate();
+                    var entry =
+                            jdbc.queryForMap(
+                                    "SELECT * FROM sc_recharge_frequency_entry WHERE"
+                                            + " active_operation_no=?",
+                                    op);
+                    var effects = moneyAndEffects(jdbc);
+                    RechargeFrequencyTimerIntegrationTest.enableQuery(context);
+                    var work = RechargeFrequencyTimerIntegrationTest.dueWork(context);
+                    assertThat(work).isNotNull();
+                    assertThat(work.permit()).isNull();
+                    var executor =
+                            context.getBean(
+                                    RechargeFrequencyExecutionIntegrationTest.CountingExecutor
+                                            .class);
+                    var query = context.getBean(RechargeFrequencyQueryService.class);
+                    executor.outcome = fact(OperationOutcomeClass.NOT_FOUND);
+                    query.query(work, "MIGRATION-QUERY-NOT-FOUND");
+                    assertThat(
+                                    jdbc.queryForMap(
+                                            "SELECT * FROM sc_recharge_frequency_entry WHERE"
+                                                    + " active_operation_no=?",
+                                            op))
+                            .isEqualTo(entry);
+                    assertThat(
+                                    jdbc.queryForObject(
+                                            "SELECT holder_entry_id FROM"
+                                                    + " sc_recharge_frequency_queue",
+                                            Long.class))
+                            .isEqualTo(entry.get("id"));
+                    assertThat(RechargeFrequencyLifecycleIntegrationTest.ledger(jdbc, "COMMIT"))
+                            .isZero();
+                    assertThat(RechargeFrequencyLifecycleIntegrationTest.ledger(jdbc, "RELEASE"))
+                            .isZero();
+                    // 保证原成功窗口尚未到期；查单只能核实，不能改写迁移取得时间。
+                    jdbc.update(
+                            "UPDATE sc_recharge_frequency_queue SET"
+                                    + " minimum_hold_until=DATE_ADD(NOW(3),INTERVAL 60 SECOND)");
+                    executor.outcome = fact(OperationOutcomeClass.valueOf(result));
+                    query.query(
+                            RechargeFrequencyTimerIntegrationTest.dueWork(context),
+                            "MIGRATION-QUERY-TERMINAL");
+                    query.query(work, "MIGRATION-QUERY-REPLAY");
+                    assertThat(executor.lastTicket.operationKind())
+                            .isEqualTo(FulfillmentOperationKind.QUERY_ORDER);
+                    assertThat(executor.lastTicket.operationNo()).isEqualTo(op);
+                    assertThat(executor.lastTicket.rechargeAccount()).isNull();
+                    assertThat(
+                                    jdbc.queryForObject(
+                                            "SELECT migration_acquired_at FROM"
+                                                    + " sc_recharge_frequency_entry WHERE"
+                                                    + " active_operation_no=?",
+                                            LocalDateTime.class,
+                                            op))
+                            .isEqualTo(entry.get("migration_acquired_at"));
+                    boolean success = result.equals("SUCCEEDED");
+                    assertThat(
+                                    RechargeFrequencyLifecycleIntegrationTest.ledger(
+                                            jdbc, success ? "COMMIT" : "RELEASE"))
+                            .isEqualTo(1L);
+                    assertThat(
+                                    jdbc.queryForObject(
+                                            "SELECT holder_entry_id FROM"
+                                                    + " sc_recharge_frequency_queue",
+                                            Long.class))
+                            .isEqualTo(success ? entry.get("id") : null);
+                    assertThat(
+                                    jdbc.queryForObject(
+                                            "SELECT COUNT(*) FROM sc_fulfillment_operation",
+                                            Long.class))
+                            .isEqualTo(effects.get("operations"));
+                    // 原成功窗口自然收敛后，旧只读快照不能释放后续新holder。
+                    if (success) {
+                        jdbc.update(
+                                "UPDATE sc_recharge_frequency_queue SET"
+                                    + " acquired_at=DATE_SUB(NOW(3),INTERVAL 10"
+                                    + " SECOND),minimum_hold_until=DATE_SUB(NOW(3),INTERVAL 5"
+                                    + " SECOND)");
+                        assertThat(RechargeFrequencyTimerIntegrationTest.dueWork(context)).isNull();
+                    }
+                    var next = context.getBean(RechargeFrequencyLifecycle.class).claim(tail);
+                    assertThat(next).isNotNull();
+                    query.query(work, "MIGRATION-QUERY-LATE-OLD");
+                    assertThat(
+                                    jdbc.queryForObject(
+                                            "SELECT holder_entry_id FROM"
+                                                    + " sc_recharge_frequency_queue",
+                                            Long.class))
+                            .isEqualTo(next.entryId());
+                    assertThat(
+                                    RechargeFrequencyLifecycleIntegrationTest.ledger(
+                                            jdbc, success ? "COMMIT" : "RELEASE"))
+                            .isEqualTo(1L);
+                });
+    }
+
+    @Test
+    void frozenTrustedHolderCannotHideAdditionalUnknownOperationDuringSuccessWindow() {
+        withFixture(
+                (context, jdbc) -> {
+                    accept(context, "TRUSTED-HOLDER-EXTRA");
+                    var op = RechargeFrequencyExecutionIntegrationTest.operations(jdbc).getFirst();
+                    clearFrequency(jdbc);
+                    jdbc.update(
+                            "UPDATE sc_fulfillment_operation SET"
+                                    + " status=30,result_class='RESULT_UNKNOWN',attempt_count=1");
+                    var migration = context.getBean(RechargeFrequencyMigrationService.class);
+                    migration.migrate();
+                    jdbc.update(
+                            "UPDATE sc_recharge_frequency_queue SET"
+                                    + " minimum_hold_until=DATE_ADD(NOW(3),INTERVAL 60 SECOND)");
+                    migration.confirmTrustedLegacyOutcome(
+                            op, fact(OperationOutcomeClass.SUCCEEDED), "VERIFIED-SUCCESS");
+                    long id =
+                            jdbc.queryForObject(
+                                    "SELECT id FROM sc_fulfillment_operation", Long.class);
+                    long extra =
+                            RechargeFrequencyAcceptanceIntegrationTest.cloneRow(
+                                    jdbc,
+                                    "sc_fulfillment_operation",
+                                    id,
+                                    java.util.Map.of(
+                                            "operation_no",
+                                            "OP_TRUSTED_EXTRA",
+                                            "sequence_no",
+                                            2,
+                                            "idempotency_key",
+                                            "TRUSTED_EXTRA"));
+                    jdbc.update(
+                            "UPDATE sc_fulfillment_operation SET"
+                                + " status=30,result_class='RESULT_UNKNOWN',completed_at=NULL,attempt_count=1"
+                                + " WHERE id=?",
+                            extra);
+                    var entry = jdbc.queryForMap("SELECT * FROM sc_recharge_frequency_entry");
+                    var queue = queueSnapshot(jdbc);
+                    byte[] digest =
+                            jdbc.queryForObject(
+                                    "SELECT mobile_digest FROM sc_recharge_frequency_queue",
+                                    byte[].class);
+                    var effects = moneyAndEffects(jdbc);
+                    assertThatThrownBy(migration::migrate)
+                            .hasMessageContaining("MULTIPLE_UNVERIFIED_OPERATIONS");
+                    assertThat(
+                                    jdbc.queryForObject(
+                                            "SELECT state FROM"
+                                                    + " sc_recharge_frequency_migration_gate",
+                                            String.class))
+                            .isEqualTo("CLOSED");
+                    assertThat(jdbc.queryForMap("SELECT * FROM sc_recharge_frequency_entry"))
+                            .isEqualTo(entry);
+                    assertThat(
+                                    MessageDigest.isEqual(
+                                            digest,
+                                            jdbc.queryForObject(
+                                                    "SELECT mobile_digest FROM"
+                                                            + " sc_recharge_frequency_queue",
+                                                    byte[].class)))
+                            .isTrue();
+                    assertThat(queueSnapshot(jdbc)).isEqualTo(queue);
+                    assertThat(moneyAndEffects(jdbc)).isEqualTo(effects);
                 });
     }
 
@@ -870,6 +1115,14 @@ class RechargeFrequencyMigrationIntegrationTest {
     private static void clearFrequency(JdbcTemplate jdbc) {
         jdbc.update("DELETE FROM sc_recharge_frequency_entry");
         jdbc.update("DELETE FROM sc_recharge_frequency_queue");
+    }
+
+    /** 控制行快照只比较迁移占用字段，不让JDBC byte[]对象标识影响相等，也不把手机号摘要写入断言日志。 */
+    private static java.util.Map<String, Object> queueSnapshot(JdbcTemplate jdbc) {
+        return jdbc.queryForMap(
+                "SELECT"
+                    + " id,holder_entry_id,occupancy_generation,acquired_at,minimum_hold_until,next_enqueue_sequence,version,wake_generation,blocked_reason,next_check_at,updated_at"
+                    + " FROM sc_recharge_frequency_queue");
     }
 
     private static java.util.Map<String, Object> moneyAndEffects(JdbcTemplate jdbc) {

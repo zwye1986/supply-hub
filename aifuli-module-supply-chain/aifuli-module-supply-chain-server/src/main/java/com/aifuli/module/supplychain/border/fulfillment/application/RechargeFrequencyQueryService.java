@@ -30,7 +30,8 @@ public class RechargeFrequencyQueryService {
                     offers.selectById(bo.getOfferVersionId()), config, FulfillmentOperationKind.QUERY_ORDER,
                     null, tickets.resolveCredential(config), traceId);
             log.debug("[直充限频查单] operationNo={}, bOrderNo={}, connectorVersionId={}, generation={}",
-                    operation.getOperationNo(), bo.getBOrderNo(), bo.getConnectorVersionId(), work.permit().generation());
+                    operation.getOperationNo(), bo.getBOrderNo(), bo.getConnectorVersionId(),
+                    work.permit() == null ? locked.queue().getOccupancyGeneration() : work.permit().generation());
             var outcome = executor.execute(ticket);
             log.debug("[直充限频查单] operationNo={}, outcome={}, httpStatus={}, durationMs={}", operation.getOperationNo(),
                     outcome.outcomeClass(), outcome.callDigest() == null ? null : outcome.callDigest().httpStatus(), (System.nanoTime()-start)/1_000_000L);
@@ -42,6 +43,9 @@ public class RechargeFrequencyQueryService {
                 outcome = OperationOutcome.builder().outcomeClass(OperationOutcomeClass.RESULT_UNKNOWN)
                         .rawObservation(outcome.rawObservation()).callDigest(outcome.callDigest()).build();
             }
+            // 迁移查询无SEND permit，原风险归属及代次由结果入口重新加锁核验；迟到work只能留观察。
+            // 普通查询仍携带原permit，保持原有资格校验。
+            // 设计见 docs/superpowers/specs/2026-09-30-direct-recharge-mobile-spu-frequency-design.md#101-迁移执行与核实边界。
             lifecycle.confirmTrustedOutcome(operation.getOperationNo(), outcome, traceId, work.permit());
         } catch (Exception exception) {
             log.debug("[直充限频查单] operationNo={}, failureType={}, durationMs={}", operation.getOperationNo(),

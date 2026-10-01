@@ -127,18 +127,28 @@ public class RechargeFrequencyRecoveryService {
             // 已有minimumHoldUntil为原acquiredAt+5秒，重复唤醒不能刷新窗口。
             defer(queue, queue.getMinimumHoldUntil()); return null;
         }
-        if (queue.getBlockedReason() == null && (operation.getStatus() == SupplierOrderOperationStatus.PENDING.getCode()
-                || operation.getStatus() == SupplierOrderOperationStatus.CLAIMED.getCode())) {
+        boolean sendPossible = Objects.equals(locked.entry().getDispatchPhase(),
+                RechargeFrequencyDispatchPhase.SEND_POSSIBLE.getCode());
+        boolean migrationVerification = RechargeFrequencyLifecycle.isMigrationRisk(locked);
+        // 历史PENDING/CLAIMED只是旧状态，SEND_POSSIBLE事实必须阻止恢复执行；仅查询原操作核实。
+        // 设计见 docs/superpowers/specs/2026-09-30-direct-recharge-mobile-spu-frequency-design.md#101-迁移执行与核实边界。
+        if (queue.getBlockedReason() == null && !sendPossible
+                && (operation.getStatus() == SupplierOrderOperationStatus.PENDING.getCode()
+                    || operation.getStatus() == SupplierOrderOperationStatus.CLAIMED.getCode())) {
             scheduler.execute(queue, operation.getOperationNo(), locked.bOrder().getBOrderNo());
             defer(queue, now.plusSeconds(RECOVERY_CHECK_SECONDS)); return null;
         }
         boolean query = queue.getHolderEntryId() != null
-                && Objects.equals(locked.entry().getDispatchPhase(), RechargeFrequencyDispatchPhase.SEND_POSSIBLE.getCode())
-                && (operation.getStatus() == SupplierOrderOperationStatus.EXECUTING.getCode()
+                && sendPossible
+                && (migrationVerification || operation.getStatus() == SupplierOrderOperationStatus.EXECUTING.getCode()
                     || operation.getStatus() == SupplierOrderOperationStatus.RESULT_UNKNOWN.getCode()
                     || operation.getStatus() == SupplierOrderOperationStatus.MANUAL.getCode());
         defer(queue, now.plusSeconds(RECOVERY_CHECK_SECONDS));
         if (!query) { return null; }
+        // 迁移只读核实不产生SEND permit；结果入口重新锁定并验证原迁移风险谓词。
+        if (migrationVerification) {
+            return new QueryWork(locked, null);
+        }
         return new QueryWork(locked, new RechargeFrequencyExecutionPermit(queueId, locked.entry().getId(),
                 operation.getOperationNo(), queue.getOccupancyGeneration(), locked.entry().getVersion(), operation.getVersion()));
     }
@@ -230,8 +240,12 @@ public class RechargeFrequencyRecoveryService {
     private static final class SanitizedCause extends IllegalStateException {
         private SanitizedCause(String originalType, Throwable cause) { super(originalType, cause); }
     }
-    /** 快照不输出DO的toString（其持有加密目标等内部字段）。 */
+    /**
+     * 只读查询快照不输出DO的toString（其持有加密目标等内部字段）。
+     * 迁移原风险的permit为空，不能把核实关联冒充发送资格；普通查询保留原permit用于迟到校验。
+     * 设计见 docs/superpowers/specs/2026-09-30-direct-recharge-mobile-spu-frequency-design.md#101-迁移执行与核实边界。
+     */
     public record QueryWork(RechargeFrequencyLifecycle.LockedExecution locked, RechargeFrequencyExecutionPermit permit) {
-        @Override public String toString() { return "QueryWork[operationNo="+permit.operationNo()+"]"; }
+        @Override public String toString() { return "QueryWork[operationNo="+locked.operation().getOperationNo()+"]"; }
     }
 }

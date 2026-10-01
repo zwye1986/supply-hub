@@ -125,7 +125,15 @@ public class RechargeFrequencyLifecycle {
         var locked = lockExecution(operationNo, true);
         if (locked == null || locked.entry() == null || !isRechargeSideEffect(locked.operation())) { return null; }
         var queue = locked.queue(); var entry = locked.entry(); var operation = locked.operation();
-        if (queue.getBlockedReason() != null || !canClaim(operation)) { return null; }
+        // SEND_POSSIBLE是不可逆发送边界；迁移旧Op即使仍PENDING/CLAIMED也不能重新生成资格。
+        // 正常WAITING与受控continuation的PREPARED仍按原认领规则执行。
+        // 设计见 docs/superpowers/specs/2026-09-30-direct-recharge-mobile-spu-frequency-design.md#101-迁移执行与核实边界。
+        if (queue.getBlockedReason() != null
+                || !canClaim(operation)
+                || Objects.equals(entry.getDispatchPhase(),
+                        RechargeFrequencyDispatchPhase.SEND_POSSIBLE.getCode())) {
+            return null;
+        }
         if (queue.getHolderEntryId() == null) {
             if (!entry.getId().equals(locked.waitingHeadId())) { return null; }
             queue.setOccupancyGeneration(Math.incrementExact(queue.getOccupancyGeneration()));

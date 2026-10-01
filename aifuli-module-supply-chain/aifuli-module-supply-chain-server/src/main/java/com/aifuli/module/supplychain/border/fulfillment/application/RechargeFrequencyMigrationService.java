@@ -276,7 +276,9 @@ public class RechargeFrequencyMigrationService {
                 chargeOps.stream()
                         .filter(op -> !trustedTerminal(op) && !certainlyUnsent(op))
                         .count();
-        if (risks > 1) {
+        // 当前冻结操作已可信结束时，同单剩余任何未核实副作用均不能被成功窗口掩盖。
+        // 全批拒绝保留CLOSED，不能通过READY后随窗口到期放行后续订单。
+        if (risks > 1 || (trustedTerminal(operation) && risks != 0)) {
             throw failure(orderNo, MULTIPLE_UNVERIFIED_OPERATIONS);
         }
         boolean success =
