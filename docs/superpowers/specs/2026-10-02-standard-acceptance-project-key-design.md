@@ -12,6 +12,8 @@
 
 标准内部查单/回执DTO补真实projectCode绑定；资产DTO删除buyerUserId，项目在RPC服务端由真实来源与projectCode校验。内部资产访问主体保持BUYER_SERVICE及真实source:tenant，不能构造假的PROJECT_APPLICATION/keyVersion；共用项目归属快照和解码/独立审计核心，audit appKeyVersion=null。内部原scope如保留，仍真实校验，HTTP不增加该scope。INSTORE/O2O身份DTO、HMACscope及共享订单真实用户字段继续保留。
 
+资产专用用户列删除还须同步实际管理端消费者OrderViewQueryService：不再读取asset.buyerUserId或计算该身份摘要，标准资产审计buyerUserDigest为NULL（不用零长byte数组占位），principal保持真实ADMIN_USER操作人，记录实际project/order，appKeyVersion为空。管理端共享订单响应为其他业务保留的用户字段，不可据此给CARD补造身份；不扩展本阶段为管理端资产展示重构。
+
 ## 2. 首次身份与重放优先
 
 Facade先通过项目永久键读取已有回执的不可变快照。已有格式已验证回执使用其冻结商品/目标Schema构造规范化输入，不因为当前Listing下架/版本变动而重建用户请求身份；先比较请求身份，再决定只回放或CAS重试。旧回执格式未验证时失败关闭，不能按新格式直接比较旧hash或重新建单。

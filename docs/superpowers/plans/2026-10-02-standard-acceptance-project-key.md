@@ -21,6 +21,7 @@ Server `.../src/main/java/com/aifuli/module/supplychain/`：
 - `application/facade/BuyerFulfillmentCommandFacade`保留内部身份适配，新增/拆`ProjectStandardOrderCommandFacade`可信项目适配；共用目标规范化/指纹/加密与受理编排，无DAL、无伪造DTO身份。
 - `border/fulfillment/application/FulfillmentAcceptanceLifecycle` PreparedAcceptance无用户/支付/客户端版本；project key claim/CAS、Listing服务端版、项目商品/永久quote归属、真实snapshot，保留事务/资金/Outbox/频率原锁序。
 - receipt Mapper/DO新project key/nullable server version/fingerprint version/冻结身份，shared orderDO/Mapper/XML实际手机号聚合与remark；`SkuPurchaseLimitService`不依赖用户、每单与phoneBind仍独立。
+- `border/order/application/OrderViewQueryService`随资产DO删列移除asset.buyerUserId读取及HMAC用户摘要，标准资产审计NULL、真实ADMIN_USER/project/order，保留其他业务共享响应和现有管理端权限；相应既有查询测试回归。
 - 标准`BuyerFulfillmentQueryFacade/Service`改真实RPC项目归属，与Task2项目读视图/解码/独立审计核心共享，不伪造StandardProductContext应用身份；RPC principal真实BUYER_SERVICE。
 - `SupplierOrderLifecycle.persistAssets`去除user拷贝，assetDO无用户。所有STANDARD_REQUEST首次/重路由subjectKey=global orderNo，检索全部恢复调用点，不只改首次。
 - 新052 SQL/主changelog HALT前置条件、生成列两类唯一键/用户清理/字段约束/hash格式0→2迁移门禁。
