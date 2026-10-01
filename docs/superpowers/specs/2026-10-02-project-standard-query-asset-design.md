@@ -48,7 +48,7 @@
 - 未建单PROCESSING或未完成卡券：成功空数组，hint“请等待，稍后重新获卡”。处理中订单可使用“订单延迟，请等待重试”，不增加未确认的延迟时长阈值。
 - 卡券SUCCEEDED却无应交付资产：一致性故障，不能用成功空数组掩盖。
 
-仅对交付资产执行EnvelopeCrypto解密，保持既有AAD `bOrderId|sequenceNo|assetType`和密钥版本。解密载荷必须为JSON对象，已知载荷字段assetType/cardCode/cardSecret/voucherCode/voucherUrl可缺省，但一旦出现必须为字符串（显式JSON null、数组或对象均拒绝），与当前交付类型无关；额外未知字段不作为交付值。不能以JsonNode.asText把对象或数组静默转为卡券值。资产类型封闭为VOUCHER_CODE、CARD_CODE_SECRET、VOUCHER_URL，载荷中assetType若存在必须与持久化类型一致。未知类型/畸形JSON/缺必要字段均失败关闭。
+仅对交付资产执行EnvelopeCrypto解密，保持既有AAD `bOrderId|sequenceNo|assetType`和密钥版本。解密载荷必须恰好为一个JSON对象；拒绝尾随JSON和任意层重复字段，避免后值覆盖绕过已知字段类型及assetType一致性校验。使用该解码器局部严格reader，不改变全局ObjectMapper配置。已知载荷字段assetType/cardCode/cardSecret/voucherCode/voucherUrl可缺省，但一旦出现必须为字符串（显式JSON null、数组或对象均拒绝），与当前交付类型无关；额外未知字段不作为交付值。不能以JsonNode.asText把对象或数组静默转为卡券值。资产类型封闭为VOUCHER_CODE、CARD_CODE_SECRET、VOUCHER_URL，载荷中assetType若存在必须与持久化类型一致。未知类型/畸形JSON/缺必要字段均失败关闭。
 
 现有生产端`SupplierOrderLifecycle.persistAssets`对券码/链接也使用cardCode保存`OperationAssetFact.cardNo`，读取时兼容这一既有密文格式：CARD_CODE_SECRET映射cardCode/cardSecret，至少有一个非空交付值；VOUCHER_CODE映射非空voucherCode（旧cardCode作为载荷兼容）；VOUCHER_URL映射非空voucherUrl（旧cardCode兼容）。同一载荷同时给出不同值的两个同义字段时拒绝，不能任取。对外只输出与类型匹配的字段，不输出供应商外部资产标识、密文、内部id、原始JSON或其他字段。响应字段名称与现有资产契约保持一致。
 
