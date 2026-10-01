@@ -24,7 +24,7 @@
 
 ## 3. 受理内查取与唯一消费
 
-增加可信项目消费入口，消费上下文只含buyerId/projectId/platformSkuId/buyerOrderNo/quantity。通过项目永久键`SELECT ... FOR UPDATE`取得已冻结报价；缺报价明确拒绝，不计算新价格、不任取最新历史报价。验证分销商/项目/SKU/数量与报价一致，并返回不可变FrozenQuote及listingId等必要商品身份快照供共享受理校验。
+增加可信项目消费入口，消费上下文只含buyerId/projectId/platformSkuId/buyerOrderNo/quantity。通过项目永久键`SELECT ... FOR UPDATE`取得已冻结报价；缺报价使用稳定业务错误STANDARD_PRICING_QUOTE_MISSING，重试指令RETRY_SAME_KEY_AFTER_CONDITION_CHANGE；共享受理将其保存为可条件重试的拒绝回执，内部首次报价形成后由调用方携带回执版本CAS重试。不计算新价格、不任取最新历史报价。验证分销商/项目/SKU/数量与报价一致，并返回不可变FrozenQuote及listingId等必要商品身份快照供共享受理校验。
 
 共用受理最终统一使用这一入口。过渡阶段旧内部受理的token入口可适配到同一个项目键并额外核对token指向该唯一报价；该过渡不保留user/paidAt作为报价绑定或有效期条件，完整标准DTO/PreparedAcceptance身份清理由下一阶段完成。过渡入口不是新增外部协议。
 

@@ -16,7 +16,7 @@ API `aifuli-module-supply-chain/aifuli-module-supply-chain-api/src/`：
 
 - `main/java/com/aifuli/module/supplychain/api/pricing/dto/StandardPricingQuoteReqDTO.java`删除buyerUserId，数量校验1；请求其余6字段保留。
 - 同目录`StandardPricingQuoteRespDTO.java`永久冻结语义、expiresAt可空且明确历史兼容，价格/币种字段保留。
-- `api/pricing/StandardPricingQuoteApi.java`及`StandardPricingQuoteContractTest`同步接口文档/删除身份/可空字段契约；新增稳定缺报价错误如需要，统一错误常量/重试指令。
+- `api/pricing/StandardPricingQuoteApi.java`及`StandardPricingQuoteContractTest`同步接口文档/删除身份/可空字段契约；新增STANDARD_PRICING_QUOTE_MISSING稳定缺报价错误与RETRY_SAME_KEY_AFTER_CONDITION_CHANGE映射，号码由实际占用清单选择，供Task4可条件重试拒绝使用。
 
 Server `aifuli-module-supply-chain/aifuli-module-supply-chain-server/src/`：
 
