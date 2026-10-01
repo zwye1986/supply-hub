@@ -235,6 +235,8 @@ timer.scheduleOnce(FulfillmentTimerTaskTypes.RECHARGE_FREQUENCY_WAKE,
 
 执行范围补充（2026-10-01）：依赖已通过两级审查的Task6独立接口范围；BACKLOGS口径现已确认，待后端补齐后启用项级控件，详见设计§7/§8。切换页签按适用契约传参，保留既有未知操作意图保护与分页/迟到响应处理；页面说明数值统计整条匹配队列。补齐范围继续以实际SFC探针、局部检查、构建及类型基线差异验证，不将真实登录人工验收冒充已执行。
 
+Task7代码范围完成（2026-10-01）：后端`9f9e5d2`两级审查通过后，前端`2bdaf796`启用积压完整筛选及整队列说明，`d418afb`修复切换页签绕过ID校验及旧查询回填。最终规格与代码质量独立复评均通过；实际SFC/Router探针18项（包含原9项未知意图保护）全绿，UTC环境也全绿，两阶段先写测试分别RED6/RED3，旧SHA重现对应缺口。ESLint含CJS、Prettier、语法与dev构建通过，真实类型基线前后13349条逐条一致、改动文件零诊断；全仓类型检查仍失败，不能称通过。证据`/tmp/frequency-backlog-frontend/manifest.json`及`reviewfix/manifest.json`。真实登录UI、system SQL及部署节点操作保留人工门禁；代码完成不等于已部署。
+
 独立范围实施记录：后端`b72eaf2`提供局部上海时间编码、实际应用Jackson字段契约和菜单；前端`1d50a11`提供真实监控/操作页面，`3b6cd8d`修复权限撤销与同路由更新丢失未知意图。规格及质量两级独立复评通过，真实SFC/Router探针9项通过，旧SHA复现7项失败。13项Contract+27项Architecture全零失败/错误/跳过；前端语法、ESLint、Prettier与构建通过。全仓类型检查仍失败：基线13350到13349，归一化无新增；最终修复前后13349精确无新增，新文件零报错。证据见集成文档§7.74。真实登录页面、system SQL实库执行及BACKLOGS待确认控件不计完成。
 
 **前端文件（相对前端仓库）：**
@@ -249,13 +251,13 @@ timer.scheduleOnce(FulfillmentTimerTaskTypes.RECHARGE_FREQUENCY_WAKE,
 
 HTTP字段对齐补充：共享LocalDateTime时间戳转换依赖JVM默认区域，与供应链固定上海时钟不一致，Task7在供应链infrastructure/time新增局部JSON时间序列化/反序列化器，显式注解到限频响应时间和搜索时间字段；不修改其他进程或共享配置。应用Jackson契约测试验证UTC/上海JVM下相同epoch与相同GET/POST筛选边界，前端上海展示。结果字段使用实际resultCode；Long主键/版本/代次保留number|string以支持现有安全数字/字符串序列化。
 
-- [ ] 先补后端HTTP契约测试覆盖前端消费字段/分页/操作返回，冻结TypeScript对应接口，不引入新的前端测试框架。
-- [ ] 页面顶部四卡全局统计，三页签等待/占用/积压，表格显示maskedMobile、SPU、归属、单号、时长、状态。筛选结果不改变“全局统计”口径。
-- [ ] 请求序号或AbortController阻止迟到响应覆盖当前页签/筛选；失败显示错误并标识旧数据过期，不能赋正常零值。
-- [ ] 未知意图承载弹窗持续挂载，不随query权限条件卸载；权限撤销仅停止新读取/操作。保护route leave和同路由query/hash/params update，覆盖AppView以fullPath为key的重新挂载；使用现有Vue/Router依赖实际行为探针验证，不新增测试框架或以源码字符串断言冒充行为测试。
-- [ ] reason必填，actionNo每次意图固定直至结果确定，等待项触发重试不承诺已发送；释放弹窗携带期望holder/generation/version，仅canRelease允许。未知状态提示查单核实，无force按钮。
-- [ ] 权限指令分别控制query/retry/release，详情单独校验既有订单权限；手机号不写URL、localStorage或复制明文。
-- [ ] 执行以下改动文件检查及构建，全仓类型既有错误与新文件错误分别记录：
+- [x] 先补后端HTTP契约测试覆盖前端消费字段/分页/操作返回，冻结TypeScript对应接口，不引入新的前端测试框架。
+- [x] 页面顶部四卡全局统计，三页签等待/占用/积压，表格显示maskedMobile、SPU、归属、单号、时长、状态。筛选结果不改变“全局统计”口径。
+- [x] 请求序号或AbortController阻止迟到响应覆盖当前页签/筛选；失败显示错误并标识旧数据过期，不能赋正常零值。
+- [x] 未知意图承载弹窗持续挂载，不随query权限条件卸载；权限撤销仅停止新读取/操作。保护route leave和同路由query/hash/params update，覆盖AppView以fullPath为key的重新挂载；使用现有Vue/Router依赖实际行为探针验证，不新增测试框架或以源码字符串断言冒充行为测试。
+- [x] reason必填，actionNo每次意图固定直至结果确定，等待项触发重试不承诺已发送；释放弹窗携带期望holder/generation/version，仅canRelease允许。未知状态提示查单核实，无force按钮。
+- [x] 权限指令分别控制query/retry/release，详情单独校验既有订单权限；手机号不写URL、localStorage或复制明文。
+- [x] 执行以下改动文件检查及构建，全仓类型既有错误与新文件错误分别记录：
 
 ```bash
 pnpm exec eslint src/api/order/rechargeFrequency.ts src/views/supplier/order/recharge-frequency
@@ -264,7 +266,8 @@ pnpm ts:check
 pnpm build:dev
 ```
 
-- [ ] 页面验收：筛选分页、SPU区分、三个权限组合、拒绝释放、旧响应、CAS冲突刷新、调用失败提示、统计超过200单仍准确。前端提交 `新增内部运营直充限频监控页面`；后端提交 `部署直充限频菜单与分离操作权限`。
+- [x] 前后端代码及自动化行为验证完成，前端提交 `新增内部运营直充限频监控页面`、后端提交 `部署直充限频菜单与分离操作权限`，以及两次积压筛选补齐提交；实际SQL聚合由真实MySQL测试验证，组件探针不替代实库。
+- [ ] 真实登录页面验收：筛选分页、SPU区分、三个权限组合、拒绝释放、旧响应、CAS冲突刷新、调用失败提示、统计超过200单仍准确；system菜单SQL实际首次/二次执行与角色授权记录。
 
 ## Task 8：存量迁移、全节点门禁与联调收尾
 
