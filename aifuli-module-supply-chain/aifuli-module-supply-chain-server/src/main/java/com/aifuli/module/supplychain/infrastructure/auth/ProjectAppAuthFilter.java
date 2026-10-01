@@ -26,7 +26,7 @@ import static com.aifuli.framework.common.exception.util.ServiceExceptionUtil.ex
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BUYER_AUTH_INVALID;
 
 /**
- * 项目应用统一认证入站过滤器：有界 body → 头与注册表 → 时间窗 → 凭证 → 摘要/HMAC → nonce →
+ * 项目应用统一认证入站过滤器：有界 body → 头与注册表 → 时间窗 → 凭证 → 摘要/HMAC → 能力 → nonce →
  * scope → 可信上下文，并在覆盖全部退出路径的 {@code finally} 中清理线程上下文。
  *
  * <p>认证阶段的可预期失败统一返回 HTTP 200 + {@code BUYER_AUTH_INVALID}；下游业务异常不在本类

@@ -22,7 +22,7 @@ public final class ProjectAuthOperations {
     /** scope 声明类型：决定签名串中哪个 scope 字段必填、产出哪型可信上下文。 */
     public enum ScopeType {
 
-        /** 无 scope 声明（SaaS 收银台回调），产出 ProjectContext。 */
+        /** 无用户/渠道 scope 声明；回调读取项目上下文，标准商品读取操作匹配的应用快照。 */
         NONE,
 
         /** 渠道编码声明（渠道命令/会员），产出 ChannelContext。 */

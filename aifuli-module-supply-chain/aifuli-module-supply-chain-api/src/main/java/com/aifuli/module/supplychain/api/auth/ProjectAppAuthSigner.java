@@ -134,7 +134,7 @@ public final class ProjectAppAuthSigner {
     }
 
     /**
-     * 客户端侧 scope 快速失败：必填 scope 缺失、非必填 scope 字段未置空或回调携带 scope 直接拒绝，
+     * 客户端侧 scope 快速失败：必填 scope 缺失、非必填 scope 字段未置空或 NONE 操作携带 scope 直接拒绝，
      * 与设计 §6.1 第 8 步「必填组非空；非必填组必须为空」对称，避免到服务端才报模糊的认证失败。
      */
     private static void validateScope(ProjectAuthOperations.Operation operation,
