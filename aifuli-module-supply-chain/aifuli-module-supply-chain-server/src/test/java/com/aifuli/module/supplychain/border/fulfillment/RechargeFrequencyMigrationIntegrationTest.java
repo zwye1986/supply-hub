@@ -990,9 +990,9 @@ class RechargeFrequencyMigrationIntegrationTest {
                     if (success) {
                         jdbc.update(
                                 "UPDATE sc_recharge_frequency_queue SET"
-                                    + " acquired_at=DATE_SUB(NOW(3),INTERVAL 10"
-                                    + " SECOND),minimum_hold_until=DATE_SUB(NOW(3),INTERVAL 5"
-                                    + " SECOND)");
+                                        + " acquired_at=DATE_SUB(NOW(3),INTERVAL 10"
+                                        + " SECOND),minimum_hold_until=DATE_SUB(NOW(3),INTERVAL 5"
+                                        + " SECOND)");
                         assertThat(RechargeFrequencyTimerIntegrationTest.dueWork(context)).isNull();
                     }
                     var next = context.getBean(RechargeFrequencyLifecycle.class).claim(tail);
@@ -1075,6 +1075,134 @@ class RechargeFrequencyMigrationIntegrationTest {
                             .isTrue();
                     assertThat(queueSnapshot(jdbc)).isEqualTo(queue);
                     assertThat(moneyAndEffects(jdbc)).isEqualTo(effects);
+                });
+    }
+
+    @Test
+    void frozenPreparedContinuationRejectsUnknownRiskOnDifferentOperation() {
+        withFixture(
+                (context, jdbc) -> {
+                    accept(context, "PREPARED-CONTINUATION-RISK");
+                    var op = RechargeFrequencyExecutionIntegrationTest.operations(jdbc).getFirst();
+                    var frequency = context.getBean(RechargeFrequencyLifecycle.class);
+                    var permit = frequency.claim(op);
+                    assertThat(frequency.markSendPossible(permit)).isTrue();
+                    long source =
+                            jdbc.queryForObject(
+                                    "SELECT id FROM sc_fulfillment_operation WHERE operation_no=?",
+                                    Long.class,
+                                    op);
+                    long next =
+                            RechargeFrequencyAcceptanceIntegrationTest.cloneRow(
+                                    jdbc,
+                                    "sc_fulfillment_operation",
+                                    source,
+                                    java.util.Map.of(
+                                            "operation_no",
+                                            "OP_PREPARED_CONTINUATION",
+                                            "sequence_no",
+                                            2,
+                                            "idempotency_key",
+                                            "PREPARED_CONTINUATION",
+                                            "status",
+                                            0,
+                                            "attempt_count",
+                                            0,
+                                            "version",
+                                            0));
+                    jdbc.update(
+                            "UPDATE sc_fulfillment_operation SET"
+                                    + " result_class=NULL,completed_at=NULL WHERE id=?",
+                            next);
+                    context.getBean(SupplierOrderLifecycle.class)
+                            .confirmTrustedRejectedAndContinue(
+                                    op,
+                                    fact(OperationOutcomeClass.REJECTED),
+                                    "CONTINUATION-TRUSTED-REJECT",
+                                    permit,
+                                    "OP_PREPARED_CONTINUATION");
+                    var migration = context.getBean(RechargeFrequencyMigrationService.class);
+                    // 没有额外风险的合法PREPARED continuation可复用冻结项，不重分配身份或发送资格。
+                    migration.migrate();
+                    long extra =
+                            RechargeFrequencyAcceptanceIntegrationTest.cloneRow(
+                                    jdbc,
+                                    "sc_fulfillment_operation",
+                                    next,
+                                    java.util.Map.of(
+                                            "operation_no",
+                                            "OP_PREPARED_OTHER_UNKNOWN",
+                                            "sequence_no",
+                                            3,
+                                            "idempotency_key",
+                                            "PREPARED_OTHER_UNKNOWN",
+                                            "status",
+                                            30,
+                                            "attempt_count",
+                                            1));
+                    jdbc.update(
+                            "UPDATE sc_fulfillment_operation SET result_class='RESULT_UNKNOWN'"
+                                    + " WHERE id=?",
+                            extra);
+                    var entry = jdbc.queryForMap("SELECT * FROM sc_recharge_frequency_entry");
+                    var queue = queueSnapshot(jdbc);
+                    byte[] digest =
+                            jdbc.queryForObject(
+                                    "SELECT mobile_digest FROM sc_recharge_frequency_queue",
+                                    byte[].class);
+                    var effects = moneyAndEffects(jdbc);
+                    var operations =
+                            jdbc.queryForList(
+                                    "SELECT id,operation_no,status,attempt_count,version FROM"
+                                            + " sc_fulfillment_operation ORDER BY id");
+                    assertThatThrownBy(migration::migrate)
+                            .hasMessageContaining("MULTIPLE_UNVERIFIED_OPERATIONS");
+                    assertThat(
+                                    jdbc.queryForObject(
+                                            "SELECT state FROM"
+                                                    + " sc_recharge_frequency_migration_gate",
+                                            String.class))
+                            .isEqualTo("CLOSED");
+                    assertThat(jdbc.queryForMap("SELECT * FROM sc_recharge_frequency_entry"))
+                            .isEqualTo(entry);
+                    assertThat(queueSnapshot(jdbc)).isEqualTo(queue);
+                    assertThat(
+                                    MessageDigest.isEqual(
+                                            digest,
+                                            jdbc.queryForObject(
+                                                    "SELECT mobile_digest FROM"
+                                                            + " sc_recharge_frequency_queue",
+                                                    byte[].class)))
+                            .isTrue();
+                    assertThat(
+                                    jdbc.queryForList(
+                                            "SELECT id,operation_no,status,attempt_count,version"
+                                                    + " FROM sc_fulfillment_operation ORDER BY id"))
+                            .isEqualTo(operations);
+                    assertThat(moneyAndEffects(jdbc)).isEqualTo(effects);
+                    // 迁移拒绝的全批无写已在上面单独确认；Handler可合法认领PREPARED，但CLOSED阻止SEND。
+                    assertThatThrownBy(
+                                    () ->
+                                            context.getBean(
+                                                            FulfillmentOperationExecuteHandler
+                                                                    .class)
+                                                    .handle(
+                                                            RechargeFrequencyExecutionIntegrationTest
+                                                                    .timer(),
+                                                            context.getBean(ObjectMapper.class)
+                                                                    .createObjectNode()
+                                                                    .put(
+                                                                            "operationNo",
+                                                                            "OP_PREPARED_CONTINUATION")))
+                            .hasMessageContaining("迁移发布门禁未就绪");
+                    assertThat(moneyAndEffects(jdbc)).isEqualTo(effects);
+                    assertThat(
+                                    context.getBean(
+                                                    RechargeFrequencyExecutionIntegrationTest
+                                                            .CountingExecutor.class)
+                                            .calls
+                                            .get())
+                            .isZero();
                 });
     }
 

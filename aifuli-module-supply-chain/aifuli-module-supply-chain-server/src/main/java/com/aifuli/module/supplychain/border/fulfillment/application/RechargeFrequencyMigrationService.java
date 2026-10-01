@@ -228,6 +228,11 @@ public class RechargeFrequencyMigrationService {
      * 已有可信密钥绑定也必须核验原关联和状态，不把冻结项存在解释为候选覆盖完成。 只读取原Request/Order/BO/Op及发送证据；不解析可变SKU、不重算身份或修改冻结序号。 设计见
      * docs/superpowers/specs/2026-09-30-direct-recharge-mobile-spu-frequency-design.md#101-迁移执行与核实边界。
      */
+    /**
+     * 复用冻结项前核实原Order/Request及全部充值操作，要求未决风险唯一且归属于activeOperation。
+     * 合法未发continuation可保持原身份、SPU和FIFO序号；其余操作的未知风险必须全批拒绝。 设计见
+     * docs/superpowers/specs/2026-09-30-direct-recharge-mobile-spu-frequency-design.md#101-迁移执行与核实边界。
+     */
     private void validateFrozenState(FulfillmentRequestDO request, RechargeFrequencyEntryDO entry) {
         String orderNo = entry.getOrderNo();
         var order = orders.selectById(request.getOrderId());
@@ -272,13 +277,16 @@ public class RechargeFrequencyMigrationService {
                         .stream()
                         .filter(RechargeFrequencyMigrationService::isRecharge)
                         .toList();
-        long risks =
+        var unresolvedRisks =
                 chargeOps.stream()
                         .filter(op -> !trustedTerminal(op) && !certainlyUnsent(op))
-                        .count();
-        // 当前冻结操作已可信结束时，同单剩余任何未核实副作用均不能被成功窗口掩盖。
-        // 全批拒绝保留CLOSED，不能通过READY后随窗口到期放行后续订单。
-        if (risks > 1 || (trustedTerminal(operation) && risks != 0)) {
+                        .toList();
+        long risks = unresolvedRisks.size();
+        // 未核实风险只能属于冻结当前Op且最多一个；不能由PREPARED continuation或成功窗口隐藏其他风险。
+        // Long主键按数值归属比较。可信终态当前Op不会进入风险集合，故任意剩余风险同样拒绝。
+        if (risks > 1
+                || unresolvedRisks.stream()
+                        .anyMatch(op -> !Objects.equals(op.getId(), operation.getId()))) {
             throw failure(orderNo, MULTIPLE_UNVERIFIED_OPERATIONS);
         }
         boolean success =
