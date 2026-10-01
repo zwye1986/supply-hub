@@ -195,7 +195,10 @@ class ProjectStandardAssetAuditIntegrationTest {
     @ValueSource(
             strings = {
                 "{\"assetType\":null,\"voucherCode\":\"second-secret\"}",
-                "{\"cardSecret\":[],\"voucherCode\":\"second-secret\"}"
+                "{\"cardSecret\":[],\"voucherCode\":\"second-secret\"}",
+                "{\"cardSecret\":null,\"cardSecret\":\"ignored\",\"voucherCode\":\"second-secret\"}",
+                "{\"assetType\":\"VOUCHER_URL\",\"assetType\":\"VOUCHER_CODE\",\"voucherCode\":\"second-secret\"}",
+                "{\"voucherCode\":\"second-secret\",\"unknown\":{\"nested\":1,\"nested\":1}}"
             })
     void invalidKnownPayloadFieldsCommitFailedAuditAndEraseAllPlaintext(String invalidPayload) {
         db.accepted(1, 3L, 2, "order", "VOUCHER_DELIVERY_TARGET");

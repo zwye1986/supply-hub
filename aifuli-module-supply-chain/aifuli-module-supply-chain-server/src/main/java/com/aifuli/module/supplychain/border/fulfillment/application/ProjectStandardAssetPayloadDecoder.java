@@ -63,7 +63,11 @@ public class ProjectStandardAssetPayloadDecoder {
         }
         try {
             JsonNode payload =
+                    // 仅本次reader拒绝任意层重复键，避免后值覆盖前值；不得修改共享mapper配置。
                     json.reader()
+                            .with(
+                                    com.fasterxml.jackson.core.JsonParser.Feature
+                                            .STRICT_DUPLICATE_DETECTION)
                             .with(
                                     com.fasterxml.jackson.databind.DeserializationFeature
                                             .FAIL_ON_TRAILING_TOKENS)

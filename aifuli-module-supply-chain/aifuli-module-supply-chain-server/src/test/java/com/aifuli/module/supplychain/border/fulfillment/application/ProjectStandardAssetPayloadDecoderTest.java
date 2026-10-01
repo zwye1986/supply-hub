@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.nio.charset.StandardCharsets;
 import java.util.stream.Stream;
@@ -151,6 +152,53 @@ class ProjectStandardAssetPayloadDecoderTest {
                             assertThat(failure.getMessage()).doesNotContain("delivery-secret");
                         });
         assertThat(plaintext).containsOnly((byte) 0);
+    }
+
+    /** 重复字段必须在局部reader解析时拒绝，不能让后值覆盖契约违规或改写共享mapper。 */
+    @ParameterizedTest
+    @ValueSource(
+            strings = {
+                "{\"cardSecret\":null,\"cardSecret\":\"ignored\",\"voucherCode\":\"delivery-secret\"}",
+                "{\"assetType\":\"VOUCHER_URL\",\"assetType\":\"VOUCHER_CODE\",\"voucherCode\":\"delivery-secret\"}",
+                "{\"voucherCode\":\"delivery-secret\",\"voucherCode\":\"delivery-secret\"}",
+                "{\"voucherCode\":\"delivery-secret\",\"unknown\":{\"nested\":1,\"nested\":2}}",
+                "{\"voucherCode\":\"delivery-secret\",\"unknown\":[{\"nested\":1,\"nested\":1}]}"
+            })
+    void rejectsDuplicateKeysAtEveryDepthWithoutChangingSharedMapper(String raw) throws Exception {
+        var plaintext = raw.getBytes(StandardCharsets.UTF_8);
+        var crypto = mock(EnvelopeCryptoPort.class);
+        when(crypto.decrypt(any(), any(), any())).thenReturn(plaintext);
+        var sharedMapper = new ObjectMapper();
+        var decoder =
+                new ProjectStandardAssetPayloadDecoder(
+                        crypto, sharedMapper, mock(SupplyChainDatabaseClock.class));
+        assertThatThrownBy(
+                        () ->
+                                decoder.decode(
+                                        FulfillmentAssetDO.builder()
+                                                .bOrderId(1L)
+                                                .sequenceNo(1)
+                                                .assetType("VOUCHER_CODE")
+                                                .lifecycleStatus((short) 10)
+                                                .build()))
+                .isInstanceOfSatisfying(
+                        ProjectStandardAssetQueryFailure.class,
+                        failure -> {
+                            assertThat(failure.reason())
+                                    .isEqualTo(ProjectStandardAssetAuditReason.PAYLOAD_FAILED);
+                            assertThat(failure.getCause())
+                                    .isInstanceOf(
+                                            com.fasterxml.jackson.core.JsonParseException.class);
+                            assertThat(failure.getMessage()).doesNotContain("delivery-secret");
+                        });
+        assertThat(plaintext).containsOnly((byte) 0);
+        assertThat(
+                        sharedMapper.isEnabled(
+                                com.fasterxml.jackson.core.JsonParser.Feature
+                                        .STRICT_DUPLICATE_DETECTION))
+                .isFalse();
+        assertThat(sharedMapper.readTree("{\"value\":1,\"value\":2}").get("value").intValue())
+                .isEqualTo(2);
     }
 
     private static Stream<Arguments> invalidKnownFields() {
