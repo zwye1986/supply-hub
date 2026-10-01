@@ -175,6 +175,36 @@ class RechargeFrequencyAdminContractTest {
                     .andExpect(jsonPath("$.code").value(400));
         } finally { TimeZone.setDefault(original); }
     }
+    /** 只验证HTTP参数与权限契约；真实整队列统计由RechargeFrequencyAdminIntegrationTest验证。 */
+    @Test void backlogGetAndSensitivePostForwardSameEntryFiltersWithShanghaiTime() throws Exception {
+        var original=TimeZone.getDefault();
+        var boundary=java.time.LocalDateTime.of(2026,10,1,10,0);
+        long epoch=boundary.atZone(com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock.DATABASE_ZONE).toInstant().toEpochMilli();
+        doReturn(new RechargeFrequencyMonitorQueryService.ObservedPage<>(new PageResult<>(List.of(),0L),boundary))
+                .when(query).page(anyLong(),any(),any(),any());
+        try {
+            for(String zone:List.of("UTC","Asia/Shanghai")) {
+                TimeZone.setDefault(TimeZone.getTimeZone(zone));clearInvocations(query);
+                mvc.perform(get(prefix+"/backlogs").param("buyerId",Long.toString(Long.MAX_VALUE)).param("projectId","202")
+                        .param("platformSpuCode","SPU").param("orderNo","ORDER").param("buyerOrderNo","BUYER-ORDER")
+                        .param("enqueuedFrom","2026-10-01T10:00:00").param("enqueuedTo","2026-10-01T10:00:00"))
+                        .andExpect(jsonPath("$.code").value(0)).andExpect(header().string("Cache-Control","no-store"));
+                mvc.perform(post(prefix+"/search").contentType("application/json").content(
+                        "{\"view\":\"BACKLOGS\",\"mobile\":\"13800138000\",\"buyerId\":\""+Long.MAX_VALUE+"\",\"projectId\":202,"
+                        +"\"platformSpuCode\":\"SPU\",\"orderNo\":\"ORDER\",\"buyerOrderNo\":\"BUYER-ORDER\",\"enqueuedFrom\":"+epoch+",\"enqueuedTo\":"+epoch+"}"))
+                        .andExpect(jsonPath("$.code").value(0)).andExpect(header().string("Cache-Control","no-store"));
+                var captor=org.mockito.ArgumentCaptor.forClass(RechargeFrequencyMonitorQueryService.Filter.class);
+                verify(query).page(eq(71L),eq(RechargeFrequencyMonitorQueryService.View.BACKLOGS),captor.capture(),isNull());
+                verify(query).page(eq(71L),eq(RechargeFrequencyMonitorQueryService.View.BACKLOGS),captor.capture(),eq("13800138000"));
+                assertThat(captor.getAllValues()).allSatisfy(filter->{
+                    assertThat(filter.buyerId()).isEqualTo(Long.MAX_VALUE);assertThat(filter.projectId()).isEqualTo(202L);
+                    assertThat(filter.platformSpuCode()).isEqualTo("SPU");assertThat(filter.orderNo()).isEqualTo("ORDER");
+                    assertThat(filter.buyerOrderNo()).isEqualTo("BUYER-ORDER");assertThat(filter.enqueuedFrom()).isEqualTo(boundary);
+                    assertThat(filter.enqueuedTo()).isEqualTo(boundary);assertThat(filter.pageNo()).isEqualTo(1);assertThat(filter.pageSize()).isEqualTo(20);
+                });
+            }
+        } finally {TimeZone.setDefault(original);}
+    }
     @Test void occupancyDisplayStatesRemainExplicitInHttpAndInternalProofFieldsAreHidden() throws Exception {
         var rows=new ArrayList<RechargeFrequencyMonitorQueryService.Occupancy>();
         var observed=java.time.LocalDateTime.of(2026,10,1,10,0);

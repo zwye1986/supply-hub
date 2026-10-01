@@ -83,11 +83,21 @@
         ORDER BY q.acquired_at,q.id LIMIT #{f.pageSize} OFFSET #{f.getOffset}
     </select>
     <select id="occupancyCount" resultType="long">SELECT COUNT(*) <include refid="occupancyFrom"/></select>
+    <!--
+        项级条件只通过同一WAITING项定位匹配队列；aggregate_waiting始终聚合整条队列的全部WAITING项，
+        不裁剪数量、最早时间或阈值判断。分页和total共用此片段，作用于筛选后的队列集合。
+        复杂聚合与关联EXISTS由既有XML表达，所有数据仅来自sc_*本地表。
+        设计见 docs/superpowers/specs/2026-09-30-direct-recharge-mobile-spu-frequency-design.md#7-管理端契约与权限。
+    -->
     <sql id="backlogFrom">
         FROM sc_recharge_frequency_queue q LEFT JOIN sc_platform_spu s ON s.id=q.platform_spu_id
         JOIN (SELECT queue_id,COUNT(*) waiting_count,MIN(enqueued_at) earliest_enqueued_at FROM sc_recharge_frequency_entry
              WHERE status=#{f.getWaitingStatus} GROUP BY queue_id) aggregate_waiting ON aggregate_waiting.queue_id=q.id
         WHERE 1=1 <include refid="queueFilters"/>
+        <if test="f.buyerId != null or f.projectId != null or f.orderNo != null or f.buyerOrderNo != null or f.enqueuedFrom != null or f.enqueuedTo != null">
+            AND EXISTS (SELECT 1 FROM sc_recharge_frequency_entry e LEFT JOIN sc_supply_chain_order o ON o.id=e.order_id
+                WHERE e.queue_id=q.id AND e.status=#{f.getWaitingStatus} <include refid="entryFilters"/>)
+        </if>
     </sql>
     <select id="backlogs" resultType="com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyMonitorQueryService$Backlog">
         SELECT q.id queue_id,q.mobile_masked masked_mobile,s.spu_code platform_spu_code,s.spu_name platform_spu_name,

@@ -12,6 +12,8 @@ import org.springframework.context.annotation.*;
 import org.springframework.jdbc.core.JdbcTemplate;
 import javax.sql.DataSource;
 import java.util.*;
+import java.time.LocalDateTime;
+import com.aifuli.module.supplychain.border.fulfillment.domain.RechargeFrequencyEntryStatus;
 import java.util.concurrent.*;
 import static org.assertj.core.api.Assertions.*;
 
@@ -254,6 +256,22 @@ class RechargeFrequencyAdminIntegrationTest {
         assertThat(monitor.statistics(7L).getOverThresholdQueueCount()).isEqualTo(206);
         var backlogs=monitor.page(7L,View.BACKLOGS,new Filter(3,100,null,null,null,null,null,null,null,null,null),null);
         assertThat(backlogs.page().getTotal()).isEqualTo(206); assertThat(backlogs.page().getList()).hasSize(6);
+        jdbc.update("UPDATE sc_recharge_frequency_entry SET buyer_id=?",99L);
+        jdbc.update("UPDATE sc_recharge_frequency_entry SET buyer_id=? WHERE id=?",77L,firstEntry());
+        var fullQueue=monitor.page(7L,View.BACKLOGS,new Filter(1,20,77L,null,null,null,null,null,null,null,null),null);
+        assertThat(fullQueue.page().getTotal()).isEqualTo(1);
+        assertThat(((Backlog)fullQueue.page().getList().getFirst()).getWaitingCount()).isEqualTo(207);
+        assertThat(((Backlog)fullQueue.page().getList().getFirst()).isOverThreshold()).isTrue();
+        jdbc.update("UPDATE sc_recharge_frequency_entry SET enqueued_at=?",LocalDateTime.of(2026,10,1,9,0));
+        var expectedQueues=jdbc.queryForList("SELECT id FROM sc_recharge_frequency_queue ORDER BY id",Long.class);
+        long earlierQueue=expectedQueues.removeLast();
+        jdbc.update("UPDATE sc_recharge_frequency_entry SET enqueued_at=? WHERE queue_id=?",LocalDateTime.of(2026,10,1,8,0),earlierQueue);
+        expectedQueues.add(1,earlierQueue);
+        var lastPage=monitor.page(7L,View.BACKLOGS,new Filter(3,100,99L,null,null,null,null,null,null,null,null),null);
+        assertThat(lastPage.page().getTotal()).isEqualTo(206);
+        assertThat(lastPage.page().getList()).extracting(row->((Backlog)row).getQueueId()).containsExactlyElementsOf(expectedQueues.subList(200,206));
+        assertThat(monitor.statistics(7L).getWaitingOrderCount()).isEqualTo(1437);
+        assertThat(monitor.statistics(7L).getOverThresholdQueueCount()).isEqualTo(206);
         // 迁移视图只能列未结束HOLDING+SEND_POSSIBLE；等待/已结束/未发送准备项不属于待核实发送风险。
         jdbc.update("UPDATE sc_recharge_frequency_entry SET status=20,completed_at=NOW() WHERE id=?",firstEntry());
         RechargeFrequencyAcceptanceIntegrationTest.cloneRow(jdbc,"sc_recharge_frequency_entry",firstEntry(),
@@ -273,6 +291,59 @@ class RechargeFrequencyAdminIntegrationTest {
         assertThat(waitingOwner.page().getTotal()).isZero();
         var json=context.getBean(com.fasterxml.jackson.databind.ObjectMapper.class).writeValueAsString(blocked);
         assertThat(json).contains("observedAt","\"list\"","\"total\":1").doesNotContain("mobileDigest","13800138000");
+    }
+    /** 项级条件只选队列，完整聚合不能被非匹配项目的更早等待项裁剪。设计见限频设计 §7。 */
+    @Test void backlogOwnerFiltersKeepWholeQueueAndNormalizeMobileWithSpu() {
+        long head=firstEntry(); long queue=queueLong("id");
+        var earliest=LocalDateTime.of(2026,10,1,9,0);
+        jdbc.update("UPDATE sc_recharge_frequency_entry SET buyer_id=?,project_id=?,enqueued_at=? WHERE id=?",11L,101L,earliest,head);
+        jdbc.update("UPDATE sc_recharge_frequency_entry SET buyer_id=?,project_id=?,enqueued_at=? WHERE id<>?",22L,202L,earliest.plusHours(1),head);
+        var monitor=context.getBean(RechargeFrequencyMonitorQueryService.class);
+        String spu=jdbc.queryForObject("SELECT spu_code FROM sc_platform_spu WHERE id=(SELECT platform_spu_id FROM sc_recharge_frequency_queue WHERE id=?)",String.class,queue);
+        var filter=new Filter(1,20,22L,202L,spu,null,null,null,null,null,null);
+        var result=monitor.page(7L,View.BACKLOGS,filter," +8613800138000 ");
+        assertThat(result.page().getTotal()).isEqualTo(1);
+        var row=(Backlog)result.page().getList().getFirst();
+        assertThat(row.getQueueId()).isEqualTo(queue);assertThat(row.getWaitingCount()).isEqualTo(2);
+        assertThat(row.getEarliestEnqueuedAt()).isEqualTo(earliest);assertThat(row.isOverThreshold()).isFalse();
+        assertThat(monitor.page(7L,View.BACKLOGS,filter,"13900139000").page().getTotal()).isZero();
+        assertThat(monitor.page(7L,View.BACKLOGS,new Filter(1,20,22L,202L,"OTHER-SPU",null,null,null,null,null,null),null).page().getTotal()).isZero();
+        var stats=monitor.statistics(7L);assertThat(stats.getWaitingOrderCount()).isEqualTo(2);assertThat(stats.getOverThresholdQueueCount()).isZero();
+        assertThatThrownBy(()->monitor.page(7L,View.BACKLOGS,filter,"invalid-mobile")).isInstanceOf(ServiceException.class)
+                .extracting("code").isEqualTo(SupplyChainErrorCodeConstants.FREQUENCY_PARAMETER_INVALID.getCode());
+        assertThatThrownBy(()->monitor.page(7L,View.BACKLOGS,new Filter(0,20,null,null,null,null,null,null,null,null,null),null)).isInstanceOf(ServiceException.class);
+        assertThatThrownBy(()->monitor.page(7L,View.BACKLOGS,new Filter(1,101,null,null,null,null,null,null,null,null,null),null)).isInstanceOf(ServiceException.class);
+        assertThatThrownBy(()->monitor.page(7L,View.BACKLOGS,new Filter(1,20,null,null,null,null,null,earliest.plusHours(1),earliest,null,null),null)).isInstanceOf(ServiceException.class);
+    }
+    /** 真实SQL验证多项条件必须在同一WAITING行命中，订单与时间边界不能跨行拼接。 */
+    @Test void backlogEntryPredicatesRequireSameWaitingRowAndInclusiveTimeBoundaries() {
+        long head=firstEntry();
+        var boundary=LocalDateTime.of(2026,10,1,10,0);
+        jdbc.update("UPDATE sc_recharge_frequency_entry SET buyer_id=?,project_id=?,enqueued_at=? WHERE id=?",11L,101L,boundary.minusHours(1),head);
+        jdbc.update("UPDATE sc_recharge_frequency_entry SET buyer_id=?,project_id=?,enqueued_at=? WHERE id<>?",22L,202L,boundary,head);
+        var tail=jdbc.queryForMap("SELECT e.order_no,o.buyer_order_no FROM sc_recharge_frequency_entry e JOIN sc_supply_chain_order o ON o.id=e.order_id WHERE e.id<>?",head);
+        String order=(String)tail.get("order_no");String buyerOrder=(String)tail.get("buyer_order_no");
+        var mapper=context.getBean(com.aifuli.module.supplychain.border.fulfillment.dal.mysql.RechargeFrequencyMonitorMapper.class);
+        var matching=new Filter(1,20,22L,202L,null,order,buyerOrder,boundary,boundary,null,boundary);
+        assertThat(mapper.backlogCount(new Filter(1,20,11L,202L,null,order,buyerOrder,boundary,boundary,null,boundary))).isZero();
+        assertThat(mapper.backlogCount(new Filter(1,20,22L,202L,null,order,"NONMATCHING",boundary,boundary,null,boundary))).isZero();
+        assertThat(mapper.backlogCount(new Filter(1,20,22L,202L,null,order,buyerOrder,boundary.plusSeconds(1),null,null,boundary))).isZero();
+        assertThat(mapper.backlogCount(new Filter(1,20,22L,202L,null,order,buyerOrder,null,boundary.minusSeconds(1),null,boundary))).isZero();
+        assertThat(mapper.backlogCount(matching)).isEqualTo(1);assertThat(mapper.backlogs(matching).getFirst().getWaitingCount()).isEqualTo(2);
+        var monitor=context.getBean(RechargeFrequencyMonitorQueryService.class);
+        assertThat(monitor.page(7L,View.BACKLOGS,matching,null).page().getTotal()).isEqualTo(1);
+    }
+    /** 占用者和已结束项的匹配不能替代WAITING项；队列仍有不匹配等待项时也须排除。 */
+    @Test void backlogFiltersExcludeHolderAndFinishedOnlyMatches() {
+        var permit=frequency.claim(operations().getFirst());
+        jdbc.update("UPDATE sc_recharge_frequency_entry SET buyer_id=?,project_id=? WHERE id=?",11L,101L,permit.entryId());
+        jdbc.update("UPDATE sc_recharge_frequency_entry SET buyer_id=?,project_id=? WHERE id<>?",22L,202L,permit.entryId());
+        var mapper=context.getBean(com.aifuli.module.supplychain.border.fulfillment.dal.mysql.RechargeFrequencyMonitorMapper.class);
+        var filter=new Filter(1,20,11L,101L,null,null,null,null,null,null,LocalDateTime.of(2026,10,1,10,0));
+        assertThat(mapper.backlogCount(filter)).isZero();assertThat(mapper.backlogs(filter)).isEmpty();
+        jdbc.update("UPDATE sc_recharge_frequency_entry SET status=?,completed_at=NOW() WHERE id=?",RechargeFrequencyEntryStatus.FINISHED.getCode(),permit.entryId());
+        assertThat(mapper.backlogCount(filter)).isZero();assertThat(mapper.backlogs(filter)).isEmpty();
+        assertThat(mapper.backlogCount(new Filter(1,20,22L,202L,null,null,null,null,null,null,filter.observedAt()))).isEqualTo(1);
     }
     private Occupancy occupancy() {
         return (Occupancy)context.getBean(RechargeFrequencyMonitorQueryService.class).page(7L,View.OCCUPANCIES,

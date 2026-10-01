@@ -45,10 +45,6 @@ public class RechargeFrequencyMonitorQueryService {
                 || filter.enqueuedFrom() != null && filter.enqueuedTo() != null && filter.enqueuedFrom().isAfter(filter.enqueuedTo())) {
             throw exception(FREQUENCY_PARAMETER_INVALID);
         }
-        // TODO: docs/superpowers/specs/2026-09-30-direct-recharge-mobile-spu-frequency-design.md#7-管理端契约与权限
-        // 积压项级筛选聚合口径待用户确认；先显式拒绝，不能静默忽略或猜测全队列/局部数。
-        if (view == View.BACKLOGS && (filter.buyerId()!=null || filter.projectId()!=null || filter.orderNo()!=null
-                || filter.buyerOrderNo()!=null || filter.enqueuedFrom()!=null || filter.enqueuedTo()!=null)) { throw exception(FREQUENCY_PARAMETER_INVALID); }
         byte[] digest = null;
         if (mobile != null) {
             if (FulfillmentTargetFields.normalizeMobile(mobile) == null) { throw exception(FREQUENCY_PARAMETER_INVALID); }
