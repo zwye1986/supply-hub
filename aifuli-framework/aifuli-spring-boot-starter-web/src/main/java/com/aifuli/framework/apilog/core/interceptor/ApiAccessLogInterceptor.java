@@ -36,6 +36,10 @@ public class ApiAccessLogInterceptor implements HandlerInterceptor {
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
+        // 内部限频响应包括参数/权限错误均禁止缓存，见 docs/superpowers/specs/2026-09-30-direct-recharge-mobile-spu-frequency-design.md#7-管理端契约与权限。
+        if (ApiAccessLogPathUtils.isRechargeFrequencyAdminPath(request.getRequestURI(), request.getContextPath())) {
+            response.setHeader("Cache-Control", "no-store");
+        }
         // 记录 HandlerMethod，提供给 ApiAccessLogFilter 使用
         HandlerMethod handlerMethod = handler instanceof HandlerMethod ? (HandlerMethod) handler : null;
         if (handlerMethod != null) {
@@ -44,16 +48,18 @@ public class ApiAccessLogInterceptor implements HandlerInterceptor {
 
         // 打印 request 日志
         if (!SpringUtils.isProd()) {
-            Map<String, String> queryString = ServletUtils.getParamMap(request);
-            String requestBody = ServletUtils.getBody(request);
             if (ApiAccessLogPathUtils.isSensitivePlatformPath(request.getRequestURI(), request.getContextPath())) {
                 // 开放回调、内部 RPC 与项目应用认证可能包含凭据或签名正文，普通日志一律省略参数。
                 log.info("[preHandle][开始请求 URL({}) 参数已省略]", request.getRequestURI());
-            } else if (CollUtil.isEmpty(queryString) && StrUtil.isEmpty(requestBody)) {
-                log.info("[preHandle][开始请求 URL({}) 无参数]", request.getRequestURI());
             } else {
-                log.info("[preHandle][开始请求 URL({}) 参数({})]", request.getRequestURI(),
-                        StrUtil.blankToDefault(requestBody, queryString.toString()));
+                Map<String, String> queryString = ServletUtils.getParamMap(request);
+                String requestBody = ServletUtils.getBody(request);
+                if (CollUtil.isEmpty(queryString) && StrUtil.isEmpty(requestBody)) {
+                    log.info("[preHandle][开始请求 URL({}) 无参数]", request.getRequestURI());
+                } else {
+                    log.info("[preHandle][开始请求 URL({}) 参数({})]", request.getRequestURI(),
+                            StrUtil.blankToDefault(requestBody, queryString.toString()));
+                }
             }
             // 计时
             StopWatch stopWatch = new StopWatch();

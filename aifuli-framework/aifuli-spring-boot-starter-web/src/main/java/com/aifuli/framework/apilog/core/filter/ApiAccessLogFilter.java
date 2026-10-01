@@ -10,6 +10,7 @@ import cn.hutool.core.util.StrUtil;
 import com.aifuli.framework.apilog.core.annotation.ApiAccessLog;
 import com.aifuli.framework.apilog.core.enums.OperateTypeEnum;
 import com.aifuli.framework.apilog.core.util.ApiAccessLogPathUtils;
+import com.aifuli.framework.apilog.core.util.SensitiveExceptionLogUtils;
 import com.aifuli.framework.common.biz.infra.logger.ApiAccessLogCommonApi;
 import com.aifuli.framework.common.biz.infra.logger.dto.ApiAccessLogCreateReqDTO;
 import com.aifuli.framework.common.exception.enums.GlobalErrorCodeConstants;
@@ -50,6 +51,9 @@ import static com.aifuli.framework.common.util.json.JsonUtils.toJsonString;
 @Slf4j
 public class ApiAccessLogFilter extends ApiRequestFilter {
 
+    private static final long SENSITIVE_LOG_FAILURE_SAMPLE_INTERVAL=100L;
+    private static final java.util.concurrent.atomic.AtomicLong SENSITIVE_LOG_FAILURES=new java.util.concurrent.atomic.AtomicLong();
+
     private static final String[] SANITIZE_KEYS = new String[]{"password", "token", "accessToken", "refreshToken"};
 
     private final String applicationName;
@@ -68,9 +72,13 @@ public class ApiAccessLogFilter extends ApiRequestFilter {
             throws ServletException, IOException {
         // 获得开始时间
         LocalDateTime beginTime = LocalDateTime.now();
-        // 提前获得参数，避免 XssFilter 过滤处理
-        Map<String, String> queryString = ServletUtils.getParamMap(request);
-        String requestBody = ServletUtils.getBody(request);
+        // 敏感限频正文无需平台日志读取；先判断路径，确保正文仍可供MVC绑定。
+        // 设计见 docs/superpowers/specs/2026-09-30-direct-recharge-mobile-spu-frequency-design.md#7-管理端契约与权限。
+        boolean sensitive = isFrequencyRequest(request);
+        if (sensitive) { response.setHeader("Cache-Control", "no-store"); }
+        // 普通路径继续提前获得参数，避免 XssFilter 过滤处理。
+        Map<String, String> queryString = sensitive ? Map.of() : ServletUtils.getParamMap(request);
+        String requestBody = sensitive ? null : ServletUtils.getBody(request);
 
         try {
             // 继续过滤器
@@ -94,6 +102,15 @@ public class ApiAccessLogFilter extends ApiRequestFilter {
             }
             apiAccessLogApi.createApiAccessLogAsync(accessLog);
         } catch (Throwable th) {
+            if (isFrequencyRequest(request)) {
+                long failures=SENSITIVE_LOG_FAILURES.incrementAndGet();
+                if (failures==1 || failures % SENSITIVE_LOG_FAILURE_SAMPLE_INTERVAL==0) {
+                    log.error("[限频管理访问日志存储失败] failureCount={}, types={}, traceId={}, safeStack={}", failures,
+                            SensitiveExceptionLogUtils.types(th), TracerUtils.getTraceId(), SensitiveExceptionLogUtils.stack(th));
+                }
+                // 平台访问日志兜底不覆盖已确定业务结果；业务操作审计由供应链同事务严格保存。
+                return;
+            }
             log.error("[createApiAccessLog][url({}) log({}) 发生异常]", request.getRequestURI(), toJsonString(accessLog), th);
         }
     }
@@ -119,7 +136,7 @@ public class ApiAccessLogFilter extends ApiRequestFilter {
             accessLog.setResultCode(result.getCode()).setResultMsg(result.getMsg());
         } else if (ex != null) {
             accessLog.setResultCode(GlobalErrorCodeConstants.INTERNAL_SERVER_ERROR.getCode())
-                    .setResultMsg(ExceptionUtil.getRootCauseMessage(ex));
+                    .setResultMsg(isFrequencyRequest(request) ? SensitiveExceptionLogUtils.types(ex) : ExceptionUtil.getRootCauseMessage(ex));
         } else {
             accessLog.setResultCode(GlobalErrorCodeConstants.SUCCESS.getCode()).setResultMsg("");
         }
@@ -160,6 +177,10 @@ public class ApiAccessLogFilter extends ApiRequestFilter {
             accessLog.setOperateModule(operateModule).setOperateName(operateName).setOperateType(operateType.getType());
         }
         return true;
+    }
+
+    private static boolean isFrequencyRequest(HttpServletRequest request) {
+        return ApiAccessLogPathUtils.isRechargeFrequencyAdminPath(request.getRequestURI(), request.getContextPath());
     }
 
     // ========== 解析 @ApiAccessLog、@Swagger 注解  ==========

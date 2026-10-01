@@ -8,6 +8,8 @@ import cn.hutool.core.util.StrUtil;
 public final class ApiAccessLogPathUtils {
 
     private static final String[] SENSITIVE_PLATFORM_PATH_PREFIXES = {
+            "/supply-chain/recharge-frequency/",
+            "/admin-api/supply-chain/recharge-frequency/",
             "/trade/order/wusheng/",
             "/app-api/trade/order/wusheng/",
             "/open/mall/v1/",
@@ -59,6 +61,15 @@ public final class ApiAccessLogPathUtils {
             }
         }
         return false;
+    }
+
+    /** 内部限频管理正文与异常原因均可能包含手机号，见
+     * {@code docs/superpowers/specs/2026-09-30-direct-recharge-mobile-spu-frequency-design.md#7-管理端契约与权限}。 */
+    public static boolean isRechargeFrequencyAdminPath(String requestUri, String contextPath) {
+        if (requestUri == null) { return false; }
+        String path = stripLeadingContextPath(requestUri, contextPath);
+        return path.startsWith("/supply-chain/recharge-frequency/")
+                || path.startsWith("/admin-api/supply-chain/recharge-frequency/");
     }
 
     private static String stripLeadingContextPath(String requestUri, String contextPath) {

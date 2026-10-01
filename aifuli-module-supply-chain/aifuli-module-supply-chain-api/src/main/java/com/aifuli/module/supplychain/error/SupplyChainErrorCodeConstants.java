@@ -203,10 +203,25 @@ public interface SupplyChainErrorCodeConstants {
     ErrorCode PROJECT_APP_CONFIRMATION_REQUIRED = error(1_050_001_149, "吊销项目应用凭证须确认并填写原因");
     ErrorCode PROJECT_APP_CREDENTIAL_STATE_INVALID = error(1_050_001_150, "项目应用凭证状态异常");
 
+    ErrorCode FREQUENCY_RESOURCE_NOT_FOUND = error(1_050_001_151, "限频资源不存在");
+    ErrorCode FREQUENCY_VERSION_CONFLICT = error(1_050_001_152, "限频资源版本或持有者已变化");
+    ErrorCode FREQUENCY_STATE_INVALID = error(1_050_001_153, "限频状态不允许该操作");
+    ErrorCode FREQUENCY_RELEASE_UNSAFE = error(1_050_001_154, "尚无可信释放依据");
+    ErrorCode FREQUENCY_SUCCESS_WINDOW = error(1_050_001_155, "成功占用最短窗口尚未达到");
+    ErrorCode FREQUENCY_ACTION_CONFLICT = error(1_050_001_156, "管理操作幂等号已用于其他请求");
+    ErrorCode FREQUENCY_PARAMETER_INVALID = error(1_050_001_157, "限频管理参数不正确");
+
     /** 订单详情不可用只作为成功响应中的详情标记，不作为 CommonResult 失败码。 */
     String DETAIL_UNAVAILABLE = "DETAIL_UNAVAILABLE";
 
     Map<Integer, RetryDirective> RETRY_DIRECTIVES = Map.ofEntries(
+            entry(FREQUENCY_RESOURCE_NOT_FOUND, RetryDirective.DO_NOT_RETRY),
+            entry(FREQUENCY_VERSION_CONFLICT, RetryDirective.DO_NOT_RETRY),
+            entry(FREQUENCY_STATE_INVALID, RetryDirective.DO_NOT_RETRY),
+            entry(FREQUENCY_RELEASE_UNSAFE, RetryDirective.DO_NOT_RETRY),
+            entry(FREQUENCY_SUCCESS_WINDOW, RetryDirective.DO_NOT_RETRY),
+            entry(FREQUENCY_ACTION_CONFLICT, RetryDirective.DO_NOT_RETRY),
+            entry(FREQUENCY_PARAMETER_INVALID, RetryDirective.DO_NOT_RETRY),
             entry(BUYER_AUTH_INVALID, RetryDirective.DO_NOT_RETRY),
             entry(BUYER_NOT_FOUND, RetryDirective.DO_NOT_RETRY),
             entry(BUYER_DISABLED, RetryDirective.RETRY_SAME_KEY_AFTER_CONDITION_CHANGE),
