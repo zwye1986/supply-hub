@@ -6,6 +6,7 @@
 ALTER TABLE sc_standard_pricing_quote
   DROP KEY idx_sc_standard_quote_expiry,
   DROP COLUMN buyer_user_id,
+  MODIFY COLUMN quote_token VARCHAR(64) NOT NULL COMMENT '随机内部追踪标识；不作为HTTP请求字段，报价永久键为项目+采购商订单号',
   MODIFY COLUMN expires_at DATETIME(3) NULL COMMENT '历史报价失效时间，Asia/Shanghai；永久冻结报价为空且不作为本流程下单条件',
   ADD UNIQUE KEY uk_sc_standard_quote_project_order (project_id, buyer_order_no),
   COMMENT = '标准商品项目订单首次永久冻结报价';

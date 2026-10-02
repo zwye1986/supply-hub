@@ -176,6 +176,8 @@ public class StandardPricingQuoteService {
         if (quoteMapper.updateById(quote) != 1) {
             throw new IllegalStateException("pricing quote consumption lost update");
         }
+        log.info("消费项目订单首次永久冻结报价 quoteId={} orderId={} buyerOrderNo={} quantity={}",
+                quote.getId(), orderId, quote.getBuyerOrderNo(), quote.getQuantity());
     }
 
     /** 行锁读取并校验项目永久键唯一报价的绑定一致性与状态；缺报价按稳定业务错误拒绝。 */

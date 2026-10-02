@@ -565,9 +565,9 @@ databaseChangeLog:
               WHERE q.status = 'CONSUMED'
                 AND (o.id IS NULL OR o.pricing_quote_id IS NULL OR o.pricing_quote_id <> q.id
                    OR o.order_type <> 'CARD' OR o.buyer_id <> q.buyer_id OR o.project_id <> q.project_id
-                   OR o.buyer_order_no <> q.buyer_order_no
+                   OR o.buyer_order_no IS NULL OR o.buyer_order_no <> q.buyer_order_no
                    OR o.platform_sku_id IS NULL OR o.platform_sku_id <> q.platform_sku_id
-                   OR o.quantity <> q.quantity
+                   OR o.quantity IS NULL OR o.quantity <> q.quantity
                    OR o.sales_unit_price_cents IS NULL OR o.sales_unit_price_cents <> q.sales_unit_price_cents
                    OR o.product_subtotal_cents IS NULL OR o.product_subtotal_cents <> q.product_subtotal_cents
                    OR o.service_fee_cents IS NULL OR o.service_fee_cents <> q.service_fee_cents
