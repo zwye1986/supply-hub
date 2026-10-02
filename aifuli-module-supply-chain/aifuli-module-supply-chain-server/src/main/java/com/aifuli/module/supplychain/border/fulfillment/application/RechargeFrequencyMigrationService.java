@@ -94,11 +94,15 @@ public class RechargeFrequencyMigrationService {
     private final ObjectProvider<DeploymentQuiescenceEvidencePort> deploymentEvidence;
     private final Environment environment;
     private final RechargeFrequencyMigrationGateService migrationGate;
+    private final StandardOrderIdentityMigrationService standardOrderIdentityMigration;
 
     /**
      * 离线完整预检及原子迁移；证据在预检前和写入前重新核验，任何失败均不产生部分队列写入。 已冻结项优先复用，历史展示账号、buyerUserId、普通审计时间均不得作为身份或发送证据。
+     * 标准订单身份离线覆盖（052 后）在门禁关闭后、候选预检前同事务执行：回执格式 2 重建与
+     * 限购手机号快照覆盖、限频队列写入与最终 READY 同事务提交，任意失败全回滚。
      * 设计见
-     * docs/superpowers/specs/2026-09-30-direct-recharge-mobile-spu-frequency-design.md#101-迁移执行与核实边界。
+     * docs/superpowers/specs/2026-09-30-direct-recharge-mobile-spu-frequency-design.md#101-迁移执行与核实边界、
+     * docs/superpowers/specs/2026-10-02-standard-acceptance-project-key-design.md#51-离线应用迁移与实际手机号覆盖。
      */
     @Transactional(
             transactionManager = "supplyChainTransactionManager",
@@ -108,6 +112,10 @@ public class RechargeFrequencyMigrationService {
         try {
             return migrateInternal();
         } catch (MigrationException exception) {
+            throw exception;
+        } catch (StandardOrderIdentityMigrationService.MigrationException exception) {
+            // 标准订单身份离线覆盖的安全错误（关联断裂/解密失败/快照矛盾）原样透传：
+            // 保留单号与安全错误码供离线核实，不得被 STORAGE_FAILURE 掩盖语义。
             throw exception;
         } catch (RuntimeException exception) {
             throw failure(null, STORAGE_FAILURE, exception);
@@ -120,6 +128,12 @@ public class RechargeFrequencyMigrationService {
             throw failure(null, IDENTITY_KEY_INVALID);
         }
         boolean verifiedIdentityBinding = migrationGate.hasVerifiedIdentityBinding();
+        // 052 后标准订单身份离线覆盖先于限频候选预检：同一供应链事务，任意解密/审计/关联失败
+        // 全批回滚且门禁保持已提交 CLOSED；幂等重跑只校验已重建绑定后跳过。
+        var identityReport = standardOrderIdentityMigration.migrateIdentitySnapshots();
+        log.info("[直充限频迁移] 标准订单身份离线覆盖完成 rebuilt={}, rebuiltSkipped={}, unverifiable={}",
+                identityReport.rebuiltCount(), identityReport.rebuiltSkipped(),
+                identityReport.unverifiableSkipped());
         log.info("[直充限频迁移] 开始全候选预检");
         var now = clock.now();
         var candidates = new ArrayList<Candidate>();

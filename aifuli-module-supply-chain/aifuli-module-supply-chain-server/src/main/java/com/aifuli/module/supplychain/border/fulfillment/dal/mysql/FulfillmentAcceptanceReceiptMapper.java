@@ -79,4 +79,27 @@ public interface FulfillmentAcceptanceReceiptMapper extends BaseMapperX<Fulfillm
                 .eq(FulfillmentAcceptanceReceiptDO::getId, id)
                 .eq(FulfillmentAcceptanceReceiptDO::getStatus, AcceptanceReceiptStatus.PROCESSING.getCode()));
     }
+
+    /**
+     * 离线身份迁移专用：把可信历史回执重建为格式 2（无用户指纹）并固化受理冻结绑定
+     * （平台SKU、目标Schema版本、报价凭证）。仅由
+     * StandardOrderIdentityMigrationService 在全批验证通过后的供应链事务内调用，
+     * 与受理路径的 markAccepted/CAS 无并发交集。
+     */
+    default int rebuildIdentityBindings(Long id, Long platformSkuId, Integer targetSchemaVersion,
+                                        Long pricingQuoteId, byte[] invariantFingerprint,
+                                        byte[] requestFingerprint, LocalDateTime updatedAt) {
+        return update(null, new LambdaUpdateWrapper<FulfillmentAcceptanceReceiptDO>()
+                .set(FulfillmentAcceptanceReceiptDO::getPlatformSkuId, platformSkuId)
+                .set(FulfillmentAcceptanceReceiptDO::getTargetSchemaVersion, targetSchemaVersion)
+                .set(FulfillmentAcceptanceReceiptDO::getPricingQuoteId, pricingQuoteId)
+                .set(FulfillmentAcceptanceReceiptDO::getInvariantFingerprint, invariantFingerprint)
+                .set(FulfillmentAcceptanceReceiptDO::getRequestFingerprint, requestFingerprint)
+                .set(FulfillmentAcceptanceReceiptDO::getFingerprintVersion,
+                        (short) 2)
+                .set(FulfillmentAcceptanceReceiptDO::getUpdatedAt, updatedAt)
+                .eq(FulfillmentAcceptanceReceiptDO::getId, id)
+                // 只重建格式 0 历史回执；并发已被重建的行（格式 2）不重复覆盖。
+                .ne(FulfillmentAcceptanceReceiptDO::getFingerprintVersion, (short) 2));
+    }
 }

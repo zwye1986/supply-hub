@@ -791,6 +791,7 @@ class FulfillmentAcceptanceIntegrationTest {
             com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyRecoveryService.class,
             com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyWakeHandler.class,
             com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyQueryService.class,
+            com.aifuli.module.supplychain.border.fulfillment.application.StandardOrderIdentityMigrationService.class,
             com.aifuli.module.supplychain.infrastructure.timer.DatabasePersistentTimer.class,
             com.aifuli.module.supplychain.infrastructure.timer.PersistentTimerHandlerRegistry.class})
     static class TestConfiguration {

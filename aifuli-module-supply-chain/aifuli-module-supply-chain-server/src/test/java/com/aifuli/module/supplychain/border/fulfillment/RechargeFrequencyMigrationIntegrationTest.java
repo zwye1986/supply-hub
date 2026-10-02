@@ -8,6 +8,7 @@ import com.aifuli.module.supplychain.border.fulfillment.application.FulfillmentO
 import com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyExecutionPermit;
 import com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyLifecycle;
 import com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyMigrationService;
+import com.aifuli.module.supplychain.border.fulfillment.application.StandardOrderIdentityMigrationService;
 import com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyMonitorQueryService;
 import com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyQueryService;
 import com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyRecoveryService;
@@ -617,6 +618,12 @@ class RechargeFrequencyMigrationIntegrationTest {
                                     + " result_order_id=?",
                             otherProject,
                             orderIds.get(1));
+                    // 项目转移后报价归属同步（身份离线迁移按总单完整关联核验报价归属，
+                    // 见设计 §5.1：报价 project 必须与订单/回执一致，否则 HALT）。
+                    jdbc.update(
+                            "UPDATE sc_standard_pricing_quote SET project_id=? WHERE consumed_order_id=?",
+                            otherProject,
+                            orderIds.get(1));
                     jdbc.update(
                             "UPDATE sc_b_order SET supplier_id=999999 WHERE order_id=?",
                             orderIds.get(1));
@@ -642,6 +649,13 @@ class RechargeFrequencyMigrationIntegrationTest {
                             orderIds.get(2));
                     jdbc.update(
                             "UPDATE sc_fulfillment_request SET platform_sku_id=? WHERE order_id=?",
+                            otherSku,
+                            orderIds.get(2));
+                    // 换绑 SKU 后回执受理冻结身份同步（身份离线迁移核验回执 platformSku 与
+                    // 请求/订单一致，见设计 §5.1）。
+                    jdbc.update(
+                            "UPDATE sc_fulfillment_acceptance_receipt SET platform_sku_id=? WHERE"
+                                    + " result_order_id=?",
                             otherSku,
                             orderIds.get(2));
                     clearFrequency(jdbc);
@@ -1269,11 +1283,11 @@ class RechargeFrequencyMigrationIntegrationTest {
     }
 
     @Configuration(proxyBeanMethods = false)
-    @Import(RechargeFrequencyMigrationService.class)
+    @Import({RechargeFrequencyMigrationService.class, StandardOrderIdentityMigrationService.class})
     static class MissingEvidenceConfiguration {}
 
     @Configuration(proxyBeanMethods = false)
-    @Import(RechargeFrequencyMigrationService.class)
+    @Import({RechargeFrequencyMigrationService.class, StandardOrderIdentityMigrationService.class})
     static class MigrationConfiguration {
         @org.springframework.context.annotation.Bean
         static org.springframework.beans.factory.config.BeanFactoryPostProcessor

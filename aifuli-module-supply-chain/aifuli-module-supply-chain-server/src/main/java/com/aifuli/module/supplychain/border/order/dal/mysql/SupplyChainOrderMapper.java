@@ -72,6 +72,24 @@ public interface SupplyChainOrderMapper extends BaseMapperX<SupplyChainOrderDO> 
                 .eq(SupplyChainOrderDO::getOrderNo, orderNo));
     }
 
+    /**
+     * 离线身份迁移专用：回填总订单格式 2 无用户指纹/业务摘要与真实履约目标账户类型、
+     * 规范化 MOBILE 手机快照。仅由 StandardOrderIdentityMigrationService 在全批验证通过后的
+     * 供应链事务内调用；不触碰订单状态、资金、频率冻结等任何其他列。
+     * 设计见 docs/superpowers/specs/2026-10-02-standard-acceptance-project-key-design.md#51-离线应用迁移与实际手机号覆盖。
+     */
+    default int rebuildIdentitySnapshot(Long id, byte[] requestFingerprint, byte[] buyerOrderDigest,
+                                         String fulfillmentAccountType, String fulfillmentAccountValue,
+                                         LocalDateTime updatedAt) {
+        return update(null, new LambdaUpdateWrapper<SupplyChainOrderDO>()
+                .set(SupplyChainOrderDO::getRequestFingerprint, requestFingerprint)
+                .set(SupplyChainOrderDO::getBuyerOrderDigest, buyerOrderDigest)
+                .set(SupplyChainOrderDO::getFulfillmentAccountType, fulfillmentAccountType)
+                .set(SupplyChainOrderDO::getFulfillmentAccountValue, fulfillmentAccountValue)
+                .set(SupplyChainOrderDO::getUpdatedAt, updatedAt)
+                .eq(SupplyChainOrderDO::getId, id));
+    }
+
     default SupplyChainOrderDO selectByBuyerOrder(Long buyerId, String buyerOrderNo) {
         return selectOne(SupplyChainOrderDO::getBuyerId, buyerId,
                 SupplyChainOrderDO::getBuyerOrderNo, buyerOrderNo);
