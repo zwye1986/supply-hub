@@ -1,0 +1,17 @@
+cluster.name: "elk-cluster"
+node.name: "elk-node-01"
+network.host: 0.0.0.0
+http.port: 9200
+transport.port: 9300
+
+# 单节点模式
+discovery.type: "single-node"
+
+# 禁用安全认证（测试环境免密直连）
+xpack.security.enabled: false
+xpack.security.enrollment.enabled: false
+xpack.security.http.ssl.enabled: false
+xpack.security.transport.ssl.enabled: false
+
+# 锁定内存防 swap 抖动
+bootstrap.memory_lock: true
