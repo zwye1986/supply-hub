@@ -211,6 +211,11 @@ public interface SupplyChainErrorCodeConstants {
     ErrorCode ASSET_QUERY_ORDER_TERMINATED =
             error(1_050_001_160, "订单已失败或取消，请通过查单接口获取订单结果");
 
+    // 标准商品缺项目订单首次冻结报价的可条件重试稳定错误：内部首次报价形成后按原项目键重新受理即可。
+    // 设计见 docs/superpowers/specs/2026-10-02-standard-internal-quote-freeze-design.md#3-受理内查取与唯一消费。
+    ErrorCode STANDARD_PRICING_QUOTE_MISSING =
+            error(1_050_001_161, "标准商品缺少项目订单首次冻结报价");
+
     ErrorCode FREQUENCY_RESOURCE_NOT_FOUND = error(1_050_001_151, "限频资源不存在");
     ErrorCode FREQUENCY_VERSION_CONFLICT = error(1_050_001_152, "限频资源版本或持有者已变化");
     ErrorCode FREQUENCY_STATE_INVALID = error(1_050_001_153, "限频状态不允许该操作");
@@ -341,6 +346,7 @@ public interface SupplyChainErrorCodeConstants {
             entry(ASSET_QUERY_UNSUPPORTED_PRODUCT_TYPE, RetryDirective.DO_NOT_RETRY),
             entry(ASSET_QUERY_ORDER_NOT_ACCEPTED, RetryDirective.DO_NOT_RETRY),
             entry(ASSET_QUERY_ORDER_TERMINATED, RetryDirective.DO_NOT_RETRY),
+            entry(STANDARD_PRICING_QUOTE_MISSING, RetryDirective.RETRY_SAME_KEY_AFTER_CONDITION_CHANGE),
             entry(SUPPLY_CHAIN_ORDER_NOT_FOUND, RetryDirective.DO_NOT_RETRY),
             entry(ORDER_QUERY_TIME_RANGE_INVALID, RetryDirective.DO_NOT_RETRY),
             entry(ORDER_EXPORT_EXCEED_LIMIT, RetryDirective.DO_NOT_RETRY),

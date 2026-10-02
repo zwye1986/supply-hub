@@ -10,13 +10,17 @@ import lombok.NoArgsConstructor;
 
 import java.time.LocalDateTime;
 
-/** 标准商品15分钟项目报价凭证。设计见 docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#7-项目报价凭证与标准履约。 */
+/**
+ * 标准商品项目订单首次永久冻结报价。永久键为「project_id + buyer_order_no」：
+ * 首次成功报价冻结价格与商品身份，同键重复询价重放首次结果；不绑定用户或支付时间。
+ * 设计见 docs/superpowers/specs/2026-10-02-standard-internal-quote-freeze-design.md#2-首次签发与重放。
+ */
 @Data @Builder @NoArgsConstructor @AllArgsConstructor
 @TableName("sc_standard_pricing_quote")
 public class StandardPricingQuoteDO {
     /** 标准商品报价凭证主键 */
     @TableId(type = IdType.AUTO) private Long id;
-    /** 随机不可猜测报价凭证 */
+    /** 随机内部追踪标识；不作为HTTP请求字段，报价永久键为项目+采购商订单号 */
     private String quoteToken;
     /** 调用来源系统编码 */
     private String sourceSystem;
@@ -34,8 +38,6 @@ public class StandardPricingQuoteDO {
     private String platformSkuCode;
     /** 冻结的项目SKU综合定价版本主键 */
     private Long projectPricingVersionId;
-    /** 项目范围内用户标识；一期为规范化后的大陆手机号 */
-    private String buyerUserId;
     /** 采购商订单号 */
     private String buyerOrderNo;
     /** 报价商品数量 */
@@ -56,7 +58,7 @@ public class StandardPricingQuoteDO {
     private String serviceFeeCopy;
     /** 凭证状态：ISSUED已签发，CONSUMED已消费 */
     private String status;
-    /** 凭证失效时间，Asia/Shanghai */
+    /** 历史报价失效时间，Asia/Shanghai；永久冻结报价为空且不作为本流程下单条件 */
     private LocalDateTime expiresAt;
     /** 消费该凭证的供应链订单主键 */
     private Long consumedOrderId;

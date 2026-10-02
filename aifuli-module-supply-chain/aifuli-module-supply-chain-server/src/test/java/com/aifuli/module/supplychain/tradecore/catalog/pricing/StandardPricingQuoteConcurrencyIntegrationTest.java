@@ -36,8 +36,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 
 /**
- * 真实 MySQL 上行锁串行化凭证消费、回滚恢复与同订单幂等。
- * 设计见 {@code docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#8-自动化测试与联调门禁}。
+ * 真实 MySQL 上行锁串行化项目永久键报价消费、回滚恢复与同订单幂等；
+ * 过期/无事务等历史有效期语义由 {@code StandardPricingQuotePermanentKeyIntegrationTest} 覆盖。
+ * 设计见 {@code docs/superpowers/specs/2026-10-02-standard-internal-quote-freeze-design.md#3-受理内查取与唯一消费}。
  */
 class StandardPricingQuoteConcurrencyIntegrationTest {
 
@@ -95,7 +96,7 @@ class StandardPricingQuoteConcurrencyIntegrationTest {
 
             StandardPricingQuoteDO rollbackQuote = insertIssued(mapper, "token-rollback", "ORD-ROLLBACK", now);
             tx.executeWithoutResult(status -> {
-                FrozenQuote frozen = service.requireForFulfillment(contextOf(rollbackQuote, now.plusMinutes(1)));
+                FrozenQuote frozen = service.requireForFulfillment(contextOf(rollbackQuote));
                 service.markConsumed(frozen.quoteId(), 301L, now.plusMinutes(1));
                 status.setRollbackOnly();
             });
@@ -105,12 +106,12 @@ class StandardPricingQuoteConcurrencyIntegrationTest {
 
             StandardPricingQuoteDO idempotent = insertIssued(mapper, "token-idempotent", "ORD-IDEM", now);
             tx.executeWithoutResult(status -> {
-                FrozenQuote frozen = service.requireForFulfillment(contextOf(idempotent, now.plusMinutes(1)));
-                service.markConsumed(frozen.quoteId(), 201L, now.plusMinutes(1));
+                FrozenQuote frozen = service.requireForFulfillment(contextOf(idempotent));
+                service.markConsumed(frozen.quoteId(), 201L, now);
             });
             tx.executeWithoutResult(status -> {
-                FrozenQuote frozen = service.requireForFulfillment(contextOf(idempotent, now.plusMinutes(1)));
-                service.markConsumed(frozen.quoteId(), 201L, now.plusMinutes(1));
+                FrozenQuote frozen = service.requireForFulfillment(contextOf(idempotent));
+                service.markConsumed(frozen.quoteId(), 201L, now);
             });
             assertThat(mapper.selectById(idempotent.getId()).getConsumedOrderId()).isEqualTo(201L);
         }
@@ -127,8 +128,8 @@ class StandardPricingQuoteConcurrencyIntegrationTest {
                     throw new IllegalStateException("等待并发消费起跑信号超时");
                 }
                 tx.executeWithoutResult(status -> {
-                    FrozenQuote frozen = service.requireForFulfillment(contextOf(quote, now.plusMinutes(1)));
-                    service.markConsumed(frozen.quoteId(), orderId, now.plusMinutes(1));
+                    FrozenQuote frozen = service.requireForFulfillment(contextOf(quote));
+                    service.markConsumed(frozen.quoteId(), orderId, now);
                 });
                 successes.incrementAndGet();
             } catch (RuntimeException ex) {
@@ -140,22 +141,43 @@ class StandardPricingQuoteConcurrencyIntegrationTest {
         };
     }
 
-    private static QuoteConsumptionContext contextOf(StandardPricingQuoteDO quote, LocalDateTime paidAt) {
-        return new QuoteConsumptionContext(quote.getQuoteToken(), quote.getBuyerId(), quote.getProjectId(),
-                quote.getPlatformSkuId(), quote.getBuyerOrderNo(), quote.getBuyerUserId(),
-                quote.getQuantity(), paidAt);
+    /**
+     * 生产代理强制 MANDATORY：require/markConsumed 在无供应链业务事务时必须拒绝，
+     * 防止消费在订单写入事务之外单独提交。
+     * 设计见 docs/superpowers/specs/2026-10-02-standard-internal-quote-freeze-design.md#3-受理内查取与唯一消费。
+     */
+    @Test
+    void rejectsConsumptionOutsideActiveTransaction() throws Exception {
+        try (ConfigurableApplicationContext context = applicationContext()) {
+            StandardPricingQuoteService service = context.getBean(StandardPricingQuoteService.class);
+
+            org.assertj.core.api.Assertions
+                    .assertThatThrownBy(() -> service.requireForProject(
+                            new ProjectQuoteKeyContext(1L, 2L, 4L, "ORD-NOTX", 1L)))
+                    .isInstanceOf(org.springframework.transaction.IllegalTransactionStateException.class);
+            org.assertj.core.api.Assertions
+                    .assertThatThrownBy(() -> service.markConsumed(1L, 1L,
+                            java.time.LocalDateTime.now()))
+                    .isInstanceOf(org.springframework.transaction.IllegalTransactionStateException.class);
+        }
     }
 
+    private static QuoteConsumptionContext contextOf(StandardPricingQuoteDO quote) {
+        return new QuoteConsumptionContext(quote.getQuoteToken(), quote.getBuyerId(), quote.getProjectId(),
+                quote.getPlatformSkuId(), quote.getBuyerOrderNo(), quote.getQuantity());
+    }
+
+    /** 历史失效时间保留为早已过期，证明永久冻结报价不因旧 expiresAt 限制消费。 */
     private static StandardPricingQuoteDO insertIssued(StandardPricingQuoteMapper mapper, String token,
                                                        String orderNo, LocalDateTime now) {
         StandardPricingQuoteDO quote = StandardPricingQuoteDO.builder()
                 .quoteToken(token).sourceSystem("AIFULI_MALL").externalTenantId("tenant-a")
                 .buyerId(1L).projectId(2L).listingId(3L).platformSkuId(4L).platformSkuCode("MOVIE_100")
-                .projectPricingVersionId(9L).buyerUserId("13800138000").buyerOrderNo(orderNo)
+                .projectPricingVersionId(9L).buyerOrderNo(orderNo)
                 .quantity(1L).distributionUnitPriceCents(9_800L).salesUnitPriceCents(10_000L)
                 .productSubtotalCents(10_000L).serviceFeeCents(0L).userPayableAmountCents(10_000L)
                 .taxMetadataJson("{\"taxIncluded\":false,\"taxRateCode\":\"NON_TAXABLE\"}")
-                .status(PricingQuoteStatus.ISSUED.name()).expiresAt(now.plusMinutes(15)).createdAt(now)
+                .status(PricingQuoteStatus.ISSUED.name()).expiresAt(now.minusMinutes(15)).createdAt(now)
                 .build();
         mapper.insert(quote);
         return quote;

@@ -250,9 +250,11 @@ public class FulfillmentAcceptanceLifecycle {
         LocalDateTime now = now();
         LockedListing locked = lockListingAndSku(command);
         ListingSnapshot listing = requireSaleableListing(command, now, locked);
+        // 报价消费按项目永久键锁定，不再传用户与支付时间；过渡 token 仅核对指向该唯一报价。
+        // 设计见 docs/superpowers/specs/2026-10-02-standard-internal-quote-freeze-design.md#3-受理内查取与唯一消费。
         FrozenQuote frozenQuote = pricingQuoteService.requireForFulfillment(new QuoteConsumptionContext(
                 command.pricingQuoteToken(), command.buyerId(), command.projectId(), listing.sku().getId(),
-                command.buyerOrderNo(), command.buyerUserId(), command.quantity(), command.paidAt()));
+                command.buyerOrderNo(), command.quantity()));
         SkuPurchaseLimitService.Violation limitViolation = purchaseLimitService.validateLockedSku(
                 command.projectId(), command.buyerUserId(), command.fulfillmentAccountValue(),
                 listing.sku(), command.quantity(), now);

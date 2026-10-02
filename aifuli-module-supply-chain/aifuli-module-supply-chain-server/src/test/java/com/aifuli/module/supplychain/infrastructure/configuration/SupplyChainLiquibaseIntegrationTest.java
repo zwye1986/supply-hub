@@ -158,7 +158,8 @@ class SupplyChainLiquibaseIntegrationTest {
                         "sc_recharge_frequency_entry.enqueue_sequence",
                         "sc_recharge_frequency_entry.dispatch_phase",
                         "sc_recharge_frequency_action_audit.request_fingerprint",
-                        "sc_recharge_frequency_action_audit.operator_user_id");
+                        "sc_recharge_frequency_action_audit.operator_user_id")
+                .doesNotContain("sc_standard_pricing_quote.buyer_user_id");
         assertThat(firstStartup.projectAuthNonceColumnDefinitions()).containsExactly(
                 "app_id:VARCHAR:128:-:NO",
                 "nonce:VARCHAR:128:-:NO",
@@ -166,7 +167,9 @@ class SupplyChainLiquibaseIntegrationTest {
                 "expire_at:DATETIME:-:3:NO");
         assertThat(firstStartup.projectAuthNoncePrimaryKeyColumns())
                 .containsExactly("app_id", "nonce");
-        assertThat(firstStartup.changeSetCount()).isEqualTo(52L);
+        // 051-standard-quote-permanent-key 后基线为 53 个变更集；新增项目订单唯一键、报价用户列删除。
+        // 设计见 docs/superpowers/specs/2026-10-02-standard-internal-quote-freeze-design.md#4-增量DDL与历史阻断检查。
+        assertThat(firstStartup.changeSetCount()).isEqualTo(53L);
         assertThat(firstStartup.uniqueIndexes())
                 .contains("sc_instore_payment_flow.uk_sc_instore_flow_order",
                         "sc_instore_channel_user_binding.uk_sc_instore_user_binding_project",
@@ -177,6 +180,7 @@ class SupplyChainLiquibaseIntegrationTest {
                         "sc_buyer_sku_pricing.uk_sc_buyer_sku_pricing_product",
                         "sc_project_sku_pricing.uk_sc_project_sku_pricing_listing",
                         "sc_standard_pricing_quote.uk_sc_standard_quote_token",
+                        "sc_standard_pricing_quote.uk_sc_standard_quote_project_order",
                         "sc_std_routing_rule.uk_sc_std_rule_code",
                         "sc_std_routing_rule_scope.uk_sc_std_rule_scope",
                         "sc_std_routing_candidate.uk_sc_std_candidate_supplier",

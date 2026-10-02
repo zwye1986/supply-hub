@@ -820,7 +820,7 @@ class FulfillmentAcceptanceIntegrationTest {
                     .thenAnswer(invocation -> {
                         QuoteConsumptionContext context = invocation.getArgument(0);
                         long quantity = context.quantity();
-                        return new FrozenQuote(1L, 1L, 9_800L, 10_000L,
+                        return new FrozenQuote(1L, 1L, 3L, 9_800L, 10_000L,
                                 Math.multiplyExact(10_000L, quantity), 0L,
                                 Math.multiplyExact(10_000L, quantity),
                                 "{\"taxIncluded\":false,\"taxRateCode\":\"NON_TAXABLE\",\"taxRateLabel\":\"不征税\"}",

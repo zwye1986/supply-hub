@@ -526,3 +526,56 @@ databaseChangeLog:
             encoding: UTF-8
             splitStatements: true
             stripComments: false
+  - changeSet:
+      id: 051-standard-quote-permanent-key
+      author: supply-chain
+      # 破坏性 DDL 前的历史阻断检查：任一冲突即 HALT，保留原数据供离线核实，不自动修复。
+      # 设计见 docs/superpowers/specs/2026-10-02-standard-internal-quote-freeze-design.md#4-增量DDL与历史阻断检查
+      preConditions:
+        - onFail: HALT
+          onError: HALT
+          sqlCheck:
+            expectedResult: 0
+            sql: >-
+              SELECT COUNT(*) FROM (
+                SELECT project_id, buyer_order_no FROM sc_standard_pricing_quote
+                GROUP BY project_id, buyer_order_no HAVING COUNT(*) > 1) dup_project_key
+        - sqlCheck:
+            expectedResult: 0
+            sql: >-
+              SELECT COUNT(*) FROM sc_standard_pricing_quote q
+              LEFT JOIN sc_buyer_project p ON p.id = q.project_id
+              LEFT JOIN sc_project_listing l ON l.id = q.listing_id AND l.project_id = q.project_id
+              LEFT JOIN sc_buyer_product bp ON bp.id = l.buyer_product_id AND bp.buyer_id = q.buyer_id
+              LEFT JOIN sc_platform_sku s ON s.id = q.platform_sku_id
+              WHERE p.id IS NULL OR p.buyer_id <> q.buyer_id OR l.id IS NULL OR bp.id IS NULL
+                 OR bp.platform_sku_id <> q.platform_sku_id OR s.id IS NULL
+                 OR s.sku_code <> q.platform_sku_code
+        - sqlCheck:
+            expectedResult: 0
+            sql: >-
+              SELECT COUNT(*) FROM sc_standard_pricing_quote q
+              WHERE (q.status = 'CONSUMED' AND (q.consumed_order_id IS NULL OR q.consumed_at IS NULL))
+                 OR (q.status = 'ISSUED' AND (q.consumed_order_id IS NOT NULL OR q.consumed_at IS NOT NULL))
+        - sqlCheck:
+            expectedResult: 0
+            sql: >-
+              SELECT COUNT(*) FROM sc_standard_pricing_quote q
+              LEFT JOIN sc_supply_chain_order o ON o.id = q.consumed_order_id
+              WHERE q.status = 'CONSUMED'
+                AND (o.id IS NULL OR o.pricing_quote_id IS NULL OR o.pricing_quote_id <> q.id
+                   OR o.order_type <> 'CARD' OR o.buyer_id <> q.buyer_id OR o.project_id <> q.project_id
+                   OR o.buyer_order_no <> q.buyer_order_no
+                   OR o.platform_sku_id IS NULL OR o.platform_sku_id <> q.platform_sku_id
+                   OR o.quantity <> q.quantity
+                   OR o.sales_unit_price_cents IS NULL OR o.sales_unit_price_cents <> q.sales_unit_price_cents
+                   OR o.product_subtotal_cents IS NULL OR o.product_subtotal_cents <> q.product_subtotal_cents
+                   OR o.service_fee_cents IS NULL OR o.service_fee_cents <> q.service_fee_cents
+                   OR o.user_payable_amount_cents IS NULL OR o.user_payable_amount_cents <> q.user_payable_amount_cents)
+      changes:
+        - sqlFile:
+            path: 051-standard-quote-permanent-key.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false

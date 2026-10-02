@@ -1,12 +1,10 @@
 package com.aifuli.module.supplychain.tradecore.catalog.pricing;
 
-import java.time.LocalDateTime;
-
 /**
- * 标准履约消费报价凭证时的绑定上下文，避免 8 个标量参数顺序传错。
- * 设计见 {@code docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#7-项目报价凭证与标准履约}。
+ * 旧内部受理消费报价的过渡上下文：按项目永久键锁定唯一报价，并额外核对过渡 token 指向该报价。
+ * 不再携带用户或支付时间语义。
+ * 设计见 docs/superpowers/specs/2026-10-02-standard-internal-quote-freeze-design.md#3-受理内查取与唯一消费。
  */
 public record QuoteConsumptionContext(String token, Long buyerId, Long projectId, Long platformSkuId,
-                                      String buyerOrderNo, String buyerUserId, long quantity,
-                                      LocalDateTime paidAt) {
+                                      String buyerOrderNo, long quantity) {
 }

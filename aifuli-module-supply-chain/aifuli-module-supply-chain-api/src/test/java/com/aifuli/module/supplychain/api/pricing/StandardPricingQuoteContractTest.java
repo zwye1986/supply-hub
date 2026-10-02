@@ -35,7 +35,18 @@ class StandardPricingQuoteContractTest {
                 .collect(Collectors.toSet());
 
         assertThat(properties).contains("sourceSystem", "externalTenantId", "projectCode",
-                "platformSkuCode", "buyerUserId", "buyerOrderNo", "quantity");
+                "platformSkuCode", "buyerOrderNo", "quantity");
+    }
+
+    /**
+     * 报价契约不再携带用户身份：永久键为「项目+项目订单号」，设计见
+     * {@code docs/superpowers/specs/2026-10-02-standard-internal-quote-freeze-design.md#1-内部契约与归属}。
+     */
+    @Test
+    void requestNoLongerCarriesBuyerUserId() {
+        assertThat(java.util.Arrays.stream(StandardPricingQuoteReqDTO.class.getDeclaredFields())
+                .map(field -> field.getName()))
+                .doesNotContain("buyerUserId");
     }
 
     @Test
