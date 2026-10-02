@@ -4,7 +4,7 @@ import cn.hutool.core.collection.CollUtil;
 import cn.hutool.core.io.FileUtil;
 import cn.hutool.core.io.resource.ResourceUtil;
 import cn.hutool.core.util.StrUtil;
-import com.aifuli.framework.apilog.core.util.ApiAccessLogPathUtils;
+import com.aifuli.framework.common.util.http.ApiAccessLogPathUtils;
 import com.aifuli.framework.common.util.servlet.ServletUtils;
 import com.aifuli.framework.common.util.spring.SpringUtils;
 import jakarta.servlet.http.HttpServletRequest;

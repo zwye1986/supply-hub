@@ -166,7 +166,7 @@ class ProjectStandardHttpRequestParserTest {
         String json = """
                 {"buyerOrderNo":"ORD_123456"}
                 """;
-        String buyerOrderNo = parser.parseQuery(json.getBytes(StandardCharsets.UTF_8));
+        String buyerOrderNo = parser.parseBuyerOrderNo(json.getBytes(StandardCharsets.UTF_8));
         assertThat(buyerOrderNo).isEqualTo("ORD_123456");
     }
 
@@ -183,18 +183,42 @@ class ProjectStandardHttpRequestParserTest {
             "{\"buyerOrderNo\":\"ORD_1\"} {\"extra\":1}"
     })
     void parseQueryRejectsInvalidOrUnknownFields(String json) {
-        assertThatThrownBy(() -> parser.parseQuery(json.getBytes(StandardCharsets.UTF_8)))
+        assertThatThrownBy(() -> parser.parseBuyerOrderNo(json.getBytes(StandardCharsets.UTF_8)))
                 .isInstanceOf(ServiceException.class);
     }
 
     @Test
-    void parseAssetsQueryReusesStrictValidation() {
+    void parseBuyerOrderNoReusedByAssetsQueryContract() {
         String json = """
                 {"buyerOrderNo":"ORD_999"}
                 """;
-        assertThat(parser.parseAssetsQuery(json.getBytes(StandardCharsets.UTF_8))).isEqualTo("ORD_999");
+        assertThat(parser.parseBuyerOrderNo(json.getBytes(StandardCharsets.UTF_8))).isEqualTo("ORD_999");
 
-        assertThatThrownBy(() -> parser.parseAssetsQuery("{\"buyerOrderNo\":null}".getBytes(StandardCharsets.UTF_8)))
+        assertThatThrownBy(() -> parser.parseBuyerOrderNo("{\"buyerOrderNo\":null}".getBytes(StandardCharsets.UTF_8)))
+                .isInstanceOf(ServiceException.class);
+    }
+
+    @Test
+    void parseCreateRejectsOverlongBuyerSkuCode() {
+        String json = "{\"buyerOrderNo\":\"O1\",\"buyerSkuCode\":\"" + "S".repeat(65)
+                + "\",\"quantity\":1,\"target\":{\"k\":\"v\"}}";
+        assertThatThrownBy(() -> parser.parseCreate(json.getBytes(StandardCharsets.UTF_8)))
+                .isInstanceOf(ServiceException.class);
+    }
+
+    @Test
+    void parseCreateAcceptsSkuCodeAtMaxLength() {
+        String json = "{\"buyerOrderNo\":\"O1\",\"buyerSkuCode\":\"" + "S".repeat(64)
+                + "\",\"quantity\":1,\"target\":{\"k\":\"v\"}}";
+        ProjectStandardOrderCreateReqDTO dto = parser.parseCreate(json.getBytes(StandardCharsets.UTF_8));
+        assertThat(dto.getBuyerSkuCode()).hasSize(64);
+    }
+
+    @Test
+    void parseCreateRejectsOverlongTargetValue() {
+        String json = "{\"buyerOrderNo\":\"O1\",\"buyerSkuCode\":\"S1\",\"quantity\":1,\"target\":{\"k\":\""
+                + "v".repeat(129) + "\"}}";
+        assertThatThrownBy(() -> parser.parseCreate(json.getBytes(StandardCharsets.UTF_8)))
                 .isInstanceOf(ServiceException.class);
     }
 }

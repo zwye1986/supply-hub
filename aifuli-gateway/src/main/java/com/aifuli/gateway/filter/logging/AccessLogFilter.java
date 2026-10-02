@@ -35,6 +35,7 @@ import org.springframework.web.reactive.function.server.ServerRequest;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.SignalType;
 
 import jakarta.annotation.Resource;
 import java.nio.charset.StandardCharsets;
@@ -147,6 +148,12 @@ public class AccessLogFilter implements GlobalFilter, Ordered {
         return filterWithoutRequestBody(exchange, chain, gatewayLog);
     }
 
+    /**
+     * 标准订单路径专用分支：在任何 bodyToMono/codec/buffer 操作之前直接透传原请求与响应流，
+     * 仅在完成或异常时采集 method、注册操作路径、route、状态、耗时等安全元数据，
+     * 保证签名正文与卡密响应不经过任何读取、重编码或缓冲。
+     * 设计见 {@code docs/superpowers/specs/2026-10-02-standard-project-http-transport-design.md#3-gateway精确路由与不消费正文}。
+     */
     private Mono<Void> filterStandardOrder(ServerWebExchange exchange, GatewayFilterChain chain) {
         ServerHttpRequest request = exchange.getRequest();
         AccessLog gatewayLog = new AccessLog();
@@ -160,20 +167,17 @@ public class AccessLogFilter implements GlobalFilter, Ordered {
         gatewayLog.setResponseBody(AccessLogSanitizeUtils.BODY_OMITTED);
 
         return chain.filter(exchange)
-                .doOnError(throwable -> {
-                    gatewayLog.setEndTime(LocalDateTime.now());
-                    gatewayLog.setDuration((int) java.time.Duration.between(gatewayLog.getStartTime(), gatewayLog.getEndTime()).toMillis());
-                    gatewayLog.setHttpStatus(exchange.getResponse().getStatusCode() != null
-                            ? HttpStatus.resolve(exchange.getResponse().getStatusCode().value()) : HttpStatus.INTERNAL_SERVER_ERROR);
-                    writeAccessLog(gatewayLog);
-                })
-                .doOnSuccess(aVoid -> {
-                    gatewayLog.setEndTime(LocalDateTime.now());
-                    gatewayLog.setDuration((int) java.time.Duration.between(gatewayLog.getStartTime(), gatewayLog.getEndTime()).toMillis());
-                    gatewayLog.setHttpStatus(exchange.getResponse().getStatusCode() != null
-                            ? HttpStatus.resolve(exchange.getResponse().getStatusCode().value()) : HttpStatus.OK);
-                    writeAccessLog(gatewayLog);
-                });
+                .doFinally(signal -> finishStandardOrderLog(exchange, gatewayLog, signal));
+    }
+
+    /** 标准订单透传分支的统一收尾：补齐耗时与状态后写安全访问日志，成功与异常共用同一逻辑。 */
+    private void finishStandardOrderLog(ServerWebExchange exchange, AccessLog gatewayLog, SignalType signal) {
+        gatewayLog.setEndTime(LocalDateTime.now());
+        gatewayLog.setDuration((int) java.time.Duration.between(gatewayLog.getStartTime(), gatewayLog.getEndTime()).toMillis());
+        HttpStatus fallback = signal == SignalType.ON_ERROR ? HttpStatus.INTERNAL_SERVER_ERROR : HttpStatus.OK;
+        gatewayLog.setHttpStatus(exchange.getResponse().getStatusCode() != null
+                ? HttpStatus.resolve(exchange.getResponse().getStatusCode().value()) : fallback);
+        writeAccessLog(gatewayLog);
     }
 
     private Mono<Void> filterWithoutRequestBody(ServerWebExchange exchange, GatewayFilterChain chain, AccessLog accessLog) {

@@ -1,7 +1,7 @@
 package com.aifuli.framework.web.core.handler;
 
 import cn.hutool.core.collection.CollUtil;
-import com.aifuli.framework.apilog.core.util.ApiAccessLogPathUtils;
+import com.aifuli.framework.common.util.http.ApiAccessLogPathUtils;
 import com.aifuli.framework.apilog.core.util.SensitiveExceptionLogUtils;
 import cn.hutool.core.exceptions.ExceptionUtil;
 import cn.hutool.core.map.MapUtil;
@@ -9,6 +9,7 @@ import cn.hutool.core.util.ObjUtil;
 import cn.hutool.core.util.StrUtil;
 import com.aifuli.framework.common.biz.infra.logger.ApiErrorLogCommonApi;
 import com.aifuli.framework.common.biz.infra.logger.dto.ApiErrorLogCreateReqDTO;
+import com.aifuli.framework.common.exception.ErrorCode;
 import com.aifuli.framework.common.exception.ServiceException;
 import com.aifuli.framework.common.exception.util.ServiceExceptionUtil;
 import com.aifuli.framework.common.pojo.CommonResult;
@@ -87,8 +88,10 @@ public class GlobalExceptionHandler {
      * @return 通用返回
      */
     public CommonResult<?> allExceptionHandler(HttpServletRequest request, Throwable ex) {
-        if (isStandardOrdersRequest(request) && isParameterFailure(ex)) { return safeStandardOrderParameterFailure(ex); }
-        if (isFrequencyRequest(request) && isParameterFailure(ex)) { return safeParameterFailure(ex); }
+        if (isParameterFailure(ex)) {
+            CommonResult<?> safeParameter = safeParameterFailureIfSensitive(request, ex);
+            if (safeParameter != null) { return safeParameter; }
+        }
         if (ex instanceof MissingServletRequestParameterException) {
             return missingServletRequestParameterExceptionHandler((MissingServletRequestParameterException) ex);
         }
@@ -139,8 +142,8 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(value = MissingServletRequestParameterException.class)
     public CommonResult<?> missingServletRequestParameterExceptionHandler(MissingServletRequestParameterException ex) {
         HttpServletRequest request = ServletUtils.getRequest();
-        if (isStandardOrdersRequest(request)) { return safeStandardOrderParameterFailure(ex); }
-        if (isFrequencyRequest(request)) { return safeParameterFailure(ex); }
+        CommonResult<?> safe = safeParameterFailureIfSensitive(request, ex);
+        if (safe != null) { return safe; }
         log.warn("[missingServletRequestParameterExceptionHandler]", ex);
         return CommonResult.error(BAD_REQUEST.getCode(), String.format("请求参数缺失:%s", ex.getParameterName()));
     }
@@ -153,8 +156,8 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(MethodArgumentTypeMismatchException.class)
     public CommonResult<?> methodArgumentTypeMismatchExceptionHandler(MethodArgumentTypeMismatchException ex) {
         HttpServletRequest request = ServletUtils.getRequest();
-        if (isStandardOrdersRequest(request)) { return safeStandardOrderParameterFailure(ex); }
-        if (isFrequencyRequest(request)) { return safeParameterFailure(ex); }
+        CommonResult<?> safe = safeParameterFailureIfSensitive(request, ex);
+        if (safe != null) { return safe; }
         log.warn("[methodArgumentTypeMismatchExceptionHandler]", ex);
         return CommonResult.error(BAD_REQUEST.getCode(), String.format("请求参数类型错误:%s", ex.getMessage()));
     }
@@ -165,8 +168,8 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public CommonResult<?> methodArgumentNotValidExceptionExceptionHandler(MethodArgumentNotValidException ex) {
         HttpServletRequest request = ServletUtils.getRequest();
-        if (isStandardOrdersRequest(request)) { return safeStandardOrderParameterFailure(ex); }
-        if (isFrequencyRequest(request)) { return safeParameterFailure(ex); }
+        CommonResult<?> safe = safeParameterFailureIfSensitive(request, ex);
+        if (safe != null) { return safe; }
         log.warn("[methodArgumentNotValidExceptionExceptionHandler]", ex);
         // 获取 errorMessage
         String errorMessage = null;
@@ -194,8 +197,8 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(BindException.class)
     public CommonResult<?> bindExceptionHandler(BindException ex) {
         HttpServletRequest request = ServletUtils.getRequest();
-        if (isStandardOrdersRequest(request)) { return safeStandardOrderParameterFailure(ex); }
-        if (isFrequencyRequest(request)) { return safeParameterFailure(ex); }
+        CommonResult<?> safe = safeParameterFailureIfSensitive(request, ex);
+        if (safe != null) { return safe; }
         log.warn("[handleBindException]", ex);
         FieldError fieldError = ex.getFieldError();
         assert fieldError != null; // 断言，避免告警
@@ -211,8 +214,8 @@ public class GlobalExceptionHandler {
     @SuppressWarnings("PatternVariableCanBeUsed")
     public CommonResult<?> methodArgumentTypeInvalidFormatExceptionHandler(HttpMessageNotReadableException ex) {
         HttpServletRequest request = ServletUtils.getRequest();
-        if (isStandardOrdersRequest(request)) { return safeStandardOrderParameterFailure(ex); }
-        if (isFrequencyRequest(request)) { return safeParameterFailure(ex); }
+        CommonResult<?> safe = safeParameterFailureIfSensitive(request, ex);
+        if (safe != null) { return safe; }
         log.warn("[methodArgumentTypeInvalidFormatExceptionHandler]", ex);
         if (ex.getCause() instanceof InvalidFormatException) {
             InvalidFormatException invalidFormatException = (InvalidFormatException) ex.getCause();
@@ -230,8 +233,8 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(value = ConstraintViolationException.class)
     public CommonResult<?> constraintViolationExceptionHandler(ConstraintViolationException ex) {
         HttpServletRequest request = ServletUtils.getRequest();
-        if (isStandardOrdersRequest(request)) { return safeStandardOrderParameterFailure(ex); }
-        if (isFrequencyRequest(request)) { return safeParameterFailure(ex); }
+        CommonResult<?> safe = safeParameterFailureIfSensitive(request, ex);
+        if (safe != null) { return safe; }
         log.warn("[constraintViolationExceptionHandler]", ex);
         ConstraintViolation<?> constraintViolation = ex.getConstraintViolations().iterator().next();
         return CommonResult.error(BAD_REQUEST.getCode(), String.format("请求参数不正确:%s", constraintViolation.getMessage()));
@@ -243,8 +246,8 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(value = ValidationException.class)
     public CommonResult<?> validationException(ValidationException ex) {
         HttpServletRequest request = ServletUtils.getRequest();
-        if (isStandardOrdersRequest(request)) { return safeStandardOrderParameterFailure(ex); }
-        if (isFrequencyRequest(request)) { return safeParameterFailure(ex); }
+        CommonResult<?> safe = safeParameterFailureIfSensitive(request, ex);
+        if (safe != null) { return safe; }
         log.warn("[constraintViolationExceptionHandler]", ex);
         // 无法拼接明细的错误信息，因为 Dubbo Consumer 抛出 ValidationException 异常时，是直接的字符串信息，且人类不可读
         return CommonResult.error(BAD_REQUEST);
@@ -268,15 +271,8 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(NoHandlerFoundException.class)
     public CommonResult<?> noHandlerFoundExceptionHandler(NoHandlerFoundException ex) {
         HttpServletRequest request = ServletUtils.getRequest();
-        if (isStandardOrdersRequest(request)) {
-            ensureNoStoreIfStandardOrders(request);
-            log.warn("[标准订单HTTP错误] type={}, traceId={}", ex.getClass().getSimpleName(), TracerUtils.getTraceId());
-            return CommonResult.error(NOT_FOUND);
-        }
-        if (isFrequencyRequest(request)) {
-            log.warn("[限频管理HTTP错误] type={}, traceId={}", ex.getClass().getSimpleName(), TracerUtils.getTraceId());
-            return CommonResult.error(NOT_FOUND);
-        }
+        CommonResult<?> safe = safeErrorResponseIfSensitive(request, ex, NOT_FOUND);
+        if (safe != null) { return safe; }
         log.warn("[noHandlerFoundExceptionHandler]", ex);
         return CommonResult.error(NOT_FOUND.getCode(), String.format("请求地址不存在:%s", ex.getRequestURL()));
     }
@@ -286,15 +282,8 @@ public class GlobalExceptionHandler {
      */
     @ExceptionHandler(NoResourceFoundException.class)
     private CommonResult<?> noResourceFoundExceptionHandler(HttpServletRequest req, NoResourceFoundException ex) {
-        if (isStandardOrdersRequest(req)) {
-            ensureNoStoreIfStandardOrders(req);
-            log.warn("[标准订单HTTP错误] type={}, traceId={}", ex.getClass().getSimpleName(), TracerUtils.getTraceId());
-            return CommonResult.error(NOT_FOUND);
-        }
-        if (isFrequencyRequest(req)) {
-            log.warn("[限频管理HTTP错误] type={}, traceId={}", ex.getClass().getSimpleName(), TracerUtils.getTraceId());
-            return CommonResult.error(NOT_FOUND);
-        }
+        CommonResult<?> safe = safeErrorResponseIfSensitive(req, ex, NOT_FOUND);
+        if (safe != null) { return safe; }
         log.warn("[noResourceFoundExceptionHandler]", ex);
         return CommonResult.error(NOT_FOUND.getCode(), String.format("请求地址不存在:%s", ex.getResourcePath()));
     }
@@ -307,15 +296,8 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
     public CommonResult<?> httpRequestMethodNotSupportedExceptionHandler(HttpRequestMethodNotSupportedException ex) {
         HttpServletRequest request = ServletUtils.getRequest();
-        if (isStandardOrdersRequest(request)) {
-            ensureNoStoreIfStandardOrders(request);
-            log.warn("[标准订单HTTP错误] type={}, traceId={}", ex.getClass().getSimpleName(), TracerUtils.getTraceId());
-            return CommonResult.error(METHOD_NOT_ALLOWED);
-        }
-        if (isFrequencyRequest(request)) {
-            log.warn("[限频管理HTTP错误] type={}, traceId={}", ex.getClass().getSimpleName(), TracerUtils.getTraceId());
-            return CommonResult.error(METHOD_NOT_ALLOWED);
-        }
+        CommonResult<?> safe = safeErrorResponseIfSensitive(request, ex, METHOD_NOT_ALLOWED);
+        if (safe != null) { return safe; }
         log.warn("[httpRequestMethodNotSupportedExceptionHandler]", ex);
         return CommonResult.error(METHOD_NOT_ALLOWED.getCode(), String.format("请求方法不正确:%s", ex.getMessage()));
     }
@@ -328,15 +310,8 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
     public CommonResult<?> httpMediaTypeNotSupportedExceptionHandler(HttpMediaTypeNotSupportedException ex) {
         HttpServletRequest request = ServletUtils.getRequest();
-        if (isStandardOrdersRequest(request)) {
-            ensureNoStoreIfStandardOrders(request);
-            log.warn("[标准订单HTTP错误] type={}, traceId={}", ex.getClass().getSimpleName(), TracerUtils.getTraceId());
-            return CommonResult.error(BAD_REQUEST);
-        }
-        if (isFrequencyRequest(request)) {
-            log.warn("[限频管理HTTP错误] type={}, traceId={}", ex.getClass().getSimpleName(), TracerUtils.getTraceId());
-            return CommonResult.error(BAD_REQUEST);
-        }
+        CommonResult<?> safe = safeErrorResponseIfSensitive(request, ex, BAD_REQUEST);
+        if (safe != null) { return safe; }
         log.warn("[httpMediaTypeNotSupportedExceptionHandler]", ex);
         return CommonResult.error(BAD_REQUEST.getCode(), String.format("请求类型不正确:%s", ex.getMessage()));
     }
@@ -348,15 +323,8 @@ public class GlobalExceptionHandler {
      */
     @ExceptionHandler(value = AccessDeniedException.class)
     public CommonResult<?> accessDeniedExceptionHandler(HttpServletRequest req, AccessDeniedException ex) {
-        if (isStandardOrdersRequest(req)) {
-            ensureNoStoreIfStandardOrders(req);
-            log.warn("[标准订单鉴权拒绝] traceId={}", TracerUtils.getTraceId());
-            return CommonResult.error(FORBIDDEN);
-        }
-        if (isFrequencyRequest(req)) {
-            log.warn("[限频管理鉴权拒绝] traceId={}", TracerUtils.getTraceId());
-            return CommonResult.error(FORBIDDEN);
-        }
+        CommonResult<?> safe = safeErrorResponseIfSensitive(req, ex, FORBIDDEN);
+        if (safe != null) { return safe; }
         log.warn("[accessDeniedExceptionHandler][userId({}) 无法访问 url({})]", WebFrameworkUtils.getLoginUserId(req),
                 req.getRequestURL(), ex);
         return CommonResult.error(FORBIDDEN);
@@ -380,15 +348,8 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(value = ServiceException.class)
     public CommonResult<?> serviceExceptionHandler(ServiceException ex) {
         HttpServletRequest request = ServletUtils.getRequest();
-        if (isStandardOrdersRequest(request)) {
-            ensureNoStoreIfStandardOrders(request);
-            log.warn("[标准订单业务拒绝] code={}, message={}, traceId={}", ex.getCode(), ex.getMessage(), TracerUtils.getTraceId());
-            return CommonResult.error(ex.getCode(), ex.getMessage());
-        }
-        if (isFrequencyRequest(request)) {
-            log.warn("[限频管理业务拒绝] code={}, traceId={}", ex.getCode(), TracerUtils.getTraceId());
-            return CommonResult.error(ex.getCode(), ex.getMessage());
-        }
+        CommonResult<?> safeBusiness = safeBusinessRejectionIfSensitive(request, ex);
+        if (safeBusiness != null) { return safeBusiness; }
         // 不包含的时候，才进行打印，避免 ex 堆栈过多
         if (!IGNORE_ERROR_MESSAGES.contains(ex.getMessage())) {
             // 即使打印，也只打印第一层 StackTraceElement，并且使用 warn 在控制台输出，更容易看到
@@ -413,22 +374,9 @@ public class GlobalExceptionHandler {
      */
     @ExceptionHandler(value = Exception.class)
     public CommonResult<?> defaultExceptionHandler(HttpServletRequest req, Throwable ex) {
-        if (isStandardOrdersRequest(req)) {
-            ensureNoStoreIfStandardOrders(req);
-            if (isParameterFailure(ex)) { return safeStandardOrderParameterFailure(ex); }
-            if (ex instanceof ServiceException service) { return CommonResult.error(service.getCode(), service.getMessage()); }
-            if (ex.getCause() instanceof ServiceException service) { return CommonResult.error(service.getCode(), service.getMessage()); }
-            log.error("[标准订单系统异常] types={}, traceId={}", SensitiveExceptionLogUtils.types(ex), TracerUtils.getTraceId());
-            createExceptionLog(req, ex);
-            return CommonResult.error(INTERNAL_SERVER_ERROR);
-        }
-        if (isFrequencyRequest(req)) {
-            if (isParameterFailure(ex)) { return safeParameterFailure(ex); }
-            if (ex instanceof ServiceException service) { return CommonResult.error(service.getCode(), service.getMessage()); }
-            if (ex.getCause() instanceof ServiceException service) { return CommonResult.error(service.getCode(), service.getMessage()); }
-            log.error("[限频管理系统异常] types={}, traceId={}", SensitiveExceptionLogUtils.types(ex), TracerUtils.getTraceId());
-            createExceptionLog(req, ex);
-            return CommonResult.error(INTERNAL_SERVER_ERROR);
+        SensitivePathKind kind = classifySensitivePath(req);
+        if (kind != SensitivePathKind.NONE) {
+            return handleSensitiveSystemException(req, ex, kind);
         }
         // 特殊：如果是 ServiceException 的异常，则直接返回
         // 例如说：https://gitee.com/zhijiantianya/aifuli-cloud/issues/ICSSRM、https://gitee.com/zhijiantianya/aifuli-cloud/issues/ICT6FM
@@ -450,6 +398,32 @@ public class GlobalExceptionHandler {
         return CommonResult.error(INTERNAL_SERVER_ERROR.getCode(), INTERNAL_SERVER_ERROR.getMsg());
     }
 
+    /**
+     * 敏感路径系统异常统一收敛骨架：标准订单与限频管理共用同一段"参数失败/ServiceException/系统异常"分派，
+     * 仅日志标签与参数失败文案按 kind 区分，消除 defaultExceptionHandler 内的同构分支重复。
+     * 设计见 {@code docs/superpowers/specs/2026-10-02-standard-project-http-transport-design.md#4-共享web保护与影响范围}
+     * 与 {@code docs/superpowers/specs/2026-09-30-direct-recharge-mobile-spu-frequency-design.md#7-管理端契约与权限}。
+     */
+    private CommonResult<?> handleSensitiveSystemException(HttpServletRequest req, Throwable ex, SensitivePathKind kind) {
+        boolean standardOrder = kind == SensitivePathKind.STANDARD_ORDER;
+        if (standardOrder) {
+            ensureNoStore();
+        }
+        if (isParameterFailure(ex)) {
+            return standardOrder ? safeStandardOrderParameterFailure(ex) : safeParameterFailure(ex);
+        }
+        if (ex instanceof ServiceException service) {
+            return CommonResult.error(service.getCode(), service.getMessage());
+        }
+        if (ex.getCause() instanceof ServiceException service) {
+            return CommonResult.error(service.getCode(), service.getMessage());
+        }
+        String label = standardOrder ? "[标准订单系统异常]" : "[限频管理系统异常]";
+        log.error("{} types={}, traceId={}", label, SensitiveExceptionLogUtils.types(ex), TracerUtils.getTraceId());
+        createExceptionLog(req, ex);
+        return CommonResult.error(INTERNAL_SERVER_ERROR);
+    }
+
     private void createExceptionLog(HttpServletRequest req, Throwable e) {
         // 插入错误日志
         ApiErrorLogCreateReqDTO errorLog = new ApiErrorLogCreateReqDTO();
@@ -459,7 +433,7 @@ public class GlobalExceptionHandler {
             // 执行插入 errorLog
             apiErrorLogApi.createApiErrorLogAsync(errorLog);
         } catch (Throwable th) {
-            if (isFrequencyRequest(req) || isStandardOrdersRequest(req)) {
+            if (classifySensitivePath(req) != SensitivePathKind.NONE) {
                 long failures = SENSITIVE_ERROR_LOG_FAILURES.incrementAndGet();
                 if (failures == 1 || failures % SENSITIVE_ERROR_LOG_FAILURE_SAMPLE_INTERVAL == 0) {
                     log.error("[敏感路径异常日志存储失败] failureCount={}, types={}, traceId={}, safeStack={}", failures,
@@ -478,9 +452,10 @@ public class GlobalExceptionHandler {
         errorLog.setUserType(WebFrameworkUtils.getLoginUserType(request));
         // 设置异常字段
         errorLog.setExceptionName(e.getClass().getName());
-        boolean frequency = isFrequencyRequest(request);
-        boolean standardOrder = isStandardOrdersRequest(request);
-        boolean sensitive = frequency || standardOrder;
+        SensitivePathKind kind = classifySensitivePath(request);
+        boolean frequency = kind == SensitivePathKind.RECHARGE_FREQUENCY;
+        boolean standardOrder = kind == SensitivePathKind.STANDARD_ORDER;
+        boolean sensitive = kind != SensitivePathKind.NONE;
         errorLog.setExceptionMessage(sensitive ? SensitiveExceptionLogUtils.types(e) : ExceptionUtil.getMessage(e));
         errorLog.setExceptionRootCauseMessage(sensitive ? SensitiveExceptionLogUtils.types(e) : ExceptionUtil.getRootCauseMessage(e));
         errorLog.setExceptionStackTrace(sensitive ? SensitiveExceptionLogUtils.stack(e) : ExceptionUtil.stacktraceToString(e));
@@ -513,34 +488,92 @@ public class GlobalExceptionHandler {
         errorLog.setExceptionTime(LocalDateTime.now());
     }
 
-    /** 只保护登记的标准订单路径；设计见
-     * {@code docs/superpowers/specs/2026-10-02-standard-project-http-transport-design.md#4-共享web保护与影响范围}。 */
-    private static boolean isStandardOrdersRequest(HttpServletRequest request) {
-        return request != null && ApiAccessLogPathUtils.isStandardOrdersPath(request.getRequestURI(), request.getContextPath());
+    /**
+     * 敏感路径类别：标准订单开放路径与限频管理路径共用同一套收敛策略骨架（参数错误、HTTP错误、业务拒绝），
+     * 普通路径不受影响。分类只认登记的精确路径，避免相似前缀误伤。
+     */
+    private enum SensitivePathKind {
+        STANDARD_ORDER, RECHARGE_FREQUENCY, NONE
     }
 
-    private static void ensureNoStoreIfStandardOrders(HttpServletRequest request) {
-        if (isStandardOrdersRequest(request)) {
-            org.springframework.web.context.request.RequestAttributes attributes = org.springframework.web.context.request.RequestContextHolder.getRequestAttributes();
-            if (attributes instanceof org.springframework.web.context.request.ServletRequestAttributes servletRequestAttributes) {
-                HttpServletResponse response = servletRequestAttributes.getResponse();
-                if (response != null) {
-                    response.setHeader("Cache-Control", "no-store");
-                }
-            }
+    /** 只保护登记的标准订单路径与限频管理路径，八个进程其他路径保持原有错误契约。设计见
+     * {@code docs/superpowers/specs/2026-10-02-standard-project-http-transport-design.md#4-共享web保护与影响范围}、
+     * {@code docs/superpowers/specs/2026-09-30-direct-recharge-mobile-spu-frequency-design.md#7-管理端契约与权限}。 */
+    private static SensitivePathKind classifySensitivePath(HttpServletRequest request) {
+        if (request == null) {
+            return SensitivePathKind.NONE;
+        }
+        if (ApiAccessLogPathUtils.isStandardOrdersPath(request.getRequestURI(), request.getContextPath())) {
+            return SensitivePathKind.STANDARD_ORDER;
+        }
+        if (ApiAccessLogPathUtils.isRechargeFrequencyAdminPath(request.getRequestURI(), request.getContextPath())) {
+            return SensitivePathKind.RECHARGE_FREQUENCY;
+        }
+        return SensitivePathKind.NONE;
+    }
+
+    /**
+     * 敏感路径参数错误统一收敛策略：标准订单路径补 no-store 并返回固定 400 文案，限频管理路径走白名单字段日志。
+     * 返回 null 表示非敏感路径，调用方沿用原有错误契约。
+     * 设计见 {@code docs/superpowers/specs/2026-10-02-standard-project-http-transport-design.md#1-controller与严格请求解析}。
+     */
+    private static CommonResult<?> safeParameterFailureIfSensitive(HttpServletRequest request, Throwable ex) {
+        SensitivePathKind kind = classifySensitivePath(request);
+        if (kind == SensitivePathKind.STANDARD_ORDER) { return safeStandardOrderParameterFailure(ex); }
+        if (kind == SensitivePathKind.RECHARGE_FREQUENCY) { return safeParameterFailure(ex); }
+        return null;
+    }
+
+    /**
+     * 敏感路径固定错误码统一收敛策略：不回显异常明细，日志仅保留异常类型与 traceId；
+     * 标准订单路径额外强制 Cache-Control: no-store。返回 null 表示非敏感路径。
+     * 设计见 {@code docs/superpowers/specs/2026-10-02-standard-project-http-transport-design.md#2-供应链独立进程安全与缓存}。
+     */
+    private static CommonResult<?> safeErrorResponseIfSensitive(HttpServletRequest request, Throwable ex, ErrorCode errorCode) {
+        SensitivePathKind kind = classifySensitivePath(request);
+        if (kind == SensitivePathKind.STANDARD_ORDER) {
+            ensureNoStore();
+            log.warn("[标准订单HTTP错误] type={}, traceId={}", ex.getClass().getSimpleName(), TracerUtils.getTraceId());
+            return CommonResult.error(errorCode);
+        }
+        if (kind == SensitivePathKind.RECHARGE_FREQUENCY) {
+            log.warn("[限频管理HTTP错误] type={}, traceId={}", ex.getClass().getSimpleName(), TracerUtils.getTraceId());
+            return CommonResult.error(errorCode);
+        }
+        return null;
+    }
+
+    /**
+     * 敏感路径业务拒绝统一收敛策略：透传业务错误码与文案（业务语义本身允许返回项目方），
+     * 标准订单路径额外强制 no-store 并记录拒绝码日志。返回 null 表示非敏感路径。
+     */
+    private static CommonResult<?> safeBusinessRejectionIfSensitive(HttpServletRequest request, ServiceException ex) {
+        SensitivePathKind kind = classifySensitivePath(request);
+        if (kind == SensitivePathKind.STANDARD_ORDER) {
+            ensureNoStore();
+            log.warn("[标准订单业务拒绝] code={}, message={}, traceId={}", ex.getCode(), ex.getMessage(), TracerUtils.getTraceId());
+            return CommonResult.error(ex.getCode(), ex.getMessage());
+        }
+        if (kind == SensitivePathKind.RECHARGE_FREQUENCY) {
+            log.warn("[限频管理业务拒绝] code={}, traceId={}", ex.getCode(), TracerUtils.getTraceId());
+            return CommonResult.error(ex.getCode(), ex.getMessage());
+        }
+        return null;
+    }
+
+    /** 标准订单路径所有成功/错误响应统一强制 Cache-Control: no-store；设计见
+     * {@code docs/superpowers/specs/2026-10-02-standard-project-http-transport-design.md#2-供应链独立进程安全与缓存}。 */
+    private static void ensureNoStore() {
+        HttpServletResponse response = ServletUtils.getResponse();
+        if (response != null) {
+            response.setHeader("Cache-Control", "no-store");
         }
     }
 
     private static CommonResult<?> safeStandardOrderParameterFailure(Throwable ex) {
-        ensureNoStoreIfStandardOrders(ServletUtils.getRequest());
+        ensureNoStore();
         log.warn("[标准订单参数错误] type={}, traceId={}", ex.getClass().getSimpleName(), TracerUtils.getTraceId());
         return CommonResult.error(BAD_REQUEST.getCode(), "请求参数不正确");
-    }
-
-    /** 只保护登记的限频路径；八个进程其他路径保持原有错误契约。设计见
-     * {@code docs/superpowers/specs/2026-09-30-direct-recharge-mobile-spu-frequency-design.md#7-管理端契约与权限}。 */
-    private static boolean isFrequencyRequest(HttpServletRequest request) {
-        return request != null && ApiAccessLogPathUtils.isRechargeFrequencyAdminPath(request.getRequestURI(), request.getContextPath());
     }
 
     private static boolean isParameterFailure(Throwable ex) {

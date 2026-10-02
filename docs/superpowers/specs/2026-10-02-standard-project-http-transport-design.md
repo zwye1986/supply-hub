@@ -37,7 +37,7 @@ Gateway GlobalExceptionHandler对标准前缀使用稳定错误文案和安全�
 
 ## 4. 共享Web保护与影响范围
 
-ApiAccessLogPathUtils新增标准orders的精确路径段分类（支持正确context path剥离）；orders根和子路径均保护，相似前缀不是标准接口。增加明确“需安全异常处理”的判断，仅包含原限频管理和新标准前缀，不借此扩大其他模块行为。
+ApiAccessLogPathUtils新增标准orders的精确路径段分类（支持正确context path剥离）；orders根和子路径均保护，相似前缀不是标准接口。增加明确“需安全异常处理”的判断，仅包含原限频管理和新标准前缀，不借此扩大其他模块行为。该工具类位于aifuli-common（包`com.aifuli.framework.common.util.http`）：Servlet栈（starter-web访问日志/异常处理）与Reactive栈（gateway访问日志/异常处理）共享同一份路径分类，不得引入Servlet/Reactive类型依赖。common不能依赖供应链模块，标准orders根路径常量与`ProjectAuthOperations`登记路径存在双侧同步义务，由`ProjectAuthOperationsContractTest`以契约断言锁定一致；GlobalExceptionHandler以统一的敏感路径分类（标准订单/限频/普通）收敛参数错误、HTTP错误与业务拒绝三套策略骨架。
 
 ApiAccessLogFilter在读取参数/ServletUtils.getBody前识别新路径，正文及query均不读作日志；即使Controller显式responseEnable=true也强制省略标准响应，不能把明文卡券写平台访问日志。标准日志URL安全固定类别，CommonResult参数/系统错误msg安全。敏感例外路径的日志API故障复用受控计数/采样及安全堆栈，返回已确定业务结果；这不同于业务资产审计，后者必须失败关闭。
 
@@ -59,6 +59,10 @@ ApiAccessLogInterceptor正文/参数省略；GlobalExceptionHandler对标准参�
 - 请求/响应/各级普通日志与平台访问/错误DTO、日志API连续故障均无敏感正文；被拒的未知路径/query也不回显目标，普通路径和原INSTORE/限频回归。
 
 Gateway本身独立编译并使用隔离classpath/本地实际进程探针验证AccessLogFilter的生产流处理、分块字节与响应不缓冲、异常安全和路由。不能把Gateway生产依赖加入供应链容器或用自写proxy代替真实Gateway。本地整链如使用单独Gateway进程，使用实际配置路由（Nacos测试开关可关闭），目标本地SC实际端口。probe/运行脚本可存script/test并纳入源码，原报告和源hash保存；不以静态grep配置代替真实传输验证。
+
+网关探针`script/test/gateway-standard-orders-probe.sh`落实上述要求：不覆盖路由，使用application.yaml实际`supply-chain-standard-orders`路由（URI经`AIFULI_GATEWAY_SUPPLY_CHAIN_URI`指向本地挡板上游），验证chunked透传、响应不缓冲、访问日志脱敏、未注册兄弟路径404与上游故障异常安全（脱敏CommonResult且不泄漏正文）；报告与源hash（git HEAD + 网关jar sha256）默认保存于`script/test/gateway-standard-orders-probe-report.md`。目标为本地SC实际端口的完整整链联调在`docs/集成测试.md`人工联调章节跟踪，探针阶段以挡板上游隔离验证网关传输行为。
+
+信封加密实现`AesGcmEnvelopeCrypto`移除`@Primary`：生产它是`EnvelopeCryptoPort`唯一实现，注解冗余，且会压制/冲突集成测试配置注册的替身实现（如`ProjectStandardQueryIntegrationSupport`的mock）；移除不影响生产装配。
 
 最后串行运行完整供应链Test、独立API Contract、profile真实Integration/Contract和Arch全部门禁；共享Web/Gateway变更须有真实隔离行为探针与编译验证，SC之外单测依用户范围跳过，不跳SC。逐类新鲜XML计数与去重结果诚实记录，不能用早期通过的报告冒充最终HEAD。前端配套文案的实际构建验证单独记录，不将既有全仓类型错误隐藏为全绿。
 

@@ -9,7 +9,7 @@ import cn.hutool.core.util.BooleanUtil;
 import cn.hutool.core.util.StrUtil;
 import com.aifuli.framework.apilog.core.annotation.ApiAccessLog;
 import com.aifuli.framework.apilog.core.enums.OperateTypeEnum;
-import com.aifuli.framework.apilog.core.util.ApiAccessLogPathUtils;
+import com.aifuli.framework.common.util.http.ApiAccessLogPathUtils;
 import com.aifuli.framework.apilog.core.util.SensitiveExceptionLogUtils;
 import com.aifuli.framework.common.biz.infra.logger.ApiAccessLogCommonApi;
 import com.aifuli.framework.common.biz.infra.logger.dto.ApiAccessLogCreateReqDTO;
@@ -188,8 +188,7 @@ public class ApiAccessLogFilter extends ApiRequestFilter {
 
     private static boolean isSensitiveProtectionRequest(HttpServletRequest request) {
         if (request == null) { return false; }
-        return ApiAccessLogPathUtils.isRechargeFrequencyAdminPath(request.getRequestURI(), request.getContextPath())
-                || ApiAccessLogPathUtils.isStandardOrdersPath(request.getRequestURI(), request.getContextPath());
+        return ApiAccessLogPathUtils.isSensitiveProtectionPath(request.getRequestURI(), request.getContextPath());
     }
 
     // ========== 解析 @ApiAccessLog、@Swagger 注解  ==========

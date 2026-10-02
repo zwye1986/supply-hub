@@ -1,6 +1,7 @@
 package com.aifuli.gateway.handler;
 
 import com.aifuli.framework.common.pojo.CommonResult;
+import com.aifuli.gateway.filter.logging.AccessLogSanitizeUtils;
 import com.aifuli.gateway.util.WebFrameworkUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.web.reactive.error.ErrorWebExceptionHandler;
@@ -36,7 +37,7 @@ public class GlobalExceptionHandler implements ErrorWebExceptionHandler {
         }
 
         String rawPath = exchange.getRequest().getURI().getRawPath();
-        boolean standardOrder = com.aifuli.gateway.filter.logging.AccessLogSanitizeUtils.isStandardOrdersPath(rawPath);
+        boolean standardOrder = AccessLogSanitizeUtils.isStandardOrdersPath(rawPath);
         if (standardOrder) {
             response.getHeaders().set("Cache-Control", "no-store");
         }
@@ -60,9 +61,9 @@ public class GlobalExceptionHandler implements ErrorWebExceptionHandler {
                                                            ResponseStatusException ex) {
         ServerHttpRequest request = exchange.getRequest();
         String rawPath = request.getURI().getRawPath();
-        if (com.aifuli.gateway.filter.logging.AccessLogSanitizeUtils.isStandardOrdersPath(rawPath)) {
+        if (AccessLogSanitizeUtils.isStandardOrdersPath(rawPath)) {
             log.error("[responseStatusExceptionHandler][safeUri({}/{}) status({}) 发生异常]",
-                    com.aifuli.gateway.filter.logging.AccessLogSanitizeUtils.safeStandardOrderUrl(rawPath),
+                    AccessLogSanitizeUtils.safeStandardOrderUrl(rawPath),
                     request.getMethod(), ex.getStatusCode());
             return CommonResult.error(ex.getStatusCode().value(), "请求失败");
         }
@@ -78,9 +79,9 @@ public class GlobalExceptionHandler implements ErrorWebExceptionHandler {
                                                    Throwable ex) {
         ServerHttpRequest request = exchange.getRequest();
         String rawPath = request.getURI().getRawPath();
-        if (com.aifuli.gateway.filter.logging.AccessLogSanitizeUtils.isStandardOrdersPath(rawPath)) {
+        if (AccessLogSanitizeUtils.isStandardOrdersPath(rawPath)) {
             log.error("[defaultExceptionHandler][safeUri({}/{}) 发生异常: {}]",
-                    com.aifuli.gateway.filter.logging.AccessLogSanitizeUtils.safeStandardOrderUrl(rawPath),
+                    AccessLogSanitizeUtils.safeStandardOrderUrl(rawPath),
                     request.getMethod(), ex.getClass().getSimpleName());
             return CommonResult.error(INTERNAL_SERVER_ERROR.getCode(), INTERNAL_SERVER_ERROR.getMsg());
         }

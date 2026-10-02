@@ -1,5 +1,6 @@
 package com.aifuli.module.supplychain.api.auth;
 
+import com.aifuli.framework.common.util.http.ApiAccessLogPathUtils;
 import com.aifuli.module.supplychain.api.instore.InstoreBuyerCashierCallbackApi;
 import com.aifuli.module.supplychain.api.instore.InstoreBuyerEntryApi;
 import com.aifuli.module.supplychain.api.instore.InstoreChannelCommandApi;
@@ -140,6 +141,29 @@ class ProjectAuthOperationsContractTest {
             assertThat(ProjectAuthOperations.findByMethodAndPath("GET", path)).isEmpty();
             assertThat(ProjectAuthOperations.findByMethodAndPath("POST", path + "/unknown")).isEmpty();
         }
+    }
+
+    /**
+     * common 层 {@link ApiAccessLogPathUtils} 的标准订单路径常量无法反向依赖供应链模块，
+     * 与 {@link ProjectAuthOperations} 的登记路径存在双侧同步义务；本测试以契约锁定两侧一致，
+     * 任一侧漂移即失败。设计见
+     * docs/superpowers/specs/2026-10-02-standard-project-http-transport-design.md#4-共享web保护与影响范围。
+     */
+    @Test
+    void standardOrdersPathConstantStaysAlignedWithSharedLogPathUtils() {
+        assertThat(ApiAccessLogPathUtils.STANDARD_ORDERS_PATH)
+                .isEqualTo(ProjectAuthOperations.STANDARD_ORDERS_PATH);
+        for (String suffix : List.of("", "/query", "/assets/query")) {
+            String path = ProjectAuthOperations.STANDARD_ORDERS_PATH + suffix;
+            assertThat(ApiAccessLogPathUtils.isStandardOrdersPath(path, ""))
+                    .as("注册路径必须被日志保护工具识别: %s", path)
+                    .isTrue();
+            assertThat(ApiAccessLogPathUtils.safeStandardOrderUrl(path, ""))
+                    .isEqualTo(path);
+        }
+        assertThat(ApiAccessLogPathUtils.safeStandardOrderUrl(
+                ProjectAuthOperations.STANDARD_ORDERS_PATH + "/unknown", ""))
+                .isEqualTo(ProjectAuthOperations.STANDARD_ORDERS_PATH + "/[protected]");
     }
 
     @Test

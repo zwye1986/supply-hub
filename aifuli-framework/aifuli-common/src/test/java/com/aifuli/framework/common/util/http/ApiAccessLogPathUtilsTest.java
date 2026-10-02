@@ -1,4 +1,4 @@
-package com.aifuli.framework.apilog.core.util;
+package com.aifuli.framework.common.util.http;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -46,6 +46,40 @@ class ApiAccessLogPathUtilsTest {
         assertThat(ApiAccessLogPathUtils.isSensitivePlatformPath(
                 "/edge/supply-chain/rpc-api/supply-chain/instore/channel-command/createPaymentOrder",
                 "/supply-chain")).isFalse();
+        // Spec-3: orders 相似前缀（orders-other）不得被 isSensitivePlatformPath 误判
+        assertThat(ApiAccessLogPathUtils.isSensitivePlatformPath(
+                "/open-api/supply-chain/project/v1/orders-other")).isFalse();
+        assertThat(ApiAccessLogPathUtils.isSensitivePlatformPath(
+                "/open-api/supply-chain/project/v1/ordersfoo")).isFalse();
+        assertThat(ApiAccessLogPathUtils.isSensitivePlatformPath(
+                "/supply-chain/open-api/supply-chain/project/v1/orders-other",
+                "/supply-chain")).isFalse();
+        // 标准订单根/子路径仍必须保护
+        assertThat(ApiAccessLogPathUtils.isSensitivePlatformPath(
+                "/open-api/supply-chain/project/v1/orders")).isTrue();
+        assertThat(ApiAccessLogPathUtils.isSensitivePlatformPath(
+                "/open-api/supply-chain/project/v1/orders/query")).isTrue();
+    }
+
+    /** Spec-1: 安全异常处理判断方法必须与 isStandardOrdersPath / isRechargeFrequencyAdminPath 同口径。 */
+    @Test
+    void isSensitiveProtectionPathAlignsWithStandardAndFrequency() {
+        assertThat(ApiAccessLogPathUtils.isSensitiveProtectionPath(
+                "/open-api/supply-chain/project/v1/orders", "")).isTrue();
+        assertThat(ApiAccessLogPathUtils.isSensitiveProtectionPath(
+                "/open-api/supply-chain/project/v1/orders/query", "")).isTrue();
+        assertThat(ApiAccessLogPathUtils.isSensitiveProtectionPath(
+                "/supply-chain/recharge-frequency/page", "")).isTrue();
+        assertThat(ApiAccessLogPathUtils.isSensitiveProtectionPath(
+                "/admin-api/supply-chain/recharge-frequency/page", "")).isTrue();
+        // 普通路径不支持安全异常处理
+        assertThat(ApiAccessLogPathUtils.isSensitiveProtectionPath(
+                "/admin-api/system/user/page", "")).isFalse();
+        // Spec-3: orders 相似前缀不支持安全异常处理
+        assertThat(ApiAccessLogPathUtils.isSensitiveProtectionPath(
+                "/open-api/supply-chain/project/v1/orders-other", "")).isFalse();
+        // null 安全
+        assertThat(ApiAccessLogPathUtils.isSensitiveProtectionPath(null, "")).isFalse();
     }
 
     @Test

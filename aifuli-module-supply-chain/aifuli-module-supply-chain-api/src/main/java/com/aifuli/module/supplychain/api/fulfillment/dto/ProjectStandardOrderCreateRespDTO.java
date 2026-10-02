@@ -16,7 +16,11 @@ import java.time.OffsetDateTime;
 @Data
 public class ProjectStandardOrderCreateRespDTO {
 
-    /** 受理回执稳定业务编号（receiptNo） */
+    /**
+     * 稳定受理回执号。对外契约字段名固定为 requestId（内部对应回执单 receiptNo），
+     * 首次受理、幂等重放与拒绝收敛路径返回同一值。
+     * 设计见 {@code docs/superpowers/specs/2026-09-30-project-signed-standard-order-http-design.md#4-永久幂等条件重试与受理结果}。
+     */
     private String requestId;
 
     /** 采购商订单号 */

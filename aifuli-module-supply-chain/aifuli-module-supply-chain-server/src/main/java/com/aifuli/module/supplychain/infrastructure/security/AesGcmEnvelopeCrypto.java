@@ -1,7 +1,6 @@
 package com.aifuli.module.supplychain.infrastructure.security;
 
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 
 import javax.crypto.Cipher;
@@ -14,8 +13,14 @@ import java.security.GeneralSecurityException;
 import java.security.SecureRandom;
 import java.util.Base64;
 
-/** 目标与资产的 AES-GCM 信封加密，以及不可逆 HMAC 指纹。 */
-@Primary
+/**
+ * 目标与资产的 AES-GCM 信封加密，以及不可逆 HMAC 指纹。
+ *
+ * <p>生产环境本类是 {@link EnvelopeCryptoPort} 的唯一实现，无需 {@code @Primary}；
+ * 去除 {@code @Primary} 后，集成测试配置（如
+ * {@code ProjectStandardQueryIntegrationSupport}）注册的替身实现才能正常参与装配，
+ * 而不会与生产实现产生双 {@code @Primary} 冲突或被其压制。</p>
+ */
 @Component
 public final class AesGcmEnvelopeCrypto implements EnvelopeCryptoPort, HmacFingerprintPort {
 

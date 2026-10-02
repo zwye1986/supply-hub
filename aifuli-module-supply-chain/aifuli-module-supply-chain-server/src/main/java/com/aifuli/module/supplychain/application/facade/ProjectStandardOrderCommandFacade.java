@@ -184,8 +184,10 @@ public class ProjectStandardOrderCommandFacade {
                         targetSchema.schemaCode(), targetSchema.schemaVersion(),
                         HexFormat.of().formatHex(targetDigest));
         byte[] canonical = StandardAcceptanceFingerprintPolicy.canonicalRequest(identity);
-        byte[] invariant = sha256(canonical);
-        byte[] fingerprint = sha256(canonical);
+        // 指纹格式 2 下 invariantFingerprint 与 requestFingerprint 同源（见 Lifecycle#claimExisting），
+        // 共用一次 sha256 计算；两列保留是为了兼容历史格式与 CHECK 约束，不构成两个独立语义。
+        byte[] requestFingerprint = sha256(canonical);
+        byte[] invariantFingerprint = requestFingerprint;
         byte[] buyerOrderDigest = sha256(StandardAcceptanceFingerprintPolicy
                 .canonicalBuyerOrderDigestInput(project.projectCode(), request.getBuyerOrderNo()));
         String fulfillmentAccountValue = FulfillmentTargetFields.mobileAccountValue(normalizedTargetValues);
@@ -199,7 +201,7 @@ public class ProjectStandardOrderCommandFacade {
                 targetSchema.schemaCode(), targetSchema.schemaVersion(),
                 encrypted == null ? null : encrypted.ciphertext(), targetDigest,
                 encrypted == null ? null : encrypted.keyVersion(), targetValid,
-                invariant, fingerprint, buyerOrderDigest, request.getPreviousReceiptVersion(), traceId);
+                invariantFingerprint, requestFingerprint, buyerOrderDigest, request.getPreviousReceiptVersion(), traceId);
     }
 
     private byte[] canonicalTarget(Map<String, String> targetValues, TargetSchemaSnapshot targetSchema) {

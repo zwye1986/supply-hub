@@ -77,7 +77,7 @@ public class ProjectStandardOrderController {
         requireNoQueryString(request);
         StandardProductContext context = contextAccessor.requireStandardProductContext(
                 ProjectAuthOperations.STANDARD_ORDER_QUERY);
-        String buyerOrderNo = parser.parseQuery(rawBody);
+        String buyerOrderNo = parser.parseBuyerOrderNo(rawBody);
         return CommonResult.success(queryFacade.query(context, buyerOrderNo));
     }
 
@@ -95,7 +95,7 @@ public class ProjectStandardOrderController {
         requireNoQueryString(request);
         StandardProductContext context = contextAccessor.requireStandardProductContext(
                 ProjectAuthOperations.STANDARD_ORDER_ASSET_QUERY);
-        String buyerOrderNo = parser.parseAssetsQuery(rawBody);
+        String buyerOrderNo = parser.parseBuyerOrderNo(rawBody);
         return CommonResult.success(queryFacade.assets(context, buyerOrderNo));
     }
 

@@ -336,6 +336,11 @@ public final class ProjectAppAuthFilter extends OncePerRequestFilter {
         return failure;
     }
 
+    /**
+     * 标准订单根及全部子路径在 HMAC 读正文前统一设置 Cache-Control: no-store，
+     * 覆盖成功、参数错误、业务拒绝、鉴权失败与系统错误，避免认证拒绝响应漏掉缓存头。
+     * 设计见 docs/superpowers/specs/2026-10-02-standard-project-http-transport-design.md#2-供应链独立进程安全与缓存。
+     */
     private static boolean isStandardOrdersPath(String path) {
         return ProjectAuthOperations.STANDARD_ORDERS_PATH.equals(path)
                 || (path != null && path.startsWith(ProjectAuthOperations.STANDARD_ORDERS_PATH + "/"));

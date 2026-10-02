@@ -1,6 +1,6 @@
 package com.aifuli.module.supplychain.interfaceapi.admin;
 
-import com.aifuli.framework.apilog.core.util.ApiAccessLogPathUtils;
+import com.aifuli.framework.common.util.http.ApiAccessLogPathUtils;
 import com.aifuli.framework.web.core.handler.GlobalExceptionHandler;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockHttpServletRequest;

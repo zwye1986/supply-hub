@@ -28,7 +28,17 @@ import static com.aifuli.framework.common.exception.util.ServiceExceptionUtil.ex
 @Component
 public class ProjectStandardHttpRequestParser {
 
+    /** 通用字符串字段最大长度，与 buyerOrderNo 上限一致（上位设计 §3）。 */
     private static final int MAX_STRING_LENGTH = 128;
+
+    /** buyerSkuCode 最大长度，见 docs/superpowers/specs/2026-09-30-project-signed-standard-order-http-design.md §3。 */
+    private static final int MAX_SKU_CODE_LENGTH = 64;
+
+    /** target 属性值最大长度：HTTP 层统一兜底上限，精确字段与格式由共享目标 Schema 校验决定。 */
+    private static final int MAX_TARGET_VALUE_LENGTH = 128;
+
+    /** 标准订单固定数量：本契约仅支持单件下单（上位设计 §3）。 */
+    private static final int STANDARD_ORDER_QUANTITY = 1;
 
     private final JsonFactory jsonFactory = JsonFactory.builder()
             .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
@@ -65,21 +75,22 @@ public class ProjectStandardHttpRequestParser {
                             throw invalidParameter("buyerOrderNo 必须为字符串");
                         }
                         buyerOrderNo = parser.getText();
-                        validateStringField(buyerOrderNo);
+                        validateTextField(buyerOrderNo, MAX_STRING_LENGTH);
                     }
                     case "buyerSkuCode" -> {
                         if (parser.currentToken() != JsonToken.VALUE_STRING) {
                             throw invalidParameter("buyerSkuCode 必须为字符串");
                         }
                         buyerSkuCode = parser.getText();
-                        validateStringField(buyerSkuCode);
+                        // buyerSkuCode 上限 64 比通用字符串字段更严格（上位设计 §3）。
+                        validateTextField(buyerSkuCode, MAX_SKU_CODE_LENGTH);
                     }
                     case "quantity" -> {
                         if (parser.currentToken() != JsonToken.VALUE_NUMBER_INT) {
                             throw invalidParameter("quantity 必须为严格整数");
                         }
                         quantity = parser.getIntValue();
-                        if (quantity != 1) {
+                        if (quantity != STANDARD_ORDER_QUANTITY) {
                             throw invalidParameter("quantity 必须精确等于 1");
                         }
                     }
@@ -139,26 +150,13 @@ public class ProjectStandardHttpRequestParser {
     }
 
     /**
-     * 严格解析标准查单请求正文。
+     * 严格解析标准查单/资产查询请求正文，二者共用同一封闭契约：仅接受 buyerOrderNo 单字段。
      *
      * @param rawBody 原始正文字节数组
      * @return 采购商订单号
+     * @see docs/superpowers/specs/2026-10-02-standard-project-http-transport-design.md#1-controller与严格请求解析
      */
-    public String parseQuery(byte[] rawBody) {
-        return parseSingleBuyerOrderNo(rawBody);
-    }
-
-    /**
-     * 严格解析标准资产查询请求正文。
-     *
-     * @param rawBody 原始正文字节数组
-     * @return 采购商订单号
-     */
-    public String parseAssetsQuery(byte[] rawBody) {
-        return parseSingleBuyerOrderNo(rawBody);
-    }
-
-    private String parseSingleBuyerOrderNo(byte[] rawBody) {
+    public String parseBuyerOrderNo(byte[] rawBody) {
         if (rawBody == null || rawBody.length == 0) {
             throw invalidParameter("正文为空");
         }
@@ -178,7 +176,7 @@ public class ProjectStandardHttpRequestParser {
                         throw invalidParameter("buyerOrderNo 必须为字符串");
                     }
                     buyerOrderNo = parser.getText();
-                    validateStringField(buyerOrderNo);
+                    validateTextField(buyerOrderNo, MAX_STRING_LENGTH);
                 } else {
                     throw invalidParameter("包含未知字段: " + fieldName);
                 }
@@ -201,8 +199,10 @@ public class ProjectStandardHttpRequestParser {
         }
     }
 
-    private static void validateStringField(String val) {
-        if (val == null || val.isBlank() || val.length() > MAX_STRING_LENGTH
+    /** 严格文本校验骨架：非空白、长度不超上限、不含 ISO 控制字符；各字段上限差异见常量注释。
+     * 设计见 {@code docs/superpowers/specs/2026-10-02-standard-project-http-transport-design.md#1-controller与严格请求解析}。 */
+    private static void validateTextField(String val, int maxLength) {
+        if (val == null || val.isBlank() || val.length() > maxLength
                 || val.chars().anyMatch(Character::isISOControl)) {
             throw invalidParameter("字段格式不正确");
         }
@@ -213,7 +213,8 @@ public class ProjectStandardHttpRequestParser {
                 || key.chars().anyMatch(Character::isISOControl)) {
             throw invalidParameter("target key 格式不正确");
         }
-        if (val == null || val.chars().anyMatch(Character::isISOControl)) {
+        if (val == null || val.length() > MAX_TARGET_VALUE_LENGTH
+                || val.chars().anyMatch(Character::isISOControl)) {
             throw invalidParameter("target value 格式不正确");
         }
     }
