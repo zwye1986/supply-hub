@@ -159,28 +159,31 @@ class StandardPricingQuoteServiceTest {
     }
 
     @Test
-    void requireForFulfillmentAcceptsQuoteBeyondLegacyExpiryWithoutPaidAtWindow() {
+    void requireForProjectAcceptsQuoteBeyondLegacyExpiryWithoutPaidAtWindow() {
         StandardPricingQuoteDO legacyExpired = issuedQuote(NOW.minusHours(1));
         when(quoteMapper.selectByProjectOrderForUpdate(2L, "ORD-1")).thenReturn(legacyExpired);
 
-        FrozenQuote frozen = service.requireForFulfillment(new QuoteConsumptionContext(
-                "token-1", 1L, 2L, 4L, "ORD-1", 1L));
+        FrozenQuote frozen = service.requireForProject(new ProjectQuoteKeyContext(1L, 2L, 4L, "ORD-1", 1L));
 
         assertThat(frozen.quoteId()).isEqualTo(7L);
         assertThat(frozen.listingId()).isEqualTo(3L);
         assertThat(frozen.consumed()).isFalse();
     }
 
+    /**
+     * 过渡 token 校验随请求 token 字段删除而退役：项目键消费不再携带或校验 quoteToken，
+     * 不能让 HTTP 请求自选报价；同永久项目键只使用首次冻结报价。
+     * 设计见 docs/superpowers/specs/2026-10-02-standard-acceptance-project-key-design.md#2-首次身份与重放优先。
+     */
     @Test
-    void requireForFulfillmentRejectsTokenNotMatchingProjectKeyQuote() {
+    void requireForProjectDoesNotRequireTransitionalTokenMatch() {
         StandardPricingQuoteDO quote = issuedQuote(NOW.minusHours(1));
         quote.setQuoteToken("token-other");
         when(quoteMapper.selectByProjectOrderForUpdate(2L, "ORD-1")).thenReturn(quote);
 
-        assertThatThrownBy(() -> service.requireForFulfillment(new QuoteConsumptionContext(
-                "token-1", 1L, 2L, 4L, "ORD-1", 1L)))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("token");
+        FrozenQuote frozen = service.requireForProject(new ProjectQuoteKeyContext(1L, 2L, 4L, "ORD-1", 1L));
+
+        assertThat(frozen.quoteId()).isEqualTo(7L);
     }
 
     @Test

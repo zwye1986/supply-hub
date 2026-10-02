@@ -19,7 +19,10 @@ import java.util.Objects;
  *
  * <p>调用方必须先锁 SKU、再把锁定快照传入本服务统计有效订单，确保同一 SKU 的并发请求不能同时越过
  * 额度判断。买家手机号与履约手机号只作为查询条件，不进入日志。失败、取消和全部退款由订单状态投影自动释放额度。
- * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#35-sku-限购计算并发与释放规则}。</p>
+ * 过渡期：请求级购买人身份已删除，「每人」维度的统计实参为实际 MOBILE 规范化手机号；卡券/非手机号
+ * 账号无手机号身份时跳过每人维度，不补造身份（每人维度完整切换与订单备注见设计 §4 后续步骤）。
+ * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#35-sku-限购计算并发与释放规则}、
+ * {@code docs/superpowers/specs/2026-10-02-standard-acceptance-project-key-design.md#2-首次身份与重放优先}。</p>
  */
 @Slf4j
 @Service
@@ -38,9 +41,11 @@ public class SkuPurchaseLimitService {
         Objects.requireNonNull(lockedSku, "lockedSku");
         Objects.requireNonNull(lockedSku.getId(), "lockedSku.id");
         Objects.requireNonNull(acceptedAt, "acceptedAt");
-        if (buyerUserId == null || buyerUserId.isBlank() || quantity <= 0) {
+        if (quantity <= 0) {
             throw new IllegalArgumentException("限购校验参数不完整");
         }
+        // 无实际手机号身份（卡券/非手机号账号）时跳过每人维度，不补造购买人身份。
+        boolean hasPersonalIdentity = buyerUserId != null && !buyerUserId.isBlank();
         if (Boolean.TRUE.equals(lockedSku.getOrderLimitEnabled())
                 && lockedSku.getMaxQuantity() != null
                 && quantity > lockedSku.getMaxQuantity()) {
@@ -48,7 +53,7 @@ public class SkuPurchaseLimitService {
                     projectId, lockedSku.getSkuCode(), quantity, lockedSku.getMaxQuantity());
             return Violation.ORDER_LIMIT_EXCEEDED;
         }
-        if (Boolean.TRUE.equals(lockedSku.getUserLimitEnabled())) {
+        if (hasPersonalIdentity && Boolean.TRUE.equals(lockedSku.getUserLimitEnabled())) {
             if (lockedSku.getUserLimitQuantity() == null || lockedSku.getUserLimitQuantity() <= 0) {
                 throw new IllegalStateException("启用的SKU每人限购配置缺少有效数量");
             }

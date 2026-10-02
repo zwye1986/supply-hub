@@ -122,22 +122,6 @@ public class StandardPricingQuoteService {
     }
 
     /**
-     * 旧内部受理的过渡消费入口：在供应链业务事务内按项目永久键行锁唯一报价，
-     * 并额外核对过渡 token 指向该报价；不再校验用户、支付时间或历史失效时间。
-     * 调用方落订单后必须调用 {@link #markConsumed}，两者必须处于同一事务。
-     */
-    @Transactional(transactionManager = TX, rollbackFor = Exception.class, propagation = Propagation.MANDATORY)
-    public FrozenQuote requireForFulfillment(QuoteConsumptionContext context) {
-        Objects.requireNonNull(context, "quote consumption context is required");
-        StandardPricingQuoteDO quote = requireLockedQuote(context.buyerId(), context.projectId(),
-                context.platformSkuId(), context.buyerOrderNo(), context.quantity());
-        if (!Objects.equals(context.token(), quote.getQuoteToken())) {
-            throw new IllegalStateException("pricing quote token does not match the project permanently keyed quote");
-        }
-        return frozen(quote);
-    }
-
-    /**
      * 共享受理的最终消费入口：仅凭可信项目键（采购商+项目+平台SKU+项目订单号+数量）行锁首次冻结报价。
      * 缺报价抛稳定业务错误 {@code STANDARD_PRICING_QUOTE_MISSING}（可条件重试），
      * 不重新定价、不任取最新历史报价；返回不可变 {@link FrozenQuote} 及商品身份快照供受理校验。

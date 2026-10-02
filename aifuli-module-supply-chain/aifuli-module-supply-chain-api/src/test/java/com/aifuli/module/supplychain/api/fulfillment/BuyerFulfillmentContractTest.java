@@ -13,7 +13,6 @@ import jakarta.validation.Validator;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
-import java.time.OffsetDateTime;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
@@ -44,6 +43,11 @@ class BuyerFulfillmentContractTest {
         assertThat(violations).isEmpty();
     }
 
+    /**
+     * 保留字段必填断言不变；同时断言已删除的购买人身份/支付时间/调用方版本/报价 token
+     * 不再是契约必填（空请求的校验结果不得包含这四个属性）。
+     * 设计见 docs/superpowers/specs/2026-10-02-standard-acceptance-project-key-design.md#1-双入口与共享命令。
+     */
     @Test
     void rejectsMissingRequiredFields() {
         AcceptFulfillmentReqDTO request = new AcceptFulfillmentReqDTO();
@@ -56,12 +60,13 @@ class BuyerFulfillmentContractTest {
                 "externalTenantId",
                 "projectCode",
                 "buyerOrderNo",
-                "buyerUserId",
                 "buyerSkuCode",
+                "quantity",
+                "target");
+        assertThat(properties).doesNotContain(
+                "buyerUserId",
                 "listingVersion",
                 "pricingQuoteToken",
-                "quantity",
-                "target",
                 "paidAt");
     }
 
@@ -77,8 +82,11 @@ class BuyerFulfillmentContractTest {
                         || name.equals("BigDecimal"));
         assertThat(json).doesNotContain("buyerId", "supplierId", "BigDecimal", "\"POINT\"");
         assertThat(root.get("quantity").isIntegralNumber()).isTrue();
-        assertThat(root.get("listingVersion").isIntegralNumber()).isTrue();
-        assertThat(root.has("paidAt")).isTrue();
+        // 契约序列化结果不得再出现已删除的购买人身份、调用方版本、报价 token 与支付时间键。
+        assertThat(root.has("buyerUserId")).isFalse();
+        assertThat(root.has("listingVersion")).isFalse();
+        assertThat(root.has("pricingQuoteToken")).isFalse();
+        assertThat(root.has("paidAt")).isFalse();
         assertThat(root.get("target").fieldNames()).toIterable().containsExactly("values");
     }
 
@@ -124,13 +132,9 @@ class BuyerFulfillmentContractTest {
         request.setExternalTenantId("tenant-wusheng");
         request.setProjectCode("PRJ_01ABC");
         request.setBuyerOrderNo("C202608110001");
-        request.setBuyerUserId("13800138000");
         request.setBuyerSkuCode("TELCO-100");
-        request.setListingVersion(42L);
-        request.setPricingQuoteToken("8a849b77e8cd4b7eb12fe6fc3ea5c2ee");
         request.setQuantity(1L);
         request.setTarget(target);
-        request.setPaidAt(OffsetDateTime.parse("2026-08-11T10:30:00+08:00"));
         return request;
     }
 

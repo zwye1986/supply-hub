@@ -4,6 +4,7 @@ import com.aifuli.module.supplychain.api.fulfillment.dto.AcceptFulfillmentReqDTO
 import com.aifuli.module.supplychain.api.fulfillment.dto.FulfillmentAcceptanceReceiptRespDTO;
 import com.aifuli.module.supplychain.api.fulfillment.dto.FulfillmentReceiptStatus;
 import com.aifuli.module.supplychain.api.fulfillment.dto.FulfillmentTargetDTO;
+import com.aifuli.module.supplychain.api.order.dto.SupplyChainOrderStatus;
 import com.aifuli.module.supplychain.border.fulfillment.application.FulfillmentAcceptanceLifecycle;
 import com.aifuli.module.supplychain.border.fulfillment.application.FulfillmentAcceptanceLifecycle.AcceptanceSnapshot;
 import com.aifuli.module.supplychain.border.fulfillment.application.FulfillmentAcceptanceLifecycle.ClaimResult;
@@ -12,6 +13,7 @@ import com.aifuli.module.supplychain.border.fulfillment.application.FulfillmentA
 import com.aifuli.module.supplychain.border.fulfillment.application.FulfillmentTargetSchemaRegistry;
 import com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyAcceptanceCoordinator;
 import com.aifuli.module.supplychain.border.fulfillment.domain.AcceptanceReceiptStatus;
+import com.aifuli.module.supplychain.border.fulfillment.domain.AcceptanceRejectionCode;
 import com.aifuli.module.supplychain.border.fulfillment.domain.FulfillmentTargetFields;
 import com.aifuli.module.supplychain.infrastructure.identity.BusinessNoGenerator;
 import com.aifuli.module.supplychain.infrastructure.security.EnvelopeCryptoPort;
@@ -41,7 +43,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * 「标准受理的项目永久键与身份清理」RED 行为测试（TDD 红灯阶段：只断言新语义，不改动生产代码）。
+ * 「标准受理的项目永久键与身份清理」行为测试（GREEN：断言新语义已由生产代码实现）。
  *
  * <p>验证设计 docs/superpowers/specs/2026-10-02-standard-acceptance-project-key-design.md：
  * <ul>
@@ -49,14 +51,13 @@ import static org.mockito.Mockito.when;
  *       受理不再要求购买人身份、客户端商品版本、报价凭证串与支付时间。本测试类不引用这四个待删字段的
  *       getter/setter，字段删除后无需机械改动即可继续编译；</li>
  *   <li>§3 回执竞争、重试和真实返回：首次与重放的 requestId 都必须返回实际回执号（receiptNo），
- *       不能每次生成新的 REQ 前缀号冒充稳定回执号。</li>
+ *       不能每次生成新的 REQ 前缀号冒充稳定回执号；重放返回订单表当前真实 orderStatus，
+ *       未建单显式 null，不得恒写 PROCESSING。</li>
  * </ul>
  *
- * <p>过渡期说明：用例二、三需要穿过当前 {@code requireBasicRequest} 的旧校验抵达 claim/accept，
- * 才能在当前实现上暴露「每次生成新 REQ 号」的语义缺口，因此请求经 JSON 反序列化构造——
- * JSON 文本不引用待删字段的 getter/setter，字段删除后这些键成为未知属性被
- * {@link #TRANSITIONAL_MAPPER} 忽略。{@code LENIENT} 宽棒策略用于红灯阶段：当前实现可能在触及
- * 协作对象之前抛出，聚焦的失败信息比未使用 stub 报错更有价值。</p>
+ * <p>过渡期说明：用例二、三、四的请求经 JSON 反序列化构造——文本中残留的四个待删字段键
+ * 成为未知属性被 {@link #TRANSITIONAL_MAPPER} 忽略，证明契约删除后旧报文不致反序列化失败。
+ * {@code LENIENT} 宽棒策略保留自红灯阶段，便于聚焦断言失败信息。</p>
  */
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
@@ -117,9 +118,8 @@ class BuyerFulfillmentCommandFacadeTest {
      * 用例一（设计 §1）：受理请求只携带 sourceSystem/externalTenantId/projectCode/buyerOrderNo/
      * buyerSkuCode/quantity/target，四个待删字段全部缺失。
      *
-     * <p>断言新语义：不得因缺失购买人身份、客户端商品版本、报价凭证串与支付时间抛出校验异常，
-     * 且流程进入 claim 并沿重放路径返回回执。
-     * 当前实现 {@code requireBasicRequest} 仍对四个字段做非空校验（NPE/IllegalArgumentException）→ RED。</p>
+     * <p>断言：不因缺失购买人身份、客户端商品版本、报价凭证串与支付时间抛出校验异常，
+     * 且流程进入 claim 并沿重放路径返回回执。</p>
      */
     @Test
     void acceptFulfillmentNoLongerRequiresRemovedIdentityFields() {
@@ -147,8 +147,7 @@ class BuyerFulfillmentCommandFacadeTest {
     /**
      * 用例二（设计 §3）：同一请求首次受理成功后再次调用，重放必须返回稳定 requestId。
      *
-     * <p>断言新语义：重放响应的 requestId 与首次响应完全一致（都为实际回执号）。
-     * 当前实现每次调用生成新的 REQ 前缀号 → 两次 requestId 不等 → RED。</p>
+     * <p>断言：重放响应的 requestId 与首次响应完全一致（都为实际回执号）。</p>
      */
     @Test
     void replayReturnsStableRequestIdAcrossRepeatedCalls() throws Exception {
@@ -175,8 +174,7 @@ class BuyerFulfillmentCommandFacadeTest {
      * 用例三（设计 §3）：首次受理返回的 requestId 就是回执身份（实际回执号），
      * 不是每次新生成的 REQ 业务号。
      *
-     * <p>断言新语义：首次与重放响应的 requestId 都等于回执号。
-     * 当前实现首次响应返回新生成的 REQ 号 → RED。</p>
+     * <p>断言：首次与重放响应的 requestId 都等于回执号。</p>
      */
     @Test
     void firstAcceptanceRequestIdIsTheActualReceiptNo() throws Exception {
@@ -199,6 +197,44 @@ class BuyerFulfillmentCommandFacadeTest {
     }
 
     /**
+     * 用例四（设计 §3）：重放返回订单表当前真实 orderStatus，快照为 SUCCEEDED 时
+     * 响应不得恒写 PROCESSING（上一步推迟的断言在本步补齐）。
+     */
+    @Test
+    void replayReturnsActualOrderStatusFromSnapshotInsteadOfAlwaysProcessing() throws Exception {
+        stubTrustedIdentityResolution();
+        when(lifecycle.claim(any(PreparedAcceptance.class)))
+                .thenReturn(new ClaimResult(RECEIPT_ID, true, false));
+        when(acceptanceCoordinator.accept(eq(RECEIPT_ID), any(PreparedAcceptance.class)))
+                .thenReturn(snapshot(false, SupplyChainOrderStatus.SUCCEEDED.getCode()));
+        when(lifecycle.replay(RECEIPT_ID))
+                .thenReturn(snapshot(true, SupplyChainOrderStatus.SUCCEEDED.getCode()));
+
+        FulfillmentAcceptanceReceiptRespDTO first = facade.acceptFulfillment(transitionalValidatedRequest());
+        FulfillmentAcceptanceReceiptRespDTO replayed = facade.acceptFulfillment(transitionalValidatedRequest());
+
+        assertThat(first.getOrderStatus()).isEqualTo(SupplyChainOrderStatus.SUCCEEDED);
+        assertThat(replayed.getOrderStatus()).isEqualTo(SupplyChainOrderStatus.SUCCEEDED)
+                .isNotEqualTo(SupplyChainOrderStatus.PROCESSING);
+    }
+
+    /**
+     * 用例五（设计 §3）：未建单（orderNo 为空）响应 orderStatus 显式 null，不再恒写 PROCESSING。
+     */
+    @Test
+    void responseWithoutOrderLeavesOrderStatusExplicitlyNull() throws Exception {
+        stubTrustedIdentityResolution();
+        when(lifecycle.claim(any(PreparedAcceptance.class)))
+                .thenReturn(new ClaimResult(RECEIPT_ID, false, true));
+        when(lifecycle.replay(RECEIPT_ID)).thenReturn(rejectedSnapshotWithoutOrder());
+
+        FulfillmentAcceptanceReceiptRespDTO response = facade.acceptFulfillment(transitionalValidatedRequest());
+
+        assertThat(response.getOrderNo()).isNull();
+        assertThat(response.getOrderStatus()).isNull();
+    }
+
+    /**
      * 桩掉受理前置的身份与 Schema 解析协作，使流程可信地抵达 lifecycle.claim。
      */
     private void stubTrustedIdentityResolution() {
@@ -209,20 +245,33 @@ class BuyerFulfillmentCommandFacadeTest {
                 .thenReturn(new BuyerProjectAccessResolver.ProjectSnapshot(
                         11L, PROJECT_CODE, "项目键单元测试项目", 1L));
         when(lifecycle.resolveTargetSchema(1L, BUYER_SKU_CODE))
-                .thenReturn(new TargetSchemaSnapshot(TARGET_SCHEMA_CODE, 1, true));
+                .thenReturn(new TargetSchemaSnapshot(4L, TARGET_SCHEMA_CODE, 1, true));
         when(hmacFingerprint.fingerprint(anyString(), any(byte[].class))).thenReturn(new byte[32]);
         when(envelopeCrypto.encrypt(any(byte[].class), any(byte[].class)))
                 .thenReturn(new EnvelopeCryptoPort.EncryptedPayload(new byte[32], "unit-test-v1"));
     }
 
     /**
-     * 已受理回执快照 fixture：回执号、状态与 CAS 版本固定，acceptedAt 为空避免时钟换算桩。
+     * 已受理回执快照 fixture：回执号、状态与 CAS 版本固定，acceptedAt 为空避免时钟换算桩；
+     * orderStatus 默认与受理完成时订单初始状态 PROCESSING 一致。
      */
     private static AcceptanceSnapshot snapshot(boolean idempotentReplay) {
+        return snapshot(idempotentReplay, SupplyChainOrderStatus.PROCESSING.getCode());
+    }
+
+    private static AcceptanceSnapshot snapshot(boolean idempotentReplay, short orderStatus) {
         return new AcceptanceSnapshot(RECEIPT_NO, BUYER_ORDER_NO,
                 AcceptanceReceiptStatus.ACCEPTED.getCode(), RECEIPT_VERSION,
                 "SC_UNIT_ORDER_0001", "FR_UNIT_REQUEST_0001", null, "QINAMENG", "奇那梦",
-                null, idempotentReplay);
+                null, idempotentReplay, orderStatus);
+    }
+
+    /** 未建单的最终拒绝快照 fixture：orderNo/orderStatus/fulfillmentRequestNo 显式为空。 */
+    private static AcceptanceSnapshot rejectedSnapshotWithoutOrder() {
+        return new AcceptanceSnapshot(RECEIPT_NO, BUYER_ORDER_NO,
+                AcceptanceReceiptStatus.REJECTED_FINAL.getCode(), RECEIPT_VERSION,
+                null, null, AcceptanceRejectionCode.QUANTITY_NOT_SUPPORTED.name(), null, null,
+                null, true, null);
     }
 
     /**

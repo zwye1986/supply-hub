@@ -16,8 +16,8 @@ class RechargeFrequencyLifecycleIntegrationTest {
         var fixture = new FulfillmentAcceptanceIntegrationTest(); fixture.startContainer();
         try (var context = fixture.applicationContext(RechargeFrequencyExecutionIntegrationTest.ExecutionConfiguration.class)) {
             fixture.seed(context); var facade = context.getBean(BuyerFulfillmentCommandFacade.class);
-            facade.acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("FACT-HEAD", 1L));
-            facade.acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("FACT-TAIL", 1L));
+            facade.acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("FACT-HEAD"));
+            facade.acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("FACT-TAIL"));
             var jdbc = new JdbcTemplate(context.getBean("supplyChainDataSource", DataSource.class));
             var ops = RechargeFrequencyExecutionIntegrationTest.operations(jdbc);
             var frequency = context.getBean(RechargeFrequencyLifecycle.class); var lifecycle = context.getBean(SupplierOrderLifecycle.class);
@@ -55,7 +55,7 @@ class RechargeFrequencyLifecycleIntegrationTest {
     @Test void trustedFailureReleasesFundsAndOccupancyOnce() {
         var fixture = new FulfillmentAcceptanceIntegrationTest(); fixture.startContainer();
         try (var context = fixture.applicationContext(RechargeFrequencyExecutionIntegrationTest.ExecutionConfiguration.class)) {
-            fixture.seed(context); context.getBean(BuyerFulfillmentCommandFacade.class).acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("FAILURE", 1L));
+            fixture.seed(context); context.getBean(BuyerFulfillmentCommandFacade.class).acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("FAILURE"));
             var jdbc = new JdbcTemplate(context.getBean("supplyChainDataSource", DataSource.class));
             var op = RechargeFrequencyExecutionIntegrationTest.operations(jdbc).getFirst();
             var frequency = context.getBean(RechargeFrequencyLifecycle.class); var permit = frequency.claim(op); frequency.markSendPossible(permit);
@@ -73,8 +73,8 @@ class RechargeFrequencyLifecycleIntegrationTest {
         var fixture = new FulfillmentAcceptanceIntegrationTest(); fixture.startContainer();
         try (var context = fixture.applicationContext(RechargeFrequencyExecutionIntegrationTest.ExecutionConfiguration.class)) {
             fixture.seed(context); var facade = context.getBean(BuyerFulfillmentCommandFacade.class);
-            facade.acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("CONTINUE-HEAD", 1L));
-            facade.acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("CONTINUE-TAIL", 1L));
+            facade.acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("CONTINUE-HEAD"));
+            facade.acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("CONTINUE-TAIL"));
             var jdbc = new JdbcTemplate(context.getBean("supplyChainDataSource", DataSource.class));
             var ops = RechargeFrequencyExecutionIntegrationTest.operations(jdbc); var frequency = context.getBean(RechargeFrequencyLifecycle.class);
             var first = frequency.claim(ops.getFirst()); frequency.markSendPossible(first);
@@ -120,8 +120,8 @@ class RechargeFrequencyLifecycleIntegrationTest {
         var fixture = new FulfillmentAcceptanceIntegrationTest(); fixture.startContainer();
         try (var context = fixture.applicationContext(RechargeFrequencyExecutionIntegrationTest.ExecutionConfiguration.class)) {
             fixture.seed(context); var facade = context.getBean(BuyerFulfillmentCommandFacade.class);
-            facade.acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("NEXT-ATTEMPT", 1L));
-            facade.acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("ATTEMPT-TAIL", 1L));
+            facade.acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("NEXT-ATTEMPT"));
+            facade.acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("ATTEMPT-TAIL"));
             var jdbc = new JdbcTemplate(context.getBean("supplyChainDataSource", DataSource.class));
             var ops = RechargeFrequencyExecutionIntegrationTest.operations(jdbc); var frequency = context.getBean(RechargeFrequencyLifecycle.class);
             var lifecycle = context.getBean(SupplierOrderLifecycle.class); var permit = frequency.claim(ops.getFirst()); frequency.markSendPossible(permit);
@@ -168,7 +168,7 @@ class RechargeFrequencyLifecycleIntegrationTest {
     @Test void trustedManualSameBOrderRecoveryClearsHistoricalCompletionWithVersionCas() {
         var fixture = new FulfillmentAcceptanceIntegrationTest(); fixture.startContainer();
         try (var context = fixture.applicationContext(RechargeFrequencyExecutionIntegrationTest.ExecutionConfiguration.class)) {
-            fixture.seed(context); context.getBean(BuyerFulfillmentCommandFacade.class).acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("MANUAL-SAME-BO", 1L));
+            fixture.seed(context); context.getBean(BuyerFulfillmentCommandFacade.class).acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("MANUAL-SAME-BO"));
             var jdbc = new JdbcTemplate(context.getBean("supplyChainDataSource", DataSource.class));
             var op = RechargeFrequencyExecutionIntegrationTest.operations(jdbc).getFirst();
             var frequency = context.getBean(RechargeFrequencyLifecycle.class); var lifecycle = context.getBean(SupplierOrderLifecycle.class);
@@ -199,8 +199,8 @@ class RechargeFrequencyLifecycleIntegrationTest {
         var fixture = new FulfillmentAcceptanceIntegrationTest(); fixture.startContainer();
         try (var context = fixture.applicationContext(RechargeFrequencyExecutionIntegrationTest.ExecutionConfiguration.class)) {
             fixture.seed(context); var facade = context.getBean(BuyerFulfillmentCommandFacade.class);
-            facade.acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("INVALID-NEXT", 1L));
-            facade.acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("OTHER-REQUEST", 1L));
+            facade.acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("INVALID-NEXT"));
+            facade.acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("OTHER-REQUEST"));
             var jdbc = new JdbcTemplate(context.getBean("supplyChainDataSource", DataSource.class));
             var ops = RechargeFrequencyExecutionIntegrationTest.operations(jdbc); var frequency = context.getBean(RechargeFrequencyLifecycle.class);
             var lifecycle = context.getBean(SupplierOrderLifecycle.class); var permit = frequency.claim(ops.getFirst()); frequency.markSendPossible(permit);
@@ -247,7 +247,7 @@ class RechargeFrequencyLifecycleIntegrationTest {
     @Test void concurrentRepeatedTrustedObservationNeverRollsBackOnUniqueKey() throws Exception {
         var fixture = new FulfillmentAcceptanceIntegrationTest(); fixture.startContainer();
         try (var context = fixture.applicationContext(RechargeFrequencyExecutionIntegrationTest.ExecutionConfiguration.class, ObservationRaceConfiguration.class)) {
-            fixture.seed(context); context.getBean(BuyerFulfillmentCommandFacade.class).acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("OBSERVATION-RACE", 1L));
+            fixture.seed(context); context.getBean(BuyerFulfillmentCommandFacade.class).acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("OBSERVATION-RACE"));
             var jdbc = new JdbcTemplate(context.getBean("supplyChainDataSource", DataSource.class));
             var op = RechargeFrequencyExecutionIntegrationTest.operations(jdbc).getFirst();
             var frequency = context.getBean(RechargeFrequencyLifecycle.class); var permit = frequency.claim(op); frequency.markSendPossible(permit);
@@ -267,8 +267,8 @@ class RechargeFrequencyLifecycleIntegrationTest {
         var fixture = new FulfillmentAcceptanceIntegrationTest(); fixture.startContainer();
         try (var context = fixture.applicationContext(RechargeFrequencyExecutionIntegrationTest.ExecutionConfiguration.class, ObservationRaceConfiguration.class)) {
             fixture.seed(context); var facade = context.getBean(BuyerFulfillmentCommandFacade.class);
-            facade.acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("FIRST-OBS-ONE", 1L));
-            var other = FulfillmentAcceptanceIntegrationTest.request("FIRST-OBS-TWO", 1L);
+            facade.acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("FIRST-OBS-ONE"));
+            var other = FulfillmentAcceptanceIntegrationTest.request("FIRST-OBS-TWO");
             other.getTarget().setValues(java.util.Map.of("accountType", "MOBILE", "accountValue", "13700137000")); facade.acceptFulfillment(other);
             var jdbc = new JdbcTemplate(context.getBean("supplyChainDataSource", DataSource.class));
             var ops = RechargeFrequencyExecutionIntegrationTest.operations(jdbc);
@@ -292,8 +292,8 @@ class RechargeFrequencyLifecycleIntegrationTest {
         var fixture = new FulfillmentAcceptanceIntegrationTest(); fixture.startContainer();
         try (var context = fixture.applicationContext(RechargeFrequencyExecutionIntegrationTest.ExecutionConfiguration.class, ObservationNumberCollisionConfiguration.class)) {
             fixture.seed(context); var facade = context.getBean(BuyerFulfillmentCommandFacade.class);
-            facade.acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("OBS-NO-ONE", 1L));
-            var other = FulfillmentAcceptanceIntegrationTest.request("OBS-NO-TWO", 1L);
+            facade.acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("OBS-NO-ONE"));
+            var other = FulfillmentAcceptanceIntegrationTest.request("OBS-NO-TWO");
             other.getTarget().setValues(java.util.Map.of("accountType", "MOBILE", "accountValue", "13700137000")); facade.acceptFulfillment(other);
             var jdbc = new JdbcTemplate(context.getBean("supplyChainDataSource", DataSource.class));
             var ops = RechargeFrequencyExecutionIntegrationTest.operations(jdbc); var frequency = context.getBean(RechargeFrequencyLifecycle.class);

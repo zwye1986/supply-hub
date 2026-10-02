@@ -33,7 +33,7 @@ class RechargeFrequencyAcceptanceIntegrationTest {
             var seed = fixture.seed(context);
             var facade = context.getBean(BuyerFulfillmentCommandFacade.class);
             var jdbc = new JdbcTemplate(context.getBean("supplyChainDataSource", DataSource.class));
-            var request = FulfillmentAcceptanceIntegrationTest.request("FREQ-ONE", 1L);
+            var request = FulfillmentAcceptanceIntegrationTest.request("FREQ-ONE");
             assertAccepted(facade, request);
             assertThat(facade.acceptFulfillment(request).getIdempotentReplay()).isTrue();
             assertThat(count(jdbc, "sc_recharge_frequency_entry")).isEqualTo(1L);
@@ -44,10 +44,8 @@ class RechargeFrequencyAcceptanceIntegrationTest {
             assertThat(jdbc.queryForObject("SELECT dispatch_phase FROM sc_recharge_frequency_entry", Short.class)).isNull();
             assertThat(jdbc.queryForObject("SELECT mobile_masked FROM sc_recharge_frequency_queue", String.class)).isEqualTo("138****8000");
 
-            var projectB = FulfillmentAcceptanceIntegrationTest.request("FREQ-PROJECT-B", 1L);
+            var projectB = FulfillmentAcceptanceIntegrationTest.request("FREQ-PROJECT-B");
             projectB.setProjectCode("PRJ_LIMIT_B");
-            // buyerUserId保留旧内核语义，但频控不能用它作为实际充值手机。
-            projectB.setBuyerUserId("13900139000");
             projectB.getTarget().setValues(Map.of("accountType", "MOBILE", "accountValue", "+8613800138000"));
             assertAccepted(facade, projectB);
             assertThat(count(jdbc, "sc_recharge_frequency_queue")).isEqualTo(1L);
@@ -61,7 +59,7 @@ class RechargeFrequencyAcceptanceIntegrationTest {
             long listingId = jdbc.queryForObject("SELECT id FROM sc_buyer_listing WHERE listing_no=?", Long.class, seed.listingNo());
             cloneListing(jdbc, listingId, "LST_FREQ_BUYER2", "WS-FREQ-2", buyer2, null);
             jdbc.update("UPDATE sc_std_routing_rule SET distributor_mode='ALL' WHERE route_mode='FIXED'");
-            var otherBuyer = FulfillmentAcceptanceIntegrationTest.request("FREQ-BUYER2", 1L);
+            var otherBuyer = FulfillmentAcceptanceIntegrationTest.request("FREQ-BUYER2");
             otherBuyer.setExternalTenantId("tenant-frequency-2"); otherBuyer.setProjectCode("PRJ_FREQ_2"); otherBuyer.setBuyerSkuCode("WS-FREQ-2");
             assertAccepted(facade, otherBuyer);
             assertThat(count(jdbc, "sc_recharge_frequency_queue")).isEqualTo(1L);
@@ -72,19 +70,19 @@ class RechargeFrequencyAcceptanceIntegrationTest {
             long spu2 = cloneRow(jdbc, "sc_platform_spu", sourceSpu, Map.of("spu_code", "SPU_FREQ_2", "code_scope_no", 2));
             long sku2 = cloneSkuAndSupply(jdbc, sourceSku, "SKU_FREQ_2", spu2);
             cloneListing(jdbc, listingId, "LST_FREQ_SPU2", "WS-FREQ-SPU2", seed.buyerId(), sku2);
-            var differentSpu = FulfillmentAcceptanceIntegrationTest.request("FREQ-SPU2", 1L); differentSpu.setBuyerSkuCode("WS-FREQ-SPU2");
+            var differentSpu = FulfillmentAcceptanceIntegrationTest.request("FREQ-SPU2"); differentSpu.setBuyerSkuCode("WS-FREQ-SPU2");
             assertAccepted(facade, differentSpu);
             assertThat(count(jdbc, "sc_recharge_frequency_queue")).isEqualTo(2L);
-            var differentMobile = FulfillmentAcceptanceIntegrationTest.request("FREQ-MOBILE2", 1L);
+            var differentMobile = FulfillmentAcceptanceIntegrationTest.request("FREQ-MOBILE2");
             differentMobile.getTarget().setValues(Map.of("accountType", "MOBILE", "accountValue", "13700137000"));
             assertAccepted(facade, differentMobile);
             assertThat(count(jdbc, "sc_recharge_frequency_queue")).isEqualTo(3L);
 
-            var external = FulfillmentAcceptanceIntegrationTest.request("FREQ-EXTERNAL", 1L);
+            var external = FulfillmentAcceptanceIntegrationTest.request("FREQ-EXTERNAL");
             external.getTarget().setValues(Map.of("accountType", "EXTERNAL_ACCOUNT", "accountValue", "external-account"));
             assertAccepted(facade, external);
             assertThat(count(jdbc, "sc_recharge_frequency_entry")).isEqualTo(5L);
-            var invalid = FulfillmentAcceptanceIntegrationTest.request("FREQ-INVALID", 1L);
+            var invalid = FulfillmentAcceptanceIntegrationTest.request("FREQ-INVALID");
             invalid.getTarget().setValues(Map.of("accountType", "MOBILE", "accountValue", "private-invalid"));
             assertThat(facade.acceptFulfillment(invalid).getReceiptStatus()).isEqualTo(FulfillmentReceiptStatus.REJECTED_FINAL);
             assertThat(count(jdbc, "sc_recharge_frequency_entry")).isEqualTo(5L);
@@ -99,7 +97,7 @@ class RechargeFrequencyAcceptanceIntegrationTest {
             var facade = context.getBean(BuyerFulfillmentCommandFacade.class);
             var jdbc = new JdbcTemplate(context.getBean("supplyChainDataSource", DataSource.class));
             var balance = jdbc.queryForMap("SELECT balance, frozen FROM sc_buyer_account");
-            var storageFailureRequest = FulfillmentAcceptanceIntegrationTest.request("FREQ-STORAGE-FAIL", 1L);
+            var storageFailureRequest = FulfillmentAcceptanceIntegrationTest.request("FREQ-STORAGE-FAIL");
             jdbc.execute("ALTER TABLE sc_recharge_frequency_entry ADD CONSTRAINT ck_frequency_test_reject CHECK (order_id < 0)");
             try {
                 assertThatThrownBy(() -> facade.acceptFulfillment(storageFailureRequest))
@@ -111,7 +109,7 @@ class RechargeFrequencyAcceptanceIntegrationTest {
             }
             var failures = context.getBean(FulfillmentAcceptanceIntegrationTest.MutableFailureInjector.class);
             failures.failAt(AcceptanceFailureInjector.Stage.FUNDS_FROZEN);
-            assertThatThrownBy(() -> facade.acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("FREQ-FUNDS-FAIL", 1L)))
+            assertThatThrownBy(() -> facade.acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("FREQ-FUNDS-FAIL")))
                     .isInstanceOf(FulfillmentAcceptanceIntegrationTest.InjectedFailure.class);
             assertEmptyBusiness(jdbc);
             assertThat(jdbc.queryForMap("SELECT balance, frozen FROM sc_buyer_account")).isEqualTo(balance);
@@ -133,8 +131,8 @@ class RechargeFrequencyAcceptanceIntegrationTest {
             long clonedSku = cloneSkuAndSupply(jdbc, sku, "SKU_FREQ_RACE", null);
             cloneListing(jdbc, listing, "LST_FREQ_RACE", "WS-FREQ-RACE", seed.buyerId(), clonedSku);
             var hook = context.getBean(IdentityRaceHook.class); hook.armed.set(true);
-            var first = FulfillmentAcceptanceIntegrationTest.request("FREQ-RACE-1", 1L);
-            var second = FulfillmentAcceptanceIntegrationTest.request("FREQ-RACE-2", 1L); second.setBuyerSkuCode("WS-FREQ-RACE");
+            var first = FulfillmentAcceptanceIntegrationTest.request("FREQ-RACE-1");
+            var second = FulfillmentAcceptanceIntegrationTest.request("FREQ-RACE-2"); second.setBuyerSkuCode("WS-FREQ-RACE");
             try (var pool = Executors.newFixedThreadPool(2)) {
                 var one = pool.submit(() -> facade.acceptFulfillment(first));
                 var two = pool.submit(() -> facade.acceptFulfillment(second));

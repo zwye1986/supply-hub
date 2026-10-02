@@ -26,8 +26,8 @@ class RechargeFrequencyExecutionIntegrationTest {
         try (var context = fixture.applicationContext(ExecutionConfiguration.class)) {
             fixture.seed(context);
             var facade = context.getBean(BuyerFulfillmentCommandFacade.class);
-            facade.acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("FIFO-HEAD", 1L));
-            facade.acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("FIFO-TAIL", 1L));
+            facade.acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("FIFO-HEAD"));
+            facade.acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("FIFO-TAIL"));
             var jdbc = new JdbcTemplate(context.getBean("supplyChainDataSource", DataSource.class));
             var operations = jdbc.queryForList("SELECT active_operation_no FROM sc_recharge_frequency_entry ORDER BY enqueue_sequence", String.class);
             assertThat(context.getBean(SupplierOrderLifecycle.class).claimForExecution(operations.get(1))).isFalse();
@@ -38,8 +38,8 @@ class RechargeFrequencyExecutionIntegrationTest {
         var fixture = new FulfillmentAcceptanceIntegrationTest(); fixture.startContainer();
         try (var context = fixture.applicationContext(ExecutionConfiguration.class)) {
             fixture.seed(context); var facade = context.getBean(BuyerFulfillmentCommandFacade.class);
-            facade.acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("CLAIM-ONE", 1L));
-            facade.acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("CLAIM-TWO", 1L));
+            facade.acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("CLAIM-ONE"));
+            facade.acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("CLAIM-TWO"));
             var jdbc = new JdbcTemplate(context.getBean("supplyChainDataSource", DataSource.class));
             var ops = operations(jdbc); var lifecycle = context.getBean(RechargeFrequencyLifecycle.class);
             var barrier = new CyclicBarrier(3);
@@ -71,7 +71,7 @@ class RechargeFrequencyExecutionIntegrationTest {
         var fixture = new FulfillmentAcceptanceIntegrationTest(); fixture.startContainer();
         try (var context = fixture.applicationContext(ExecutionConfiguration.class)) {
             fixture.seed(context); context.getBean(BuyerFulfillmentCommandFacade.class)
-                    .acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("BOUNDARY", 1L));
+                    .acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("BOUNDARY"));
             var jdbc = new JdbcTemplate(context.getBean("supplyChainDataSource", DataSource.class));
             var lifecycle = context.getBean(RechargeFrequencyLifecycle.class); var op = operations(jdbc).getFirst();
             var permit = lifecycle.claim(op); var committed = new CountDownLatch(1); var barrier = new CyclicBarrier(2);
@@ -109,7 +109,7 @@ class RechargeFrequencyExecutionIntegrationTest {
         var fixture = new FulfillmentAcceptanceIntegrationTest(); fixture.startContainer();
         try (var context = fixture.applicationContext(ExecutionConfiguration.class)) {
             fixture.seed(context); var facade = context.getBean(BuyerFulfillmentCommandFacade.class);
-            facade.acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("MISSING-ENTRY", 1L));
+            facade.acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("MISSING-ENTRY"));
             var jdbc = new JdbcTemplate(context.getBean("supplyChainDataSource", DataSource.class));
             var op = operations(jdbc).getFirst(); jdbc.update("DELETE FROM sc_recharge_frequency_entry");
             var handler = context.getBean(FulfillmentOperationExecuteHandler.class); var counter = context.getBean(CountingExecutor.class);
@@ -117,7 +117,7 @@ class RechargeFrequencyExecutionIntegrationTest {
                     .isEqualTo("RECHARGE_FREQUENCY_MIGRATION_MISSING");
             assertThat(counter.calls.get()).isZero();
             assertThat(jdbc.queryForObject("SELECT frozen FROM sc_buyer_account", Long.class)).isPositive();
-            var request = FulfillmentAcceptanceIntegrationTest.request("EXTERNAL-ACCOUNT", 1L);
+            var request = FulfillmentAcceptanceIntegrationTest.request("EXTERNAL-ACCOUNT");
             request.getTarget().setValues(Map.of("accountType", "EXTERNAL_ACCOUNT", "accountValue", "trusted-external")); facade.acceptFulfillment(request);
             var externalOp = jdbc.queryForObject("SELECT operation_no FROM sc_fulfillment_operation ORDER BY id DESC LIMIT 1", String.class);
             assertThat(handler.handle(timer(), context.getBean(ObjectMapper.class).createObjectNode().put("operationNo", externalOp)))
@@ -129,7 +129,7 @@ class RechargeFrequencyExecutionIntegrationTest {
         var fixture = new FulfillmentAcceptanceIntegrationTest(); fixture.startContainer();
         try (var context = fixture.applicationContext(ExecutionConfiguration.class)) {
             fixture.seed(context); context.getBean(BuyerFulfillmentCommandFacade.class)
-                    .acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("CREDENTIAL-FAIL", 1L));
+                    .acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("CREDENTIAL-FAIL"));
             var jdbc = new JdbcTemplate(context.getBean("supplyChainDataSource", DataSource.class));
             var op = operations(jdbc).getFirst(); var handler = context.getBean(FulfillmentOperationExecuteHandler.class);
             var provider = context.getBean(MutableCredentialProvider.class); provider.fail = true;
@@ -151,7 +151,7 @@ class RechargeFrequencyExecutionIntegrationTest {
     void credentialFailureWithPrebuiltFutureOperationOrQueryReturnsWaitingAndRetriesOnce(String kind) {
         var fixture = new FulfillmentAcceptanceIntegrationTest(); fixture.startContainer();
         try (var context = fixture.applicationContext(ExecutionConfiguration.class)) {
-            fixture.seed(context); context.getBean(BuyerFulfillmentCommandFacade.class).acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("PREBUILT-"+kind, 1L));
+            fixture.seed(context); context.getBean(BuyerFulfillmentCommandFacade.class).acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("PREBUILT-"+kind));
             var jdbc = new JdbcTemplate(context.getBean("supplyChainDataSource", DataSource.class));
             var op = operations(jdbc).getFirst(); long opId = jdbc.queryForObject("SELECT id FROM sc_fulfillment_operation WHERE operation_no=?", Long.class, op);
             if ("QUERY_ORDER".equals(kind)) { jdbc.update("UPDATE sc_fulfillment_operation SET sequence_no=2 WHERE id=?", opId); }
@@ -180,7 +180,7 @@ class RechargeFrequencyExecutionIntegrationTest {
     void credentialFailureWithUnconfirmedChargingRiskKeepsHolderEvenWhenRiskIsLater(int riskSequence) {
         var fixture = new FulfillmentAcceptanceIntegrationTest(); fixture.startContainer();
         try (var context = fixture.applicationContext(ExecutionConfiguration.class)) {
-            fixture.seed(context); context.getBean(BuyerFulfillmentCommandFacade.class).acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("RISK-"+riskSequence, 1L));
+            fixture.seed(context); context.getBean(BuyerFulfillmentCommandFacade.class).acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("RISK-"+riskSequence));
             var jdbc = new JdbcTemplate(context.getBean("supplyChainDataSource", DataSource.class)); var op = operations(jdbc).getFirst();
             long opId = jdbc.queryForObject("SELECT id FROM sc_fulfillment_operation WHERE operation_no=?", Long.class, op);
             jdbc.update("UPDATE sc_fulfillment_operation SET sequence_no=2 WHERE id=?", opId);
@@ -202,7 +202,7 @@ class RechargeFrequencyExecutionIntegrationTest {
     @Test void preparationAndRevocationStorageFailuresKeepSafeDualCausesAndRollbackPreparedState() {
         var fixture = new FulfillmentAcceptanceIntegrationTest(); fixture.startContainer();
         try (var context = fixture.applicationContext(ExecutionConfiguration.class, RevokeStorageFailureConfiguration.class)) {
-            fixture.seed(context); context.getBean(BuyerFulfillmentCommandFacade.class).acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("DOUBLE-FAULT", 1L));
+            fixture.seed(context); context.getBean(BuyerFulfillmentCommandFacade.class).acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("DOUBLE-FAULT"));
             var jdbc = new JdbcTemplate(context.getBean("supplyChainDataSource", DataSource.class)); var op = operations(jdbc).getFirst();
             var provider = context.getBean(MutableCredentialProvider.class); provider.fail = true;
             provider.failure = new IllegalArgumentException("phone=13800138000 credential=evil-credential");
@@ -251,8 +251,8 @@ class RechargeFrequencyExecutionIntegrationTest {
             long newSku = RechargeFrequencyAcceptanceIntegrationTest.cloneSkuAndSupply(jdbc, sku, "SKU_CONCURRENT", newSpu);
             RechargeFrequencyAcceptanceIntegrationTest.cloneListing(jdbc, listing, "LST_CONCURRENT", "WS-CONCURRENT", seed.buyerId(), newSku);
             var facade = context.getBean(BuyerFulfillmentCommandFacade.class);
-            facade.acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("SPU-ONE", 1L));
-            var other = FulfillmentAcceptanceIntegrationTest.request("SPU-TWO", 1L); other.setBuyerSkuCode("WS-CONCURRENT"); facade.acceptFulfillment(other);
+            facade.acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("SPU-ONE"));
+            var other = FulfillmentAcceptanceIntegrationTest.request("SPU-TWO"); other.setBuyerSkuCode("WS-CONCURRENT"); facade.acceptFulfillment(other);
             var ops = operations(jdbc); var lifecycle = context.getBean(RechargeFrequencyLifecycle.class); var barrier = new CyclicBarrier(2);
             try (var pool = Executors.newFixedThreadPool(2)) {
                 var one = pool.submit(() -> { barrier.await(10, TimeUnit.SECONDS); return lifecycle.claim(ops.getFirst()); });
@@ -269,7 +269,7 @@ class RechargeFrequencyExecutionIntegrationTest {
         var fixture = new FulfillmentAcceptanceIntegrationTest(); fixture.startContainer();
         try (var context = fixture.applicationContext(ExecutionConfiguration.class, BoundaryConfiguration.class)) {
             fixture.seed(context); context.getBean(BuyerFulfillmentCommandFacade.class)
-                    .acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("HANDLER-BOUNDARY", 1L));
+                    .acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("HANDLER-BOUNDARY"));
             var jdbc = new JdbcTemplate(context.getBean("supplyChainDataSource", DataSource.class));
             var op = operations(jdbc).getFirst(); var hook = context.getBean(SendBoundaryHook.class);
             hook.markerFirst = markerFirst; hook.armed = true;
@@ -327,7 +327,7 @@ class RechargeFrequencyExecutionIntegrationTest {
         var fixture = new FulfillmentAcceptanceIntegrationTest(); fixture.startContainer();
         try (var context = fixture.applicationContext(ExecutionConfiguration.class, CallbackFailureConfiguration.class)) {
             fixture.seed(context); context.getBean(BuyerFulfillmentCommandFacade.class)
-                    .acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("TICKET-FAIL", 1L));
+                    .acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("TICKET-FAIL"));
             var jdbc = new JdbcTemplate(context.getBean("supplyChainDataSource", DataSource.class));
             var op = operations(jdbc).getFirst(); var hook = context.getBean(CallbackAssemblyFailureHook.class); hook.armed = true;
             var handler = context.getBean(FulfillmentOperationExecuteHandler.class);

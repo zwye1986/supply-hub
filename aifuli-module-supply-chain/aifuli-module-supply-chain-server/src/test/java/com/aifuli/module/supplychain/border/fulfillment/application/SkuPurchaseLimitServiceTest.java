@@ -36,6 +36,29 @@ class SkuPurchaseLimitServiceTest {
     private final SupplyChainOrderMapper orderMapper = mock(SupplyChainOrderMapper.class);
     private final SkuPurchaseLimitService service = new SkuPurchaseLimitService(orderMapper);
 
+    /**
+     * 过渡期新语义：实际 MOBILE 规范化手机号为空（卡券/非手机号账号，无购买人身份可补造）时
+     * 跳过每人维度，不查询订单聚合；绑定手机号维度不受影响（有手机目标仍按其统计）。
+     * 设计见 docs/superpowers/specs/2026-10-02-standard-acceptance-project-key-design.md#2-首次身份与重放优先。
+     */
+    @Test
+    void emptyPersonalIdentitySkipsPersonalDimensionWithoutFabricatingIdentity() {
+        assertThat(service.validateLockedSku(
+                PROJECT_ID, null, null, sku(true, "DAY", 2L, true, 9L), 1L, NOW))
+                .isEqualTo(SkuPurchaseLimitService.Violation.NONE);
+        assertThat(service.validateLockedSku(
+                PROJECT_ID, "  ", null, sku(true, "DAY", 2L, true, 9L), 1L, NOW))
+                .isEqualTo(SkuPurchaseLimitService.Violation.NONE);
+        assertThat(service.validateLockedSku(
+                PROJECT_ID, "", null, sku(true, "DAY", 2L, true, 9L, true, "DAY", 1L), 1L, NOW))
+                .isEqualTo(SkuPurchaseLimitService.Violation.PHONE_BIND_TARGET_REQUIRED);
+
+        verify(orderMapper, never()).sumEffectivePurchaseQuantity(
+                anyString(), anyLong(), anyString(), anyLong(), any(), any(), anyShort(), anyShort(), anyShort());
+        verify(orderMapper, never()).sumEffectivePhoneBindPurchaseQuantity(
+                anyString(), anyLong(), anyString(), anyLong(), any(), any(), anyShort(), anyShort(), anyShort());
+    }
+
     @Test
     void disabledPersonalLimitDoesNotReadOrders() {
         assertThat(service.validateLockedSku(

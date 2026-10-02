@@ -12,7 +12,7 @@ class RechargeFrequencyTimerIntegrationTest {
         var fixture = new FulfillmentAcceptanceIntegrationTest(); fixture.startContainer();
         try (var context = fixture.applicationContext()) {
             fixture.seed(context);
-            context.getBean(BuyerFulfillmentCommandFacade.class).acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("TIMER-HEAD", 1L));
+            context.getBean(BuyerFulfillmentCommandFacade.class).acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("TIMER-HEAD"));
             var jdbc = new JdbcTemplate(context.getBean("supplyChainDataSource", DataSource.class));
             assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_timer_task WHERE task_type='RECHARGE_FREQUENCY_WAKE'", Long.class)).isEqualTo(1L);
             var queue = jdbc.queryForMap("SELECT id,wake_generation,next_check_at FROM sc_recharge_frequency_queue");
@@ -30,7 +30,7 @@ class RechargeFrequencyTimerIntegrationTest {
             Long queueId; long firstGeneration;
             try (var context = fixture.applicationContext()) {
                 fixture.seed(context); var facade = context.getBean(BuyerFulfillmentCommandFacade.class);
-                facade.acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("RESTART-HEAD", 1L));
+                facade.acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("RESTART-HEAD"));
                 var jdbc = jdbc(context); queueId = queueId(jdbc); firstGeneration = generation(jdbc);
                 var scheduler = context.getBean(com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyWakeScheduler.class);
                 var mapper = context.getBean(com.aifuli.module.supplychain.border.fulfillment.dal.mysql.RechargeFrequencyQueueMapper.class);
@@ -38,7 +38,7 @@ class RechargeFrequencyTimerIntegrationTest {
                 tx.executeWithoutResult(status -> { scheduler.schedule(mapper.selectById(queueId)); scheduler.schedule(mapper.selectById(queueId)); });
                 assertThat(wakeCount(jdbc)).isEqualTo(1L);
                 jdbc.update("UPDATE sc_timer_task SET status=40 WHERE task_type='RECHARGE_FREQUENCY_WAKE'");
-                facade.acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("RESTART-TAIL", 1L));
+                facade.acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("RESTART-TAIL"));
                 assertThat(generation(jdbc)).isGreaterThan(firstGeneration); assertThat(wakeCount(jdbc)).isEqualTo(2L);
             }
             // 新Spring容器只读数据库恢复，不依赖前一个节点内存队列。
@@ -67,7 +67,7 @@ class RechargeFrequencyTimerIntegrationTest {
     @Test void compensationPreservesFutureRetryAndRunningLeaseButRepairsDeadMissingAndExpiredTasks() {
         var fixture = new FulfillmentAcceptanceIntegrationTest(); fixture.startContainer();
         try (var context = fixture.applicationContext()) {
-            fixture.seed(context); context.getBean(BuyerFulfillmentCommandFacade.class).acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("REPAIR",1L));
+            fixture.seed(context); context.getBean(BuyerFulfillmentCommandFacade.class).acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("REPAIR"));
             var jdbc=jdbc(context); var recovery=context.getBean(com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyRecoveryService.class);
             long initial=generation(jdbc);
             jdbc.update("UPDATE sc_timer_task SET status=30,next_fire_at=DATE_ADD(NOW(),INTERVAL 1 HOUR)");
@@ -90,7 +90,7 @@ class RechargeFrequencyTimerIntegrationTest {
     @Test void successWakeUsesRemainingOriginalWindowAndQuiescesEmptyQueue() {
         var fixture = new FulfillmentAcceptanceIntegrationTest(); fixture.startContainer();
         try (var context=fixture.applicationContext()) {
-            fixture.seed(context); context.getBean(BuyerFulfillmentCommandFacade.class).acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("WINDOW",1L));
+            fixture.seed(context); context.getBean(BuyerFulfillmentCommandFacade.class).acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("WINDOW"));
             var jdbc=jdbc(context); var frequency=context.getBean(com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyLifecycle.class);
             var lifecycle=context.getBean(com.aifuli.module.supplychain.border.fulfillment.application.SupplierOrderLifecycle.class);
             var recovery=context.getBean(com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyRecoveryService.class);
@@ -117,7 +117,7 @@ class RechargeFrequencyTimerIntegrationTest {
         var fixture = new FulfillmentAcceptanceIntegrationTest(); fixture.startContainer();
         try (var context=fixture.applicationContext()) {
             fixture.seed(context); var facade=context.getBean(BuyerFulfillmentCommandFacade.class);
-            facade.acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("QUERY-HEAD",1L)); facade.acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("QUERY-TAIL",1L));
+            facade.acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("QUERY-HEAD")); facade.acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("QUERY-TAIL"));
             var jdbc=jdbc(context); var ops=RechargeFrequencyExecutionIntegrationTest.operations(jdbc);
             var frequency=context.getBean(com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyLifecycle.class);
             var recovery=context.getBean(com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyRecoveryService.class);
@@ -157,7 +157,7 @@ class RechargeFrequencyTimerIntegrationTest {
         var fixture=new FulfillmentAcceptanceIntegrationTest(); fixture.startContainer();
         try(var server=new okhttp3.mockwebserver.MockWebServer(); var context=fixture.applicationContext()) {
             server.start(); fixture.seed(context);
-            context.getBean(BuyerFulfillmentCommandFacade.class).acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("QNM-AUTH",1L));
+            context.getBean(BuyerFulfillmentCommandFacade.class).acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("QNM-AUTH"));
             var jdbc=jdbc(context); var operation=RechargeFrequencyExecutionIntegrationTest.operations(jdbc).getFirst();
             var frequency=context.getBean(com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyLifecycle.class);
             var permit=frequency.claim(operation); assertThat(frequency.markSendPossible(permit)).isTrue();
@@ -199,10 +199,10 @@ class RechargeFrequencyTimerIntegrationTest {
             java.time.LocalDateTime alertAt;
             try (var context=fixture.applicationContext(AlarmRollbackConfiguration.class)) {
                 fixture.seed(context); var facade=context.getBean(BuyerFulfillmentCommandFacade.class);
-                for(int index=0;index<5;index++) { facade.acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("ALARM-"+index,1L)); }
+                for(int index=0;index<5;index++) { facade.acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("ALARM-"+index)); }
                 var jdbc=jdbc(context); var recovery=context.getBean(com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyRecoveryService.class);
                 recovery.repair(queueId(jdbc)); assertThat(jdbc.queryForObject("SELECT backlog_alert_active FROM sc_recharge_frequency_queue",Boolean.class)).isFalse();
-                facade.acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("ALARM-5",1L));
+                facade.acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("ALARM-5"));
                 var hook=context.getBean(AlarmRollbackHook.class); hook.fail=true;
                 var logger=(ch.qos.logback.classic.Logger)org.slf4j.LoggerFactory.getLogger(com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyRecoveryService.class);
                 var events=new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>(); events.start(); logger.addAppender(events);
@@ -241,7 +241,7 @@ class RechargeFrequencyTimerIntegrationTest {
     @Test void repeatedLocalCredentialFailuresCreateDelayedWakeAndRecoverOriginalOperation() {
         var fixture=new FulfillmentAcceptanceIntegrationTest(); fixture.startContainer();
         try(var context=fixture.applicationContext()) {
-            fixture.seed(context); context.getBean(BuyerFulfillmentCommandFacade.class).acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("LOCAL-FAULT",1L));
+            fixture.seed(context); context.getBean(BuyerFulfillmentCommandFacade.class).acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("LOCAL-FAULT"));
             var jdbc=jdbc(context); var operation=RechargeFrequencyExecutionIntegrationTest.operations(jdbc).getFirst();
             var handler=context.getBean(com.aifuli.module.supplychain.border.fulfillment.application.FulfillmentOperationExecuteHandler.class);
             var credentials=context.getBean(RechargeFrequencyExecutionIntegrationTest.MutableCredentialProvider.class); credentials.fail=true;

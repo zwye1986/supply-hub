@@ -47,9 +47,9 @@ class RechargeFrequencyMigrationIntegrationTest {
             fixture.seed(context);
             var facade = context.getBean(BuyerFulfillmentCommandFacade.class);
             facade.acceptFulfillment(
-                    FulfillmentAcceptanceIntegrationTest.request("MIGRATION-ONE", 1L));
+                    FulfillmentAcceptanceIntegrationTest.request("MIGRATION-ONE"));
             facade.acceptFulfillment(
-                    FulfillmentAcceptanceIntegrationTest.request("MIGRATION-TWO", 1L));
+                    FulfillmentAcceptanceIntegrationTest.request("MIGRATION-TWO"));
             var jdbc = new JdbcTemplate(context.getBean("supplyChainDataSource", DataSource.class));
             jdbc.update("DELETE FROM sc_recharge_frequency_entry");
             jdbc.update("DELETE FROM sc_recharge_frequency_queue");
@@ -418,7 +418,7 @@ class RechargeFrequencyMigrationIntegrationTest {
                     var facade = context.getBean(BuyerFulfillmentCommandFacade.class);
                     var request =
                             FulfillmentAcceptanceIntegrationTest.request(
-                                    "CLOSED-GATE-NEW-MOBILE", 1L);
+                                    "CLOSED-GATE-NEW-MOBILE");
                     var accepted = facade.acceptFulfillment(request);
                     assertThat(accepted.getOrderNo()).isNotBlank();
                     var before = moneyAndEffects(jdbc);
@@ -1237,7 +1237,7 @@ class RechargeFrequencyMigrationIntegrationTest {
 
     private static void accept(ConfigurableApplicationContext context, String buyerOrderNo) {
         context.getBean(BuyerFulfillmentCommandFacade.class)
-                .acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request(buyerOrderNo, 1L));
+                .acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request(buyerOrderNo));
     }
 
     private static void clearFrequency(JdbcTemplate jdbc) {

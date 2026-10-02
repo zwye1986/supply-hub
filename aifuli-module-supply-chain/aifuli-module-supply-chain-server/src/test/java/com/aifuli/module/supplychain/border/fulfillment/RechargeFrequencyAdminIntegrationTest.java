@@ -30,8 +30,8 @@ class RechargeFrequencyAdminIntegrationTest {
         jdbc=new JdbcTemplate(context.getBean("supplyChainDataSource",DataSource.class));
         commands=context.getBean(RechargeFrequencyAdminCommandService.class); frequency=context.getBean(RechargeFrequencyLifecycle.class);
         var facade=context.getBean(BuyerFulfillmentCommandFacade.class);
-        facade.acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("ADMIN-HEAD",1L));
-        facade.acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("ADMIN-TAIL",1L));
+        facade.acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("ADMIN-HEAD"));
+        facade.acceptFulfillment(FulfillmentAcceptanceIntegrationTest.request("ADMIN-TAIL"));
     }
     @AfterEach void stop() { if(context!=null) context.close(); if(fixture!=null) fixture.stopContainer(); }
     @Configuration(proxyBeanMethods=false)

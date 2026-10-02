@@ -50,7 +50,7 @@ class RechargeFrequencyIdentityServiceTest {
         target.setValues(java.util.Map.of("accountType", "MOBILE", "accountValue", "13800138000"));
         var request = new com.aifuli.module.supplychain.api.fulfillment.dto.AcceptFulfillmentReqDTO();
         request.setTarget(target);
-        request.setBuyerUserId("13900139000");
+        // buyerUserId 已删除：防泄漏断言聚焦目标手机号与目标载体本身。
         assertThat(target.toString()).doesNotContain("13800138000");
         assertThat(request.toString()).doesNotContain("13800138000", "13900139000");
     }

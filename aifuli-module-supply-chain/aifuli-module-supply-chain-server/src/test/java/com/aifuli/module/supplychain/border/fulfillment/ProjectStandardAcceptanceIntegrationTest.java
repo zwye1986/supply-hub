@@ -108,7 +108,6 @@ import org.testcontainers.containers.MySQLContainer;
 import javax.sql.DataSource;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
-import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Base64;
@@ -143,9 +142,10 @@ import static org.mockito.Mockito.when;
  * </ul>
  *
  * <p>报价按项目永久键语义准备：每个用例为各自 (projectCode, buyerOrderNo) 先经真实
- * {@link StandardPricingQuoteService} 签发 ISSUED 报价并携带返回的 token（Task3 已生效语义）。
- * 过渡期 fixture 说明：当前实现仍强制 buyerUserId/listingVersion/pricingQuoteToken/paidAt 四个
- * 待删字段非空，本类按现状填充；GREEN 阶段随 DTO 清理机械移除这些赋值，业务断言保持不变。</p>
+ * {@link StandardPricingQuoteService} 签发 ISSUED 报价；受理请求不携带 token，服务端在供应链
+ * 事务内按项目永久键查取唯一报价并一次性消费（Task3 语义）。请求级
+ * buyerUserId/listingVersion/pricingQuoteToken/paidAt 已随身份清理删除，本类 fixture 已机械移除
+ * 这些赋值，业务断言保持不变。</p>
  */
 class ProjectStandardAcceptanceIntegrationTest {
 
@@ -159,11 +159,6 @@ class ProjectStandardAcceptanceIntegrationTest {
     /** 明显假号 fixture（大陆手机号格式）；按契约不写入日志或断言消息。 */
     private static final String FAKE_MOBILE = "13800138000";
     private static final String OTHER_FAKE_MOBILE = "13900139000";
-    /** 过渡期占位报价凭证：数量不为一的请求在报价消费之前即被最终拒绝，永不真正消费。 */
-    private static final String UNUSED_QUOTE_TOKEN = "transitional-unused-quote-token";
-    /** 固定支付时间 fixture：同一请求重放与异参比较都需要指纹稳定。 */
-    private static final OffsetDateTime FIXED_PAID_AT =
-            OffsetDateTime.of(2026, 10, 2, 10, 30, 0, 0, ZoneOffset.ofHours(8));
     private static final long ACCEPT_QUANTITY = 1L;
     private static final long REJECTED_QUANTITY = 2L;
 
@@ -199,13 +194,13 @@ class ProjectStandardAcceptanceIntegrationTest {
             BuyerFulfillmentCommandFacade facade = context.getBean(BuyerFulfillmentCommandFacade.class);
             JdbcTemplate jdbc = new JdbcTemplate(context.getBean("supplyChainDataSource", DataSource.class));
             String sharedOrderNo = "C-PROJECT-KEY-SHARED";
-            String quoteA = issueQuote(context, PROJECT_A, sharedOrderNo);
-            String quoteB = issueQuote(context, PROJECT_B, sharedOrderNo);
+            issueQuote(context, PROJECT_A, sharedOrderNo);
+            issueQuote(context, PROJECT_B, sharedOrderNo);
 
             FulfillmentAcceptanceReceiptRespDTO first =
-                    facade.acceptFulfillment(acceptanceRequest(PROJECT_A, sharedOrderNo, quoteA));
+                    facade.acceptFulfillment(acceptanceRequest(PROJECT_A, sharedOrderNo));
             FulfillmentAcceptanceReceiptRespDTO second =
-                    facade.acceptFulfillment(acceptanceRequest(PROJECT_B, sharedOrderNo, quoteB));
+                    facade.acceptFulfillment(acceptanceRequest(PROJECT_B, sharedOrderNo));
 
             assertThat(first.getReceiptStatus()).isEqualTo(FulfillmentReceiptStatus.ACCEPTED);
             assertThat(second.getReceiptStatus()).isEqualTo(FulfillmentReceiptStatus.ACCEPTED);
@@ -237,13 +232,13 @@ class ProjectStandardAcceptanceIntegrationTest {
             seed(context);
             BuyerFulfillmentCommandFacade facade = context.getBean(BuyerFulfillmentCommandFacade.class);
             String orderNo = "C-CONFLICT-TARGET";
-            String quoteToken = issueQuote(context, PROJECT_A, orderNo);
+            issueQuote(context, PROJECT_A, orderNo);
 
             FulfillmentAcceptanceReceiptRespDTO first =
-                    facade.acceptFulfillment(acceptanceRequest(PROJECT_A, orderNo, quoteToken));
+                    facade.acceptFulfillment(acceptanceRequest(PROJECT_A, orderNo));
             assertThat(first.getReceiptStatus()).isEqualTo(FulfillmentReceiptStatus.ACCEPTED);
 
-            AcceptFulfillmentReqDTO differentTarget = acceptanceRequest(PROJECT_A, orderNo, quoteToken);
+            AcceptFulfillmentReqDTO differentTarget = acceptanceRequest(PROJECT_A, orderNo);
             differentTarget.getTarget().setValues(Map.of(
                     FulfillmentTargetFields.ACCOUNT_TYPE, FulfillmentTargetFields.ACCOUNT_TYPE_MOBILE,
                     FulfillmentTargetFields.ACCOUNT_VALUE, OTHER_FAKE_MOBILE));
@@ -269,10 +264,10 @@ class ProjectStandardAcceptanceIntegrationTest {
             BuyerFulfillmentCommandFacade facade = context.getBean(BuyerFulfillmentCommandFacade.class);
             JdbcTemplate jdbc = new JdbcTemplate(context.getBean("supplyChainDataSource", DataSource.class));
             String orderNo = "C-CONFLICT-RACE";
-            String quoteToken = issueQuote(context, PROJECT_A, orderNo);
+            issueQuote(context, PROJECT_A, orderNo);
 
             List<Object> outcomes = concurrentlyCollect(2, index -> {
-                AcceptFulfillmentReqDTO request = acceptanceRequest(PROJECT_A, orderNo, quoteToken);
+                AcceptFulfillmentReqDTO request = acceptanceRequest(PROJECT_A, orderNo);
                 if (index == 1) {
                     request.getTarget().setValues(Map.of(
                             FulfillmentTargetFields.ACCOUNT_TYPE, FulfillmentTargetFields.ACCOUNT_TYPE_MOBILE,
@@ -313,8 +308,8 @@ class ProjectStandardAcceptanceIntegrationTest {
             BuyerFulfillmentCommandFacade facade = context.getBean(BuyerFulfillmentCommandFacade.class);
             JdbcTemplate jdbc = new JdbcTemplate(context.getBean("supplyChainDataSource", DataSource.class));
             String orderNo = "C-REPLAY-STABLE";
-            String quoteToken = issueQuote(context, PROJECT_A, orderNo);
-            AcceptFulfillmentReqDTO request = acceptanceRequest(PROJECT_A, orderNo, quoteToken);
+            issueQuote(context, PROJECT_A, orderNo);
+            AcceptFulfillmentReqDTO request = acceptanceRequest(PROJECT_A, orderNo);
 
             FulfillmentAcceptanceReceiptRespDTO first = facade.acceptFulfillment(request);
             assertThat(first.getReceiptStatus()).isEqualTo(FulfillmentReceiptStatus.ACCEPTED);
@@ -351,6 +346,7 @@ class ProjectStandardAcceptanceIntegrationTest {
             String casOrderNo = "C-FINAL-CAS";
 
             AcceptFulfillmentReqDTO plain = quantityRejectedRequest(PROJECT_A, plainOrderNo);
+            // 数量不为一在报价消费之前即被最终拒绝，无需为该键签发报价。
             FulfillmentAcceptanceReceiptRespDTO rejected = facade.acceptFulfillment(plain);
             assertThat(rejected.getReceiptStatus()).isEqualTo(FulfillmentReceiptStatus.REJECTED_FINAL);
             assertThat(rejected.getRejectionCode())
@@ -384,11 +380,11 @@ class ProjectStandardAcceptanceIntegrationTest {
     }
 
     /**
-     * 按项目永久键签发 ISSUED 报价（Task3 语义：永久键为 projectId+buyerOrderNo），
-     * 返回受理请求需要携带的报价 token。
+     * 按项目永久键签发 ISSUED 报价（Task3 语义：永久键为 projectId+buyerOrderNo）。
+     * 受理不携带 token：服务端在供应链事务内按项目键查取唯一报价并一次性消费。
      */
-    private static String issueQuote(ConfigurableApplicationContext context,
-                                     String projectCode, String buyerOrderNo) {
+    private static void issueQuote(ConfigurableApplicationContext context,
+                                   String projectCode, String buyerOrderNo) {
         StandardPricingQuoteReqDTO quoteRequest = new StandardPricingQuoteReqDTO();
         quoteRequest.setSourceSystem(SOURCE_SYSTEM);
         quoteRequest.setExternalTenantId(EXTERNAL_TENANT_ID);
@@ -396,35 +392,27 @@ class ProjectStandardAcceptanceIntegrationTest {
         quoteRequest.setPlatformSkuCode(PLATFORM_SKU_CODE);
         quoteRequest.setBuyerOrderNo(buyerOrderNo);
         quoteRequest.setQuantity(ACCEPT_QUANTITY);
-        return context.getBean(StandardPricingQuoteService.class).quote(quoteRequest).getQuoteToken();
+        context.getBean(StandardPricingQuoteService.class).quote(quoteRequest);
     }
 
-    /**
-     * 过渡期受理请求 fixture：四个待删字段按当前校验要求填充（GREEN 阶段机械移除）。
-     */
-    private static AcceptFulfillmentReqDTO acceptanceRequest(String projectCode, String buyerOrderNo,
-                                                             String quoteToken) {
+    private static AcceptFulfillmentReqDTO acceptanceRequest(String projectCode, String buyerOrderNo) {
         AcceptFulfillmentReqDTO request = new AcceptFulfillmentReqDTO();
         request.setSourceSystem(SOURCE_SYSTEM);
         request.setExternalTenantId(EXTERNAL_TENANT_ID);
         request.setProjectCode(projectCode);
         request.setBuyerOrderNo(buyerOrderNo);
-        request.setBuyerUserId(FAKE_MOBILE);
         request.setBuyerSkuCode(BUYER_SKU_CODE);
-        request.setListingVersion(1L);
-        request.setPricingQuoteToken(quoteToken);
         request.setQuantity(ACCEPT_QUANTITY);
-        request.setPaidAt(FIXED_PAID_AT);
         request.setTarget(mobileTarget(FAKE_MOBILE));
         return request;
     }
 
     /**
      * 数量不为一的最终拒绝请求：QUANTITY_NOT_SUPPORTED 拒绝发生在报价消费之前，
-     * 报价服务一期只支持数量一，无法为该键签发可消费报价，故携带过渡期占位 token。
+     * 报价服务一期只支持数量一，无法为该键签发可消费报价。
      */
     private static AcceptFulfillmentReqDTO quantityRejectedRequest(String projectCode, String buyerOrderNo) {
-        AcceptFulfillmentReqDTO request = acceptanceRequest(projectCode, buyerOrderNo, UNUSED_QUOTE_TOKEN);
+        AcceptFulfillmentReqDTO request = acceptanceRequest(projectCode, buyerOrderNo);
         request.setQuantity(REJECTED_QUANTITY);
         return request;
     }
@@ -443,12 +431,8 @@ class ProjectStandardAcceptanceIntegrationTest {
         target.setExternalTenantId(source.getExternalTenantId());
         target.setProjectCode(source.getProjectCode());
         target.setBuyerOrderNo(source.getBuyerOrderNo());
-        target.setBuyerUserId(source.getBuyerUserId());
         target.setBuyerSkuCode(source.getBuyerSkuCode());
-        target.setListingVersion(source.getListingVersion());
-        target.setPricingQuoteToken(source.getPricingQuoteToken());
         target.setQuantity(source.getQuantity());
-        target.setPaidAt(source.getPaidAt());
         target.setPreviousReceiptVersion(source.getPreviousReceiptVersion());
         FulfillmentTargetDTO fulfillmentTarget = new FulfillmentTargetDTO();
         fulfillmentTarget.setValues(Map.copyOf(source.getTarget().getValues()));

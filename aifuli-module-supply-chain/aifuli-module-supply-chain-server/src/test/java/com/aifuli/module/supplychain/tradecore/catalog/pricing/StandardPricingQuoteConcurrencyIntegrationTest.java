@@ -96,7 +96,7 @@ class StandardPricingQuoteConcurrencyIntegrationTest {
 
             StandardPricingQuoteDO rollbackQuote = insertIssued(mapper, "token-rollback", "ORD-ROLLBACK", now);
             tx.executeWithoutResult(status -> {
-                FrozenQuote frozen = service.requireForFulfillment(contextOf(rollbackQuote));
+                FrozenQuote frozen = service.requireForProject(contextOf(rollbackQuote));
                 service.markConsumed(frozen.quoteId(), 301L, now.plusMinutes(1));
                 status.setRollbackOnly();
             });
@@ -106,11 +106,11 @@ class StandardPricingQuoteConcurrencyIntegrationTest {
 
             StandardPricingQuoteDO idempotent = insertIssued(mapper, "token-idempotent", "ORD-IDEM", now);
             tx.executeWithoutResult(status -> {
-                FrozenQuote frozen = service.requireForFulfillment(contextOf(idempotent));
+                FrozenQuote frozen = service.requireForProject(contextOf(idempotent));
                 service.markConsumed(frozen.quoteId(), 201L, now);
             });
             tx.executeWithoutResult(status -> {
-                FrozenQuote frozen = service.requireForFulfillment(contextOf(idempotent));
+                FrozenQuote frozen = service.requireForProject(contextOf(idempotent));
                 service.markConsumed(frozen.quoteId(), 201L, now);
             });
             assertThat(mapper.selectById(idempotent.getId()).getConsumedOrderId()).isEqualTo(201L);
@@ -128,7 +128,7 @@ class StandardPricingQuoteConcurrencyIntegrationTest {
                     throw new IllegalStateException("等待并发消费起跑信号超时");
                 }
                 tx.executeWithoutResult(status -> {
-                    FrozenQuote frozen = service.requireForFulfillment(contextOf(quote));
+                    FrozenQuote frozen = service.requireForProject(contextOf(quote));
                     service.markConsumed(frozen.quoteId(), orderId, now);
                 });
                 successes.incrementAndGet();
@@ -162,8 +162,8 @@ class StandardPricingQuoteConcurrencyIntegrationTest {
         }
     }
 
-    private static QuoteConsumptionContext contextOf(StandardPricingQuoteDO quote) {
-        return new QuoteConsumptionContext(quote.getQuoteToken(), quote.getBuyerId(), quote.getProjectId(),
+    private static ProjectQuoteKeyContext contextOf(StandardPricingQuoteDO quote) {
+        return new ProjectQuoteKeyContext(quote.getBuyerId(), quote.getProjectId(),
                 quote.getPlatformSkuId(), quote.getBuyerOrderNo(), quote.getQuantity());
     }
 
