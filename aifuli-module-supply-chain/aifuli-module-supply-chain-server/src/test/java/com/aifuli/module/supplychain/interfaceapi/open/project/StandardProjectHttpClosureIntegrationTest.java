@@ -903,15 +903,19 @@ class StandardProjectHttpClosureIntegrationTest {
                 : "wrong|aad".getBytes(StandardCharsets.UTF_8);
         EnvelopeCryptoPort.EncryptedPayload encrypted = envelopeCrypto.encrypt(plaintext, aad);
         Long assetId = UNIQUE_SEQ.incrementAndGet();
+        // 指纹必须由 assetId 派生出全局唯一值：sc_fulfillment_asset 上存在
+        // uk_sc_fulfillment_asset_fingerprint(supplier_id, fingerprint)，固定占位指纹会让同一供应商的
+        // 多条损坏资产相互冲突，使「解密失败」与「载荷解析失败」两个分支无法在同一测试里都写入。
+        String fingerprintHex = String.format("%064x", assetId);
         jdbc.update("""
                 INSERT INTO sc_fulfillment_asset(id, asset_no, fulfillment_request_id, b_order_id,
                     operation_id, supplier_id, buyer_id, sequence_no, unit_quantity,
                     asset_type, encrypted_payload, masked_value, fingerprint, key_version,
                     lifecycle_status, created_at, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, 1, 1, 'CARD_CODE_SECRET', ?, 'CAR***',
-                    UNHEX(REPEAT('07', 32)), ?, 10, UTC_TIMESTAMP(3), UTC_TIMESTAMP(3))
+                    UNHEX(?), ?, 10, UTC_TIMESTAMP(3), UTC_TIMESTAMP(3))
                 """, assetId, "FA-" + assetId, requestId, bOrderId, operationId, supplierId, BUYER_ID,
-                encrypted.ciphertext(), encrypted.keyVersion());
+                encrypted.ciphertext(), fingerprintHex, encrypted.keyVersion());
     }
 
     private static long countAudit() {
