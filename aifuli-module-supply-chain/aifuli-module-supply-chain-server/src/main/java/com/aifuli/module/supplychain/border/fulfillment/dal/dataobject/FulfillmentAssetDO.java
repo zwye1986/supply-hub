@@ -48,9 +48,6 @@ public class FulfillmentAssetDO {
     /** 资产所属采购商内部主键 */
     private Long buyerId;
 
-    /** 采购商范围内的C端用户唯一标识 */
-    private String buyerUserId;
-
     /** BOrder范围内资产顺序号，从1递增 */
     private Integer sequenceNo;
 

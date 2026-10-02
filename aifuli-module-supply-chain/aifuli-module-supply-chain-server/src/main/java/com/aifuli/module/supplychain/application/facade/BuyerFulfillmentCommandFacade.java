@@ -25,7 +25,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.stereotype.Service;
 
 import java.nio.charset.StandardCharsets;
@@ -69,9 +69,11 @@ public class BuyerFulfillmentCommandFacade {
     /**
      * 标准履约受理入口：按平台 SKU 派生并校验目标 Schema 与指纹后进入 Lifecycle 抢占/受理。
      *
-     * <p>加密与 Schema 校验在数据库事务外完成。幂等冲突返回已有回执；可重试拒绝由 Lifecycle 收敛。
-     * 响应 requestId 一律返回实际回执号（AcceptanceSnapshot.receiptNo），首次与重放一致，
-     * 不再以每次新生成的 REQ 业务号冒充稳定回执号（该号仅作为 traceId 供链路审计）。
+     * <p>加密与 Schema 校验在数据库事务外完成。claim 按项目永久键 (projectId, buyerOrderNo) 收敛：
+     * 并发首创落败方在 Lifecycle 内按项目键重探测并比较指纹——同参数回放/续跑，异参抛幂等冲突，
+     * Facade 不捕获任意键冲突盲回放。响应 requestId 一律返回实际回执号
+     * （AcceptanceSnapshot.receiptNo），首次与重放一致，不再以每次新生成的 REQ 业务号冒充稳定回执号
+     * （该号仅作为 traceId 供链路审计）。
      * 详见 {@code docs/superpowers/specs/2026-10-02-standard-acceptance-project-key-design.md#3-回执竞争、重试和真实返回}。</p>
      */
     public FulfillmentAcceptanceReceiptRespDTO acceptFulfillment(AcceptFulfillmentReqDTO request) {
@@ -90,13 +92,10 @@ public class BuyerFulfillmentCommandFacade {
                 request, buyer, project, targetSchema, traceId);
         FulfillmentAcceptanceLifecycle.ClaimResult claim;
         try {
-            claim = lifecycle.claim(prepared);
-        } catch (DataIntegrityViolationException duplicate) {
-            log.info("[履约][facade] 并发首创冲突，回放业务键 buyerId={}, buyerOrderNo={}",
-                    buyer.id(), request.getBuyerOrderNo());
-            return toResponse(lifecycle.replayByBusinessKey(buyer.id(), request.getBuyerOrderNo()));
+            claim = claimWithProjectKeyRaceRetry(prepared);
         } catch (FulfillmentAcceptanceLifecycle.IdempotencyConflictException conflict) {
-            log.warn("[履约][facade] 幂等冲突 buyerOrderNo={}", request.getBuyerOrderNo());
+            log.warn("[履约][facade] 幂等冲突 projectId={}, buyerOrderNo={}",
+                    project.projectId(), request.getBuyerOrderNo());
             throw exception(IDEMPOTENCY_CONFLICT);
         }
         if (!claim.executeAcceptance()) {
@@ -112,6 +111,33 @@ public class BuyerFulfillmentCommandFacade {
             log.warn("[履约][facade] 业务拒绝 receiptId={}, code={}",
                     rejection.receiptId(), rejection.rejectionCode());
             return toResponse(lifecycle.reject(rejection));
+        }
+    }
+
+    /**
+     * 项目键并发首创竞争的收敛入口，两条路径均不捕获任意键冲突盲回放：
+     * <ul>
+     *   <li>{@link ProjectKeyClaimRaceException}：claim 的项目永久键唯一冲突已结束旧事务（释放
+     *       insert 在其他唯一索引上残留的意向/gap 锁，避免与获胜方 accept 收敛互锁），此处以
+     *       新事务按项目键重探测获胜回执并比较指纹——同参回放/续跑，异参幂等冲突。</li>
+     *   <li>{@link CannotAcquireLockException}：并发首创双方在唯一索引上互等（死锁/锁超时），
+     *       受害方整个 claim 事务已回滚，以新事务重试一次 claim 即收敛（重试中若获 duplicate
+     *       仍走上一条路径），不构成递归循环。</li>
+     * </ul>
+     * 设计见 docs/superpowers/specs/2026-10-02-standard-acceptance-project-key-design.md#3-回执竞争、重试和真实返回。
+     */
+    private FulfillmentAcceptanceLifecycle.ClaimResult claimWithProjectKeyRaceRetry(
+            FulfillmentAcceptanceLifecycle.PreparedAcceptance prepared) {
+        try {
+            return lifecycle.claim(prepared);
+        } catch (FulfillmentAcceptanceLifecycle.ProjectKeyClaimRaceException projectKeyRace) {
+            log.info("[履约][facade] 项目键并发首创冲突，新事务按项目键重探测 buyerOrderNo={}, traceId={}",
+                    prepared.buyerOrderNo(), prepared.traceId(), projectKeyRace.getCause());
+            return lifecycle.claimAfterProjectKeyRace(prepared);
+        } catch (CannotAcquireLockException lockRace) {
+            log.info("[履约][facade] 并发首创锁竞争（死锁/锁超时），按项目键新事务重试 buyerOrderNo={}, traceId={}",
+                    prepared.buyerOrderNo(), prepared.traceId(), lockRace);
+            return lifecycle.claim(prepared);
         }
     }
 

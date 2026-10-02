@@ -50,7 +50,7 @@ class BuyerFulfillmentQueryFacadeTest {
         request.setSourceSystem("AIFULI_MALL");
         request.setExternalTenantId("tenant-wusheng");
         request.setFulfillmentRequestNo("FR_001");
-        request.setBuyerUserId("member-1024");
+        request.setProjectCode("PRJ_KEY_A");
         request.setScopeCode("FULFILLMENT_ASSET_READ");
         when(queryService.getFulfillmentAssets(request)).thenReturn(List.of());
 

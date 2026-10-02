@@ -213,7 +213,7 @@ class SupplierOrderLifecycleTest {
         FulfillmentAssetDO capturedAsset = assetCaptor.getValue();
         assertThat(capturedAsset.getAssetNo()).isEqualTo("FA_001");
         assertThat(capturedAsset.getBuyerId()).isEqualTo(600L);
-        assertThat(capturedAsset.getBuyerUserId()).isEqualTo("user_001");
+        // 052 身份清理：标准资产不再持久化购买人用户标识，生产侧不复制共享总单购买人。
         assertThat(capturedAsset.getMaskedValue()).isNotBlank();
 
         // Verify Order status log

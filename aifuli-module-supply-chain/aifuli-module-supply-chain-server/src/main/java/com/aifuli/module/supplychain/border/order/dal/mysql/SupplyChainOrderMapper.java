@@ -21,13 +21,15 @@ public interface SupplyChainOrderMapper extends BaseMapperX<SupplyChainOrderDO> 
     /**
      * 聚合限购窗口内仍占用额度的标准商品数量。聚合 SQL 放在 XML，避免在 Java 中加载全部历史订单。
      * 失败、取消和全额退款状态通过参数化枚举码排除，禁止在 SQL 中散落业务魔法值。
+     * 「每人」维度自052起按实际履约目标手机号（fulfillment_account_value）统计，不再回退 buyer_user_id。
      *
-     * <p>设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#35-sku-限购计算并发与释放规则}。</p>
+     * <p>设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#35-sku-限购计算并发与释放规则}、
+     * {@code docs/superpowers/specs/2026-10-02-standard-acceptance-project-key-design.md#4-手机号限购与内部备注}。</p>
      */
     Long sumEffectivePurchaseQuantity(
             @Param("orderType") String orderType,
             @Param("projectId") Long projectId,
-            @Param("buyerUserId") String buyerUserId,
+            @Param("fulfillmentAccountValue") String fulfillmentAccountValue,
             @Param("platformSkuId") Long platformSkuId,
             @Param("startInclusive") LocalDateTime startInclusive,
             @Param("endExclusive") LocalDateTime endExclusive,

@@ -4,14 +4,16 @@
 
     <!--
       订单状态是限购额度的权威投影：失败、取消、全部退款自动退出统计，部分退款继续占用。
-      设计见 docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#35-sku-限购计算并发与释放规则。
+      「每人」维度自052起按实际履约目标手机号统计（与绑定手机号规则共享准确列索引），不从 buyer_user_id 回退。
+      设计见 docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#35-sku-限购计算并发与释放规则、
+      docs/superpowers/specs/2026-10-02-standard-acceptance-project-key-design.md#4-手机号限购与内部备注。
     -->
     <select id="sumEffectivePurchaseQuantity" resultType="java.lang.Long">
         SELECT COALESCE(SUM(quantity), 0)
         FROM sc_supply_chain_order
         WHERE order_type = #{orderType}
           AND project_id = #{projectId}
-          AND buyer_user_id = #{buyerUserId}
+          AND fulfillment_account_value = #{fulfillmentAccountValue}
           AND platform_sku_id = #{platformSkuId}
           AND order_status NOT IN (#{failedStatus}, #{cancelledStatus})
           AND aftersale_status != #{fullyRefundedStatus}

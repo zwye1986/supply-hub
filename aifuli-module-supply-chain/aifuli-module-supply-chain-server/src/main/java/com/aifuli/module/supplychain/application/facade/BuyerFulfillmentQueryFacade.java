@@ -41,7 +41,9 @@ public class BuyerFulfillmentQueryFacade {
 
     public List<FulfillmentAssetRespDTO> getFulfillmentAssets(FulfillmentAssetQueryReqDTO request) {
         Objects.requireNonNull(request, "request");
-        if (isBlank(request.getFulfillmentRequestNo()) || isBlank(request.getBuyerUserId())
+        // 项目归属在 RPC 服务端由真实来源与 projectCode 校验；请求已无购买人用户标识（052）。
+        // 设计见 docs/superpowers/specs/2026-10-02-standard-acceptance-project-key-design.md#1-双入口与共享命令。
+        if (isBlank(request.getFulfillmentRequestNo()) || isBlank(request.getProjectCode())
                 || isBlank(request.getSourceSystem()) || isBlank(request.getExternalTenantId())
                 || isBlank(request.getScopeCode())) {
             throw exception(BUYER_AUTH_INVALID);

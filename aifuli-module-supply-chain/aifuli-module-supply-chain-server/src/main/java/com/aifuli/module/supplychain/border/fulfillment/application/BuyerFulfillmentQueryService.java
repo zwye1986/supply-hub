@@ -32,6 +32,8 @@ import com.aifuli.module.supplychain.infrastructure.security.HmacFingerprintPort
 import com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock;
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerResolver;
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerResolver.BuyerSnapshot;
+import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerProjectAccessResolver;
+import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerProjectAccessResolver.ProjectSnapshot;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -54,10 +56,11 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
 /**
  * 采购商履约查询领域服务：处理受理回执查询、履约结果查询与授权敏感资产解密查询。
  *
- * <p>敏感资产查询严格遵循最小暴露原则：核验调用来源系统、租户与订单持久化的 C 端用户归属，
- * 解密交付卡密并记录不可变 {@code sc_sensitive_access_audit} 访问审计。</p>
- *
- * <p>设计详见 {@code docs/superpowers/specs/2026-08-07-supply-chain-phase1-detailed-design.md#732-task-11-任务执行器接入状态机推进与资产资金闭环}。</p>
+ * <p>敏感资产查询严格遵循最小暴露原则：核验调用来源系统、租户与真实项目归属（项目在 RPC 服务端由
+ * 真实来源与 projectCode 校验，不再接收购买人用户标识），解密交付卡密并记录不可变
+ * {@code sc_sensitive_access_audit} 访问审计。回执与订单均按项目永久键 (projectId, buyerOrderNo) 查询。
+ * 设计详见 {@code docs/superpowers/specs/2026-08-07-supply-chain-phase1-detailed-design.md#732-task-11-任务执行器接入状态机推进与资产资金闭环}、
+ * {@code docs/superpowers/specs/2026-10-02-standard-acceptance-project-key-design.md#1-双入口与共享命令}。</p>
  */
 @Slf4j
 @Service
@@ -67,6 +70,7 @@ public class BuyerFulfillmentQueryService {
     private static final String TRANSACTION_MANAGER = "supplyChainTransactionManager";
 
     private final BuyerResolver buyerResolver;
+    private final BuyerProjectAccessResolver projectAccessResolver;
     private final FulfillmentAcceptanceReceiptMapper receiptMapper;
     private final FulfillmentRequestMapper requestMapper;
     private final SupplyChainOrderMapper orderMapper;
@@ -79,14 +83,18 @@ public class BuyerFulfillmentQueryService {
     private final ObjectMapper objectMapper;
 
     /**
-     * 按永久业务键查询履约受理回执。
+     * 按项目永久键查询履约受理回执：真实来源解析采购商后按 projectCode 校验项目归属，
+     * 再按 (projectId, buyerOrderNo) 查询；不接收购买人用户标识。
      */
     public FulfillmentAcceptanceReceiptRespDTO getAcceptanceReceipt(FulfillmentReceiptQueryReqDTO request) {
-        log.info("[履约查询] getAcceptanceReceipt sourceSystem={}, externalTenantId={}, buyerOrderNo={}",
-                request.getSourceSystem(), request.getExternalTenantId(), request.getBuyerOrderNo());
+        log.info("[履约查询] getAcceptanceReceipt sourceSystem={}, externalTenantId={}, projectCode={}, buyerOrderNo={}",
+                request.getSourceSystem(), request.getExternalTenantId(),
+                request.getProjectCode(), request.getBuyerOrderNo());
         LocalDateTime now = databaseClock.now();
         BuyerSnapshot buyer = buyerResolver.resolve(request.getSourceSystem(), request.getExternalTenantId(), now);
-        FulfillmentAcceptanceReceiptDO receipt = receiptMapper.selectByBusinessKey(buyer.id(), request.getBuyerOrderNo());
+        ProjectSnapshot project = projectAccessResolver.requireActiveByCode(request.getProjectCode(), buyer.id());
+        FulfillmentAcceptanceReceiptDO receipt = receiptMapper.selectByProjectKey(
+                project.projectId(), request.getBuyerOrderNo());
         if (receipt == null) {
             return null;
         }
@@ -114,16 +122,19 @@ public class BuyerFulfillmentQueryService {
     }
 
     /**
-     * 查询履约结果摘要（不包含明文卡号/卡密/券码）。
+     * 按项目永久键查询履约结果摘要（不包含明文卡号/卡密/券码）。
      */
     public FulfillmentResultRespDTO getFulfillmentResult(FulfillmentResultQueryReqDTO request) {
-        log.info("[履约查询] getFulfillmentResult sourceSystem={}, externalTenantId={}, buyerOrderNo={}",
-                request.getSourceSystem(), request.getExternalTenantId(), request.getBuyerOrderNo());
+        log.info("[履约查询] getFulfillmentResult sourceSystem={}, externalTenantId={}, projectCode={}, buyerOrderNo={}",
+                request.getSourceSystem(), request.getExternalTenantId(),
+                request.getProjectCode(), request.getBuyerOrderNo());
         LocalDateTime now = databaseClock.now();
         BuyerSnapshot buyer = buyerResolver.resolve(request.getSourceSystem(), request.getExternalTenantId(), now);
+        ProjectSnapshot project = projectAccessResolver.requireActiveByCode(request.getProjectCode(), buyer.id());
         SupplyChainOrderDO order = orderMapper.selectOne(
                 new LambdaQueryWrapper<SupplyChainOrderDO>()
                         .eq(SupplyChainOrderDO::getBuyerId, buyer.id())
+                        .eq(SupplyChainOrderDO::getProjectId, project.projectId())
                         .eq(SupplyChainOrderDO::getBuyerOrderNo, request.getBuyerOrderNo()));
         if (order == null || order.getDetailId() == null) {
             return null;
@@ -181,10 +192,13 @@ public class BuyerFulfillmentQueryService {
             throw exception(BUYER_AUTH_INVALID);
         }
 
+        // 项目在 RPC 服务端由真实来源与 projectCode 校验：订单固化项目必须属于解析出的启用项目，
+        // 替代已删除的购买人用户标识比对。设计见
+        // docs/superpowers/specs/2026-10-02-standard-acceptance-project-key-design.md#1-双入口与共享命令。
+        ProjectSnapshot project = projectAccessResolver.requireActiveByCode(request.getProjectCode(), buyer.id());
         SupplyChainOrderDO order = orderMapper.selectById(fulfillmentRequest.getOrderId());
-        String reqBuyerUserId = request.getBuyerUserId() != null ? request.getBuyerUserId().trim() : "";
-        if (order == null || !Objects.equals(order.getBuyerUserId(), reqBuyerUserId)) {
-            recordAudit(request, buyer.id(), fulfillmentRequest.getId(), SensitiveAccessAuditResultStatus.REJECTED.getCode(), "BUYER_USER_MISMATCH", now);
+        if (order == null || !Objects.equals(order.getProjectId(), project.projectId())) {
+            recordAudit(request, buyer.id(), fulfillmentRequest.getId(), SensitiveAccessAuditResultStatus.REJECTED.getCode(), "PROJECT_MISMATCH", now);
             throw exception(BUYER_AUTH_INVALID);
         }
 
@@ -249,16 +263,15 @@ public class BuyerFulfillmentQueryService {
 
     private void recordAudit(FulfillmentAssetQueryReqDTO request, Long buyerId,
                              Long resourceId, short resultStatus, String reasonCode, LocalDateTime now) {
-        String rawUserId = request.getBuyerUserId() != null ? request.getBuyerUserId().trim() : "";
-        byte[] userDigest = hmacFingerprint.fingerprint("SENSITIVE_AUDIT_USER",
-                rawUserId.getBytes(StandardCharsets.UTF_8));
+        // 请求级购买人用户标识已删除（052）：审计主体保持真实 BUYER_SERVICE 与 source:tenant，
+        // 不再计算购买人用户摘要（buyerUserDigest 为 NULL，不以零长数组占位）。设计见
+        // docs/superpowers/specs/2026-10-02-standard-acceptance-project-key-design.md#1-双入口与共享命令。
         SensitiveAccessAuditDO audit = SensitiveAccessAuditDO.builder()
                 .auditNo(businessNoGenerator.next(BusinessNoPrefixes.AUD))
                 .accessType(SensitiveAccessAuditAccessType.ASSET_DECRYPT.name())
                 .principalType("BUYER_SERVICE")
                 .principalId(request.getSourceSystem() + ":" + request.getExternalTenantId())
                 .buyerId(buyerId)
-                .buyerUserDigest(userDigest)
                 .resourceType("FULFILLMENT_ASSET")
                 .resourceId(resourceId != null ? resourceId : 0L)
                 .scopeCode(request.getScopeCode() != null && !request.getScopeCode().isBlank()

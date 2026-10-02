@@ -768,7 +768,9 @@ public class SupplierOrderLifecycle {
                     .operationId(operation.getId())
                     .supplierId(bOrder.getSupplierId())
                     .buyerId(request.getBuyerId())
-                    .buyerUserId(order.getBuyerUserId())
+                    // 标准资产不再从共享总单复制购买人身份（052 已删除标准专用 buyer_user_id 列）；
+                    // 审计主体为真实 ADMIN_USER 操作人与实际 project/order。
+                    // 设计见 docs/superpowers/specs/2026-10-02-standard-acceptance-project-key-design.md#5-052增量历史清理与安全覆盖。
                     .sequenceNo(assetFact.sequenceNo())
                     .unitQuantity(1L)
                     .assetType(assetFact.assetType())

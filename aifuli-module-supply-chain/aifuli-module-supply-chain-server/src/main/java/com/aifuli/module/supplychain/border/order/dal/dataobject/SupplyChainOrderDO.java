@@ -26,9 +26,20 @@ public class SupplyChainOrderDO {
     private Long pricingVersionId;
     private String buyerCodeSnapshot;
     private String buyerNameSnapshot;
+    /**
+     * 采购商范围内真实C端用户唯一标识；INSTORE/O2O场景受理时固化，
+     * CARD标准商品订单无购买人身份固定为空（052 CHECK约束）。与DDL COMMENT语义一致。
+     */
     private String buyerUserId;
     /** 履约目标手机号；仅直充与账户绑定权益写入，卡密类为空 */
     private String fulfillmentAccountValue;
+    /**
+     * 履约目标真实账户类型：MOBILE手机号直充，EXTERNAL_ACCOUNT外部账号；
+     * 来自已校验实际履约目标而非购买人身份，历史订单未冻结时为空。与DDL COMMENT语义一致。
+     */
+    private String fulfillmentAccountType;
+    /** 中台订单内部业务备注，不向项目接口返回（如每人限购跳过记录）。与DDL COMMENT语义一致。 */
+    private String remark;
     private String buyerOrderNo;
     /** 受理时项目业务编码快照；CARD场景可空（044 变更集新增列，订单视图回显所属项目） */
     private String projectCodeSnapshot;

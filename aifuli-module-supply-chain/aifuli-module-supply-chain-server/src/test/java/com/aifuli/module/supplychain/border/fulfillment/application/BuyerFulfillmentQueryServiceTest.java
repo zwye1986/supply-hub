@@ -25,6 +25,8 @@ import com.aifuli.module.supplychain.infrastructure.identity.BusinessNoGenerator
 import com.aifuli.module.supplychain.infrastructure.security.EnvelopeCryptoPort;
 import com.aifuli.module.supplychain.infrastructure.security.HmacFingerprintPort;
 import com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock;
+import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerProjectAccessResolver;
+import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerProjectAccessResolver.ProjectSnapshot;
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerResolver;
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerResolver.BuyerSnapshot;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
@@ -52,12 +54,22 @@ import static org.mockito.Mockito.when;
 
 /**
  * 采购商履约查询服务单测：受理回执查询、结果摘要查询、敏感资产解密与不可变访问审计。
+ *
+ * <p>机械更新至项目永久键语义（052 身份清理）：回执/订单按 (projectId, buyerOrderNo) 查询，
+ * 资产查询以真实项目归属校验替代已删除的购买人用户标识比对，审计不再计算购买人摘要。
+ * 设计见 docs/superpowers/specs/2026-10-02-standard-acceptance-project-key-design.md#1-双入口与共享命令。</p>
  */
 @ExtendWith(MockitoExtension.class)
 class BuyerFulfillmentQueryServiceTest {
 
+    private static final long BUYER_ID = 10L;
+    private static final long PROJECT_ID = 800L;
+    private static final String PROJECT_CODE = "PRJ_KEY_A";
+
     @Mock
     private BuyerResolver buyerResolver;
+    @Mock
+    private BuyerProjectAccessResolver projectAccessResolver;
     @Mock
     private FulfillmentAcceptanceReceiptMapper receiptMapper;
     @Mock
@@ -87,6 +99,7 @@ class BuyerFulfillmentQueryServiceTest {
     void setUp() {
         queryService = new BuyerFulfillmentQueryService(
                 buyerResolver,
+                projectAccessResolver,
                 receiptMapper,
                 requestMapper,
                 orderMapper,
@@ -105,17 +118,21 @@ class BuyerFulfillmentQueryServiceTest {
         FulfillmentReceiptQueryReqDTO req = new FulfillmentReceiptQueryReqDTO();
         req.setSourceSystem("AIFULI_MALL");
         req.setExternalTenantId("tenant_01");
+        req.setProjectCode(PROJECT_CODE);
         req.setBuyerOrderNo("BO_BUYER_01");
 
         when(databaseClock.now()).thenReturn(fixedNow);
         when(databaseClock.toInstant(any())).thenReturn(Instant.parse("2026-08-11T12:00:00Z"));
         when(buyerResolver.resolve("AIFULI_MALL", "tenant_01", fixedNow))
-                .thenReturn(new BuyerSnapshot(10L, "buyer_code", "BuyerName", "PROJECT_01", 1));
+                .thenReturn(new BuyerSnapshot(BUYER_ID, "buyer_code", "BuyerName", "PROJECT_01", 1));
+        when(projectAccessResolver.requireActiveByCode(PROJECT_CODE, BUYER_ID))
+                .thenReturn(new ProjectSnapshot(PROJECT_ID, PROJECT_CODE, "项目A", BUYER_ID));
 
         FulfillmentAcceptanceReceiptDO receipt = FulfillmentAcceptanceReceiptDO.builder()
                 .id(1L)
                 .receiptNo("RCP_001")
-                .buyerId(10L)
+                .buyerId(BUYER_ID)
+                .projectId(PROJECT_ID)
                 .buyerOrderNo("BO_BUYER_01")
                 .status((short) 10) // ACCEPTED
                 .version(1L)
@@ -133,7 +150,7 @@ class BuyerFulfillmentQueryServiceTest {
                 .displaySupplierName("奇那梦")
                 .build();
 
-        when(receiptMapper.selectByBusinessKey(10L, "BO_BUYER_01")).thenReturn(receipt);
+        when(receiptMapper.selectByProjectKey(PROJECT_ID, "BO_BUYER_01")).thenReturn(receipt);
         when(orderMapper.selectById(100L)).thenReturn(order);
 
         FulfillmentAcceptanceReceiptRespDTO resp = queryService.getAcceptanceReceipt(req);
@@ -151,17 +168,21 @@ class BuyerFulfillmentQueryServiceTest {
         FulfillmentResultQueryReqDTO req = new FulfillmentResultQueryReqDTO();
         req.setSourceSystem("AIFULI_MALL");
         req.setExternalTenantId("tenant_01");
+        req.setProjectCode(PROJECT_CODE);
         req.setBuyerOrderNo("BO_BUYER_02");
 
         when(databaseClock.now()).thenReturn(fixedNow);
         when(databaseClock.toInstant(any())).thenReturn(Instant.parse("2026-08-11T12:00:00Z"));
         when(buyerResolver.resolve("AIFULI_MALL", "tenant_01", fixedNow))
-                .thenReturn(new BuyerSnapshot(10L, "buyer_code", "BuyerName", "PROJECT_01", 1));
+                .thenReturn(new BuyerSnapshot(BUYER_ID, "buyer_code", "BuyerName", "PROJECT_01", 1));
+        when(projectAccessResolver.requireActiveByCode(PROJECT_CODE, BUYER_ID))
+                .thenReturn(new ProjectSnapshot(PROJECT_ID, PROJECT_CODE, "项目A", BUYER_ID));
 
         SupplyChainOrderDO order = SupplyChainOrderDO.builder()
                 .id(101L)
                 .orderNo("SC_ORDER_002")
-                .buyerId(10L)
+                .buyerId(BUYER_ID)
+                .projectId(PROJECT_ID)
                 .buyerOrderNo("BO_BUYER_02")
                 .detailId(201L)
                 .orderStatus((short) 30)
@@ -194,16 +215,11 @@ class BuyerFulfillmentQueryServiceTest {
 
     @Test
     void getFulfillmentAssetsRejectsBuyerMismatch() {
-        FulfillmentAssetQueryReqDTO req = new FulfillmentAssetQueryReqDTO();
-        req.setSourceSystem("AIFULI_MALL");
-        req.setExternalTenantId("tenant_01");
-        req.setFulfillmentRequestNo("FR_003");
-        req.setBuyerUserId("user_003");
-        req.setScopeCode("FULFILLMENT_ASSET_READ");
+        FulfillmentAssetQueryReqDTO req = baseAssetRequest("FR_003");
 
         when(databaseClock.now()).thenReturn(fixedNow);
         when(buyerResolver.resolve("AIFULI_MALL", "tenant_01", fixedNow))
-                .thenReturn(new BuyerSnapshot(10L, "buyer_code", "BuyerName", "PROJECT_01", 1));
+                .thenReturn(new BuyerSnapshot(BUYER_ID, "buyer_code", "BuyerName", "PROJECT_01", 1));
 
         FulfillmentRequestDO requestDO = FulfillmentRequestDO.builder()
                 .id(301L)
@@ -213,8 +229,6 @@ class BuyerFulfillmentQueryServiceTest {
 
         when(requestMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(requestDO);
         when(businessNoGenerator.next("AUD_")).thenReturn("AUD_001");
-        when(hmacFingerprint.fingerprint(eq("SENSITIVE_AUDIT_USER"), any()))
-                .thenReturn("digest".getBytes(StandardCharsets.UTF_8));
 
         assertThatThrownBy(() -> queryService.getFulfillmentAssets(req))
                 .isInstanceOf(ServiceException.class);
@@ -228,29 +242,61 @@ class BuyerFulfillmentQueryServiceTest {
     }
 
     @Test
+    void getFulfillmentAssetsRejectsProjectMismatch() {
+        FulfillmentAssetQueryReqDTO req = baseAssetRequest("FR_010");
+
+        when(databaseClock.now()).thenReturn(fixedNow);
+        when(buyerResolver.resolve("AIFULI_MALL", "tenant_01", fixedNow))
+                .thenReturn(new BuyerSnapshot(BUYER_ID, "buyer_code", "BuyerName", "PROJECT_01", 1));
+        // 请求声明的项目属于该采购商，但订单固化项目不同：项目归属校验失败关闭。
+        when(projectAccessResolver.requireActiveByCode(PROJECT_CODE, BUYER_ID))
+                .thenReturn(new ProjectSnapshot(PROJECT_ID, PROJECT_CODE, "项目A", BUYER_ID));
+
+        FulfillmentRequestDO requestDO = FulfillmentRequestDO.builder()
+                .id(310L)
+                .requestNo("FR_010")
+                .buyerId(BUYER_ID)
+                .orderId(510L)
+                .build();
+        SupplyChainOrderDO order = SupplyChainOrderDO.builder()
+                .id(510L)
+                .projectId(999L) // 与解析项目 800 不一致
+                .build();
+
+        when(requestMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(requestDO);
+        when(orderMapper.selectById(510L)).thenReturn(order);
+        when(businessNoGenerator.next("AUD_")).thenReturn("AUD_010");
+
+        assertThatThrownBy(() -> queryService.getFulfillmentAssets(req))
+                .isInstanceOf(ServiceException.class);
+
+        ArgumentCaptor<SensitiveAccessAuditDO> auditCaptor = ArgumentCaptor.forClass(SensitiveAccessAuditDO.class);
+        verify(auditMapper).insert(auditCaptor.capture());
+        assertThat(auditCaptor.getValue().getReasonCode()).isEqualTo("PROJECT_MISMATCH");
+        verify(assetMapper, never()).selectListByFulfillmentRequestId(any());
+    }
+
+    @Test
     void getFulfillmentAssetsDecryptsAndWritesAudit() {
-        FulfillmentAssetQueryReqDTO req = new FulfillmentAssetQueryReqDTO();
-        req.setSourceSystem("AIFULI_MALL");
-        req.setExternalTenantId("tenant_01");
-        req.setFulfillmentRequestNo("FR_004");
-        req.setBuyerUserId("13800000000");
-        req.setScopeCode("FULFILLMENT_ASSET_READ");
+        FulfillmentAssetQueryReqDTO req = baseAssetRequest("FR_004");
 
         when(databaseClock.now()).thenReturn(fixedNow);
         when(databaseClock.toInstant(any())).thenReturn(Instant.parse("2026-08-11T12:00:00Z"));
         when(buyerResolver.resolve("AIFULI_MALL", "tenant_01", fixedNow))
-                .thenReturn(new BuyerSnapshot(10L, "buyer_code", "BuyerName", "PROJECT_01", 1));
+                .thenReturn(new BuyerSnapshot(BUYER_ID, "buyer_code", "BuyerName", "PROJECT_01", 1));
+        when(projectAccessResolver.requireActiveByCode(PROJECT_CODE, BUYER_ID))
+                .thenReturn(new ProjectSnapshot(PROJECT_ID, PROJECT_CODE, "项目A", BUYER_ID));
 
         FulfillmentRequestDO requestDO = FulfillmentRequestDO.builder()
                 .id(401L)
                 .requestNo("FR_004")
-                .buyerId(10L)
+                .buyerId(BUYER_ID)
                 .orderId(501L)
                 .build();
 
         SupplyChainOrderDO order = SupplyChainOrderDO.builder()
                 .id(501L)
-                .buyerUserId("13800000000")
+                .projectId(PROJECT_ID)
                 .build();
 
         FulfillmentAssetDO assetDO = FulfillmentAssetDO.builder()
@@ -271,8 +317,6 @@ class BuyerFulfillmentQueryServiceTest {
         when(orderMapper.selectById(501L)).thenReturn(order);
         when(assetMapper.selectListByFulfillmentRequestId(401L)).thenReturn(List.of(assetDO));
         when(businessNoGenerator.next("AUD_")).thenReturn("AUD_002");
-        when(hmacFingerprint.fingerprint(eq("SENSITIVE_AUDIT_USER"), any()))
-                .thenReturn("user-digest".getBytes(StandardCharsets.UTF_8));
 
         String assetPlaintext = "{\"assetType\":\"CARD_SECRET\",\"cardCode\":\"CARD9999\",\"cardSecret\":\"PASS9999\"}";
         when(envelopeCrypto.decrypt(eq(assetDO.getEncryptedPayload()), eq("1"), any()))
@@ -295,33 +339,34 @@ class BuyerFulfillmentQueryServiceTest {
         assertThat(audit.getResultStatus()).isEqualTo((short) 10); // 10 成功
         assertThat(audit.getScopeCode()).isEqualTo("FULFILLMENT_ASSET_READ");
         assertThat(audit.getReasonCode()).isEqualTo("AUTHORIZED_QUERY");
+        // 购买人用户标识已删除：审计不再持久化购买人摘要（为 NULL 而非零长占位）。
+        assertThat(audit.getBuyerUserDigest()).isNull();
     }
 
     @Test
-    void getFulfillmentAssetsAllowsNonMobileOpaqueBuyerUserId() {
-        String opaqueUserId = "ext_user_uuid_9876543210_abc";
-        FulfillmentAssetQueryReqDTO req = new FulfillmentAssetQueryReqDTO();
-        req.setSourceSystem("AIFULI_MALL");
-        req.setExternalTenantId("tenant_01");
-        req.setFulfillmentRequestNo("FR_005");
-        req.setBuyerUserId(opaqueUserId);
-        req.setScopeCode("FULFILLMENT_ASSET_READ");
+    void getFulfillmentAssetsAllowsNonMobileTargetOrders() {
+        // 052 身份清理后的等价改写：非手机号目标（EXTERNAL_ACCOUNT）订单不再有购买人比对，
+        // 只要项目归属一致即可授权查询；原「opaque buyerUserId 允许」语义由项目归属校验承接。
+        FulfillmentAssetQueryReqDTO req = baseAssetRequest("FR_005");
 
         when(databaseClock.now()).thenReturn(fixedNow);
         when(databaseClock.toInstant(any())).thenReturn(Instant.parse("2026-08-11T12:00:00Z"));
         when(buyerResolver.resolve("AIFULI_MALL", "tenant_01", fixedNow))
-                .thenReturn(new BuyerSnapshot(10L, "buyer_code", "BuyerName", "PROJECT_01", 1));
+                .thenReturn(new BuyerSnapshot(BUYER_ID, "buyer_code", "BuyerName", "PROJECT_01", 1));
+        when(projectAccessResolver.requireActiveByCode(PROJECT_CODE, BUYER_ID))
+                .thenReturn(new ProjectSnapshot(PROJECT_ID, PROJECT_CODE, "项目A", BUYER_ID));
 
         FulfillmentRequestDO requestDO = FulfillmentRequestDO.builder()
                 .id(402L)
                 .requestNo("FR_005")
-                .buyerId(10L)
+                .buyerId(BUYER_ID)
                 .orderId(502L)
                 .build();
 
         SupplyChainOrderDO order = SupplyChainOrderDO.builder()
                 .id(502L)
-                .buyerUserId(opaqueUserId)
+                .projectId(PROJECT_ID)
+                .fulfillmentAccountType("EXTERNAL_ACCOUNT")
                 .build();
 
         FulfillmentAssetDO assetDO = FulfillmentAssetDO.builder()
@@ -342,8 +387,6 @@ class BuyerFulfillmentQueryServiceTest {
         when(orderMapper.selectById(502L)).thenReturn(order);
         when(assetMapper.selectListByFulfillmentRequestId(402L)).thenReturn(List.of(assetDO));
         when(businessNoGenerator.next("AUD_")).thenReturn("AUD_003");
-        when(hmacFingerprint.fingerprint(eq("SENSITIVE_AUDIT_USER"), any()))
-                .thenReturn("opaque-user-digest".getBytes(StandardCharsets.UTF_8));
 
         String assetPlaintext = "{\"assetType\":\"CARD_SECRET\",\"cardCode\":\"CARD8888\",\"cardSecret\":\"PASS8888\"}";
         when(envelopeCrypto.decrypt(eq(assetDO.getEncryptedPayload()), eq("1"), any()))
@@ -358,27 +401,24 @@ class BuyerFulfillmentQueryServiceTest {
 
     @Test
     void getFulfillmentAssetsFailsClosedWhenAuditInsertFails() {
-        FulfillmentAssetQueryReqDTO req = new FulfillmentAssetQueryReqDTO();
-        req.setSourceSystem("AIFULI_MALL");
-        req.setExternalTenantId("tenant_01");
-        req.setFulfillmentRequestNo("FR_006");
-        req.setBuyerUserId("user_006");
-        req.setScopeCode("FULFILLMENT_ASSET_READ");
+        FulfillmentAssetQueryReqDTO req = baseAssetRequest("FR_006");
 
         when(databaseClock.now()).thenReturn(fixedNow);
         when(buyerResolver.resolve("AIFULI_MALL", "tenant_01", fixedNow))
-                .thenReturn(new BuyerSnapshot(10L, "buyer_code", "BuyerName", "PROJECT_01", 1));
+                .thenReturn(new BuyerSnapshot(BUYER_ID, "buyer_code", "BuyerName", "PROJECT_01", 1));
+        when(projectAccessResolver.requireActiveByCode(PROJECT_CODE, BUYER_ID))
+                .thenReturn(new ProjectSnapshot(PROJECT_ID, PROJECT_CODE, "项目A", BUYER_ID));
 
         FulfillmentRequestDO requestDO = FulfillmentRequestDO.builder()
                 .id(403L)
                 .requestNo("FR_006")
-                .buyerId(10L)
+                .buyerId(BUYER_ID)
                 .orderId(503L)
                 .build();
 
         SupplyChainOrderDO order = SupplyChainOrderDO.builder()
                 .id(503L)
-                .buyerUserId("user_006")
+                .projectId(PROJECT_ID)
                 .build();
 
         when(requestMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(requestDO);
@@ -398,8 +438,6 @@ class BuyerFulfillmentQueryServiceTest {
         when(assetMapper.selectListByFulfillmentRequestId(403L)).thenReturn(List.of(assetDO));
         when(envelopeCrypto.decrypt(any(), any(), any())).thenReturn("{}".getBytes(StandardCharsets.UTF_8));
         when(businessNoGenerator.next("AUD_")).thenReturn("AUD_004");
-        when(hmacFingerprint.fingerprint(eq("SENSITIVE_AUDIT_USER"), any()))
-                .thenReturn("digest".getBytes(StandardCharsets.UTF_8));
 
         // 模拟审计持久化异常
         when(auditMapper.insert(any(SensitiveAccessAuditDO.class)))
@@ -412,19 +450,13 @@ class BuyerFulfillmentQueryServiceTest {
 
     @Test
     void getFulfillmentAssetsRejectsMissingAssetReadScope() {
-        FulfillmentAssetQueryReqDTO req = new FulfillmentAssetQueryReqDTO();
-        req.setSourceSystem("AIFULI_MALL");
-        req.setExternalTenantId("tenant_01");
-        req.setFulfillmentRequestNo("FR_007");
-        req.setBuyerUserId("user_007");
+        FulfillmentAssetQueryReqDTO req = baseAssetRequest("FR_007");
         req.setScopeCode("ORDER_READ");
 
         when(databaseClock.now()).thenReturn(fixedNow);
         when(buyerResolver.resolve("AIFULI_MALL", "tenant_01", fixedNow))
-                .thenReturn(new BuyerSnapshot(10L, "buyer_code", "BuyerName", "PROJECT_01", 1));
+                .thenReturn(new BuyerSnapshot(BUYER_ID, "buyer_code", "BuyerName", "PROJECT_01", 1));
         when(businessNoGenerator.next("AUD_")).thenReturn("AUD_SCOPE");
-        when(hmacFingerprint.fingerprint(eq("SENSITIVE_AUDIT_USER"), any()))
-                .thenReturn("digest".getBytes(StandardCharsets.UTF_8));
 
         assertThatThrownBy(() -> queryService.getFulfillmentAssets(req))
                 .isInstanceOf(ServiceException.class)
@@ -441,26 +473,23 @@ class BuyerFulfillmentQueryServiceTest {
 
     @Test
     void getFulfillmentAssetsFailsClosedWhenDecryptFails() {
-        FulfillmentAssetQueryReqDTO req = new FulfillmentAssetQueryReqDTO();
-        req.setSourceSystem("AIFULI_MALL");
-        req.setExternalTenantId("tenant_01");
-        req.setFulfillmentRequestNo("FR_008");
-        req.setBuyerUserId("user_008");
-        req.setScopeCode("FULFILLMENT_ASSET_READ");
+        FulfillmentAssetQueryReqDTO req = baseAssetRequest("FR_008");
 
         when(databaseClock.now()).thenReturn(fixedNow);
         when(buyerResolver.resolve("AIFULI_MALL", "tenant_01", fixedNow))
-                .thenReturn(new BuyerSnapshot(10L, "buyer_code", "BuyerName", "PROJECT_01", 1));
+                .thenReturn(new BuyerSnapshot(BUYER_ID, "buyer_code", "BuyerName", "PROJECT_01", 1));
+        when(projectAccessResolver.requireActiveByCode(PROJECT_CODE, BUYER_ID))
+                .thenReturn(new ProjectSnapshot(PROJECT_ID, PROJECT_CODE, "项目A", BUYER_ID));
 
         FulfillmentRequestDO requestDO = FulfillmentRequestDO.builder()
                 .id(408L)
                 .requestNo("FR_008")
-                .buyerId(10L)
+                .buyerId(BUYER_ID)
                 .orderId(508L)
                 .build();
         SupplyChainOrderDO order = SupplyChainOrderDO.builder()
                 .id(508L)
-                .buyerUserId("user_008")
+                .projectId(PROJECT_ID)
                 .build();
         FulfillmentAssetDO assetDO = FulfillmentAssetDO.builder()
                 .id(608L)
@@ -478,8 +507,6 @@ class BuyerFulfillmentQueryServiceTest {
         when(assetMapper.selectListByFulfillmentRequestId(408L)).thenReturn(List.of(assetDO));
         when(envelopeCrypto.decrypt(any(), any(), any())).thenThrow(new IllegalStateException("kms unavailable"));
         when(businessNoGenerator.next("AUD_")).thenReturn("AUD_DECRYPT");
-        when(hmacFingerprint.fingerprint(eq("SENSITIVE_AUDIT_USER"), any()))
-                .thenReturn("digest".getBytes(StandardCharsets.UTF_8));
 
         assertThatThrownBy(() -> queryService.getFulfillmentAssets(req))
                 .isInstanceOf(IllegalStateException.class)
@@ -493,26 +520,23 @@ class BuyerFulfillmentQueryServiceTest {
 
     @Test
     void getFulfillmentAssetsHidesQuarantinedAssets() {
-        FulfillmentAssetQueryReqDTO req = new FulfillmentAssetQueryReqDTO();
-        req.setSourceSystem("AIFULI_MALL");
-        req.setExternalTenantId("tenant_01");
-        req.setFulfillmentRequestNo("FR_009");
-        req.setBuyerUserId("user_009");
-        req.setScopeCode("FULFILLMENT_ASSET_READ");
+        FulfillmentAssetQueryReqDTO req = baseAssetRequest("FR_009");
 
         when(databaseClock.now()).thenReturn(fixedNow);
         when(buyerResolver.resolve("AIFULI_MALL", "tenant_01", fixedNow))
-                .thenReturn(new BuyerSnapshot(10L, "buyer_code", "BuyerName", "PROJECT_01", 1));
+                .thenReturn(new BuyerSnapshot(BUYER_ID, "buyer_code", "BuyerName", "PROJECT_01", 1));
+        when(projectAccessResolver.requireActiveByCode(PROJECT_CODE, BUYER_ID))
+                .thenReturn(new ProjectSnapshot(PROJECT_ID, PROJECT_CODE, "项目A", BUYER_ID));
 
         FulfillmentRequestDO requestDO = FulfillmentRequestDO.builder()
                 .id(409L)
                 .requestNo("FR_009")
-                .buyerId(10L)
+                .buyerId(BUYER_ID)
                 .orderId(509L)
                 .build();
         SupplyChainOrderDO order = SupplyChainOrderDO.builder()
                 .id(509L)
-                .buyerUserId("user_009")
+                .projectId(PROJECT_ID)
                 .build();
         FulfillmentAssetDO available = FulfillmentAssetDO.builder()
                 .id(609L)
@@ -540,8 +564,6 @@ class BuyerFulfillmentQueryServiceTest {
         when(orderMapper.selectById(509L)).thenReturn(order);
         when(assetMapper.selectListByFulfillmentRequestId(409L)).thenReturn(List.of(available, quarantined));
         when(businessNoGenerator.next("AUD_")).thenReturn("AUD_Q");
-        when(hmacFingerprint.fingerprint(eq("SENSITIVE_AUDIT_USER"), any()))
-                .thenReturn("digest".getBytes(StandardCharsets.UTF_8));
         when(envelopeCrypto.decrypt(eq(available.getEncryptedPayload()), eq("1"), any()))
                 .thenReturn("{\"cardCode\":\"CARD1111\",\"cardSecret\":\"PASS1111\"}".getBytes(StandardCharsets.UTF_8));
 
@@ -550,5 +572,15 @@ class BuyerFulfillmentQueryServiceTest {
         assertThat(result).hasSize(1);
         assertThat(result.get(0).getAssetNo()).isEqualTo("FA_009");
         verify(envelopeCrypto, never()).decrypt(eq(quarantined.getEncryptedPayload()), any(), any());
+    }
+
+    private static FulfillmentAssetQueryReqDTO baseAssetRequest(String fulfillmentRequestNo) {
+        FulfillmentAssetQueryReqDTO req = new FulfillmentAssetQueryReqDTO();
+        req.setSourceSystem("AIFULI_MALL");
+        req.setExternalTenantId("tenant_01");
+        req.setFulfillmentRequestNo(fulfillmentRequestNo);
+        req.setProjectCode(PROJECT_CODE);
+        req.setScopeCode("FULFILLMENT_ASSET_READ");
+        return req;
     }
 }
