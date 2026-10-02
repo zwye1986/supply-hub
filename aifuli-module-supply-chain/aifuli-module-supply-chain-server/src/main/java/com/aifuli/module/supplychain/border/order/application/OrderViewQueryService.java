@@ -473,16 +473,15 @@ public class OrderViewQueryService {
     /** 管理端明文查看资产的审计留痕：principal=ADMIN_USER，资源=FULFILLMENT_ASSET。 */
     private void recordAdminAudit(SupplyChainOrderDO order, FulfillmentAssetDO asset, Long userId,
                                   short resultStatus, String reasonCode, LocalDateTime now) {
-        byte[] userDigest = asset.getBuyerUserId() == null ? new byte[0]
-                : hmacFingerprint.fingerprint(SENSITIVE_AUDIT_USER_DOMAIN,
-                        asset.getBuyerUserId().getBytes(StandardCharsets.UTF_8));
+        // 标准资产购买人列已删除（052）：不再计算购买人用户摘要，buyerUserDigest 恒为 NULL（不以零长
+        // 数组占位）；principal 保持真实 ADMIN_USER 操作人。设计见
+        // docs/superpowers/specs/2026-10-02-standard-acceptance-project-key-design.md#1-双入口与共享命令。
         SensitiveAccessAuditDO audit = SensitiveAccessAuditDO.builder()
                 .auditNo(businessNoGenerator.next(BusinessNoPrefixes.AUD))
                 .accessType(SensitiveAccessAuditAccessType.ASSET_DECRYPT.name())
                 .principalType(PRINCIPAL_TYPE_ADMIN_USER)
                 .principalId(String.valueOf(userId == null ? 0L : userId))
                 .buyerId(asset.getBuyerId())
-                .buyerUserDigest(userDigest)
                 .resourceType("FULFILLMENT_ASSET")
                 .resourceId(asset.getId() == null ? 0L : asset.getId())
                 .scopeCode(AUDIT_SCOPE_ADMIN_ORDER_VIEW)

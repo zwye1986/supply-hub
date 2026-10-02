@@ -21,13 +21,15 @@ public interface SupplyChainOrderMapper extends BaseMapperX<SupplyChainOrderDO> 
     /**
      * 聚合限购窗口内仍占用额度的标准商品数量。聚合 SQL 放在 XML，避免在 Java 中加载全部历史订单。
      * 失败、取消和全额退款状态通过参数化枚举码排除，禁止在 SQL 中散落业务魔法值。
+     * 「每人」维度自052起按实际履约目标手机号（fulfillment_account_value）统计，不再回退 buyer_user_id。
      *
-     * <p>设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#35-sku-限购计算并发与释放规则}。</p>
+     * <p>设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#35-sku-限购计算并发与释放规则}、
+     * {@code docs/superpowers/specs/2026-10-02-standard-acceptance-project-key-design.md#4-手机号限购与内部备注}。</p>
      */
     Long sumEffectivePurchaseQuantity(
             @Param("orderType") String orderType,
             @Param("projectId") Long projectId,
-            @Param("buyerUserId") String buyerUserId,
+            @Param("fulfillmentAccountValue") String fulfillmentAccountValue,
             @Param("platformSkuId") Long platformSkuId,
             @Param("startInclusive") LocalDateTime startInclusive,
             @Param("endExclusive") LocalDateTime endExclusive,
@@ -68,6 +70,24 @@ public interface SupplyChainOrderMapper extends BaseMapperX<SupplyChainOrderDO> 
     default SupplyChainOrderDO selectByOrderNo(String orderNo) {
         return selectOne(new LambdaQueryWrapper<SupplyChainOrderDO>()
                 .eq(SupplyChainOrderDO::getOrderNo, orderNo));
+    }
+
+    /**
+     * 离线身份迁移专用：回填总订单格式 2 无用户指纹/业务摘要与真实履约目标账户类型、
+     * 规范化 MOBILE 手机快照。仅由 StandardOrderIdentityMigrationService 在全批验证通过后的
+     * 供应链事务内调用；不触碰订单状态、资金、频率冻结等任何其他列。
+     * 设计见 docs/superpowers/specs/2026-10-02-standard-acceptance-project-key-design.md#51-离线应用迁移与实际手机号覆盖。
+     */
+    default int rebuildIdentitySnapshot(Long id, byte[] requestFingerprint, byte[] buyerOrderDigest,
+                                         String fulfillmentAccountType, String fulfillmentAccountValue,
+                                         LocalDateTime updatedAt) {
+        return update(null, new LambdaUpdateWrapper<SupplyChainOrderDO>()
+                .set(SupplyChainOrderDO::getRequestFingerprint, requestFingerprint)
+                .set(SupplyChainOrderDO::getBuyerOrderDigest, buyerOrderDigest)
+                .set(SupplyChainOrderDO::getFulfillmentAccountType, fulfillmentAccountType)
+                .set(SupplyChainOrderDO::getFulfillmentAccountValue, fulfillmentAccountValue)
+                .set(SupplyChainOrderDO::getUpdatedAt, updatedAt)
+                .eq(SupplyChainOrderDO::getId, id));
     }
 
     default SupplyChainOrderDO selectByBuyerOrder(Long buyerId, String buyerOrderNo) {

@@ -46,7 +46,7 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerListingMap
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.FulfillmentType;
-import com.aifuli.module.supplychain.tradecore.catalog.pricing.QuoteConsumptionContext;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.ProjectQuoteKeyContext;
 import com.aifuli.module.supplychain.tradecore.catalog.pricing.StandardPricingQuoteService;
 import com.aifuli.module.supplychain.tradecore.catalog.pricing.StandardPricingQuoteService.FrozenQuote;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.ListingAvailability;
@@ -89,7 +89,6 @@ import org.testcontainers.containers.MySQLContainer;
 import javax.sql.DataSource;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
-import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Base64;
@@ -140,7 +139,7 @@ class FulfillmentAcceptanceIntegrationTest {
             MutableFailureInjector failures = context.getBean(MutableFailureInjector.class);
             JdbcTemplate jdbc = new JdbcTemplate(context.getBean("supplyChainDataSource", DataSource.class));
 
-            AcceptFulfillmentReqDTO first = request("C-CONCURRENT", 1L);
+            AcceptFulfillmentReqDTO first = request("C-CONCURRENT");
             List<FulfillmentAcceptanceReceiptRespDTO> concurrent = concurrently(20,
                     () -> facade.acceptFulfillment(first));
             assertThat(concurrent).hasSize(20);
@@ -183,40 +182,47 @@ class FulfillmentAcceptanceIntegrationTest {
                     String.class, first.getBuyerOrderNo())).isEqualTo("13800138000");
 
             AcceptFulfillmentReqDTO prefixedReplay = copy(first);
-            prefixedReplay.setBuyerUserId("+8613800138000");
             prefixedReplay.getTarget().setValues(Map.of("accountType", "MOBILE",
                     "accountValue", "008613800138000"));
             assertThat(facade.acceptFulfillment(prefixedReplay).getIdempotentReplay()).isTrue();
 
+            // 购买人身份字段已删除：同键异参以实际目标手机号变更表达，仍必须幂等冲突。
             AcceptFulfillmentReqDTO conflicting = copy(first);
-            conflicting.setBuyerUserId("13700137000");
+            conflicting.getTarget().setValues(Map.of("accountType", "MOBILE",
+                    "accountValue", "13700137000"));
             assertThatThrownBy(() -> facade.acceptFulfillment(conflicting))
                     .isInstanceOf(ServiceException.class)
                     .extracting("code").isEqualTo(1_050_001_012);
             assertCounts(jdbc, 1, 1, 1, 1, 1, 1);
 
-            AcceptFulfillmentReqDTO invalidMobile = request("C-MOBILE-INVALID", 1L);
-            invalidMobile.setBuyerUserId("member-1024");
-            assertThatThrownBy(() -> facade.acceptFulfillment(invalidMobile))
-                    .isInstanceOf(IllegalArgumentException.class)
-                    .hasMessageContaining("中国大陆手机号");
+            // 购买人身份字段已删除：非法手机号身份的等价语义改为 MOBILE 目标不可规范化 → 最终拒绝，
+            // 由回执收敛而非入口校验异常（回执数随之 +1，后续基线同步传导）。
+            AcceptFulfillmentReqDTO invalidMobile = request("C-MOBILE-INVALID");
+            invalidMobile.getTarget().setValues(Map.of(
+                    FulfillmentTargetFields.ACCOUNT_TYPE, FulfillmentTargetFields.ACCOUNT_TYPE_MOBILE,
+                    FulfillmentTargetFields.ACCOUNT_VALUE, "member-1024"));
+            FulfillmentAcceptanceReceiptRespDTO invalidMobileReceipt = facade.acceptFulfillment(invalidMobile);
+            assertThat(invalidMobileReceipt.getReceiptStatus())
+                    .isEqualTo(FulfillmentReceiptStatus.REJECTED_FINAL);
+            assertThat(invalidMobileReceipt.getRejectionCode())
+                    .isEqualTo(AcceptanceRejectionCode.INVALID_TARGET.name());
 
-            AcceptFulfillmentReqDTO unknownProject = request("C-PROJECT-MISSING", 1L);
+            AcceptFulfillmentReqDTO unknownProject = request("C-PROJECT-MISSING");
             unknownProject.setProjectCode("PRJ_NOT_EXIST");
             assertThatThrownBy(() -> facade.acceptFulfillment(unknownProject))
                     .isInstanceOf(ServiceException.class)
                     .extracting("code").isEqualTo(PROJECT_NOT_FOUND.getCode());
-            assertCounts(jdbc, 1, 1, 1, 1, 1, 1);
+            assertCounts(jdbc, 2, 1, 1, 1, 1, 1);
 
-            AcceptFulfillmentReqDTO invalidQuantity = request("C-QTY", 1L);
+            AcceptFulfillmentReqDTO invalidQuantity = request("C-QTY");
             invalidQuantity.setQuantity(2L);
             assertThat(facade.acceptFulfillment(invalidQuantity).getReceiptStatus())
                     .isEqualTo(FulfillmentReceiptStatus.REJECTED_FINAL);
             assertThat(rejection(jdbc, "C-QTY")).isEqualTo(AcceptanceRejectionCode.QUANTITY_NOT_SUPPORTED.name());
-            assertCounts(jdbc, 2, 1, 1, 1, 1, 1);
+            assertCounts(jdbc, 3, 1, 1, 1, 1, 1);
 
             setAvailability(context, ListingAvailability.UNAVAILABLE, "SUPPLY_DOWN");
-            assertThat(facade.acceptFulfillment(request("C-SUPPLY", 1L)).getReceiptStatus())
+            assertThat(facade.acceptFulfillment(request("C-SUPPLY")).getReceiptStatus())
                     .isEqualTo(FulfillmentReceiptStatus.REJECTED_RETRYABLE);
             assertThat(rejection(jdbc, "C-SUPPLY")).isEqualTo(AcceptanceRejectionCode.INVENTORY_INSUFFICIENT.name());
             setAvailability(context, ListingAvailability.AVAILABLE, "SUPPLY_READY");
@@ -224,7 +230,7 @@ class FulfillmentAcceptanceIntegrationTest {
             fixture.supplier().setStatus(SupplierStatus.SUSPENDED.getCode());
             fixture.supplier().setUpdatedAt(LocalDateTime.now(ZoneOffset.UTC));
             context.getBean(SupplierMapper.class).updateById(fixture.supplier());
-            assertThat(facade.acceptFulfillment(request("C-ROUTE", 1L)).getReceiptStatus())
+            assertThat(facade.acceptFulfillment(request("C-ROUTE")).getReceiptStatus())
                     .isEqualTo(FulfillmentReceiptStatus.REJECTED_RETRYABLE);
             assertThat(rejection(jdbc, "C-ROUTE")).isEqualTo(AcceptanceRejectionCode.NO_ROUTABLE_SUPPLIER.name());
             fixture.supplier().setStatus(SupplierStatus.ACTIVE.getCode());
@@ -239,7 +245,7 @@ class FulfillmentAcceptanceIntegrationTest {
                     .selectByBuyerId(fixture.buyerId());
             for (AcceptanceFailureInjector.Stage stage : AcceptanceFailureInjector.Stage.values()) {
                 failures.failAt(stage);
-                AcceptFulfillmentReqDTO failed = request("C-FAIL-" + stage.name(), 1L);
+                AcceptFulfillmentReqDTO failed = request("C-FAIL-" + stage.name());
                 assertThatThrownBy(() -> facade.acceptFulfillment(failed))
                         .isInstanceOf(InjectedFailure.class);
                 failures.clear();
@@ -255,14 +261,18 @@ class FulfillmentAcceptanceIntegrationTest {
             assertThat(afterFailures.getBalance()).isEqualTo(beforeFailures.getBalance());
             assertThat(afterFailures.getFrozen()).isEqualTo(beforeFailures.getFrozen());
 
-            AcceptFulfillmentReqDTO oldListing = request("C-LISTING-RETRY", 99L);
+            // 调用方商品版本已删除：版本过期拒绝的等价触发改为服务端当前发布版本失效（valid_to 已过），
+            // 业务版本由服务端在受理事务内锁定校验。
+            jdbc.update("UPDATE sc_buyer_listing_version SET valid_to=? WHERE listing_id="
+                    + "(SELECT id FROM sc_buyer_listing WHERE listing_no=?) AND version_no=1",
+                    LocalDateTime.now(ZoneOffset.UTC).minusMinutes(1), fixture.listingNo());
+            AcceptFulfillmentReqDTO oldListing = request("C-LISTING-RETRY");
             FulfillmentAcceptanceReceiptRespDTO listingRejected = facade.acceptFulfillment(oldListing);
             assertThat(listingRejected.getReceiptStatus()).isEqualTo(FulfillmentReceiptStatus.REJECTED_RETRYABLE);
             assertThat(rejection(jdbc, "C-LISTING-RETRY"))
                     .isEqualTo(AcceptanceRejectionCode.LISTING_VERSION_EXPIRED.name());
 
             AcceptFulfillmentReqDTO alteredTarget = copy(oldListing);
-            alteredTarget.setListingVersion(2L);
             alteredTarget.setPreviousReceiptVersion(listingRejected.getReceiptVersion());
             alteredTarget.getTarget().setValues(Map.of(
                     FulfillmentTargetFields.ACCOUNT_TYPE, FulfillmentTargetFields.ACCOUNT_TYPE_MOBILE,
@@ -275,30 +285,31 @@ class FulfillmentAcceptanceIntegrationTest {
                     fixture.listingNo(), 1L, 9_700L, "话费直充 100 元",
                     LocalDateTime.now(ZoneOffset.UTC).minusMinutes(1), null, "调价", 1L,
                     "trace-listing-v2", null, null));
+            // 可重试拒绝携带当前 CAS 即重开，不再要求调用方更换 Listing 版本。
             AcceptFulfillmentReqDTO corrected = copy(oldListing);
-            corrected.setListingVersion(2L);
             corrected.setPreviousReceiptVersion(listingRejected.getReceiptVersion());
             FulfillmentAcceptanceReceiptRespDTO retried = facade.acceptFulfillment(corrected);
             assertThat(retried.getReceiptStatus()).isEqualTo(FulfillmentReceiptStatus.ACCEPTED);
 
             FulfillmentAcceptanceReceiptRespDTO overdraft =
-                    facade.acceptFulfillment(request("C-BALANCE", 2L));
+                    facade.acceptFulfillment(request("C-BALANCE"));
             assertThat(overdraft.getReceiptStatus()).isEqualTo(FulfillmentReceiptStatus.ACCEPTED);
             assertThat(count(jdbc, "sc_supply_chain_order")).isEqualTo(3L);
             assertThat(count(jdbc, "sc_fund_reservation")).isEqualTo(3L);
 
             configureDailyLimit(context, 3L);
-            AcceptFulfillmentReqDTO anotherProject = request("C-PROJECT-B", 2L);
+            AcceptFulfillmentReqDTO anotherProject = request("C-PROJECT-B");
             anotherProject.setProjectCode(PROJECT_B);
             assertThat(facade.acceptFulfillment(anotherProject).getReceiptStatus())
                     .isEqualTo(FulfillmentReceiptStatus.ACCEPTED);
 
-            AcceptFulfillmentReqDTO otherPhone = request("C-LIMIT-OTHER-PHONE", 2L);
-            otherPhone.setBuyerUserId("13900139000");
+            AcceptFulfillmentReqDTO otherPhone = request("C-LIMIT-OTHER-PHONE");
+            // 购买人身份已删除：每人限购换用户的等价表达改为实际目标手机号。
+            otherPhone.setTarget(mobileTarget("13900139000"));
             assertThat(facade.acceptFulfillment(otherPhone).getReceiptStatus())
                     .isEqualTo(FulfillmentReceiptStatus.ACCEPTED);
 
-            AcceptFulfillmentReqDTO afterCancel = request("C-LIMIT-CANCEL", 2L);
+            AcceptFulfillmentReqDTO afterCancel = request("C-LIMIT-CANCEL");
             assertUserLimitRejected(facade.acceptFulfillment(afterCancel));
             jdbc.update("UPDATE sc_supply_chain_order SET order_status=? WHERE buyer_order_no=?",
                     SupplyChainOrderStatus.CANCELLED.getCode(), "C-CONCURRENT");
@@ -306,7 +317,7 @@ class FulfillmentAcceptanceIntegrationTest {
             assertThat(facade.acceptFulfillment(afterCancel).getReceiptStatus())
                     .isEqualTo(FulfillmentReceiptStatus.ACCEPTED);
 
-            AcceptFulfillmentReqDTO afterFailure = request("C-LIMIT-FAILURE", 2L);
+            AcceptFulfillmentReqDTO afterFailure = request("C-LIMIT-FAILURE");
             assertUserLimitRejected(facade.acceptFulfillment(afterFailure));
             jdbc.update("UPDATE sc_supply_chain_order SET order_status=? WHERE buyer_order_no=?",
                     SupplyChainOrderStatus.FAILED.getCode(), "C-LISTING-RETRY");
@@ -314,7 +325,7 @@ class FulfillmentAcceptanceIntegrationTest {
             assertThat(facade.acceptFulfillment(afterFailure).getReceiptStatus())
                     .isEqualTo(FulfillmentReceiptStatus.ACCEPTED);
 
-            AcceptFulfillmentReqDTO afterRefund = request("C-LIMIT-REFUND", 2L);
+            AcceptFulfillmentReqDTO afterRefund = request("C-LIMIT-REFUND");
             assertUserLimitRejected(facade.acceptFulfillment(afterRefund));
             jdbc.update("UPDATE sc_supply_chain_order SET aftersale_status=? WHERE buyer_order_no=?",
                     SupplyChainAftersaleStatus.FULLY_REFUNDED.getCode(), "C-BALANCE");
@@ -322,7 +333,7 @@ class FulfillmentAcceptanceIntegrationTest {
             assertThat(facade.acceptFulfillment(afterRefund).getReceiptStatus())
                     .isEqualTo(FulfillmentReceiptStatus.ACCEPTED);
 
-            AcceptFulfillmentReqDTO afterPartialRefund = request("C-LIMIT-PARTIAL", 2L);
+            AcceptFulfillmentReqDTO afterPartialRefund = request("C-LIMIT-PARTIAL");
             assertUserLimitRejected(facade.acceptFulfillment(afterPartialRefund));
             jdbc.update("UPDATE sc_supply_chain_order SET aftersale_status=? WHERE buyer_order_no=?",
                     SupplyChainAftersaleStatus.PARTIALLY_REFUNDED.getCode(), "C-LIMIT-CANCEL");
@@ -332,7 +343,7 @@ class FulfillmentAcceptanceIntegrationTest {
 
             configureDailyLimit(context, 4L);
             List<FulfillmentAcceptanceReceiptRespDTO> limitRace = concurrentlyIndexed(10,
-                    index -> facade.acceptFulfillment(request("C-LIMIT-RACE-" + index, 2L)));
+                    index -> facade.acceptFulfillment(request("C-LIMIT-RACE-" + index)));
             assertThat(limitRace).filteredOn(response ->
                     response.getReceiptStatus() == FulfillmentReceiptStatus.ACCEPTED).hasSize(1);
             assertThat(limitRace).filteredOn(response ->
@@ -340,8 +351,7 @@ class FulfillmentAcceptanceIntegrationTest {
                     .hasSize(9).allSatisfy(FulfillmentAcceptanceIntegrationTest::assertUserLimitRejected);
 
             configurePhoneBindDailyLimit(context, 1L);
-            AcceptFulfillmentReqDTO phoneFirst = request("C-PHONE-BIND-A", 2L);
-            phoneFirst.setBuyerUserId("13800138000");
+            AcceptFulfillmentReqDTO phoneFirst = request("C-PHONE-BIND-A");
             phoneFirst.setTarget(mobileTarget("13700137000"));
             assertThat(facade.acceptFulfillment(phoneFirst).getReceiptStatus())
                     .isEqualTo(FulfillmentReceiptStatus.ACCEPTED);
@@ -349,13 +359,11 @@ class FulfillmentAcceptanceIntegrationTest {
                     "SELECT fulfillment_account_value FROM sc_supply_chain_order WHERE buyer_order_no=?",
                     String.class, "C-PHONE-BIND-A")).isEqualTo("13700137000");
 
-            AcceptFulfillmentReqDTO phoneShared = request("C-PHONE-BIND-B", 2L);
-            phoneShared.setBuyerUserId("13900139000");
+            AcceptFulfillmentReqDTO phoneShared = request("C-PHONE-BIND-B");
             phoneShared.setTarget(mobileTarget("13700137000"));
             assertPhoneBindLimitRejected(facade.acceptFulfillment(phoneShared));
 
-            AcceptFulfillmentReqDTO phoneOther = request("C-PHONE-BIND-C", 2L);
-            phoneOther.setBuyerUserId("13800138000");
+            AcceptFulfillmentReqDTO phoneOther = request("C-PHONE-BIND-C");
             phoneOther.setTarget(mobileTarget("13600136000"));
             assertThat(facade.acceptFulfillment(phoneOther).getReceiptStatus())
                     .isEqualTo(FulfillmentReceiptStatus.ACCEPTED);
@@ -363,7 +371,7 @@ class FulfillmentAcceptanceIntegrationTest {
                     "SELECT fulfillment_account_value FROM sc_supply_chain_order WHERE buyer_order_no=?",
                     String.class, "C-PHONE-BIND-C")).isEqualTo("13600136000");
 
-            AcceptFulfillmentReqDTO notMobile = request("C-PHONE-BIND-EXT", 2L);
+            AcceptFulfillmentReqDTO notMobile = request("C-PHONE-BIND-EXT");
             FulfillmentTargetDTO external = new FulfillmentTargetDTO();
             external.setValues(Map.of(
                     FulfillmentTargetFields.ACCOUNT_TYPE, FulfillmentTargetFields.ACCOUNT_TYPE_EXTERNAL_ACCOUNT,
@@ -376,7 +384,7 @@ class FulfillmentAcceptanceIntegrationTest {
 
             disablePhoneBindLimit(context);
             jdbc.update("DELETE FROM sc_buyer_account WHERE buyer_id = ?", fixture.buyerId());
-            AcceptFulfillmentReqDTO withoutAccount = request("C-NO-ACCOUNT", 2L);
+            AcceptFulfillmentReqDTO withoutAccount = request("C-NO-ACCOUNT");
             withoutAccount.setProjectCode(PROJECT_B);
             FulfillmentAcceptanceReceiptRespDTO missingAccount = facade.acceptFulfillment(withoutAccount);
             assertThat(missingAccount.getReceiptStatus()).isEqualTo(FulfillmentReceiptStatus.REJECTED_RETRYABLE);
@@ -400,7 +408,7 @@ class FulfillmentAcceptanceIntegrationTest {
 
             BuyerFulfillmentCommandFacade facade = context.getBean(BuyerFulfillmentCommandFacade.class);
             List<FulfillmentAcceptanceReceiptRespDTO> concurrent = concurrentlyIndexed(8,
-                    index -> facade.acceptFulfillment(request("C-QUOTA-RACE-" + index, 1L)));
+                    index -> facade.acceptFulfillment(request("C-QUOTA-RACE-" + index)));
             assertThat(concurrent).filteredOn(response ->
                     response.getReceiptStatus() == FulfillmentReceiptStatus.ACCEPTED).hasSize(1);
             assertThat(concurrent).filteredOn(response ->
@@ -413,12 +421,18 @@ class FulfillmentAcceptanceIntegrationTest {
                     .isEqualTo(1L);
             jdbc.update("UPDATE sc_supply_chain_order SET order_status=?",
                     SupplyChainOrderStatus.FAILED.getCode());
-            assertThat(facade.acceptFulfillment(request("C-QUOTA-AFTER-FAIL", 1L)).getReceiptStatus())
+            assertThat(facade.acceptFulfillment(request("C-QUOTA-AFTER-FAIL")).getReceiptStatus())
                     .isEqualTo(FulfillmentReceiptStatus.ACCEPTED);
         }
     }
 
-    private Fixture seed(ConfigurableApplicationContext context) {
+    Fixture seed(ConfigurableApplicationContext context) {
+        // 普通流程fixture明确建立已核验READY（测试密钥端口仅返回测试专用32字节key），不改变生产初始CLOSED。
+        // 真实离线覆盖验收由RechargeFrequencyMigrationIntegrationTest独立执行。
+        var gateJdbc = new JdbcTemplate(context.getBean("supplyChainDataSource", DataSource.class));
+        byte[] gateFingerprint = context.getBean(com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyMigrationGateService.class).currentKeyFingerprint();
+        gateJdbc.update("UPDATE sc_recharge_frequency_migration_gate SET state='READY',verified_artifact=?,identity_key_fingerprint=?,verified_at=NOW(3) WHERE id=1", "a".repeat(40), gateFingerprint);
+
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC).withNano(0);
         BuyerCommandService buyers = context.getBean(BuyerCommandService.class);
         ProductCatalogCommandService catalog = context.getBean(ProductCatalogCommandService.class);
@@ -561,18 +575,14 @@ class FulfillmentAcceptanceIntegrationTest {
         assertThat(mapper.updateById(availability)).isEqualTo(1);
     }
 
-    private static AcceptFulfillmentReqDTO request(String buyerOrderNo, long listingVersion) {
+    static AcceptFulfillmentReqDTO request(String buyerOrderNo) {
         AcceptFulfillmentReqDTO request = new AcceptFulfillmentReqDTO();
         request.setSourceSystem("AIFULI_MALL");
         request.setExternalTenantId("tenant-wusheng");
         request.setProjectCode(PROJECT_A);
         request.setBuyerOrderNo(buyerOrderNo);
-        request.setBuyerUserId("13800138000");
         request.setBuyerSkuCode("WS-TELCO-100");
-        request.setListingVersion(listingVersion);
-        request.setPricingQuoteToken("quote-" + buyerOrderNo);
         request.setQuantity(1L);
-        request.setPaidAt(OffsetDateTime.now(ZoneOffset.UTC));
         request.setTarget(mobileTarget("13800138000"));
         return request;
     }
@@ -591,12 +601,8 @@ class FulfillmentAcceptanceIntegrationTest {
         target.setExternalTenantId(source.getExternalTenantId());
         target.setProjectCode(source.getProjectCode());
         target.setBuyerOrderNo(source.getBuyerOrderNo());
-        target.setBuyerUserId(source.getBuyerUserId());
         target.setBuyerSkuCode(source.getBuyerSkuCode());
-        target.setListingVersion(source.getListingVersion());
-        target.setPricingQuoteToken(source.getPricingQuoteToken());
         target.setQuantity(source.getQuantity());
-        target.setPaidAt(source.getPaidAt());
         target.setPreviousReceiptVersion(source.getPreviousReceiptVersion());
         FulfillmentTargetDTO fulfillmentTarget = new FulfillmentTargetDTO();
         fulfillmentTarget.setValues(Map.copyOf(source.getTarget().getValues()));
@@ -735,7 +741,7 @@ class FulfillmentAcceptanceIntegrationTest {
         assertThat(mapper.insert(project)).isEqualTo(1);
     }
 
-    private ConfigurableApplicationContext applicationContext() {
+    ConfigurableApplicationContext applicationContext(Class<?>... additions) {
         Map<String, Object> properties = new LinkedHashMap<>();
         properties.put("aifuli.supply-chain.enabled", true);
         properties.put("aifuli.supply-chain.datasource.url", jdbcUrl());
@@ -745,7 +751,7 @@ class FulfillmentAcceptanceIntegrationTest {
         properties.put("aifuli.supply-chain.security.key-version", "test-v1");
         properties.put("aifuli.supply-chain.security.envelope-key-base64", KEY_BASE64);
         properties.put("aifuli.supply-chain.security.fingerprint-key-base64", KEY_BASE64);
-        return new SpringApplicationBuilder(TestConfiguration.class)
+        return new SpringApplicationBuilder(TestConfiguration.class).sources(additions)
                 .web(WebApplicationType.NONE).properties(properties).run();
     }
 
@@ -772,9 +778,28 @@ class FulfillmentAcceptanceIntegrationTest {
             RoutingPolicyPublicationService.class, SupplierRoutingApplicationService.class,
             ClosedJsonSchemaValidator.class, FulfillmentTargetSchemaRegistry.class,
             AesGcmEnvelopeCrypto.class, SkuPurchaseLimitService.class, FulfillmentAcceptanceLifecycle.class,
+            com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyLifecycle.class,
+            com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyMigrationGateService.class,
+            com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyIdentityService.class,
+            com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyAcceptanceCoordinator.class,
+            com.aifuli.module.supplychain.tradecore.catalog.application.RechargeFrequencyProductResolver.class,
             OrderSummaryPolicyRegistry.class, CardOrderSummaryPolicy.class,
-            BuyerFulfillmentCommandFacade.class})
+            BuyerFulfillmentCommandFacade.class,
+            RechargeFrequencyExecutionIntegrationTest.ExecutionConfiguration.class,
+            com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyWakeScheduler.class,
+            com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyTimerStartupCheck.class,
+            com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyRecoveryService.class,
+            com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyWakeHandler.class,
+            com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyQueryService.class,
+            com.aifuli.module.supplychain.border.fulfillment.application.StandardOrderIdentityMigrationService.class,
+            com.aifuli.module.supplychain.infrastructure.timer.DatabasePersistentTimer.class,
+            com.aifuli.module.supplychain.infrastructure.timer.PersistentTimerHandlerRegistry.class})
     static class TestConfiguration {
+        @Bean
+        com.aifuli.module.supplychain.infrastructure.security.RechargeFrequencyIdentityKeyProvider frequencyKey() {
+            return () -> new byte[32];
+        }
+
         @Bean
         ObjectMapper objectMapper() {
             return new ObjectMapper().findAndRegisterModules();
@@ -786,17 +811,18 @@ class FulfillmentAcceptanceIntegrationTest {
         }
 
         /**
-         * 既有履约集成测试聚焦受理原子性，报价签发/绑定由独立定价测试覆盖；这里冻结与原目录价等价的快照。
-         * 设计见 {@code docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#7-项目报价凭证与标准履约}。
+         * 既有履约集成测试聚焦受理原子性，报价签发/绑定由独立定价测试覆盖；这里冻结与原目录价等价的快照，
+         * 按项目永久键（无 token、无用户、无支付时间）供受理消费。
+         * 设计见 {@code docs/superpowers/specs/2026-10-02-standard-internal-quote-freeze-design.md#3-受理内查取与唯一消费}。
          */
         @Bean
         StandardPricingQuoteService pricingQuoteService() {
             StandardPricingQuoteService service = mock(StandardPricingQuoteService.class);
-            when(service.requireForFulfillment(any(QuoteConsumptionContext.class)))
+            when(service.requireForProject(any(ProjectQuoteKeyContext.class)))
                     .thenAnswer(invocation -> {
-                        QuoteConsumptionContext context = invocation.getArgument(0);
+                        ProjectQuoteKeyContext context = invocation.getArgument(0);
                         long quantity = context.quantity();
-                        return new FrozenQuote(1L, 1L, 9_800L, 10_000L,
+                        return new FrozenQuote(1L, 1L, 3L, 9_800L, 10_000L,
                                 Math.multiplyExact(10_000L, quantity), 0L,
                                 Math.multiplyExact(10_000L, quantity),
                                 "{\"taxIncluded\":false,\"taxRateCode\":\"NON_TAXABLE\",\"taxRateLabel\":\"不征税\"}",
@@ -841,6 +867,6 @@ class FulfillmentAcceptanceIntegrationTest {
         T get(int index) throws Exception;
     }
 
-    private record Fixture(Long buyerId, String listingNo, SupplierDO supplier) {
+    record Fixture(Long buyerId, String listingNo, SupplierDO supplier) {
     }
 }

@@ -26,7 +26,7 @@ import static com.aifuli.framework.common.exception.util.ServiceExceptionUtil.ex
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BUYER_AUTH_INVALID;
 
 /**
- * 项目应用统一认证入站过滤器：有界 body → 头与注册表 → 时间窗 → 凭证 → 摘要/HMAC → nonce →
+ * 项目应用统一认证入站过滤器：有界 body → 头与注册表 → 时间窗 → 凭证 → 摘要/HMAC → 能力 → nonce →
  * scope → 可信上下文，并在覆盖全部退出路径的 {@code finally} 中清理线程上下文。
  *
  * <p>认证阶段的可预期失败统一返回 HTTP 200 + {@code BUYER_AUTH_INVALID}；下游业务异常不在本类
@@ -111,7 +111,11 @@ public final class ProjectAppAuthFilter extends OncePerRequestFilter {
         }
     }
 
-    /** 固定认证顺序；包级可见仅用于证明上下文防御性异常保留 cause。 */
+    /**
+     * 固定认证顺序；注册表匹配后使用按操作状态策略的凭证入口，签名→能力→nonce→scope顺序不变。
+     * 包级可见仅用于证明上下文防御性异常保留 cause。
+     * 详见 docs/superpowers/specs/2026-09-30-project-signed-standard-order-http-design.md#21-认证实施边界。
+     */
     ProjectAuthContext authenticate(CachedBodyHttpServletRequestWrapper request) {
         ParsedHeaders headers = parseHeaders(request);
         String path = pathWithoutContext(request);
@@ -127,7 +131,7 @@ public final class ProjectAppAuthFilter extends OncePerRequestFilter {
 
         validateTimestamp(headers.timestamp());
         ProjectAppCredentialService.AuthenticatedApp app =
-                credentialService.authenticate(headers.appId(), headers.keyVersion());
+                credentialService.authenticate(headers.appId(), headers.keyVersion(), operation.operationCode());
         validateAuthenticatedSnapshot(app, headers);
 
         String actualHash = ProjectAppAuthSigner.sha256Hex(request.bodyForDigest());
@@ -148,6 +152,7 @@ public final class ProjectAppAuthFilter extends OncePerRequestFilter {
             throw authInvalid();
         }
 
+        credentialService.requireCapability(app.projectId(), operation.requiredCapability());
         nonceStore.ensureUnique(headers.appId(), headers.nonce());
         validateScope(operation.scopeType(), headers.buyerUserId(), headers.channelCode());
         try {

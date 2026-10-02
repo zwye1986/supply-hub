@@ -60,6 +60,49 @@ class ProjectAppAuthSignerTest {
     }
 
     @Test
+    void standardOperationsEmitEightHeadersAndSignEmptyScopeFields() throws Exception {
+        for (String suffix : java.util.List.of("", "/query", "/assets/query")) {
+            byte[] body = "{\"buyerOrderNo\":\"STD-1\"}".getBytes(StandardCharsets.UTF_8);
+            Map<String, String> headers = ProjectAppAuthSigner.sign(
+                    new ProjectAppAuthCredentials(APP_ID, APP_KEY, 3, null, null), "POST",
+                    ProjectAuthOperations.STANDARD_ORDERS_PATH + suffix, body, 42L, "standard-nonce");
+            assertThat(headers.keySet()).containsExactlyInAnyOrder("appId", "keyVersion", "contractVersion",
+                    "operationCode", "timestamp", "nonce", "requestSha256", "signature");
+            String canonical = String.join("\n", APP_ID, "3", "1.0.0", headers.get("operationCode"),
+                    "42", "standard-nonce", headers.get("requestSha256"), "", "");
+            assertThat(canonical.split("\n", -1)).hasSize(9);
+            Mac mac = Mac.getInstance("HmacSHA256");
+            mac.init(new SecretKeySpec(APP_KEY.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
+            String expected = java.util.Base64.getUrlEncoder().withoutPadding()
+                    .encodeToString(mac.doFinal(canonical.getBytes(StandardCharsets.UTF_8)));
+            assertThat(headers.get("signature").equals(expected)).isTrue();
+            Map<String, String> changed = ProjectAppAuthSigner.sign(
+                    new ProjectAppAuthCredentials(APP_ID, APP_KEY, 3, null, null), "POST",
+                    ProjectAuthOperations.STANDARD_ORDERS_PATH + suffix,
+                    "{ \"buyerOrderNo\":\"STD-1\"}".getBytes(StandardCharsets.UTF_8), 42L, "standard-nonce");
+            assertThat(headers.get("signature").equals(changed.get("signature"))).isFalse();
+        }
+    }
+
+    @Test
+    void standardOperationsRejectAnyScopeDeclarationAndOldCallbacksKeepTenHeaders() {
+        for (String scope : java.util.List.of("scope", "", " ")) {
+            for (String suffix : java.util.List.of("", "/query", "/assets/query")) {
+                assertThatThrownBy(() -> ProjectAppAuthSigner.sign(
+                        new ProjectAppAuthCredentials(APP_ID, APP_KEY, 1, scope, null), "POST",
+                        ProjectAuthOperations.STANDARD_ORDERS_PATH + suffix, null))
+                        .isInstanceOf(IllegalArgumentException.class);
+                assertThatThrownBy(() -> ProjectAppAuthSigner.sign(
+                        new ProjectAppAuthCredentials(APP_ID, APP_KEY, 1, null, scope), "POST",
+                        ProjectAuthOperations.STANDARD_ORDERS_PATH + suffix, null))
+                        .isInstanceOf(IllegalArgumentException.class);
+            }
+        }
+        assertThat(ProjectAppAuthSigner.sign(new ProjectAppAuthCredentials(APP_ID, APP_KEY, 1, null, null),
+                "POST", CALLBACK_PATH, null)).hasSize(10);
+    }
+
+    @Test
     void signIsDeterministicWithExplicitTimestampAndNonce() {
         byte[] body = "{}".getBytes(StandardCharsets.UTF_8);
         Map<String, String> first = ProjectAppAuthSigner.sign(

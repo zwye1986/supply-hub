@@ -27,7 +27,7 @@ class ProjectAuthOperationsContractTest {
     void registryCoversEveryInstorePostMappingExactlyOnce() {
         Set<String> registeredPaths = new HashSet<>();
         Set<String> registeredOperationCodes = new HashSet<>();
-        for (ProjectAuthOperations.Operation operation : ProjectAuthOperations.OPERATIONS) {
+        for (ProjectAuthOperations.Operation operation : instoreOperations()) {
             assertThat(registeredOperationCodes.add(operation.operationCode()))
                     .as("注册表 operationCode 必须唯一: %s", operation.operationCode())
                     .isTrue();
@@ -54,7 +54,7 @@ class ProjectAuthOperationsContractTest {
 
     @Test
     void registryLocksMethodVersionOperationPathAndScopeForAllTenOperations() {
-        assertThat(ProjectAuthOperations.OPERATIONS).containsExactly(
+        assertThat(instoreOperations()).containsExactly(
                 operation("INSTORE_CREATE_PAYMENT_ORDER",
                         "/rpc-api/supply-chain/instore/channel-command/createPaymentOrder",
                         ProjectAuthOperations.ScopeType.CHANNEL_CODE),
@@ -130,6 +130,79 @@ class ProjectAuthOperationsContractTest {
                 ProjectAuthOperations.indexByOperationCode(List.of(first));
         assertThatThrownBy(() -> index.put("OTHER", duplicate))
                 .isInstanceOf(UnsupportedOperationException.class);
+    }
+
+    @Test
+    void registryRegistersThreeExactStandardOrderPaths() {
+        for (String suffix : List.of("", "/query", "/assets/query")) {
+            String path = "/open-api/supply-chain/project/v1/orders" + suffix;
+            assertThat(ProjectAuthOperations.findByMethodAndPath("POST", path)).isPresent();
+            assertThat(ProjectAuthOperations.findByMethodAndPath("GET", path)).isEmpty();
+            assertThat(ProjectAuthOperations.findByMethodAndPath("POST", path + "/unknown")).isEmpty();
+        }
+    }
+
+    @Test
+    void standardContractsAndRegistryIdentityAreClosedAndImmutable() {
+        assertThat(ProjectAuthOperations.OPERATIONS.stream()
+                .filter(op -> ProjectAuthOperations.CAPABILITY_STANDARD_PRODUCT.equals(op.requiredCapability()))
+                .toList()).containsExactly(
+                new ProjectAuthOperations.Operation(ProjectAuthOperations.STANDARD_ORDER_CREATE, "POST",
+                        ProjectAuthOperations.STANDARD_ORDERS_PATH, ProjectAuthOperations.ScopeType.NONE,
+                        "1.0.0", ProjectAuthOperations.CAPABILITY_STANDARD_PRODUCT,
+                        ProjectAuthOperations.ProjectStatePolicy.ACTIVE_ONLY),
+                new ProjectAuthOperations.Operation(ProjectAuthOperations.STANDARD_ORDER_QUERY, "POST",
+                        ProjectAuthOperations.STANDARD_ORDERS_PATH + "/query", ProjectAuthOperations.ScopeType.NONE,
+                        "1.0.0", ProjectAuthOperations.CAPABILITY_STANDARD_PRODUCT,
+                        ProjectAuthOperations.ProjectStatePolicy.ACTIVE_OR_SUSPENDED),
+                new ProjectAuthOperations.Operation(ProjectAuthOperations.STANDARD_ORDER_ASSET_QUERY, "POST",
+                        ProjectAuthOperations.STANDARD_ORDERS_PATH + "/assets/query", ProjectAuthOperations.ScopeType.NONE,
+                        "1.0.0", ProjectAuthOperations.CAPABILITY_STANDARD_PRODUCT,
+                        ProjectAuthOperations.ProjectStatePolicy.ACTIVE_ONLY));
+        assertThat(ProjectAuthOperations.OPERATIONS).hasSize(13);
+        assertThat(ProjectAuthOperations.OPERATIONS.stream().map(ProjectAuthOperations.Operation::operationCode)
+                .distinct()).hasSize(13);
+        assertThat(ProjectAuthOperations.OPERATIONS.stream().map(op -> op.httpMethod() + " " + op.path())
+                .distinct()).hasSize(13);
+        assertThatThrownBy(() -> ProjectAuthOperations.OPERATIONS.clear())
+                .isInstanceOf(UnsupportedOperationException.class);
+        assertThatThrownBy(() -> ProjectAuthOperations.PROTECTED_PREFIXES.clear())
+                .isInstanceOf(UnsupportedOperationException.class);
+        assertThat(instoreOperations()).allSatisfy(op -> assertThat(op.projectStatePolicy())
+                .isEqualTo(ProjectAuthOperations.ProjectStatePolicy.ACTIVE_ONLY));
+    }
+
+    @Test
+    void operationRejectsMissingContractFieldsAndDefaultsOldConstructorsToActiveOnly() {
+        assertThat(new ProjectAuthOperations.Operation("CUSTOM", "POST", "/custom",
+                ProjectAuthOperations.ScopeType.NONE, "1.0.0", "CUSTOM_CAPABILITY").projectStatePolicy())
+                .isEqualTo(ProjectAuthOperations.ProjectStatePolicy.ACTIVE_ONLY);
+        assertThat(operation("CUSTOM", "/custom", ProjectAuthOperations.ScopeType.NONE).requiredCapability())
+                .isEqualTo("INSTORE");
+        for (String invalid : java.util.Arrays.asList(null, "", " ")) {
+            assertThatThrownBy(() -> operation(invalid, "/custom", ProjectAuthOperations.ScopeType.NONE))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> operation("CUSTOM", invalid, ProjectAuthOperations.ScopeType.NONE))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> new ProjectAuthOperations.Operation("CUSTOM", invalid, "/custom",
+                    ProjectAuthOperations.ScopeType.NONE, "1.0.0"))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> new ProjectAuthOperations.Operation("CUSTOM", "POST", "/custom",
+                    ProjectAuthOperations.ScopeType.NONE, invalid))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> new ProjectAuthOperations.Operation("CUSTOM", "POST", "/custom",
+                    ProjectAuthOperations.ScopeType.NONE, "1.0.0", invalid))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+        assertThatThrownBy(() -> operation("CUSTOM", "/custom", null)).isInstanceOf(NullPointerException.class);
+        assertThatThrownBy(() -> new ProjectAuthOperations.Operation("CUSTOM", "POST", "/custom",
+                ProjectAuthOperations.ScopeType.NONE, "1.0.0", "INSTORE", null))
+                .isInstanceOf(NullPointerException.class);
+    }
+
+    private static List<ProjectAuthOperations.Operation> instoreOperations() {
+        return ProjectAuthOperations.OPERATIONS.stream()
+                .filter(operation -> "INSTORE".equals(operation.requiredCapability())).toList();
     }
 
     private static ProjectAuthOperations.Operation operation(

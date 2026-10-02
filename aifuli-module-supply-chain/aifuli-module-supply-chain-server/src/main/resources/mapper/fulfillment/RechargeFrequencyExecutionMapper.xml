@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.aifuli.module.supplychain.border.fulfillment.dal.mysql.RechargeFrequencyExecutionMapper">
+    <select id="lockRequest" resultType="com.aifuli.module.supplychain.border.fulfillment.dal.dataobject.FulfillmentRequestDO">SELECT * FROM sc_fulfillment_request WHERE id = #{id} FOR UPDATE</select>
+    <select id="lockOrder" resultType="com.aifuli.module.supplychain.border.order.dal.dataobject.SupplyChainOrderDO">SELECT * FROM sc_supply_chain_order WHERE id = #{id} FOR UPDATE</select>
+    <select id="lockBOrders" resultType="com.aifuli.module.supplychain.border.fulfillment.dal.dataobject.BOrderDO">
+        SELECT * FROM sc_b_order WHERE order_id = #{orderId} ORDER BY id FOR UPDATE
+    </select>
+    <select id="lockOperations" resultType="com.aifuli.module.supplychain.border.fulfillment.dal.dataobject.FulfillmentOperationDO">
+        SELECT * FROM sc_fulfillment_operation WHERE b_order_id IN (SELECT id FROM sc_b_order WHERE order_id = #{orderId}) ORDER BY id FOR UPDATE
+    </select>
+</mapper>

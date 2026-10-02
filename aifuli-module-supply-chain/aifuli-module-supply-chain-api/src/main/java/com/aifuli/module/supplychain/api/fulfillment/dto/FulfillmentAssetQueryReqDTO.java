@@ -28,11 +28,11 @@ public class FulfillmentAssetQueryReqDTO implements Serializable {
     @Size(max = 32)
     private String fulfillmentRequestNo;
 
-    @Schema(description = "资产所属采购商用户标识；必须与订单固化归属一致",
-            requiredMode = Schema.RequiredMode.REQUIRED, example = "member-1024")
-    @NotBlank(message = "采购商用户标识不能为空")
-    @Size(max = 128)
-    private String buyerUserId;
+    @Schema(description = "采购项目业务编码；RPC服务端按真实来源与项目归属校验，不再接收购买人用户标识",
+            requiredMode = Schema.RequiredMode.REQUIRED, example = "PRJ_KEY_A")
+    @NotBlank(message = "采购项目业务编码不能为空")
+    @Size(max = 64)
+    private String projectCode;
 
     @Schema(description = "调用方声明的权限 Scope，必须为 FULFILLMENT_ASSET_READ",
             requiredMode = Schema.RequiredMode.REQUIRED, example = "FULFILLMENT_ASSET_READ")

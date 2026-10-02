@@ -17,6 +17,6 @@ public interface StandardPricingQuoteApi {
     String PREFIX = ApiConstants.PREFIX + "/buyer/pricing";
 
     @PostMapping(PREFIX + "/quote")
-    @Operation(summary = "签发15分钟标准商品项目报价凭证")
+    @Operation(summary = "按项目+项目订单号签发或重放永久冻结的标准商品首次报价")
     CommonResult<StandardPricingQuoteRespDTO> quote(@Valid @RequestBody StandardPricingQuoteReqDTO request);
 }

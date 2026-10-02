@@ -6,10 +6,16 @@ import lombok.Data;
 import java.io.Serializable;
 import java.time.OffsetDateTime;
 
+/**
+ * 项目订单首次永久冻结的标准商品报价响应。永久键为「项目 + 采购商订单号」，
+ * 同键重复询价始终重放同一冻结结果；不再返回用户身份。
+ * 设计见 docs/superpowers/specs/2026-10-02-standard-internal-quote-freeze-design.md#1-内部契约与归属。
+ */
 @Data
-@Schema(description = "冻结15分钟的标准商品项目报价")
+@Schema(description = "项目订单首次永久冻结的标准商品报价")
 public class StandardPricingQuoteRespDTO implements Serializable {
-    @Schema(description = "随机不可猜测报价凭证", requiredMode = Schema.RequiredMode.REQUIRED)
+    @Schema(description = "随机内部追踪标识；不作为HTTP请求字段，报价永久键为项目+采购商订单号",
+            requiredMode = Schema.RequiredMode.REQUIRED)
     private String quoteToken;
     @Schema(description = "冻结的项目SKU综合定价版本主键", requiredMode = Schema.RequiredMode.REQUIRED)
     private Long pricingVersionId;
@@ -37,6 +43,6 @@ public class StandardPricingQuoteRespDTO implements Serializable {
     private String serviceFeeCopy;
     @Schema(description = "币种，一期固定CNY", requiredMode = Schema.RequiredMode.REQUIRED)
     private String currency;
-    @Schema(description = "凭证失效时间", requiredMode = Schema.RequiredMode.REQUIRED)
+    @Schema(description = "历史报价失效时间，Asia/Shanghai；永久冻结报价为空且不作为本流程下单条件")
     private OffsetDateTime expiresAt;
 }

@@ -203,10 +203,44 @@ public interface SupplyChainErrorCodeConstants {
     ErrorCode ROUTING_RULE_PROJECT_BUYER_MISMATCH =
             error(1_050_001_148, "项目不属于所选分销商");
 
+    // 项目应用开通与凭证状态错误。编号从 162 起，避免与已发布的路由规则 147/148 冲突。
+    ErrorCode PROJECT_APP_ALREADY_ENABLED = error(1_050_001_162, "项目应用已开通");
+    ErrorCode PROJECT_APP_NOT_ENABLED = error(1_050_001_163, "项目应用未开通或不可用");
+    ErrorCode PROJECT_APP_CONFIRMATION_REQUIRED = error(1_050_001_164, "吊销项目应用凭证须确认并填写原因");
+    ErrorCode PROJECT_APP_CREDENTIAL_STATE_INVALID = error(1_050_001_165, "项目应用凭证状态异常");
+
+    // 项目标准资产查询稳定错误，设计见 docs/superpowers/specs/2026-10-02-project-standard-query-asset-design.md#4-资产结果与封闭载荷。
+    ErrorCode ASSET_QUERY_UNSUPPORTED_PRODUCT_TYPE =
+            error(1_050_001_158, "此类商品不能查询资产，请通过查单接口获取订单信息");
+    ErrorCode ASSET_QUERY_ORDER_NOT_ACCEPTED =
+            error(1_050_001_159, "订单未受理，请通过查单接口获取订单信息");
+    ErrorCode ASSET_QUERY_ORDER_TERMINATED =
+            error(1_050_001_160, "订单已失败或取消，请通过查单接口获取订单结果");
+
+    // 标准商品缺项目订单首次冻结报价的可条件重试稳定错误：内部首次报价形成后按原项目键重新受理即可。
+    // 设计见 docs/superpowers/specs/2026-10-02-standard-internal-quote-freeze-design.md#3-受理内查取与唯一消费。
+    ErrorCode STANDARD_PRICING_QUOTE_MISSING =
+            error(1_050_001_161, "标准商品缺少项目订单首次冻结报价");
+
+    ErrorCode FREQUENCY_RESOURCE_NOT_FOUND = error(1_050_001_151, "限频资源不存在");
+    ErrorCode FREQUENCY_VERSION_CONFLICT = error(1_050_001_152, "限频资源版本或持有者已变化");
+    ErrorCode FREQUENCY_STATE_INVALID = error(1_050_001_153, "限频状态不允许该操作");
+    ErrorCode FREQUENCY_RELEASE_UNSAFE = error(1_050_001_154, "尚无可信释放依据");
+    ErrorCode FREQUENCY_SUCCESS_WINDOW = error(1_050_001_155, "成功占用最短窗口尚未达到");
+    ErrorCode FREQUENCY_ACTION_CONFLICT = error(1_050_001_156, "管理操作幂等号已用于其他请求");
+    ErrorCode FREQUENCY_PARAMETER_INVALID = error(1_050_001_157, "限频管理参数不正确");
+
     /** 订单详情不可用只作为成功响应中的详情标记，不作为 CommonResult 失败码。 */
     String DETAIL_UNAVAILABLE = "DETAIL_UNAVAILABLE";
 
     Map<Integer, RetryDirective> RETRY_DIRECTIVES = Map.ofEntries(
+            entry(FREQUENCY_RESOURCE_NOT_FOUND, RetryDirective.DO_NOT_RETRY),
+            entry(FREQUENCY_VERSION_CONFLICT, RetryDirective.DO_NOT_RETRY),
+            entry(FREQUENCY_STATE_INVALID, RetryDirective.DO_NOT_RETRY),
+            entry(FREQUENCY_RELEASE_UNSAFE, RetryDirective.DO_NOT_RETRY),
+            entry(FREQUENCY_SUCCESS_WINDOW, RetryDirective.DO_NOT_RETRY),
+            entry(FREQUENCY_ACTION_CONFLICT, RetryDirective.DO_NOT_RETRY),
+            entry(FREQUENCY_PARAMETER_INVALID, RetryDirective.DO_NOT_RETRY),
             entry(BUYER_AUTH_INVALID, RetryDirective.DO_NOT_RETRY),
             entry(BUYER_NOT_FOUND, RetryDirective.DO_NOT_RETRY),
             entry(BUYER_DISABLED, RetryDirective.RETRY_SAME_KEY_AFTER_CONDITION_CHANGE),
@@ -315,6 +349,10 @@ public interface SupplyChainErrorCodeConstants {
             entry(PRODUCT_SKU_CODE_DUPLICATE, RetryDirective.DO_NOT_RETRY),
             entry(PRODUCT_SKU_FIELD_INVALID, RetryDirective.DO_NOT_RETRY),
             entry(PRODUCT_CURRENCY_INVALID, RetryDirective.DO_NOT_RETRY),
+            entry(ASSET_QUERY_UNSUPPORTED_PRODUCT_TYPE, RetryDirective.DO_NOT_RETRY),
+            entry(ASSET_QUERY_ORDER_NOT_ACCEPTED, RetryDirective.DO_NOT_RETRY),
+            entry(ASSET_QUERY_ORDER_TERMINATED, RetryDirective.DO_NOT_RETRY),
+            entry(STANDARD_PRICING_QUOTE_MISSING, RetryDirective.RETRY_SAME_KEY_AFTER_CONDITION_CHANGE),
             entry(SUPPLY_CHAIN_ORDER_NOT_FOUND, RetryDirective.DO_NOT_RETRY),
             entry(ORDER_QUERY_TIME_RANGE_INVALID, RetryDirective.DO_NOT_RETRY),
             entry(ORDER_EXPORT_EXCEED_LIMIT, RetryDirective.DO_NOT_RETRY),
@@ -354,7 +392,11 @@ public interface SupplyChainErrorCodeConstants {
             entry(BUSINESS_CODE_PARENT_MISMATCH, RetryDirective.DO_NOT_RETRY),
             entry(BUSINESS_CODE_MANUAL_NOT_ALLOWED, RetryDirective.DO_NOT_RETRY),
             entry(BUSINESS_CODE_PERMANENT_EXISTS, RetryDirective.DO_NOT_RETRY),
-            entry(BUSINESS_CODE_LEGACY_PARENT_OCCUPIED, RetryDirective.DO_NOT_RETRY));
+            entry(BUSINESS_CODE_LEGACY_PARENT_OCCUPIED, RetryDirective.DO_NOT_RETRY),
+            entry(PROJECT_APP_ALREADY_ENABLED, RetryDirective.DO_NOT_RETRY),
+            entry(PROJECT_APP_NOT_ENABLED, RetryDirective.RETRY_SAME_KEY_AFTER_CONDITION_CHANGE),
+            entry(PROJECT_APP_CONFIRMATION_REQUIRED, RetryDirective.DO_NOT_RETRY),
+            entry(PROJECT_APP_CREDENTIAL_STATE_INVALID, RetryDirective.DO_NOT_RETRY));
 
     static RetryDirective retryDirective(int errorCode) {
         return RETRY_DIRECTIVES.getOrDefault(errorCode, RetryDirective.DO_NOT_RETRY);

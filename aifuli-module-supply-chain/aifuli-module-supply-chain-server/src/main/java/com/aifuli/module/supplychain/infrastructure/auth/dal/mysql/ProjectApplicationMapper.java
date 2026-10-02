@@ -14,4 +14,14 @@ public interface ProjectApplicationMapper extends BaseMapperX<ProjectApplication
         return selectOne(new LambdaQueryWrapper<ProjectApplicationDO>()
                 .eq(ProjectApplicationDO::getAppId, appId));
     }
+
+    /** 按项目读取唯一应用身份，供发码与只读配置查询。 */
+    default ProjectApplicationDO selectByProjectId(Long projectId) {
+        return selectOne(ProjectApplicationDO::getProjectId, projectId);
+    }
+
+    /** 轮换、吊销时锁定应用行，保持项目→应用→凭证的固定锁顺序。 */
+    default ProjectApplicationDO selectByProjectIdForUpdate(Long projectId) {
+        return selectOneForUpdate(ProjectApplicationDO::getProjectId, projectId);
+    }
 }

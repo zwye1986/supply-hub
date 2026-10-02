@@ -57,6 +57,7 @@ class ProjectAppAuthConfigurationTest {
                 .run(context -> {
                     assertThat(context).hasNotFailed();
                     assertThat(context).hasSingleBean(AppKeySecretResolver.class);
+                    assertThat(context).hasSingleBean(AppKeySecretIssuer.class);
                     assertThat(context).hasSingleBean(FilterRegistrationBean.class);
                 });
     }
@@ -128,7 +129,11 @@ class ProjectAppAuthConfigurationTest {
                             "/rpc-api/supply-chain/instore/channel-command/*",
                             "/rpc-api/supply-chain/instore/channel-member/*",
                             "/rpc-api/supply-chain/instore/buyer-entry/*",
-                            "/rpc-api/supply-chain/buyer/instore/payment/*");
+                            "/rpc-api/supply-chain/buyer/instore/payment/*",
+                            "/open-api/supply-chain/project/v1/orders/*");
+                    assertThat(registration.getUrlPatterns()).containsExactlyInAnyOrderElementsOf(
+                            com.aifuli.module.supplychain.api.auth.ProjectAuthOperations.PROTECTED_PREFIXES.stream()
+                                    .map(prefix -> prefix + "/*").toList());
                 });
     }
 

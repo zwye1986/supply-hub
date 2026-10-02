@@ -55,6 +55,13 @@ public final class SupplyChainAdminPermissions {
     public static final String PRODUCT_TYPE_DELETE = "supply-chain:product-type:delete";
     public static final String PRODUCT_TYPE_UPDATE_STATUS = "supply-chain:product-type:update-status";
 
+    public static final String RECHARGE_FREQUENCY_QUERY = "supply-chain:recharge-frequency:query";
+    public static final String RECHARGE_FREQUENCY_RETRY = "supply-chain:recharge-frequency:retry";
+    public static final String RECHARGE_FREQUENCY_RELEASE = "supply-chain:recharge-frequency:release";
+    public static final String RECHARGE_FREQUENCY_QUERY_EXPRESSION = "@ss.hasPermission('" + RECHARGE_FREQUENCY_QUERY + "')";
+    public static final String RECHARGE_FREQUENCY_RETRY_EXPRESSION = "@ss.hasPermission('" + RECHARGE_FREQUENCY_RETRY + "')";
+    public static final String RECHARGE_FREQUENCY_RELEASE_EXPRESSION = "@ss.hasPermission('" + RECHARGE_FREQUENCY_RELEASE + "')";
+
     public static final String ORDER_QUERY = "supply-chain:order:query";
     public static final String ORDER_EXPORT = "supply-chain:order:export";
 

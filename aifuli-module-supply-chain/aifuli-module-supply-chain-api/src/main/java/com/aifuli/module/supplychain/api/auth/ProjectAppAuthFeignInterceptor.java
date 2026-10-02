@@ -7,7 +7,7 @@ import java.util.Map;
 import java.util.function.Supplier;
 
 /**
- * Feign 请求拦截器：为受保护 INSTORE 操作应用 Signer 生成的 10 个项目认证字段。
+ * Feign 请求拦截器：为受保护操作应用 Signer 生成的项目认证字段。
  *
  * <p>按模板最终方法与路径在 {@link ProjectAuthOperations} 注册表定位操作，
  * requestSha256 取 Feign 已序列化 body 原始字节；凭证以供应器注入，支持调用方
@@ -37,6 +37,10 @@ public final class ProjectAppAuthFeignInterceptor implements RequestInterceptor 
         String path = queryIndex >= 0 ? url.substring(0, queryIndex) : url;
         Map<String, String> headers = ProjectAppAuthSigner.sign(
                 credentialsSupplier.get(), template.method(), path, template.body());
+        // 标准签名结果省略 scope 头，必须同时移除模板预置的旧身份，避免残留未签名声明。
+        // 详见 docs/superpowers/specs/2026-09-30-project-signed-standard-order-http-design.md#21-认证实施边界。
+        template.removeHeader(ProjectAppAuthSigner.HEADER_BUYER_USER_ID);
+        template.removeHeader(ProjectAppAuthSigner.HEADER_CHANNEL_CODE);
         headers.forEach((name, value) -> {
             template.removeHeader(name);
             template.header(name, value);

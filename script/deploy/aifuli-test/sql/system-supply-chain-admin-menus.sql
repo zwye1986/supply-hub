@@ -373,3 +373,58 @@ SET menu.name = actions.name, menu.type = 3, menu.sort = actions.sort,
     menu.component_name = NULL, menu.status = 0, menu.visible = b'1', menu.keep_alive = b'1',
     menu.always_show = b'1', menu.updater = @sc_creator, menu.update_time = NOW()
 WHERE BINARY menu.application_code = BINARY @sc_app AND menu.deleted = b'0';
+
+-- ===== 内部运营直充限频监控 =====
+-- 设计：docs/superpowers/specs/2026-09-30-direct-recharge-mobile-spu-frequency-design.md#7-管理端契约与权限
+-- 查询、触发检查、释放独立授权；此脚本只部署菜单，不授予角色。
+-- 关闭keep_alive，精确手机号只能留在页面内存，不能被缓存页面保留。
+INSERT INTO system_menu
+    (application_code, name, permission, type, sort, parent_id, path, icon, component, component_name,
+     status, visible, keep_alive, always_show, creator, create_time, updater, update_time, deleted)
+SELECT @sc_app, '直充限频监控', 'supply-chain:recharge-frequency:query', 2, 6, @sc_root_id,
+       'recharge-frequency', 'ep:timer', 'supplier/order/recharge-frequency/index', 'RechargeFrequencyMonitor',
+       0, b'1', b'0', b'1', @sc_creator, NOW(), @sc_creator, NOW(), b'0'
+WHERE NOT EXISTS (
+    SELECT 1 FROM system_menu
+    WHERE BINARY application_code = BINARY @sc_app
+      AND BINARY permission = BINARY 'supply-chain:recharge-frequency:query' AND deleted = b'0'
+);
+
+SET @sc_frequency_page_id = (
+    SELECT MIN(id) FROM system_menu
+    WHERE BINARY application_code = BINARY @sc_app
+      AND BINARY permission = BINARY 'supply-chain:recharge-frequency:query' AND deleted = b'0'
+);
+
+UPDATE system_menu
+SET name = '直充限频监控', type = 2, sort = 6, parent_id = @sc_root_id,
+    path = 'recharge-frequency', icon = 'ep:timer', component = 'supplier/order/recharge-frequency/index',
+    component_name = 'RechargeFrequencyMonitor', status = 0, visible = b'1', keep_alive = b'0',
+    always_show = b'1', updater = @sc_creator, update_time = NOW()
+WHERE BINARY application_code = BINARY @sc_app
+  AND BINARY permission = BINARY 'supply-chain:recharge-frequency:query' AND deleted = b'0';
+
+INSERT INTO system_menu
+    (application_code, name, permission, type, sort, parent_id, path, icon, component, component_name,
+     status, visible, keep_alive, always_show, creator, create_time, updater, update_time, deleted)
+SELECT @sc_app, actions.name, actions.permission, 3, actions.sort, @sc_frequency_page_id, '', '', '', NULL,
+       0, b'1', b'0', b'1', @sc_creator, NOW(), @sc_creator, NOW(), b'0'
+FROM (
+    SELECT '触发限频检查' name, 'supply-chain:recharge-frequency:retry' permission, 1 sort
+    UNION ALL SELECT '释放限频占用', 'supply-chain:recharge-frequency:release', 2
+) actions
+WHERE NOT EXISTS (
+    SELECT 1 FROM system_menu existing WHERE BINARY existing.application_code = BINARY @sc_app
+      AND BINARY existing.permission = BINARY actions.permission AND existing.deleted = b'0'
+);
+
+UPDATE system_menu menu
+JOIN (
+    SELECT '触发限频检查' name, 'supply-chain:recharge-frequency:retry' permission, 1 sort
+    UNION ALL SELECT '释放限频占用', 'supply-chain:recharge-frequency:release', 2
+) actions ON BINARY actions.permission = BINARY menu.permission
+SET menu.name = actions.name, menu.type = 3, menu.sort = actions.sort,
+    menu.parent_id = @sc_frequency_page_id, menu.path = '', menu.icon = '', menu.component = '',
+    menu.component_name = NULL, menu.status = 0, menu.visible = b'1', menu.keep_alive = b'0',
+    menu.always_show = b'1', menu.updater = @sc_creator, menu.update_time = NOW()
+WHERE BINARY menu.application_code = BINARY @sc_app AND menu.deleted = b'0';

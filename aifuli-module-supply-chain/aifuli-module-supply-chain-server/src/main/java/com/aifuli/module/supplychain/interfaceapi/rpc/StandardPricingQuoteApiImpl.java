@@ -14,9 +14,9 @@ import org.springframework.web.bind.annotation.RestController;
 import static com.aifuli.framework.common.pojo.CommonResult.success;
 
 /**
- * 标准商品项目报价 RPC 入口。凭证有效期 15 分钟，绑定项目、SKU、数量、用户和采购商订单号；
- * 已消费订单号禁止重新签发。
- * 设计见 {@code docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#7-项目报价凭证与标准履约}。
+ * 标准商品项目报价 RPC 入口。按「项目+项目订单号」永久键签发或重放首次冻结报价：
+ * 不绑定用户与支付时间，无 15 分钟有效期；同键重复询价返回同一冻结结果，已消费报价同样重放。
+ * 设计见 {@code docs/superpowers/specs/2026-10-02-standard-internal-quote-freeze-design.md#1-内部契约与归属}。
  */
 @Slf4j
 @Primary

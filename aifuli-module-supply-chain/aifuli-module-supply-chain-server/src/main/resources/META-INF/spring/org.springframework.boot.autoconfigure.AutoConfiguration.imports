@@ -2,3 +2,4 @@ com.aifuli.module.supplychain.integration.rtmart.RtmartEntryAdapterConfiguration
 com.aifuli.module.supplychain.integration.configuration.InstoreEntryPortConfiguration
 com.aifuli.module.supplychain.infrastructure.auth.ProjectAppAuthConfiguration
 com.aifuli.module.supplychain.infrastructure.security.ProjectCallContextConfiguration
+com.aifuli.module.supplychain.infrastructure.security.RechargeFrequencyIdentityConfiguration

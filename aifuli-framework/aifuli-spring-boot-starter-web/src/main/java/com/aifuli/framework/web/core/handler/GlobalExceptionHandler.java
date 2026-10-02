@@ -1,6 +1,8 @@
 package com.aifuli.framework.web.core.handler;
 
 import cn.hutool.core.collection.CollUtil;
+import com.aifuli.framework.apilog.core.util.ApiAccessLogPathUtils;
+import com.aifuli.framework.apilog.core.util.SensitiveExceptionLogUtils;
 import cn.hutool.core.exceptions.ExceptionUtil;
 import cn.hutool.core.map.MapUtil;
 import cn.hutool.core.util.ObjUtil;
@@ -43,6 +45,7 @@ import org.springframework.web.servlet.resource.NoResourceFoundException;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 import static com.aifuli.framework.common.exception.enums.GlobalErrorCodeConstants.*;
@@ -62,6 +65,13 @@ public class GlobalExceptionHandler {
      */
     public static final Set<String> IGNORE_ERROR_MESSAGES = SetUtils.asSet("无效的刷新令牌");
 
+    /**
+     * 限频错误日志存储失败独立计数；与访问日志API失败计数分开，首次及每100次保留安全因果位置。
+     * 设计见 {@code docs/superpowers/specs/2026-09-30-direct-recharge-mobile-spu-frequency-design.md#7-管理端契约与权限}。
+     */
+    private static final long SENSITIVE_ERROR_LOG_FAILURE_SAMPLE_INTERVAL = 100L;
+    private static final java.util.concurrent.atomic.AtomicLong SENSITIVE_ERROR_LOG_FAILURES = new java.util.concurrent.atomic.AtomicLong();
+
     @SuppressWarnings("SpringJavaInjectionPointsAutowiringInspection")
     private final String applicationName;
 
@@ -76,6 +86,7 @@ public class GlobalExceptionHandler {
      * @return 通用返回
      */
     public CommonResult<?> allExceptionHandler(HttpServletRequest request, Throwable ex) {
+        if (isFrequencyRequest(request) && isParameterFailure(ex)) { return safeParameterFailure(ex); }
         if (ex instanceof MissingServletRequestParameterException) {
             return missingServletRequestParameterExceptionHandler((MissingServletRequestParameterException) ex);
         }
@@ -125,6 +136,7 @@ public class GlobalExceptionHandler {
      */
     @ExceptionHandler(value = MissingServletRequestParameterException.class)
     public CommonResult<?> missingServletRequestParameterExceptionHandler(MissingServletRequestParameterException ex) {
+        if (isFrequencyRequest(ServletUtils.getRequest())) { return safeParameterFailure(ex); }
         log.warn("[missingServletRequestParameterExceptionHandler]", ex);
         return CommonResult.error(BAD_REQUEST.getCode(), String.format("请求参数缺失:%s", ex.getParameterName()));
     }
@@ -136,6 +148,7 @@ public class GlobalExceptionHandler {
      */
     @ExceptionHandler(MethodArgumentTypeMismatchException.class)
     public CommonResult<?> methodArgumentTypeMismatchExceptionHandler(MethodArgumentTypeMismatchException ex) {
+        if (isFrequencyRequest(ServletUtils.getRequest())) { return safeParameterFailure(ex); }
         log.warn("[methodArgumentTypeMismatchExceptionHandler]", ex);
         return CommonResult.error(BAD_REQUEST.getCode(), String.format("请求参数类型错误:%s", ex.getMessage()));
     }
@@ -145,6 +158,7 @@ public class GlobalExceptionHandler {
      */
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public CommonResult<?> methodArgumentNotValidExceptionExceptionHandler(MethodArgumentNotValidException ex) {
+        if (isFrequencyRequest(ServletUtils.getRequest())) { return safeParameterFailure(ex); }
         log.warn("[methodArgumentNotValidExceptionExceptionHandler]", ex);
         // 获取 errorMessage
         String errorMessage = null;
@@ -171,6 +185,7 @@ public class GlobalExceptionHandler {
      */
     @ExceptionHandler(BindException.class)
     public CommonResult<?> bindExceptionHandler(BindException ex) {
+        if (isFrequencyRequest(ServletUtils.getRequest())) { return safeParameterFailure(ex); }
         log.warn("[handleBindException]", ex);
         FieldError fieldError = ex.getFieldError();
         assert fieldError != null; // 断言，避免告警
@@ -185,6 +200,7 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(HttpMessageNotReadableException.class)
     @SuppressWarnings("PatternVariableCanBeUsed")
     public CommonResult<?> methodArgumentTypeInvalidFormatExceptionHandler(HttpMessageNotReadableException ex) {
+        if (isFrequencyRequest(ServletUtils.getRequest())) { return safeParameterFailure(ex); }
         log.warn("[methodArgumentTypeInvalidFormatExceptionHandler]", ex);
         if (ex.getCause() instanceof InvalidFormatException) {
             InvalidFormatException invalidFormatException = (InvalidFormatException) ex.getCause();
@@ -201,6 +217,7 @@ public class GlobalExceptionHandler {
      */
     @ExceptionHandler(value = ConstraintViolationException.class)
     public CommonResult<?> constraintViolationExceptionHandler(ConstraintViolationException ex) {
+        if (isFrequencyRequest(ServletUtils.getRequest())) { return safeParameterFailure(ex); }
         log.warn("[constraintViolationExceptionHandler]", ex);
         ConstraintViolation<?> constraintViolation = ex.getConstraintViolations().iterator().next();
         return CommonResult.error(BAD_REQUEST.getCode(), String.format("请求参数不正确:%s", constraintViolation.getMessage()));
@@ -211,6 +228,7 @@ public class GlobalExceptionHandler {
      */
     @ExceptionHandler(value = ValidationException.class)
     public CommonResult<?> validationException(ValidationException ex) {
+        if (isFrequencyRequest(ServletUtils.getRequest())) { return safeParameterFailure(ex); }
         log.warn("[constraintViolationExceptionHandler]", ex);
         // 无法拼接明细的错误信息，因为 Dubbo Consumer 抛出 ValidationException 异常时，是直接的字符串信息，且人类不可读
         return CommonResult.error(BAD_REQUEST);
@@ -233,6 +251,10 @@ public class GlobalExceptionHandler {
      */
     @ExceptionHandler(NoHandlerFoundException.class)
     public CommonResult<?> noHandlerFoundExceptionHandler(NoHandlerFoundException ex) {
+        if (isFrequencyRequest(ServletUtils.getRequest())) {
+            log.warn("[限频管理HTTP错误] type={}, traceId={}", ex.getClass().getSimpleName(), TracerUtils.getTraceId());
+            return CommonResult.error(NOT_FOUND);
+        }
         log.warn("[noHandlerFoundExceptionHandler]", ex);
         return CommonResult.error(NOT_FOUND.getCode(), String.format("请求地址不存在:%s", ex.getRequestURL()));
     }
@@ -242,6 +264,10 @@ public class GlobalExceptionHandler {
      */
     @ExceptionHandler(NoResourceFoundException.class)
     private CommonResult<?> noResourceFoundExceptionHandler(HttpServletRequest req, NoResourceFoundException ex) {
+        if (isFrequencyRequest(req)) {
+            log.warn("[限频管理HTTP错误] type={}, traceId={}", ex.getClass().getSimpleName(), TracerUtils.getTraceId());
+            return CommonResult.error(NOT_FOUND);
+        }
         log.warn("[noResourceFoundExceptionHandler]", ex);
         return CommonResult.error(NOT_FOUND.getCode(), String.format("请求地址不存在:%s", ex.getResourcePath()));
     }
@@ -253,6 +279,10 @@ public class GlobalExceptionHandler {
      */
     @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
     public CommonResult<?> httpRequestMethodNotSupportedExceptionHandler(HttpRequestMethodNotSupportedException ex) {
+        if (isFrequencyRequest(ServletUtils.getRequest())) {
+            log.warn("[限频管理HTTP错误] type={}, traceId={}", ex.getClass().getSimpleName(), TracerUtils.getTraceId());
+            return CommonResult.error(METHOD_NOT_ALLOWED);
+        }
         log.warn("[httpRequestMethodNotSupportedExceptionHandler]", ex);
         return CommonResult.error(METHOD_NOT_ALLOWED.getCode(), String.format("请求方法不正确:%s", ex.getMessage()));
     }
@@ -264,6 +294,10 @@ public class GlobalExceptionHandler {
      */
     @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
     public CommonResult<?> httpMediaTypeNotSupportedExceptionHandler(HttpMediaTypeNotSupportedException ex) {
+        if (isFrequencyRequest(ServletUtils.getRequest())) {
+            log.warn("[限频管理HTTP错误] type={}, traceId={}", ex.getClass().getSimpleName(), TracerUtils.getTraceId());
+            return CommonResult.error(BAD_REQUEST);
+        }
         log.warn("[httpMediaTypeNotSupportedExceptionHandler]", ex);
         return CommonResult.error(BAD_REQUEST.getCode(), String.format("请求类型不正确:%s", ex.getMessage()));
     }
@@ -275,6 +309,10 @@ public class GlobalExceptionHandler {
      */
     @ExceptionHandler(value = AccessDeniedException.class)
     public CommonResult<?> accessDeniedExceptionHandler(HttpServletRequest req, AccessDeniedException ex) {
+        if (isFrequencyRequest(req)) {
+            log.warn("[限频管理鉴权拒绝] traceId={}", TracerUtils.getTraceId());
+            return CommonResult.error(FORBIDDEN);
+        }
         log.warn("[accessDeniedExceptionHandler][userId({}) 无法访问 url({})]", WebFrameworkUtils.getLoginUserId(req),
                 req.getRequestURL(), ex);
         return CommonResult.error(FORBIDDEN);
@@ -297,6 +335,10 @@ public class GlobalExceptionHandler {
      */
     @ExceptionHandler(value = ServiceException.class)
     public CommonResult<?> serviceExceptionHandler(ServiceException ex) {
+        if (isFrequencyRequest(ServletUtils.getRequest())) {
+            log.warn("[限频管理业务拒绝] code={}, traceId={}", ex.getCode(), TracerUtils.getTraceId());
+            return CommonResult.error(ex.getCode(), ex.getMessage());
+        }
         // 不包含的时候，才进行打印，避免 ex 堆栈过多
         if (!IGNORE_ERROR_MESSAGES.contains(ex.getMessage())) {
             // 即使打印，也只打印第一层 StackTraceElement，并且使用 warn 在控制台输出，更容易看到
@@ -321,6 +363,14 @@ public class GlobalExceptionHandler {
      */
     @ExceptionHandler(value = Exception.class)
     public CommonResult<?> defaultExceptionHandler(HttpServletRequest req, Throwable ex) {
+        if (isFrequencyRequest(req)) {
+            if (isParameterFailure(ex)) { return safeParameterFailure(ex); }
+            if (ex instanceof ServiceException service) { return CommonResult.error(service.getCode(), service.getMessage()); }
+            if (ex.getCause() instanceof ServiceException service) { return CommonResult.error(service.getCode(), service.getMessage()); }
+            log.error("[限频管理系统异常] types={}, traceId={}", SensitiveExceptionLogUtils.types(ex), TracerUtils.getTraceId());
+            createExceptionLog(req, ex);
+            return CommonResult.error(INTERNAL_SERVER_ERROR);
+        }
         // 特殊：如果是 ServiceException 的异常，则直接返回
         // 例如说：https://gitee.com/zhijiantianya/aifuli-cloud/issues/ICSSRM、https://gitee.com/zhijiantianya/aifuli-cloud/issues/ICT6FM
         if (ex.getCause() != null && ex.getCause() instanceof ServiceException) {
@@ -350,6 +400,15 @@ public class GlobalExceptionHandler {
             // 执行插入 errorLog
             apiErrorLogApi.createApiErrorLogAsync(errorLog);
         } catch (Throwable th) {
+            if (isFrequencyRequest(req)) {
+                long failures = SENSITIVE_ERROR_LOG_FAILURES.incrementAndGet();
+                if (failures == 1 || failures % SENSITIVE_ERROR_LOG_FAILURE_SAMPLE_INTERVAL == 0) {
+                    log.error("[限频管理异常日志存储失败] failureCount={}, types={}, traceId={}, safeStack={}", failures,
+                            SensitiveExceptionLogUtils.types(th), TracerUtils.getTraceId(), SensitiveExceptionLogUtils.stack(th));
+                }
+                // 平台错误日志兜底不覆盖原系统异常500响应；采样仍保留安全cause与位置，禁止输出原正文或DTO。
+                return;
+            }
             log.error("[createExceptionLog][url({}) log({}) 发生异常]", req.getRequestURI(),  JsonUtils.toJsonString(errorLog), th);
         }
     }
@@ -360,9 +419,10 @@ public class GlobalExceptionHandler {
         errorLog.setUserType(WebFrameworkUtils.getLoginUserType(request));
         // 设置异常字段
         errorLog.setExceptionName(e.getClass().getName());
-        errorLog.setExceptionMessage(ExceptionUtil.getMessage(e));
-        errorLog.setExceptionRootCauseMessage(ExceptionUtil.getRootCauseMessage(e));
-        errorLog.setExceptionStackTrace(ExceptionUtil.stacktraceToString(e));
+        boolean sensitive = isFrequencyRequest(request);
+        errorLog.setExceptionMessage(sensitive ? SensitiveExceptionLogUtils.types(e) : ExceptionUtil.getMessage(e));
+        errorLog.setExceptionRootCauseMessage(sensitive ? SensitiveExceptionLogUtils.types(e) : ExceptionUtil.getRootCauseMessage(e));
+        errorLog.setExceptionStackTrace(sensitive ? SensitiveExceptionLogUtils.stack(e) : ExceptionUtil.stacktraceToString(e));
         StackTraceElement[] stackTraceElements = e.getStackTrace();
         Assert.notEmpty(stackTraceElements, "异常 stackTraceElements 不能为空");
         StackTraceElement stackTraceElement = stackTraceElements[0];
@@ -373,15 +433,42 @@ public class GlobalExceptionHandler {
         // 设置其它字段
         errorLog.setTraceId(TracerUtils.getTraceId());
         errorLog.setApplicationName(applicationName);
-        errorLog.setRequestUrl(request.getRequestURI());
-        Map<String, Object> requestParams = MapUtil.<String, Object>builder()
+        errorLog.setRequestUrl(sensitive ? "/supply-chain/recharge-frequency/[protected]" : request.getRequestURI());
+        Map<String, Object> requestParams = sensitive ? Map.of() : MapUtil.<String, Object>builder()
                 .put("query", ServletUtils.getParamMap(request))
                 .put("body", ServletUtils.getBody(request)).build();
-        errorLog.setRequestParams(JsonUtils.toJsonString(requestParams));
+        errorLog.setRequestParams(sensitive ? "{}" : JsonUtils.toJsonString(requestParams));
         errorLog.setRequestMethod(request.getMethod());
         errorLog.setUserAgent(ServletUtils.getUserAgent(request));
         errorLog.setUserIp(ServletUtils.getClientIP(request));
         errorLog.setExceptionTime(LocalDateTime.now());
+    }
+
+    /** 只保护登记的限频路径；八个进程其他路径保持原有错误契约。设计见
+     * {@code docs/superpowers/specs/2026-09-30-direct-recharge-mobile-spu-frequency-design.md#7-管理端契约与权限}。 */
+    private static boolean isFrequencyRequest(HttpServletRequest request) {
+        return request != null && ApiAccessLogPathUtils.isRechargeFrequencyAdminPath(request.getRequestURI(), request.getContextPath());
+    }
+
+    private static boolean isParameterFailure(Throwable ex) {
+        return ex instanceof MissingServletRequestParameterException || ex instanceof MethodArgumentTypeMismatchException
+                || ex instanceof BindException || ex instanceof ValidationException || ex instanceof HttpMessageNotReadableException
+                || ex instanceof org.springframework.web.method.annotation.HandlerMethodValidationException
+                || ex instanceof org.springframework.validation.method.MethodValidationException;
+    }
+
+    private static CommonResult<?> safeParameterFailure(Throwable ex) {
+        // 不打印Throwable：绑定异常包含rejectedValue，解析异常包含原JSON。
+        String field = null;
+        if (ex instanceof BindException binding && binding.getFieldError() != null) { field = binding.getFieldError().getField(); }
+        if (ex instanceof MethodArgumentTypeMismatchException typed) { field = typed.getName(); }
+        // 字段名也只允许静态DTO字段，避免恶意属性路径进入日志。
+        if (!Set.of("mobile", "view", "pageNo", "pageSize", "buyerId", "projectId", "platformSpuCode", "orderNo", "buyerOrderNo",
+                "enqueuedFrom", "enqueuedTo", "actionNo", "expectedVersion", "expectedGeneration", "expectedHolderOrderNo", "reason", "entryId", "queueId").contains(Objects.toString(field, ""))) {
+            field = "[protected]";
+        }
+        log.warn("[限频管理参数错误] type={}, field={}, traceId={}", ex.getClass().getSimpleName(), field, TracerUtils.getTraceId());
+        return CommonResult.error(BAD_REQUEST.getCode(), "请求参数不正确");
     }
 
     /**

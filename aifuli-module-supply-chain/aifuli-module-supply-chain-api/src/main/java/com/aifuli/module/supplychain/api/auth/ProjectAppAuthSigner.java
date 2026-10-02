@@ -38,13 +38,13 @@ public final class ProjectAppAuthSigner {
     }
 
     /**
-     * 为受保护操作生成完整 10 个认证头（自动生成 timestamp 与 nonce）。
+     * 为受保护操作生成认证头（INSTORE 十个、标准商品八个）（自动生成 timestamp 与 nonce）。
      *
      * @param credentials 调用方凭证
      * @param httpMethod  HTTP 方法
      * @param path        请求路径，不含 query
      * @param body        请求 body 原始字节，空 body 传 null 或空数组
-     * @return 10 个认证头
+     * @return 由操作能力决定的认证头
      */
     public static Map<String, String> sign(ProjectAppAuthCredentials credentials, String httpMethod,
                                            String path, byte[] body) {
@@ -52,7 +52,7 @@ public final class ProjectAppAuthSigner {
     }
 
     /**
-     * 为受保护操作生成完整 10 个认证头；timestamp 与 nonce 由调用方显式提供（重放测试与固定场景用）。
+     * 为受保护操作生成认证头（INSTORE 十个、标准商品八个）；timestamp 与 nonce 由调用方显式提供（重放测试与固定场景用）。
      */
     public static Map<String, String> sign(ProjectAppAuthCredentials credentials, String httpMethod,
                                            String path, byte[] body, long timestamp, String nonce) {
@@ -74,8 +74,12 @@ public final class ProjectAppAuthSigner {
         headers.put(HEADER_NONCE, nonce);
         headers.put(HEADER_REQUEST_SHA256, requestSha256);
         headers.put(HEADER_SIGNATURE, signature);
-        headers.put(HEADER_BUYER_USER_ID, nullToEmpty(credentials.buyerUserId()));
-        headers.put(HEADER_CHANNEL_CODE, nullToEmpty(credentials.channelCode()));
+        // 标准商品不传用户/渠道身份头；九字段签名串末两项仍为空，INSTORE 输出保持十头。
+        // 详见 docs/superpowers/specs/2026-09-30-project-signed-standard-order-http-design.md#21-认证实施边界。
+        if (!ProjectAuthOperations.CAPABILITY_STANDARD_PRODUCT.equals(operation.requiredCapability())) {
+            headers.put(HEADER_BUYER_USER_ID, nullToEmpty(credentials.buyerUserId()));
+            headers.put(HEADER_CHANNEL_CODE, nullToEmpty(credentials.channelCode()));
+        }
         return headers;
     }
 
@@ -130,7 +134,7 @@ public final class ProjectAppAuthSigner {
     }
 
     /**
-     * 客户端侧 scope 快速失败：必填 scope 缺失、非必填 scope 字段未置空或回调携带 scope 直接拒绝，
+     * 客户端侧 scope 快速失败：必填 scope 缺失、非必填 scope 字段未置空或 NONE 操作携带 scope 直接拒绝，
      * 与设计 §6.1 第 8 步「必填组非空；非必填组必须为空」对称，避免到服务端才报模糊的认证失败。
      */
     private static void validateScope(ProjectAuthOperations.Operation operation,

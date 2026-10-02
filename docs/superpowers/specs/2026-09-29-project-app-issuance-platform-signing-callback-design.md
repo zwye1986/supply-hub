@@ -20,7 +20,7 @@
 
 吊销是立即撤销该应用当前全部凭证，不删除 appId。需要恢复同一项目时，管理员在审计确认后执行轮换，生成更高 keyVersion 的新 CURRENT；不能再次开通另一个 appId。吊销后的项目回调保持停用，须由管理员重新启用。
 
-认证服务先确认应用、项目、密钥和签名，再按 operationCode 校验项目能力。标准商品要求 STANDARD_PRODUCT，到店购继续要求 INSTORE。现有 ProjectAppCredentialService.authenticate 无条件检查 INSTORE，须将能力校验移至按操作授权层；否则标准商品项目即使已发码也无法调用。错误响应继续避免应用枚举。
+认证服务先确认应用、项目、密钥和签名，再按 operationCode 校验项目能力。标准商品要求 STANDARD_PRODUCT，到店购继续要求 INSTORE。现有 ProjectAppCredentialService.authenticate 无条件检查 INSTORE，须将能力校验移至按操作授权层；否则标准商品项目即使已发码也无法调用。现有 `ProjectAuthOperations` 仅登记到店购操作，标准商品受理当前为内部 `BuyerFulfillmentCommandApi` RPC；新增项目直连 HMAC 下单入口时须另行固定其 HTTP 契约、注册操作与 STANDARD_PRODUCT 能力映射，不能把现有内部 RPC 误认为已经受 HMAC 过滤器保护。错误响应继续避免应用枚举。
 
 ## 3. 项目应用管理
 
@@ -30,10 +30,10 @@
 | --- | --- |
 | POST /supply-chain/projects/{projectCode}/application/enable | 项目启用且尚无应用时生成 appId 和第 1 版 CURRENT；重复开通返回冲突。响应一次性含 appId/keyVersion/appKey/maskedHint。 |
 | POST /supply-chain/projects/{projectCode}/application/rotate | 锁应用行，原子切换 CURRENT/GRACE；默认过渡窗口 24 小时，由 aifuli.supply-chain.auth.grace-window 配置。 |
-| POST /supply-chain/projects/{projectCode}/application/revoke | 要求确认标记与原因，吊销活动凭证，并停用该项目后续事件回调。 |
+| POST /supply-chain/projects/{projectCode}/application/revoke | 要求确认标记与原因；项目存在即可吊销活动凭证，包括 SUSPENDED/CLOSED 状态，并停用该项目后续事件回调。重新启用项目不会恢复已吊销凭证。 |
 | GET /supply-chain/projects/{projectCode}/application/credentials | 返回 appId、版本、状态、脱敏提示及生效时间；不返回明文或 secret_ref。 |
 
-appKey 用 32 字节 SecureRandom 生成并 Base64URL 编码。secret_ref 复用 LocalEnvelopeAppKeyCodec，AAD 绑定 appId 与 keyVersion。masterKey 按 ProjectAppAuthProperties 现有规则解析。应用行锁、版本唯一键和 active_slot 唯一键共同约束并发。发码响应设置 Cache-Control: no-store；日志、DTO toString、浏览器持久化存储均不得包含明文 appKey。管理接口全部带 @PreAuthorize 并记录审计。
+appKey 用 32 字节 SecureRandom 生成并 Base64URL 编码。secret_ref 复用 LocalEnvelopeAppKeyCodec，AAD 绑定 appId 与 keyVersion。masterKey 按 ProjectAppAuthProperties 现有规则解析。应用行锁、版本唯一键和 active_slot 唯一键共同约束并发。发码响应设置 Cache-Control: no-store；日志、DTO toString、浏览器持久化存储均不得包含明文 appKey。管理接口全部带 @PreAuthorize；开通、轮换、吊销在凭证事务内追加 `sc_project_app_credential_audit`，记录动作、目标版本、操作人、吊销原因与时间，不存密钥明文或密文引用。
 
 ## 4. 平台签名密钥与验签协议
 
@@ -124,11 +124,30 @@ CREATE TABLE sc_platform_signing_key (
         (status = 'CURRENT' AND active_slot = 'CURRENT')
         OR (status <> 'CURRENT' AND active_slot IS NULL))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='平台事件签名公钥版本';
+
+CREATE TABLE sc_project_app_credential_audit (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT '项目应用凭证操作审计内部主键',
+    project_id BIGINT NOT NULL COMMENT '采购项目内部主键，逻辑引用sc_buyer_project.id',
+    application_id BIGINT NOT NULL COMMENT '项目应用身份内部主键，逻辑引用sc_project_application.id',
+    action VARCHAR(16) NOT NULL COMMENT '凭证操作：ENABLE开通，ROTATE轮换，REVOKE吊销',
+    key_version INT NULL COMMENT '本次开通或轮换生成的密钥版本号；吊销时为空',
+    operator_id BIGINT NOT NULL COMMENT '操作人用户ID',
+    reason VARCHAR(256) NULL COMMENT '吊销原因；开通与轮换时为空',
+    occurred_at DATETIME(3) NOT NULL COMMENT '操作时间，Asia/Shanghai',
+    PRIMARY KEY (id),
+    KEY idx_sc_project_app_credential_audit_project (project_id, occurred_at),
+    CONSTRAINT ck_sc_project_app_credential_audit_action CHECK (action IN ('ENABLE', 'ROTATE', 'REVOKE')),
+    CONSTRAINT ck_sc_project_app_credential_audit_reason CHECK (
+        (action = 'REVOKE' AND reason IS NOT NULL AND CHAR_LENGTH(TRIM(reason)) > 0 AND key_version IS NULL)
+        OR (action <> 'REVOKE' AND reason IS NULL AND key_version IS NOT NULL))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='项目应用凭证操作追加审计';
 ~~~
 
 迁移建表后插入 sc_platform_signing_control(id=1)。`sc_outbox_event.target_config_version_id` 已由 `009-buyer-integration.sql` 增加（`008-timer-inbox-outbox.sql` 的初始建表语句尚无此列），本次迁移不得重复 `ADD COLUMN`；其既有 COMMENT 为“创建事件时固化的目标配置版本内部主键”，在项目 HTTP 回调事件中逻辑引用 `sc_project_callback_config_version.id`。当前 `OutboxEventDO` 尚无对应 Java 字段，实施时须新增 `targetConfigVersionId` 并扩展 `appendBuyerEvent` 的持久化映射，确保写入及读取冻结版本 ID。事件正文不保存回调 URL 或私钥。
 
 ## 7. 管理端配套和安全边界
+
+项目详情中的一次性 appKey 只属于发码时的 projectCode。详情抽屉切换项目时立即关闭密钥弹窗并清除内存中的明文，同时清空旧项目详情状态；旧项目详情/凭证列表请求和开通/轮换响应晚于切换返回时，不得覆盖新项目视图或展示旧密钥。吊销确认框打开期间如切换项目，应取消后续提交；已经发出的吊销请求只作用于发起时的项目，返回后不得刷新新项目视图。所有异步响应写入均校验发起时 projectCode 与当前项目一致。
 
 supplychainhubweb 项目详情增加应用凭证、回调地址和通知记录：开通/轮换/吊销、一次性密钥展示与复制、脱敏凭证列表、回调配置、最近投递与死信入口。平台密钥管理页展示版本、公钥指纹、状态和保留截止时间；不回显 secret_ref 或私钥。菜单和权限由 script/deploy 写入 system 库，供应链进程不访问 system_*。
 

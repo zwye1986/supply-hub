@@ -9,6 +9,7 @@ import com.aifuli.module.supplychain.api.instore.dto.ConfirmPaymentReqDTO;
 import com.aifuli.module.supplychain.api.instore.dto.CreatePaymentOrderReqDTO;
 import com.aifuli.module.supplychain.api.instore.dto.HomeEntryReqDTO;
 import com.aifuli.module.supplychain.api.instore.dto.ResolveInstoreMemberReqDTO;
+import com.aifuli.module.supplychain.tradecore.buyer.application.ProjectAppCredentialAdminService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterAll;
@@ -45,6 +46,7 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.INSTORE_PAYMENT_FLOW_NOT_FOUND;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.INSTORE_SUPPLIER_CHANNEL_BINDING_NOT_FOUND;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * 项目应用认证真实 HTTP 门禁：完整应用、Spring Security、真实 Filter/Accessor/Facade、Liquibase
@@ -71,6 +73,7 @@ class ProjectAppAuthFlowIntegrationTest {
     private static final long BUYER_ID = 9_300_001L;
     private static final long PROJECT_ID = 9_310_001L;
     private static final long CAPABILITY_ID = 9_320_001L;
+    private static final long STANDARD_CAPABILITY_ID = 9_320_002L;
     private static final long APPLICATION_ID = 9_330_001L;
     private static final long CURRENT_CREDENTIAL_ID = 9_340_001L;
     private static final long GRACE_CREDENTIAL_ID = 9_340_002L;
@@ -83,6 +86,8 @@ class ProjectAppAuthFlowIntegrationTest {
     private static final int PAUSED_STATUS = 20;
 
     private static final String APP_ID = "project-auth-flow-it";
+    private static final long ISSUANCE_PROJECT_ID = 9_310_002L;
+    private static final String ISSUANCE_PROJECT_CODE = "PROJECT_APP_ISSUANCE_IT";
     private static final String APP_KEY = "project-auth-flow-app-key";
     private static final String CHANNEL_CODE = "RT_MART";
     /** 数字外观且超出 long 表示范围，必须作为不透明字符串原样进入 BuyerContext。 */
@@ -150,6 +155,56 @@ class ProjectAppAuthFlowIntegrationTest {
         cleanupResources();
     }
 
+    /** 真实 MySQL 验证开通→轮换→停用期间吊销→恢复启用后仍拒绝旧密钥；见 docs/superpowers/specs/2026-09-29-access-config-backend-impl-design.md#32-管理服务。 */
+    @Test
+    void projectCredentialLifecyclePersistsVersionSlotsAndAudit() {
+        jdbc.update("""
+                INSERT INTO sc_buyer_project(
+                    id, project_code, project_name, buyer_id, catalog_mode,
+                    status, version, created_at, updated_at)
+                VALUES (?, ?, '项目发码联调', ?, 'MANAGED', 10, 0, NOW(3), NOW(3))
+                """, ISSUANCE_PROJECT_ID, ISSUANCE_PROJECT_CODE, BUYER_ID);
+        ProjectAppCredentialAdminService admin = server.getBean(ProjectAppCredentialAdminService.class);
+
+        var issued = admin.enable(ISSUANCE_PROJECT_CODE, 99L);
+        assertThat(issued.keyVersion()).isEqualTo(1);
+        assertThat(issued.appKey()).hasSize(43);
+        String storedSecretRef = jdbc.queryForObject("""
+                SELECT c.secret_ref FROM sc_project_app_credential_version c
+                JOIN sc_project_application a ON a.id = c.application_id
+                WHERE a.project_id = ? AND c.key_version = 1
+                """, String.class, ISSUANCE_PROJECT_ID);
+        assertThat(storedSecretRef).doesNotContain(issued.appKey());
+        assertThat(LocalEnvelopeAppKeyCodec.decrypt(MASTER_KEY, issued.appId(), 1, storedSecretRef))
+                .isEqualTo(issued.appKey());
+
+        var rotated = admin.rotate(ISSUANCE_PROJECT_CODE, 99L);
+        assertThat(rotated.appId()).isEqualTo(issued.appId());
+        assertThat(rotated.keyVersion()).isEqualTo(2);
+        assertThat(jdbc.queryForObject("""
+                SELECT COUNT(*) FROM sc_project_app_credential_version c
+                JOIN sc_project_application a ON a.id = c.application_id
+                WHERE a.project_id = ? AND c.active_slot IN ('CURRENT', 'GRACE')
+                """, Integer.class, ISSUANCE_PROJECT_ID)).isEqualTo(2);
+
+        jdbc.update("UPDATE sc_buyer_project SET status = ? WHERE id = ?", PAUSED_STATUS, ISSUANCE_PROJECT_ID);
+        admin.revoke(ISSUANCE_PROJECT_CODE, true, "停用期间联调吊销", 99L);
+        assertThat(jdbc.queryForObject("""
+                SELECT COUNT(*) FROM sc_project_app_credential_version c
+                JOIN sc_project_application a ON a.id = c.application_id
+                WHERE a.project_id = ? AND c.active_slot IS NOT NULL
+                """, Integer.class, ISSUANCE_PROJECT_ID)).isZero();
+        assertThat(jdbc.queryForObject(
+                "SELECT COUNT(*) FROM sc_project_app_credential_audit WHERE project_id = ?",
+                Integer.class, ISSUANCE_PROJECT_ID)).isEqualTo(3);
+        jdbc.update("UPDATE sc_buyer_project SET status = ? WHERE id = ?", ENABLED_STATUS, ISSUANCE_PROJECT_ID);
+        ProjectAppCredentialService credentialService = server.getBean(ProjectAppCredentialService.class);
+        assertThatThrownBy(() -> credentialService.authenticate(issued.appId(), issued.keyVersion()))
+                .hasFieldOrPropertyWithValue("code", BUYER_AUTH_INVALID.getCode());
+        assertThatThrownBy(() -> credentialService.authenticate(rotated.appId(), rotated.keyVersion()))
+                .hasFieldOrPropertyWithValue("code", BUYER_AUTH_INVALID.getCode());
+    }
+
     /** ChannelContext：合法命令必须越过认证与 Adapter，到达未配置渠道用户绑定的业务分支。 */
     @Test
     void signedChannelCommandInjectsChannelContextIntoBusinessLayer() {
@@ -209,8 +264,8 @@ class ProjectAppAuthFlowIntegrationTest {
     }
 
     /**
-     * 注册表 10 个 operation 全部由 Security permit，再由 HMAC Filter 失败关闭；若某前缀漏放会得到
-     * 401/403，若 Filter 漏挂则请求会进入 DTO 校验，两种情况都不能满足本断言。
+     * 注册表十三个 operation 均先由 HMAC Filter 失败关闭，证明配置挂载覆盖精确路径。
+     * 标准 Controller 与 Security 放行属于后续阶段，本测试不以 404 证明业务已开放。
      */
     @ParameterizedTest(name = "{index}: {0}")
     @MethodSource("registeredOperations")
@@ -324,6 +379,98 @@ class ProjectAppAuthFlowIntegrationTest {
 
         assertThat(result.getCode()).isEqualTo(BUYER_AUTH_INVALID.getCode());
         assertNonceRows(nonce, 0L);
+    }
+
+    /**
+     * 标准操作真实认证到能力门禁后失败；未建立标准业务 Controller，不把 404 当成业务成功。
+     * 详见 docs/superpowers/specs/2026-09-30-project-signed-standard-order-http-design.md#21-认证实施边界。
+     */
+    @ParameterizedTest
+    @MethodSource("standardOperations")
+    void standardOperationsWithoutCapabilityAreRejectedBeforeNonce(ProjectAuthOperations.Operation operation) {
+        assertThat(server.getBean(ProjectAppCredentialService.class)
+                .authenticate(APP_ID, CURRENT_KEY_VERSION, operation.operationCode()).projectId()).isEqualTo(PROJECT_ID);
+        String nonce = unique("nonce-standard-no-capability");
+        CommonResult<?> result = postSigned(operation.path(), "{}".getBytes(StandardCharsets.UTF_8),
+                projectCredentials(CURRENT_KEY_VERSION), System.currentTimeMillis(), nonce);
+        assertThat(result.getCode()).isEqualTo(BUYER_AUTH_INVALID.getCode());
+        assertNonceRows(nonce, 0L);
+    }
+
+    @Test
+    void suspendedStandardQueryPassesCredentialPolicyButCannotBypassCapability() {
+        jdbc.update("UPDATE sc_buyer_project SET status = ? WHERE id = ?", ProjectAuthStatus.SUSPENDED.code(), PROJECT_ID);
+        try {
+            ProjectAppCredentialService service = server.getBean(ProjectAppCredentialService.class);
+            assertThat(service.authenticate(APP_ID, CURRENT_KEY_VERSION,
+                    ProjectAuthOperations.STANDARD_ORDER_QUERY).projectId()).isEqualTo(PROJECT_ID);
+            assertThatThrownBy(() -> service.authenticate(APP_ID, CURRENT_KEY_VERSION))
+                    .hasFieldOrPropertyWithValue("code", BUYER_AUTH_INVALID.getCode());
+            for (String code : java.util.List.of(ProjectAuthOperations.STANDARD_ORDER_CREATE,
+                    ProjectAuthOperations.STANDARD_ORDER_ASSET_QUERY)) {
+                assertThatThrownBy(() -> service.authenticate(APP_ID, CURRENT_KEY_VERSION, code))
+                        .hasFieldOrPropertyWithValue("code", BUYER_AUTH_INVALID.getCode());
+            }
+            assertStandardQueryRejectedWithoutNonce(CURRENT_KEY_VERSION, "suspended-no-capability");
+        } finally {
+            jdbc.update("UPDATE sc_buyer_project SET status = ? WHERE id = ?", ProjectAuthStatus.ENABLED.code(), PROJECT_ID);
+        }
+    }
+
+    @Test
+    void suspendedStandardQueryCannotBypassDisabledCapability() {
+        jdbc.update("""
+                INSERT INTO sc_project_capability(
+                    id, project_id, capability_code, status, version, created_at, updated_at)
+                VALUES (?, ?, ?, ?, 0, UTC_TIMESTAMP(3), UTC_TIMESTAMP(3))
+                """, STANDARD_CAPABILITY_ID, PROJECT_ID, ProjectAuthOperations.CAPABILITY_STANDARD_PRODUCT,
+                ProjectAuthStatus.SUSPENDED.code());
+        try {
+            jdbc.update("UPDATE sc_buyer_project SET status = ? WHERE id = ?", ProjectAuthStatus.SUSPENDED.code(), PROJECT_ID);
+            assertStandardQueryRejectedWithoutNonce(CURRENT_KEY_VERSION, "disabled-capability");
+        } finally {
+            jdbc.update("UPDATE sc_buyer_project SET status = ? WHERE id = ?", ProjectAuthStatus.ENABLED.code(), PROJECT_ID);
+            jdbc.update("DELETE FROM sc_project_capability WHERE id = ?", STANDARD_CAPABILITY_ID);
+        }
+    }
+
+    @Test
+    void suspendedStandardQueryCannotBypassDisabledApp() {
+        jdbc.update("UPDATE sc_buyer_project SET status = ? WHERE id = ?", ProjectAuthStatus.SUSPENDED.code(), PROJECT_ID);
+        try {
+            jdbc.update("UPDATE sc_project_application SET status = ? WHERE id = ?", ProjectAuthStatus.SUSPENDED.code(), APPLICATION_ID);
+            assertStandardQueryRejectedWithoutNonce(CURRENT_KEY_VERSION, "disabled-application");
+        } finally {
+            jdbc.update("UPDATE sc_project_application SET status = ? WHERE id = ?", ProjectAuthStatus.ENABLED.code(), APPLICATION_ID);
+            jdbc.update("UPDATE sc_buyer_project SET status = ? WHERE id = ?", ProjectAuthStatus.ENABLED.code(), PROJECT_ID);
+        }
+    }
+
+    @Test
+    void suspendedStandardQueryCannotBypassRevokedOrExpiredCredential() {
+        jdbc.update("UPDATE sc_buyer_project SET status = ? WHERE id = ?", ProjectAuthStatus.SUSPENDED.code(), PROJECT_ID);
+        try {
+            assertStandardQueryRejectedWithoutNonce(REVOKED_KEY_VERSION, "revoked-standard-query");
+            jdbc.update("UPDATE sc_project_app_credential_version SET valid_to = UTC_TIMESTAMP(3) WHERE id = ?",
+                    CURRENT_CREDENTIAL_ID);
+            assertStandardQueryRejectedWithoutNonce(CURRENT_KEY_VERSION, "expired-standard-query");
+        } finally {
+            jdbc.update("UPDATE sc_project_app_credential_version SET valid_to = NULL WHERE id = ?", CURRENT_CREDENTIAL_ID);
+            jdbc.update("UPDATE sc_buyer_project SET status = ? WHERE id = ?", ProjectAuthStatus.ENABLED.code(), PROJECT_ID);
+        }
+    }
+
+    private static void assertStandardQueryRejectedWithoutNonce(int keyVersion, String label) {
+        String nonce = unique("nonce-standard-" + label);
+        CommonResult<?> result = postSigned(ProjectAuthOperations.STANDARD_ORDERS_PATH + "/query",
+                "{}".getBytes(StandardCharsets.UTF_8), projectCredentials(keyVersion), System.currentTimeMillis(), nonce);
+        assertThat(result.getCode()).isEqualTo(BUYER_AUTH_INVALID.getCode());
+        assertNonceRows(nonce, 0L);
+    }
+
+    private static Stream<ProjectAuthOperations.Operation> standardOperations() {
+        return ProjectAuthOperations.OPERATIONS.stream()
+                .filter(op -> ProjectAuthOperations.CAPABILITY_STANDARD_PRODUCT.equals(op.requiredCapability()));
     }
 
     private static Stream<ProjectAuthOperations.Operation> registeredOperations() {

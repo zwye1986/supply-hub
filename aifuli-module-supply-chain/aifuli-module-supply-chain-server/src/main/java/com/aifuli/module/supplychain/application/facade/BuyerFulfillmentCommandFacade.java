@@ -8,10 +8,12 @@ import com.aifuli.module.supplychain.api.fulfillment.dto.FulfillmentReceiptStatu
 import com.aifuli.module.supplychain.api.fulfillment.dto.FulfillmentTargetDTO;
 import com.aifuli.module.supplychain.api.order.dto.SupplyChainOrderStatus;
 import com.aifuli.module.supplychain.border.fulfillment.application.FulfillmentAcceptanceLifecycle;
+import com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyAcceptanceCoordinator;
 import com.aifuli.module.supplychain.border.fulfillment.application.FulfillmentAcceptanceLifecycle.TargetSchemaSnapshot;
 import com.aifuli.module.supplychain.border.fulfillment.application.FulfillmentTargetSchemaRegistry;
 import com.aifuli.module.supplychain.border.fulfillment.domain.AcceptanceReceiptStatus;
 import com.aifuli.module.supplychain.border.fulfillment.domain.FulfillmentTargetFields;
+import com.aifuli.module.supplychain.border.fulfillment.domain.StandardAcceptanceFingerprintPolicy;
 import com.aifuli.module.supplychain.infrastructure.identity.BusinessNoGenerator;
 import com.aifuli.module.supplychain.infrastructure.identity.BusinessNoPrefixes;
 import com.aifuli.module.supplychain.infrastructure.security.EnvelopeCryptoPort;
@@ -23,7 +25,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.stereotype.Service;
 
 import java.nio.charset.StandardCharsets;
@@ -31,6 +33,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.ZoneOffset;
 import java.time.LocalDateTime;
+import java.util.HexFormat;
 import java.util.Map;
 import java.util.Objects;
 import java.util.TreeMap;
@@ -41,8 +44,10 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
 /**
  * RPC/HTTP 共用的标准履约受理门面；加密和 Schema 校验不占用数据库事务。
  *
- * <p>buyerUserId 与履约目标手机号按契约不得写入日志。详见
- * {@code docs/superpowers/specs/2026-08-07-supply-chain-phase1-detailed-design.md#7.2-标准履约受理}。</p>
+ * <p>请求已无购买人身份、支付时间、调用方商品版本与报价 token：指纹按格式 2 无用户规范化
+ * 请求计算（见 {@link StandardAcceptanceFingerprintPolicy}），手机号身份只经
+ * target.accountType=MOBILE 的实际值表达。履约目标手机号按契约不得写入日志。详见
+ * {@code docs/superpowers/specs/2026-10-02-standard-acceptance-project-key-design.md#2-首次身份与重放优先}。</p>
  */
 @Slf4j
 @Service
@@ -57,57 +62,94 @@ public class BuyerFulfillmentCommandFacade {
     private final EnvelopeCryptoPort envelopeCrypto;
     private final HmacFingerprintPort hmacFingerprint;
     private final FulfillmentAcceptanceLifecycle lifecycle;
+    private final RechargeFrequencyAcceptanceCoordinator acceptanceCoordinator;
     private final BusinessNoGenerator businessNoGenerator;
     private final ObjectMapper objectMapper;
 
     /**
      * 标准履约受理入口：按平台 SKU 派生并校验目标 Schema 与指纹后进入 Lifecycle 抢占/受理。
      *
-     * <p>加密与 Schema 校验在数据库事务外完成。幂等冲突返回已有回执；可重试拒绝由 Lifecycle 收敛。
-     * 详见 {@code docs/superpowers/specs/2026-08-07-supply-chain-phase1-detailed-design.md#7.2-标准履约受理}。</p>
+     * <p>加密与 Schema 校验在数据库事务外完成。claim 按项目永久键 (projectId, buyerOrderNo) 收敛：
+     * 并发首创落败方在 Lifecycle 内按项目键重探测并比较指纹——同参数回放/续跑，异参抛幂等冲突，
+     * Facade 不捕获任意键冲突盲回放。响应 requestId 一律返回实际回执号
+     * （AcceptanceSnapshot.receiptNo），首次与重放一致，不再以每次新生成的 REQ 业务号冒充稳定回执号
+     * （该号仅作为 traceId 供链路审计）。
+     * 详见 {@code docs/superpowers/specs/2026-10-02-standard-acceptance-project-key-design.md#3-回执竞争、重试和真实返回}。</p>
      */
     public FulfillmentAcceptanceReceiptRespDTO acceptFulfillment(AcceptFulfillmentReqDTO request) {
         log.info("[履约][facade] acceptFulfillment 入口 sourceSystem={}, externalTenantId={}, projectCode={}, buyerOrderNo={}, buyerSkuCode={}, quantity={}",
                 request.getSourceSystem(), request.getExternalTenantId(), request.getProjectCode(),
                 request.getBuyerOrderNo(), request.getBuyerSkuCode(), request.getQuantity());
-        String normalizedBuyerUserId = requireBasicRequest(request);
+        requireBasicRequest(request);
         LocalDateTime now = databaseClock.now();
         BuyerResolver.BuyerSnapshot buyer = buyerResolver.resolve(
                 request.getSourceSystem(), request.getExternalTenantId(), now);
         ProjectSnapshot project = projectAccessResolver.requireActiveByCode(request.getProjectCode(), buyer.id());
         TargetSchemaSnapshot targetSchema = lifecycle.resolveTargetSchema(buyer.id(), request.getBuyerSkuCode());
-        String requestId = businessNoGenerator.next(BusinessNoPrefixes.REQ);
+        // 仅作链路追踪与审计 traceId（outbox/资金/状态日志沿用）；对外稳定回执号见回执快照 receiptNo。
+        String traceId = businessNoGenerator.next(BusinessNoPrefixes.REQ);
         FulfillmentAcceptanceLifecycle.PreparedAcceptance prepared = prepare(
-                request, normalizedBuyerUserId, buyer, project, targetSchema, requestId);
+                request, buyer, project, targetSchema, traceId);
         FulfillmentAcceptanceLifecycle.ClaimResult claim;
         try {
-            claim = lifecycle.claim(prepared);
-        } catch (DataIntegrityViolationException duplicate) {
-            log.info("[履约][facade] 并发首创冲突，回放业务键 buyerId={}, buyerOrderNo={}",
-                    buyer.id(), request.getBuyerOrderNo());
-            return toResponse(requestId, lifecycle.replayByBusinessKey(buyer.id(), request.getBuyerOrderNo()));
+            claim = claimWithProjectKeyRaceRetry(prepared);
         } catch (FulfillmentAcceptanceLifecycle.IdempotencyConflictException conflict) {
-            log.warn("[履约][facade] 幂等冲突 buyerOrderNo={}", request.getBuyerOrderNo());
+            log.warn("[履约][facade] 幂等冲突 projectId={}, buyerOrderNo={}",
+                    project.projectId(), request.getBuyerOrderNo());
             throw exception(IDEMPOTENCY_CONFLICT);
         }
         if (!claim.executeAcceptance()) {
             log.info("[履约][facade] 抢占后回放 receiptId={}", claim.receiptId());
-            return toResponse(requestId, lifecycle.replay(claim.receiptId()));
+            return toResponse(lifecycle.replay(claim.receiptId()));
         }
         try {
-            FulfillmentAcceptanceReceiptRespDTO response = toResponse(requestId, lifecycle.accept(claim.receiptId(), prepared));
-            log.info("[履约][facade] acceptFulfillment 完成 requestId={}, businessNo={}, receiptStatus={}, orderNo={}",
-                    requestId, response.getBusinessNo(), response.getReceiptStatus(), response.getOrderNo());
+            FulfillmentAcceptanceReceiptRespDTO response = toResponse(acceptanceCoordinator.accept(claim.receiptId(), prepared));
+            log.info("[履约][facade] acceptFulfillment 完成 receiptNo={}, businessNo={}, receiptStatus={}, orderNo={}",
+                    response.getRequestId(), response.getBusinessNo(), response.getReceiptStatus(), response.getOrderNo());
             return response;
         } catch (FulfillmentAcceptanceLifecycle.BusinessRejection rejection) {
             log.warn("[履约][facade] 业务拒绝 receiptId={}, code={}",
                     rejection.receiptId(), rejection.rejectionCode());
-            return toResponse(requestId, lifecycle.reject(rejection));
+            return toResponse(lifecycle.reject(rejection));
         }
     }
 
+    /**
+     * 项目键并发首创竞争的收敛入口，两条路径均不捕获任意键冲突盲回放：
+     * <ul>
+     *   <li>{@link ProjectKeyClaimRaceException}：claim 的项目永久键唯一冲突已结束旧事务（释放
+     *       insert 在其他唯一索引上残留的意向/gap 锁，避免与获胜方 accept 收敛互锁），此处以
+     *       新事务按项目键重探测获胜回执并比较指纹——同参回放/续跑，异参幂等冲突。</li>
+     *   <li>{@link CannotAcquireLockException}：并发首创双方在唯一索引上互等（死锁/锁超时），
+     *       受害方整个 claim 事务已回滚，以新事务重试一次 claim 即收敛（重试中若获 duplicate
+     *       仍走上一条路径），不构成递归循环。</li>
+     * </ul>
+     * 设计见 docs/superpowers/specs/2026-10-02-standard-acceptance-project-key-design.md#3-回执竞争、重试和真实返回。
+     */
+    private FulfillmentAcceptanceLifecycle.ClaimResult claimWithProjectKeyRaceRetry(
+            FulfillmentAcceptanceLifecycle.PreparedAcceptance prepared) {
+        try {
+            return lifecycle.claim(prepared);
+        } catch (FulfillmentAcceptanceLifecycle.ProjectKeyClaimRaceException projectKeyRace) {
+            log.info("[履约][facade] 项目键并发首创冲突，新事务按项目键重探测 buyerOrderNo={}, traceId={}",
+                    prepared.buyerOrderNo(), prepared.traceId(), projectKeyRace.getCause());
+            return lifecycle.claimAfterProjectKeyRace(prepared);
+        } catch (CannotAcquireLockException lockRace) {
+            log.info("[履约][facade] 并发首创锁竞争（死锁/锁超时），按项目键新事务重试 buyerOrderNo={}, traceId={}",
+                    prepared.buyerOrderNo(), prepared.traceId(), lockRace);
+            return lifecycle.claim(prepared);
+        }
+    }
+
+    /**
+     * 目标规范化、封闭校验、加密与格式 2 指纹准备（全部在数据库事务外完成）。
+     *
+     * <p>invariant/request 指纹与 buyerOrderDigest 均按无用户格式 2 计算：服务端尝试版本类
+     * 信息不再混入 fingerprint（052 增量将以独立列承载）；手机号身份只出现在 MOBILE 目标的
+     * 规范化值与其摘要中，不在规范化请求里保留任何购买人身份副本。</p>
+     */
     private FulfillmentAcceptanceLifecycle.PreparedAcceptance prepare(
-            AcceptFulfillmentReqDTO request, String normalizedBuyerUserId, BuyerResolver.BuyerSnapshot buyer,
+            AcceptFulfillmentReqDTO request, BuyerResolver.BuyerSnapshot buyer,
             ProjectSnapshot project, TargetSchemaSnapshot targetSchema, String traceId) {
         FulfillmentTargetDTO target = request.getTarget();
         Map<String, String> normalizedTargetValues = new TreeMap<>(target.getValues());
@@ -137,20 +179,27 @@ public class BuyerFulfillmentCommandFacade {
                     targetSchema.schemaCode(), targetSchema.schemaVersion()));
         }
 
-        byte[] invariant = sha256(canonicalRequest(
-                request, normalizedBuyerUserId, targetSchema, targetDigest, false));
-        byte[] fingerprint = sha256(canonicalRequest(
-                request, normalizedBuyerUserId, targetSchema, targetDigest, true));
-        byte[] buyerOrderDigest = sha256((request.getBuyerOrderNo() + '|'
-                + normalizedBuyerUserId).getBytes(StandardCharsets.UTF_8));
+        // 格式 2 无用户指纹：不变量与请求指纹同一规范化输入；服务端冻结商品身份仅在可解析时参与。
+        StandardAcceptanceFingerprintPolicy.RequestIdentity identity =
+                new StandardAcceptanceFingerprintPolicy.RequestIdentity(
+                        buyer.id(), project.projectCode(), request.getBuyerOrderNo(),
+                        request.getBuyerSkuCode(),
+                        targetSchema.available() ? targetSchema.platformSkuId() : null,
+                        request.getQuantity(),
+                        targetSchema.schemaCode(), targetSchema.schemaVersion(),
+                        HexFormat.of().formatHex(targetDigest));
+        byte[] canonical = StandardAcceptanceFingerprintPolicy.canonicalRequest(identity);
+        byte[] invariant = sha256(canonical);
+        byte[] fingerprint = sha256(canonical);
+        byte[] buyerOrderDigest = sha256(StandardAcceptanceFingerprintPolicy
+                .canonicalBuyerOrderDigestInput(project.projectCode(), request.getBuyerOrderNo()));
         String fulfillmentAccountValue = FulfillmentTargetFields.mobileAccountValue(normalizedTargetValues);
         return new FulfillmentAcceptanceLifecycle.PreparedAcceptance(
                 project.projectId(), project.projectCode(), project.projectName(),
                 buyer.id(), buyer.buyerCode(), buyer.buyerName(), request.getBuyerOrderNo(),
-                normalizedBuyerUserId, fulfillmentAccountValue, request.getBuyerSkuCode(),
-                Math.toIntExact(request.getListingVersion()), request.getQuantity(),
-                request.getPricingQuoteToken(),
-                request.getPaidAt().atZoneSameInstant(java.time.ZoneId.of("Asia/Shanghai")).toLocalDateTime(),
+                fulfillmentAccountValue,
+                normalizedTargetValues.get(FulfillmentTargetFields.ACCOUNT_TYPE), request.getBuyerSkuCode(),
+                request.getQuantity(),
                 targetSchema.schemaCode(), targetSchema.schemaVersion(),
                 encrypted == null ? null : encrypted.ciphertext(), targetDigest,
                 encrypted == null ? null : encrypted.keyVersion(), targetValid,
@@ -169,68 +218,42 @@ public class BuyerFulfillmentCommandFacade {
         }
     }
 
-    private byte[] canonicalRequest(AcceptFulfillmentReqDTO request, String normalizedBuyerUserId,
-                                    TargetSchemaSnapshot targetSchema,
-                                    byte[] targetDigest, boolean includeListingVersion) {
-        Map<String, Object> canonical = new TreeMap<>();
-        canonical.put("buyerOrderNo", request.getBuyerOrderNo());
-        canonical.put("projectCode", request.getProjectCode());
-        canonical.put("buyerUserId", normalizedBuyerUserId);
-        canonical.put("buyerSkuCode", request.getBuyerSkuCode());
-        canonical.put("quantity", request.getQuantity());
-        canonical.put("pricingQuoteToken", request.getPricingQuoteToken());
-        canonical.put("targetSchemaCode", targetSchema.schemaCode());
-        canonical.put("targetSchemaVersion", targetSchema.schemaVersion());
-        canonical.put("targetDigest", java.util.HexFormat.of().formatHex(targetDigest));
-        canonical.put("paidAt", request.getPaidAt().toInstant().toString());
-        if (includeListingVersion) {
-            canonical.put("listingVersion", request.getListingVersion());
-        }
-        try {
-            return objectMapper.writeValueAsBytes(canonical);
-        } catch (JsonProcessingException exception) {
-            throw new IllegalArgumentException("Fulfillment request cannot be canonicalized", exception);
-        }
-    }
-
+    /** 目标加密 AAD 保持既有引用链 buyerId|buyerOrderNo|schemaCode|schemaVersion，旧密文解密不受影响。 */
     private static byte[] associatedData(Long buyerId, String buyerOrderNo,
                                          String schemaCode, int schemaVersion) {
         return (buyerId + "|" + buyerOrderNo + "|" + schemaCode + "|" + schemaVersion)
                 .getBytes(StandardCharsets.UTF_8);
     }
 
-    private static String requireBasicRequest(AcceptFulfillmentReqDTO request) {
+    /** 基础完整性校验：不再要求购买人身份、调用方商品版本、报价 token 与支付时间。 */
+    private static void requireBasicRequest(AcceptFulfillmentReqDTO request) {
         Objects.requireNonNull(request, "Fulfillment request is required");
         Objects.requireNonNull(request.getTarget(), "Fulfillment target is required");
         Objects.requireNonNull(request.getTarget().getValues(), "Fulfillment target values are required");
-        Objects.requireNonNull(request.getListingVersion(), "Listing version is required");
         Objects.requireNonNull(request.getQuantity(), "Quantity is required");
-        Objects.requireNonNull(request.getPaidAt(), "Paid time is required");
         if (blank(request.getSourceSystem()) || blank(request.getExternalTenantId())
-                || blank(request.getBuyerOrderNo()) || blank(request.getBuyerUserId())
+                || blank(request.getBuyerOrderNo())
                 || blank(request.getBuyerSkuCode()) || blank(request.getProjectCode())
-                || blank(request.getPricingQuoteToken())
-                || request.getListingVersion() <= 0 || request.getListingVersion() > Integer.MAX_VALUE
                 || request.getQuantity() <= 0) {
             throw new IllegalArgumentException("Fulfillment request is incomplete");
         }
-        String normalizedBuyerUserId = FulfillmentTargetFields.normalizeMobile(request.getBuyerUserId());
-        if (normalizedBuyerUserId == null) {
-            throw new IllegalArgumentException("采购商用户标识必须是有效的中国大陆手机号");
-        }
-        return normalizedBuyerUserId;
     }
 
+    /**
+     * 回执响应组装：requestId=实际回执号 receiptNo（首次、重放、拒绝收敛路径一致）；
+     * orderStatus=订单表当前真实状态，未建单显式 null，不再恒写 PROCESSING。
+     */
     private FulfillmentAcceptanceReceiptRespDTO toResponse(
-            String requestId, FulfillmentAcceptanceLifecycle.AcceptanceSnapshot snapshot) {
+            FulfillmentAcceptanceLifecycle.AcceptanceSnapshot snapshot) {
         FulfillmentAcceptanceReceiptRespDTO response = new FulfillmentAcceptanceReceiptRespDTO();
-        response.setRequestId(requestId);
+        response.setRequestId(snapshot.receiptNo());
         response.setBusinessNo(snapshot.buyerOrderNo());
         response.setReceiptStatus(FulfillmentReceiptStatus.valueOf(
                 AcceptanceReceiptStatus.fromCode(snapshot.status()).name()));
         response.setReceiptVersion(snapshot.receiptVersion());
         response.setOrderNo(snapshot.orderNo());
-        response.setOrderStatus(snapshot.orderNo() == null ? null : SupplyChainOrderStatus.PROCESSING);
+        response.setOrderStatus(snapshot.orderStatus() == null
+                ? null : SupplyChainOrderStatus.fromCode(snapshot.orderStatus()));
         response.setFulfillmentRequestNo(snapshot.fulfillmentRequestNo());
         response.setRejectionCode(snapshot.rejectionCode());
         response.setSupplierCode(snapshot.supplierCode());

@@ -54,7 +54,7 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapp
 import com.aifuli.module.supplychain.tradecore.catalog.domain.BuyerListingStatus;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.ListingAvailability;
 import com.aifuli.module.supplychain.tradecore.catalog.application.ProductSellabilityService;
-import com.aifuli.module.supplychain.tradecore.catalog.pricing.QuoteConsumptionContext;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.ProjectQuoteKeyContext;
 import com.aifuli.module.supplychain.tradecore.catalog.pricing.StandardPricingQuoteService;
 import com.aifuli.module.supplychain.tradecore.catalog.pricing.StandardPricingQuoteService.FrozenQuote;
 import com.aifuli.framework.common.exception.ServiceException;
@@ -98,6 +98,18 @@ public class FulfillmentAcceptanceLifecycle {
 
     private static final String TRANSACTION_MANAGER = "supplyChainTransactionManager";
 
+    /**
+     * 受理请求指纹格式版本2：无用户规范化格式（历史含用户身份的格式0回执不可用于重放比较）。
+     * 与 052 变更集 fingerprint_version 列 CHECK 语义一致。
+     */
+    private static final short FINGERPRINT_FORMAT_NO_USER = 2;
+
+    /**
+     * 启用「每人每周期限购」但本单无可用手机号（卡券/非手机号账号）时写入订单的内部备注，
+     * 不向项目接口返回。文案见设计 §4。
+     */
+    private static final String PURCHASE_LIMIT_SKIP_REMARK = "该商品无可用手机号，本单未执行每人每周期限购";
+
     private final FulfillmentAcceptanceReceiptMapper receiptMapper;
     private final SupplyChainOrderMapper orderMapper;
     private final OrderStatusLogMapper statusLogMapper;
@@ -115,6 +127,7 @@ public class FulfillmentAcceptanceLifecycle {
     private final StandardPricingQuoteService pricingQuoteService;
     private final SupplierRoutingApplicationService routingService;
     private final FundReservationService fundReservationService;
+    private final RechargeFrequencyLifecycle rechargeFrequencyLifecycle;
     private final OutboxEventRepository outboxRepository;
     private final BusinessNoGenerator businessNoGenerator;
     private final ObjectMapper objectMapper;
@@ -140,14 +153,21 @@ public class FulfillmentAcceptanceLifecycle {
         if (sku == null || sku.getTargetSchemaCode() == null || sku.getTargetSchemaVersion() == null) {
             return TargetSchemaSnapshot.unavailable();
         }
-        return new TargetSchemaSnapshot(sku.getTargetSchemaCode(), sku.getTargetSchemaVersion(), true);
+        // platformSkuId 是服务端解析的商品身份，供格式 2 指纹的「服务端冻结商品身份（可解析时）」成分。
+        return new TargetSchemaSnapshot(listing.getPlatformSkuId(),
+                sku.getTargetSchemaCode(), sku.getTargetSchemaVersion(), true);
     }
 
     /**
-     * 抢占受理回执：按 (buyerId, buyerOrderNo) 幂等创建 PROCESSING 回执或回放已有终态。
+     * 抢占受理回执：按项目永久键 (projectId, buyerOrderNo) 幂等创建 PROCESSING 回执或回放已有终态。
      *
-     * <p>首次创建不加行锁，靠唯一索引裁决并发；指纹一致且仍 PROCESSING 时允许本次重试继续 accept。
-     * 详见 {@code docs/superpowers/plans/2026-08-11-supply-chain-m1-qnm-vertical-slice.md#task-9}。</p>
+     * <p>首次创建不加行锁，靠项目键唯一索引裁决并发；并发首创落败方按项目键当前读重探测获胜回执并
+     * 比较指纹——同参数沿用既有回执语义，异参幂等冲突，不捕获任意键冲突后盲回放。格式 2 无用户指纹
+     * 一致且仍 PROCESSING 时允许本次重试继续 accept。可重试拒绝携带当前 positive
+     * previousReceiptVersion 才 CAS 重开，不要求调用方更换 Listing 版本；回执 listing_version_no
+     * 由服务端解析当前发布版本写入。详见
+     * {@code docs/superpowers/specs/2026-10-02-standard-acceptance-project-key-design.md#3-回执竞争、重试和真实返回}、
+     * {@code docs/superpowers/plans/2026-08-11-supply-chain-m1-qnm-vertical-slice.md#task-9}。</p>
      */
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public ClaimResult claim(PreparedAcceptance command) {
@@ -156,32 +176,74 @@ public class FulfillmentAcceptanceLifecycle {
                 command.quantity(), command.traceId());
         // 首次探测不加锁：REPEATABLE READ 下对不存在唯一键 FOR UPDATE
         // 会让并发首请求同时持有间隙锁，再插入时形成死锁。唯一索引才是创建竞争裁决者。
-        FulfillmentAcceptanceReceiptDO existing = receiptMapper.selectByBusinessKey(
-                command.buyerId(), command.buyerOrderNo());
+        FulfillmentAcceptanceReceiptDO existing = receiptMapper.selectByProjectKey(
+                command.projectId(), command.buyerOrderNo());
+        BuyerListingDO gateListing = null;
+        if (existing == null || existing.getStatus() != AcceptanceReceiptStatus.ACCEPTED.getCode()
+                || !Arrays.equals(existing.getRequestFingerprint(), command.requestFingerprint())) {
+            // 已接受同指纹请求只回放；其余MOBILE写路径先核验门禁，暂时关闭不固化为业务终拒。
+            // 设计见 docs/superpowers/specs/2026-09-30-direct-recharge-mobile-spu-frequency-design.md#101-迁移执行与核实边界。
+            gateListing = listingMapper.selectByBuyerAndSkuCode(command.buyerId(), command.buyerSkuCode());
+            if (gateListing != null) {
+                rechargeFrequencyLifecycle.requireAcceptanceReady(gateListing.getPlatformSkuId(), command.targetAccountType());
+            }
+        }
         if (existing == null) {
             LocalDateTime now = now();
             FulfillmentAcceptanceReceiptDO receipt = FulfillmentAcceptanceReceiptDO.builder()
                     .receiptNo(businessNoGenerator.next(BusinessNoPrefixes.RCP))
                     .buyerId(command.buyerId()).projectId(command.projectId()).buyerOrderNo(command.buyerOrderNo())
-                    .buyerUserId(command.buyerUserId()).buyerSkuCode(command.buyerSkuCode())
+                    .buyerSkuCode(command.buyerSkuCode())
+                    // 受理时冻结的平台SKU/目标Schema版本：仅服务端可解析的真实值，无解析值时不补假数据。
+                    .platformSkuId(gateListing == null ? null : gateListing.getPlatformSkuId())
                     .quantity(command.quantity()).targetSchemaCode(command.targetSchemaCode())
+                    .targetSchemaVersion(command.targetSchemaVersion())
                     .targetDigest(command.targetDigest()).invariantFingerprint(command.invariantFingerprint())
                     .requestFingerprint(command.requestFingerprint())
-                    .listingVersionNo(command.listingVersionNo()).attemptNo(1)
+                    .fingerprintVersion(FINGERPRINT_FORMAT_NO_USER)
+                    .listingVersionNo(resolveAttemptListingVersionNo(command, gateListing)).attemptNo(1)
                     .status(AcceptanceReceiptStatus.PROCESSING.getCode())
                     .createdAt(now).updatedAt(now).version(0L).build();
             try {
                 receiptMapper.insert(receipt);
-            } catch (DuplicateKeyException exception) {
-                throw exception;
+            } catch (DuplicateKeyException duplicate) {
+                // 项目键唯一索引裁决并发首创竞争。此处必须结束本事务后由 Facade 以新事务重探测：
+                // insert 失败的语句在多个唯一索引（含 result_order 唯一索引的 supremum gap）残留的
+                // 意向/gap 锁若随本事务继续持有，会与获胜方 accept 收敛（markAccepted 更新
+                // result_order 唯一索引）形成死锁环。专用异常仅承载项目键唯一冲突，Facade 不得
+                // 捕获任意键冲突盲回放。
+                // 设计见 docs/superpowers/specs/2026-10-02-standard-acceptance-project-key-design.md#3-回执竞争、重试和真实返回。
+                throw new ProjectKeyClaimRaceException(duplicate);
             }
             log.info("[履约][lifecycle] claim 新建回执 receiptId={}, receiptNo={}", receipt.getId(), receipt.getReceiptNo());
             return new ClaimResult(receipt.getId(), true, false);
         }
-        existing = receiptMapper.selectByBusinessKeyForUpdate(command.buyerId(), command.buyerOrderNo());
+        existing = receiptMapper.selectByProjectKeyForUpdate(command.projectId(), command.buyerOrderNo());
         if (existing == null) {
             throw new IllegalStateException("Acceptance receipt disappeared during row-lock acquisition");
         }
+        return claimExisting(existing, command);
+    }
+
+    /**
+     * 并发首创落败方的新事务重探测（由 Facade 在 claim 以 {@link ProjectKeyClaimRaceException}
+     * 结束旧事务后调用）：项目键当前读锁定获胜回执并按既有语义收敛——同参数回放/续跑/CAS 重开，
+     * 异参幂等冲突。重探测无行说明冲突不来自项目键（其他唯一键/系统故障），保留原异常传播，不盲回放。
+     */
+    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
+    public ClaimResult claimAfterProjectKeyRace(PreparedAcceptance command) {
+        log.info("[履约][lifecycle] 并发首创冲突按项目键重探测 projectId={}, buyerOrderNo={}, traceId={}",
+                command.projectId(), command.buyerOrderNo(), command.traceId());
+        FulfillmentAcceptanceReceiptDO winner = receiptMapper.selectByProjectKeyForUpdate(
+                command.projectId(), command.buyerOrderNo());
+        if (winner == null) {
+            throw new IllegalStateException("Project key race winner disappeared during re-probe");
+        }
+        return claimExisting(winner, command);
+    }
+
+    /** 已有回执的竞争收敛：指纹一致按状态回放/续跑/CAS 重开；身份不同一律幂等冲突（旧格式失败关闭）。 */
+    private ClaimResult claimExisting(FulfillmentAcceptanceReceiptDO existing, PreparedAcceptance command) {
         if (Arrays.equals(existing.getRequestFingerprint(), command.requestFingerprint())) {
             // 同一请求重试：回执仍处于 PROCESSING 说明上一次 accept 未提交，
             // 由本次重试重新执行 accept（幂等，行锁串行化）；已终态则直接回放快照。
@@ -192,18 +254,18 @@ public class FulfillmentAcceptanceLifecycle {
                 reopenRetryable(existing, command);
                 return new ClaimResult(existing.getId(), true, false);
             }
+            // 可重试拒绝携带当前 positive previousReceiptVersion 才 CAS 重开，不要求调用方更换 Listing 版本。
+            // 设计见 docs/superpowers/specs/2026-10-02-standard-acceptance-project-key-design.md#3-回执竞争、重试和真实返回。
+            if (existing.getStatus() == AcceptanceReceiptStatus.REJECTED_RETRYABLE.getCode()
+                    && command.previousReceiptVersion() != null
+                    && Objects.equals(command.previousReceiptVersion(), existing.getVersion())) {
+                reopenRetryable(existing, command);
+                return new ClaimResult(existing.getId(), true, false);
+            }
             return new ClaimResult(existing.getId(), false, true);
         }
-        if (!Arrays.equals(existing.getInvariantFingerprint(), command.invariantFingerprint())) {
-            throw new IdempotencyConflictException();
-        }
-        if (existing.getStatus() == AcceptanceReceiptStatus.REJECTED_RETRYABLE.getCode()
-                && command.previousReceiptVersion() != null
-                && Objects.equals(command.previousReceiptVersion(), existing.getVersion())
-                && command.listingVersionNo() != existing.getListingVersionNo()) {
-            reopenRetryable(existing, command);
-            return new ClaimResult(existing.getId(), true, false);
-        }
+        // 格式 2 下 invariant 与 request 指纹同源：身份不同的请求一律幂等冲突，
+        // 旧格式历史回执（含用户/版本 hash）同样失败关闭，不得按新格式比较或重新建单。
         throw new IdempotencyConflictException();
     }
 
@@ -240,11 +302,17 @@ public class FulfillmentAcceptanceLifecycle {
         LocalDateTime now = now();
         LockedListing locked = lockListingAndSku(command);
         ListingSnapshot listing = requireSaleableListing(command, now, locked);
-        FrozenQuote frozenQuote = pricingQuoteService.requireForFulfillment(new QuoteConsumptionContext(
-                command.pricingQuoteToken(), command.buyerId(), command.projectId(), listing.sku().getId(),
-                command.buyerOrderNo(), command.buyerUserId(), command.quantity(), command.paidAt()));
+        // 报价消费按项目永久键锁定首次冻结报价，不携带用户、支付时间、报价 token 或调用方商品版本；
+        // quoteId/listingId 等真实冻结值经 FrozenQuote 进入本事务持久化（回执级新列见 052 增量）。
+        // 设计见 docs/superpowers/specs/2026-10-02-standard-internal-quote-freeze-design.md#3-受理内查取与唯一消费。
+        FrozenQuote frozenQuote = pricingQuoteService.requireForProject(new ProjectQuoteKeyContext(
+                command.buyerId(), command.projectId(), listing.sku().getId(),
+                command.buyerOrderNo(), command.quantity()));
+        // 「每人」限购以实际履约目标为输入（已验证的targetAccountType+规范化MOBILE手机号），
+        // 不再接收购买人身份；卡券/非手机号跳过该维度，由订单内部备注经独立判定记录一次。
+        // 设计见 docs/superpowers/specs/2026-10-02-standard-acceptance-project-key-design.md#4-手机号限购与内部备注。
         SkuPurchaseLimitService.Violation limitViolation = purchaseLimitService.validateLockedSku(
-                command.projectId(), command.buyerUserId(), command.fulfillmentAccountValue(),
+                command.projectId(), command.targetAccountType(), command.fulfillmentAccountValue(),
                 listing.sku(), command.quantity(), now);
         if (limitViolation == SkuPurchaseLimitService.Violation.ORDER_LIMIT_EXCEEDED) {
             throw rejection(receiptId, listing.version().getId(), AcceptanceReceiptStatus.REJECTED_FINAL,
@@ -262,6 +330,11 @@ public class FulfillmentAcceptanceLifecycle {
             throw rejection(receiptId, listing.version().getId(), AcceptanceReceiptStatus.REJECTED_RETRYABLE,
                     AcceptanceRejectionCode.PHONE_BIND_PURCHASE_LIMIT_EXCEEDED);
         }
+        // 启用每人限购但本单无可用手机号：仅记录中台内部备注，不向项目响应说明；订单仅创建一次，
+        // 天然满足「同事务、重放/重试不重复追加」。
+        String orderRemark = purchaseLimitService.isPersonalLimitSkipped(
+                listing.sku(), command.targetAccountType(), command.fulfillmentAccountValue())
+                ? PURCHASE_LIMIT_SKIP_REMARK : null;
         SupplierRoutingApplicationService.RoutingSnapshot routing = route(command, listing.sku(), now);
         if (!routing.decision().selected()) {
             throw rejection(receiptId, listing.version().getId(), AcceptanceReceiptStatus.REJECTED_RETRYABLE,
@@ -281,8 +354,10 @@ public class FulfillmentAcceptanceLifecycle {
                 .buyerId(command.buyerId()).projectId(command.projectId())
                 .pricingQuoteId(frozenQuote.quoteId()).pricingVersionId(frozenQuote.pricingVersionId())
                 .buyerCodeSnapshot(command.buyerCode())
-                .buyerNameSnapshot(command.buyerName()).buyerUserId(command.buyerUserId())
+                // CARD标准商品订单无购买人身份（052 CHECK约束固定为空）；真实履约目标账户类型独立冻结。
+                .buyerNameSnapshot(command.buyerName())
                 .fulfillmentAccountValue(command.fulfillmentAccountValue())
+                .fulfillmentAccountType(command.targetAccountType()).remark(orderRemark)
                 .buyerOrderNo(command.buyerOrderNo()).acceptanceReceiptId(receiptId)
                 .projectCodeSnapshot(command.projectCode())
                 .projectNameSnapshot(command.projectName())
@@ -336,6 +411,11 @@ public class FulfillmentAcceptanceLifecycle {
         operationMapper.insert(operation);
         inject(AcceptanceFailureInjector.Stage.B_ORDER_CREATED);
 
+        rechargeFrequencyLifecycle.enqueue(new RechargeFrequencyLifecycle.EnqueueCommand(
+                order.getId(), order.getOrderNo(), fulfillmentRequest.getId(), operation.getOperationNo(),
+                command.buyerId(), command.projectId(), listing.sku().getId(),
+                command.targetAccountType(), command.fulfillmentAccountValue()));
+
         FundReservationService.ReservationSnapshot reservation;
         try {
             reservation = fundReservationService.freeze(new FundReservationService.FreezeCommand(
@@ -356,8 +436,8 @@ public class FulfillmentAcceptanceLifecycle {
         appendAcceptanceEvents(command, order, fulfillmentRequest, bOrder, operation, reservation, now);
         inject(AcceptanceFailureInjector.Stage.OUTBOX_APPENDED);
 
-        if (receiptMapper.markAccepted(receiptId, listing.version().getId(), order.getId(),
-                order.getOrderNo(), fulfillmentRequest.getRequestNo(), now) != 1) {
+        if (receiptMapper.markAccepted(receiptId, listing.version().getId(), frozenQuote.quoteId(),
+                order.getId(), order.getOrderNo(), fulfillmentRequest.getRequestNo(), now) != 1) {
             throw new IllegalStateException("Acceptance receipt was not PROCESSING at commit");
         }
         statusLogMapper.insert(OrderStatusLogDO.builder().orderId(order.getId()).detailVersion(1L)
@@ -398,8 +478,8 @@ public class FulfillmentAcceptanceLifecycle {
     }
 
     @Transactional(transactionManager = TRANSACTION_MANAGER, readOnly = true)
-    public AcceptanceSnapshot replayByBusinessKey(Long buyerId, String buyerOrderNo) {
-        FulfillmentAcceptanceReceiptDO receipt = receiptMapper.selectByBusinessKey(buyerId, buyerOrderNo);
+    public AcceptanceSnapshot replayByProjectKey(Long projectId, String buyerOrderNo) {
+        FulfillmentAcceptanceReceiptDO receipt = receiptMapper.selectByProjectKey(projectId, buyerOrderNo);
         if (receipt == null) {
             throw new IllegalStateException("Acceptance receipt does not exist after duplicate claim");
         }
@@ -431,10 +511,11 @@ public class FulfillmentAcceptanceLifecycle {
     private ListingSnapshot requireSaleableListing(PreparedAcceptance command, LocalDateTime now,
                                                     LockedListing locked) {
         BuyerListingDO listing = locked.listing();
-        BuyerListingVersionDO version = listingVersionMapper.selectByListingAndVersionNo(
-                listing.getId(), command.listingVersionNo());
+        // 业务版本由服务端取得：按 Listing 当前发布版本锁定校验，不再接受调用方提交的商品版本。
+        // 设计见 docs/superpowers/specs/2026-10-02-standard-acceptance-project-key-design.md#2-首次身份与重放优先。
+        BuyerListingVersionDO version = listing.getCurrentVersionId() == null
+                ? null : listingVersionMapper.selectById(listing.getCurrentVersionId());
         if (version == null || listing.getStatus() != BuyerListingStatus.PUBLISHED.getCode()
-                || !version.getId().equals(listing.getCurrentVersionId())
                 || version.getValidFrom().isAfter(now)
                 || (version.getValidTo() != null && !version.getValidTo().isAfter(now))) {
             throw rejection(command.receiptIdHint(), version == null ? null : version.getId(),
@@ -484,7 +565,10 @@ public class FulfillmentAcceptanceLifecycle {
         SupplierRoutingRoundDO round = SupplierRoutingRoundDO.builder()
                 .routingRoundNo(businessNoGenerator.next(BusinessNoPrefixes.RR)).buyerId(command.buyerId())
                 .routingSubjectType(RoutingSubjectType.STANDARD_REQUEST.code())
-                .routingSubjectKey(command.buyerOrderNo())
+                // STANDARD_REQUEST 主体键统一为全局 orderNo，避免同一分销商不同项目同号时路由轮次撞键；
+                // 历史 key 由 052 严格关联迁移，重路由/恢复沿用同一全局键。
+                // 设计见 docs/superpowers/specs/2026-10-02-standard-acceptance-project-key-design.md#5-052增量历史清理与安全覆盖。
+                .routingSubjectKey(order.getOrderNo())
                 .routingType(RoutingType.STANDARD_PRODUCT.code()).orderId(order.getId())
                 .fulfillmentRequestId(request.getId()).roundSequence(1)
                 .policyId(routing.policyId()).policyVersionId(routing.policyVersionId())
@@ -585,6 +669,11 @@ public class FulfillmentAcceptanceLifecycle {
                 command.traceId(), order.getOrderNo(), operation.getOperationNo(), now);
     }
 
+    /**
+     * 回执快照组装：orderStatus 读取订单表当前真实状态（未建单为 null），首次与重放返回一致，
+     * 不再恒写 PROCESSING。重放返回真实订单状态见
+     * docs/superpowers/specs/2026-10-02-standard-acceptance-project-key-design.md#3-回执竞争、重试和真实返回。
+     */
     private AcceptanceSnapshot snapshot(long receiptId, boolean replay) {
         FulfillmentAcceptanceReceiptDO receipt = receiptMapper.selectById(receiptId);
         if (receipt == null) {
@@ -596,7 +685,27 @@ public class FulfillmentAcceptanceLifecycle {
                 receipt.getStatus(), receipt.getVersion(), receipt.getResultOrderNo(),
                 receipt.getResultFulfillmentRequestNo(), receipt.getRejectionCode(),
                 order == null ? null : order.getDisplaySupplierCode(),
-                order == null ? null : order.getDisplaySupplierName(), receipt.getAcceptedAt(), replay);
+                order == null ? null : order.getDisplaySupplierName(), receipt.getAcceptedAt(), replay,
+                order == null ? null : order.getOrderStatus());
+    }
+
+    /**
+     * 服务端解析本次尝试的商品业务版本号（回执 listing_version_no）。
+     * Listing 关系无法解析出当前发布版本时受理注定失败（INVALID_TARGET/LISTING_VERSION_EXPIRED），
+     * 此处快速失败而不以版本 1 伪造服务端快照；052 已将该列改为可空，但新受理仍解析到当前发布版本。
+     * 设计见 docs/superpowers/specs/2026-10-02-standard-acceptance-project-key-design.md#2-首次身份与重放优先。
+     */
+    private int resolveAttemptListingVersionNo(PreparedAcceptance command, BuyerListingDO gateListing) {
+        if (gateListing == null || gateListing.getCurrentVersionId() == null) {
+            throw new IllegalStateException("Buyer listing has no resolvable current version: buyerSkuCode="
+                    + command.buyerSkuCode());
+        }
+        BuyerListingVersionDO version = listingVersionMapper.selectById(gateListing.getCurrentVersionId());
+        if (version == null || version.getVersionNo() == null || version.getVersionNo() < 1) {
+            throw new IllegalStateException("Buyer listing version snapshot is broken: listingId="
+                    + gateListing.getId());
+        }
+        return version.getVersionNo();
     }
 
     private void requireProcessingReceipt(FulfillmentAcceptanceReceiptDO receipt,
@@ -617,10 +726,12 @@ public class FulfillmentAcceptanceLifecycle {
     }
 
     private void reopenRetryable(FulfillmentAcceptanceReceiptDO receipt, PreparedAcceptance command) {
-        log.info("[履约][lifecycle] reopenRetryable 重开受理回执 receiptId={}, version={}, listingVersionNo={}",
-                receipt.getId(), receipt.getVersion(), command.listingVersionNo());
+        log.info("[履约][lifecycle] reopenRetryable 重开受理回执 receiptId={}, version={}",
+                receipt.getId(), receipt.getVersion());
+        // 重开不再要求调用方更换 Listing 版本：过渡期保留回执原 listing_version_no 不变
+        // （服务端尝试版本的独立列承载见 052 增量），仅刷新格式 2 请求指纹。
         int updated = receiptMapper.reopenRetryable(receipt.getId(), receipt.getVersion(),
-                command.listingVersionNo(), command.requestFingerprint(), now());
+                receipt.getListingVersionNo(), command.requestFingerprint(), now());
         if (updated != 1) {
             throw new IdempotencyConflictException();
         }
@@ -692,19 +803,28 @@ public class FulfillmentAcceptanceLifecycle {
     public record ClaimResult(long receiptId, boolean executeAcceptance, boolean replay) {
     }
 
+    /** 受理回执快照：orderStatus 为订单表当前真实状态（未建单为 null），供响应返回真实状态。 */
     public record AcceptanceSnapshot(String receiptNo, String buyerOrderNo, short status,
                                      long receiptVersion, String orderNo, String fulfillmentRequestNo,
                                      String rejectionCode, String supplierCode, String supplierName,
-                                     LocalDateTime acceptedAt, boolean idempotentReplay) {
+                                     LocalDateTime acceptedAt, boolean idempotentReplay, Short orderStatus) {
     }
 
-    /** 加密与请求指纹准备阶段使用的平台 SKU Schema 快照。 */
-    public record TargetSchemaSnapshot(String schemaCode, int schemaVersion, boolean available) {
+    /**
+     * 加密与请求指纹准备阶段使用的平台 SKU Schema 快照（含服务端解析的商品身份）。
+     * platformSkuId 供格式 2 指纹的「服务端冻结商品身份（可解析时）」成分；不可解析时为 null。
+     */
+    public record TargetSchemaSnapshot(Long platformSkuId, String schemaCode, int schemaVersion, boolean available) {
         private static TargetSchemaSnapshot unavailable() {
-            return new TargetSchemaSnapshot("", 0, false);
+            return new TargetSchemaSnapshot(null, "", 0, false);
         }
     }
 
+    /**
+     * 可信标准受理命令（双入口共享）：已删除购买人身份、支付时间、调用方商品版本与报价 token；
+     * 服务端冻结商品身份与报价 id 由 accept 阶段的报价消费上下文承载，不在准备期伪造。
+     * 设计见 docs/superpowers/specs/2026-10-02-standard-acceptance-project-key-design.md#1-双入口与共享命令。
+     */
     public static final class PreparedAcceptance {
         private final Long projectId;
         private final String projectCode;
@@ -713,13 +833,12 @@ public class FulfillmentAcceptanceLifecycle {
         private final String buyerCode;
         private final String buyerName;
         private final String buyerOrderNo;
-        private final String buyerUserId;
+        /** 实际 MOBILE 目标的规范化手机号（履约目标，非购买人身份）；非 MOBILE 为空。 */
         private final String fulfillmentAccountValue;
+        /** 来自已校验实际target的账户类型，用于区分非MOBILE与非法MOBILE，不从任何请求身份推断。 */
+        private final String targetAccountType;
         private final String buyerSkuCode;
-        private final int listingVersionNo;
         private final long quantity;
-        private final String pricingQuoteToken;
-        private final LocalDateTime paidAt;
         private final String targetSchemaCode;
         private final int targetSchemaVersion;
         private final byte[] targetCiphertext;
@@ -735,11 +854,10 @@ public class FulfillmentAcceptanceLifecycle {
 
         public PreparedAcceptance(Long projectId, String projectCode, String projectName,
                                   Long buyerId, String buyerCode, String buyerName,
-                                  String buyerOrderNo, String buyerUserId, String fulfillmentAccountValue,
-                                  String buyerSkuCode,
-                                  int listingVersionNo, long quantity, String pricingQuoteToken,
-                                  LocalDateTime paidAt, String targetSchemaCode,
-                                  int targetSchemaVersion, byte[] targetCiphertext, byte[] targetDigest,
+                                  String buyerOrderNo, String fulfillmentAccountValue, String targetAccountType,
+                                  String buyerSkuCode, long quantity,
+                                  String targetSchemaCode, int targetSchemaVersion,
+                                  byte[] targetCiphertext, byte[] targetDigest,
                                   String targetKeyVersion, boolean targetValid,
                                   byte[] invariantFingerprint, byte[] requestFingerprint,
                                   byte[] buyerOrderDigest, Long previousReceiptVersion, String traceId) {
@@ -750,13 +868,10 @@ public class FulfillmentAcceptanceLifecycle {
             this.buyerCode = buyerCode;
             this.buyerName = buyerName;
             this.buyerOrderNo = buyerOrderNo;
-            this.buyerUserId = buyerUserId;
             this.fulfillmentAccountValue = fulfillmentAccountValue;
+            this.targetAccountType = targetAccountType;
             this.buyerSkuCode = buyerSkuCode;
-            this.listingVersionNo = listingVersionNo;
             this.quantity = quantity;
-            this.pricingQuoteToken = pricingQuoteToken;
-            this.paidAt = paidAt;
             this.targetSchemaCode = targetSchemaCode;
             this.targetSchemaVersion = targetSchemaVersion;
             this.targetCiphertext = targetCiphertext == null ? null : targetCiphertext.clone();
@@ -777,13 +892,10 @@ public class FulfillmentAcceptanceLifecycle {
         public String buyerCode() { return buyerCode; }
         public String buyerName() { return buyerName; }
         public String buyerOrderNo() { return buyerOrderNo; }
-        public String buyerUserId() { return buyerUserId; }
         public String fulfillmentAccountValue() { return fulfillmentAccountValue; }
+        public String targetAccountType() { return targetAccountType; }
         public String buyerSkuCode() { return buyerSkuCode; }
-        public int listingVersionNo() { return listingVersionNo; }
         public long quantity() { return quantity; }
-        public String pricingQuoteToken() { return pricingQuoteToken; }
-        public LocalDateTime paidAt() { return paidAt; }
         public String targetSchemaCode() { return targetSchemaCode; }
         public int targetSchemaVersion() { return targetSchemaVersion; }
         public byte[] targetCiphertext() { return targetCiphertext == null ? null : targetCiphertext.clone(); }
@@ -823,6 +935,16 @@ public class FulfillmentAcceptanceLifecycle {
     public static final class IdempotencyConflictException extends RuntimeException {
         public IdempotencyConflictException() {
             super("Acceptance business key payload conflicts with the original request");
+        }
+    }
+
+    /**
+     * 项目键并发首创竞争信号：仅由 claim 的项目永久键唯一冲突抛出，携带原始 DuplicateKeyException
+     * 作为因（保留数据库错误码与消息）。Facade 只对它做新事务项目键重探测，不捕获任意键冲突盲回放。
+     */
+    public static final class ProjectKeyClaimRaceException extends RuntimeException {
+        public ProjectKeyClaimRaceException(DuplicateKeyException cause) {
+            super("Acceptance project key race on concurrent first claim", cause);
         }
     }
 

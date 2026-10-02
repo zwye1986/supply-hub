@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.aifuli.module.supplychain.border.fulfillment.dal.mysql.RechargeFrequencyMonitorMapper">
+    <!-- 仅sc_*本地归属；队列身份digest只作条件，不进入SELECT输出。 -->
+    <sql id="queueFilters">
+        <if test="f.mobileDigest != null"> AND q.mobile_digest=#{f.mobileDigest}</if>
+        <if test="f.platformSpuCode != null and f.platformSpuCode != ''"> AND s.spu_code=#{f.platformSpuCode}</if>
+    </sql>
+    <sql id="entryFilters">
+        <if test="f.buyerId != null"> AND e.buyer_id=#{f.buyerId}</if>
+        <if test="f.projectId != null"> AND e.project_id=#{f.projectId}</if>
+        <if test="f.orderNo != null and f.orderNo != ''"> AND e.order_no=#{f.orderNo}</if>
+        <if test="f.buyerOrderNo != null and f.buyerOrderNo != ''"> AND o.buyer_order_no=#{f.buyerOrderNo}</if>
+        <if test="f.enqueuedFrom != null"> AND e.enqueued_at &gt;=#{f.enqueuedFrom}</if>
+        <if test="f.enqueuedTo != null"> AND e.enqueued_at &lt;=#{f.enqueuedTo}</if>
+    </sql>
+    <sql id="waitingFrom">
+        FROM sc_recharge_frequency_entry e JOIN sc_recharge_frequency_queue q ON q.id=e.queue_id
+        LEFT JOIN sc_platform_spu s ON s.id=q.platform_spu_id
+        LEFT JOIN sc_supply_chain_order o ON o.id=e.order_id
+        LEFT JOIN sc_buyer b ON b.id=e.buyer_id
+        LEFT JOIN sc_buyer_project p ON p.id=e.project_id
+        WHERE e.status=#{f.getWaitingStatus}
+        <include refid="queueFilters"/><include refid="entryFilters"/>
+    </sql>
+    <select id="statistics" resultType="com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyMonitorQueryService$Statistics">
+        SELECT (SELECT COUNT(*) FROM sc_recharge_frequency_entry WHERE status=#{f.getWaitingStatus}) waiting_order_count,
+               (SELECT COUNT(*) FROM sc_recharge_frequency_queue WHERE holder_entry_id IS NOT NULL OR blocked_reason IS NOT NULL) occupied_queue_count,
+               (SELECT COUNT(*) FROM (SELECT queue_id FROM sc_recharge_frequency_entry WHERE status=#{f.getWaitingStatus}
+                   GROUP BY queue_id HAVING COUNT(*) &gt; #{f.getBacklogThreshold}) backlog) over_threshold_queue_count,
+               (SELECT COUNT(*) FROM sc_recharge_frequency_queue WHERE (holder_entry_id IS NOT NULL OR blocked_reason IS NOT NULL)
+                   AND acquired_at &lt; TIMESTAMPADD(SECOND,-#{f.getOccupiedAlertSeconds},#{f.observedAt})) overdue_queue_count,
+               #{f.getSuccessMinimumHoldSeconds} success_minimum_hold_seconds, #{f.getOccupiedAlertSeconds} occupied_alert_seconds,
+               #{f.getBacklogThreshold} backlog_threshold, #{f.observedAt} observed_at
+    </select>
+    <select id="waiting" resultType="com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyMonitorQueryService$WaitingOrder">
+        SELECT e.id entry_id, e.queue_id, e.version, q.mobile_masked masked_mobile, s.spu_code platform_spu_code, s.spu_name platform_spu_name,
+               e.order_no, o.buyer_order_no, e.buyer_id, b.buyer_code, b.buyer_name, e.project_id, p.project_code, p.project_name,
+               e.enqueued_at, GREATEST(0,TIMESTAMPDIFF(SECOND,e.enqueued_at,#{f.observedAt})) wait_seconds, e.enqueue_sequence queue_sequence
+        <include refid="waitingFrom"/>
+        ORDER BY e.enqueued_at,e.queue_id,e.enqueue_sequence LIMIT #{f.pageSize} OFFSET #{f.getOffset}
+    </select>
+    <select id="waitingCount" resultType="long">SELECT COUNT(*) <include refid="waitingFrom"/></select>
+    <sql id="occupancyFrom">
+        FROM sc_recharge_frequency_queue q LEFT JOIN sc_platform_spu s ON s.id=q.platform_spu_id
+        LEFT JOIN sc_recharge_frequency_entry h ON h.id=q.holder_entry_id
+        LEFT JOIN sc_fulfillment_request r ON r.id=h.fulfillment_request_id
+        LEFT JOIN sc_fulfillment_operation op ON op.operation_no=h.active_operation_no
+        LEFT JOIN sc_b_order bo ON bo.id=op.b_order_id
+        WHERE (q.holder_entry_id IS NOT NULL OR q.blocked_reason IS NOT NULL)
+        <include refid="queueFilters"/>
+        <if test="f.buyerId != null or f.projectId != null or f.orderNo != null or f.buyerOrderNo != null or f.enqueuedFrom != null or f.enqueuedTo != null">
+            AND EXISTS (SELECT 1 FROM sc_recharge_frequency_entry e LEFT JOIN sc_supply_chain_order o ON o.id=e.order_id
+                WHERE e.queue_id=q.id
+                  AND ((q.holder_entry_id IS NOT NULL AND e.id=q.holder_entry_id)
+                    OR (q.holder_entry_id IS NULL AND q.blocked_reason IS NOT NULL AND e.status=#{f.getHoldingStatus} AND e.dispatch_phase=#{f.getSendPossiblePhase})) <include refid="entryFilters"/>)
+        </if>
+    </sql>
+    <select id="occupancies" resultType="com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyMonitorQueryService$Occupancy">
+        SELECT q.id queue_id, q.mobile_masked masked_mobile, s.spu_code platform_spu_code, s.spu_name platform_spu_name,
+               h.order_no holder_order_no, q.acquired_at, q.minimum_hold_until,
+               GREATEST(0,TIMESTAMPDIFF(SECOND,q.acquired_at,#{f.observedAt})) held_seconds,
+               (q.acquired_at &lt; TIMESTAMPADD(SECOND,-#{f.getOccupiedAlertSeconds},#{f.observedAt})) overdue,
+               q.occupancy_generation generation, q.version, q.blocked_reason, r.status request_status, op.status operation_status,
+               (bo.order_id=h.order_id AND bo.fulfillment_request_id=h.fulfillment_request_id
+                 AND h.occupancy_generation=q.occupancy_generation
+                 AND ((r.status=#{f.getSuccessStatus} AND op.status=#{f.getOperationSuccessStatus} AND op.result_class=#{f.getSuccessResult})
+                   OR (r.status=#{f.getFailedStatus} AND op.status=#{f.getOperationFailedStatus} AND op.result_class=#{f.getRejectedResult}))) terminal_evidence,
+               (bo.order_id=h.order_id AND bo.fulfillment_request_id=h.fulfillment_request_id
+                 AND r.status=#{f.getFulfillingStatus} AND h.occupancy_generation=q.occupancy_generation AND h.dispatch_phase=#{f.getPreparedPhase}
+                 AND op.status=#{f.getExecutingStatus} AND op.attempt_count=0 AND op.result_class IS NULL AND op.external_operation_no IS NULL
+                 AND NOT EXISTS (
+                    SELECT 1 FROM sc_fulfillment_operation other JOIN sc_b_order ob ON ob.id=other.b_order_id
+                    WHERE ob.order_id=h.order_id AND other.id != op.id
+                      AND other.operation_kind NOT IN (#{f.getQueryOrderKind},#{f.getQueryAssetKind})
+                      AND NOT (other.status=#{f.getOperationFailedStatus} AND COALESCE(other.result_class,'')=#{f.getRejectedResult})
+                      AND NOT (other.operation_kind=#{f.getFulfillKind} AND other.adapter_step_code IN (#{f.getSendStep},#{f.getSendKmStep})
+                         AND other.status IN (#{f.getPendingStatus},#{f.getClaimedStatus}) AND other.attempt_count=0
+                         AND other.result_class IS NULL AND other.external_operation_no IS NULL AND other.completed_at IS NULL
+                         AND ob.fulfillment_request_id=r.id
+                         AND ((ob.id=bo.id AND other.sequence_no &gt; op.sequence_no) OR ob.attempt_no &gt; bo.attempt_no)))) prepared_safe
+        <include refid="occupancyFrom"/>
+        ORDER BY q.acquired_at,q.id LIMIT #{f.pageSize} OFFSET #{f.getOffset}
+    </select>
+    <select id="occupancyCount" resultType="long">SELECT COUNT(*) <include refid="occupancyFrom"/></select>
+    <!--
+        项级条件只通过同一WAITING项定位匹配队列；aggregate_waiting始终聚合整条队列的全部WAITING项，
+        不裁剪数量、最早时间或阈值判断。分页和total共用此片段，作用于筛选后的队列集合。
+        复杂聚合与关联EXISTS由既有XML表达，所有数据仅来自sc_*本地表。
+        设计见 docs/superpowers/specs/2026-09-30-direct-recharge-mobile-spu-frequency-design.md#7-管理端契约与权限。
+    -->
+    <sql id="backlogFrom">
+        FROM sc_recharge_frequency_queue q LEFT JOIN sc_platform_spu s ON s.id=q.platform_spu_id
+        JOIN (SELECT queue_id,COUNT(*) waiting_count,MIN(enqueued_at) earliest_enqueued_at FROM sc_recharge_frequency_entry
+             WHERE status=#{f.getWaitingStatus} GROUP BY queue_id) aggregate_waiting ON aggregate_waiting.queue_id=q.id
+        WHERE 1=1 <include refid="queueFilters"/>
+        <if test="f.buyerId != null or f.projectId != null or f.orderNo != null or f.buyerOrderNo != null or f.enqueuedFrom != null or f.enqueuedTo != null">
+            AND EXISTS (SELECT 1 FROM sc_recharge_frequency_entry e LEFT JOIN sc_supply_chain_order o ON o.id=e.order_id
+                WHERE e.queue_id=q.id AND e.status=#{f.getWaitingStatus} <include refid="entryFilters"/>)
+        </if>
+    </sql>
+    <select id="backlogs" resultType="com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyMonitorQueryService$Backlog">
+        SELECT q.id queue_id,q.mobile_masked masked_mobile,s.spu_code platform_spu_code,s.spu_name platform_spu_name,
+               aggregate_waiting.waiting_count,aggregate_waiting.earliest_enqueued_at,
+               (aggregate_waiting.waiting_count &gt; #{f.getBacklogThreshold}) over_threshold
+        <include refid="backlogFrom"/>
+        ORDER BY aggregate_waiting.waiting_count DESC,aggregate_waiting.earliest_enqueued_at,q.id LIMIT #{f.pageSize} OFFSET #{f.getOffset}
+    </select>
+    <select id="backlogCount" resultType="long">SELECT COUNT(*) <include refid="backlogFrom"/></select>
+    <select id="riskOrders" resultType="string">
+        SELECT order_no FROM sc_recharge_frequency_entry WHERE queue_id=#{queueId}
+            AND status=#{holdingStatus} AND dispatch_phase=#{sendPossiblePhase} ORDER BY enqueue_sequence
+    </select>
+</mapper>

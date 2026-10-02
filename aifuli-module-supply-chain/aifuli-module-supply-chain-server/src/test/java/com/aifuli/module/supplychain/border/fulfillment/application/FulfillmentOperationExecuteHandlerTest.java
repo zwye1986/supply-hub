@@ -82,6 +82,9 @@ class FulfillmentOperationExecuteHandlerTest {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
+    @Mock
+    private RechargeFrequencyLifecycle frequencyLifecycle;
+
     private FulfillmentOperationExecuteHandler executeHandler;
     private FulfillmentCallbackProperties callbackProperties;
 
@@ -96,14 +99,12 @@ class FulfillmentOperationExecuteHandlerTest {
                 orderMapper,
                 supplierMapper,
                 offerVersionMapper,
-                credentialSlotMapper,
                 connectorResolver,
-                List.of(credentialProvider),
                 envelopeCrypto,
                 operationExecutorPort,
                 supplierOrderLifecycle,
                 objectMapper,
-                callbackProperties
+                new FulfillmentOperationTicketFactory(credentialSlotMapper, List.of(credentialProvider), callbackProperties), frequencyLifecycle
         );
     }
 
@@ -234,7 +235,7 @@ class FulfillmentOperationExecuteHandlerTest {
                 .outcomeClass(OperationOutcomeClass.SUCCEEDED)
                 .externalOrderNo("EXT_QNM_999")
                 .build();
-        when(supplierOrderLifecycle.claimForExecution(operationNo)).thenReturn(true);
+        when(supplierOrderLifecycle.claimForExecution(operationNo, null)).thenReturn(true);
         when(operationExecutorPort.execute(any(OperationTicket.class))).thenReturn(successOutcome);
 
         String result = executeHandler.handle(context, payload);
@@ -256,9 +257,9 @@ class FulfillmentOperationExecuteHandlerTest {
         assertThat(ticket.callbackUrl()).isEqualTo("https://api.aifuli.com/qnm/callback");
 
         org.mockito.InOrder inOrder = inOrder(supplierOrderLifecycle, operationExecutorPort);
-        inOrder.verify(supplierOrderLifecycle).claimForExecution(operationNo);
+        inOrder.verify(supplierOrderLifecycle).claimForExecution(operationNo, null);
         inOrder.verify(operationExecutorPort).execute(any(OperationTicket.class));
-        verify(supplierOrderLifecycle).transition(eq(operationNo), eq(successOutcome), eq("4"));
+        verify(supplierOrderLifecycle).confirmTrustedOutcome(eq(operationNo), eq(successOutcome), eq("4"), org.mockito.ArgumentMatchers.isNull());
     }
 
     @Test
@@ -316,19 +317,26 @@ class FulfillmentOperationExecuteHandlerTest {
         when(orderMapper.selectById(41L)).thenReturn(order);
         when(supplierMapper.selectById(51L)).thenReturn(supplier);
         when(connectorResolver.resolve(61L)).thenReturn(connectorConfig);
-        when(supplierOrderLifecycle.claimForExecution(operationNo)).thenReturn(true);
+        when(supplierOrderLifecycle.claimForExecution(operationNo, null)).thenReturn(true);
 
         when(operationExecutorPort.execute(any(OperationTicket.class)))
-                .thenThrow(new RuntimeException("Network timeout"));
+                .thenThrow(new RuntimeException("Network timeout phone=13800138000 credential=evil-secret"));
+        var logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(FulfillmentOperationExecuteHandler.class);
+        var logs = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+        logs.start(); logger.addAppender(logs);
 
         String result = executeHandler.handle(context, payload);
 
         assertThat(result).isEqualTo("RESULT_UNKNOWN");
 
         ArgumentCaptor<OperationOutcome> outcomeCaptor = ArgumentCaptor.forClass(OperationOutcome.class);
-        verify(supplierOrderLifecycle).transition(eq(operationNo), outcomeCaptor.capture(), eq("5"));
+        verify(supplierOrderLifecycle).confirmTrustedOutcome(eq(operationNo), outcomeCaptor.capture(), eq("5"), org.mockito.ArgumentMatchers.isNull());
         assertThat(outcomeCaptor.getValue().outcomeClass()).isEqualTo(OperationOutcomeClass.RESULT_UNKNOWN);
-        assertThat(outcomeCaptor.getValue().externalErrorMessage()).contains("Network timeout");
+        assertThat(outcomeCaptor.getValue().externalErrorMessage()).doesNotContain("13800138000", "evil-secret");
+        assertThat(logs.list.stream().map(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage).toList().toString())
+                .doesNotContain("13800138000", "evil-secret");
+        assertThat(logs.list.stream().filter(event -> event.getThrowableProxy() != null).count()).isZero();
+        logger.detachAppender(logs);
     }
 
     @Test
@@ -395,6 +403,34 @@ class FulfillmentOperationExecuteHandlerTest {
         verify(supplierOrderLifecycle).transition(eq(operationNo), outcomeCaptor.capture(), eq("6"));
         assertThat(outcomeCaptor.getValue().outcomeClass()).isEqualTo(OperationOutcomeClass.MANUAL_REQUIRED);
         assertThat(outcomeCaptor.getValue().externalErrorCode()).isEqualTo("TARGET_DECRYPT_FAILED");
+    }
+
+    @Test
+    void preparationFailureRetainsSanitizedRevocationFailureAsSuppressedCause() {
+        String no = "OP_SAFE_PREPARATION";
+        var operation = FulfillmentOperationDO.builder().id(1L).operationNo(no).bOrderId(2L).status((short)0)
+                .operationKind("FULFILL").adapterStepCode("SEND").sequenceNo(1).build();
+        var request = FulfillmentRequestDO.builder().id(3L).buyerId(8L).targetCiphertext(new byte[]{1}).targetKeyVersion("1").build();
+        when(operationMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(operation);
+        when(bOrderMapper.selectById(2L)).thenReturn(BOrderDO.builder().id(2L).bOrderNo("BO_SAFE").fulfillmentRequestId(3L).orderId(4L).supplierId(5L).connectorVersionId(6L).offerVersionId(7L).build());
+        when(requestMapper.selectById(3L)).thenReturn(request);
+        when(orderMapper.selectById(4L)).thenReturn(SupplyChainOrderDO.builder().id(4L).orderNo("SC_SAFE").build());
+        when(supplierMapper.selectById(5L)).thenReturn(SupplierDO.builder().id(5L).supplierCode("QNM").build());
+        when(offerVersionMapper.selectById(7L)).thenReturn(SupplierOfferVersionDO.builder().id(7L).build());
+        when(connectorResolver.resolve(6L)).thenReturn(new PublishedConnectorConfiguration("CON_SAFE",6L,1,"QNM","https://supplier.invalid","fixture",9L,null,Set.of(Capability.CREATE_RECHARGE)));
+        when(envelopeCrypto.decrypt(eq(request.getTargetCiphertext()), eq("1"), any())).thenReturn("{\"values\":{\"accountType\":\"MOBILE\",\"accountValue\":\"13800138000\"}}".getBytes(StandardCharsets.UTF_8));
+        when(frequencyLifecycle.requiresFrequency(no,"MOBILE")).thenReturn(true);
+        var permit = new RechargeFrequencyExecutionPermit(1L,1L,no,1L,1L,1L); when(frequencyLifecycle.claim(no)).thenReturn(permit);
+        var slot = CredentialSlotDO.builder().id(9L).providerType("ENV").status((short)10).build(); when(credentialSlotMapper.selectById(9L)).thenReturn(slot);
+        when(credentialProvider.supports("ENV")).thenReturn(true);
+        when(credentialProvider.resolve(slot)).thenThrow(new IllegalArgumentException("phone=13800138000 secret=evil-credential"));
+        when(frequencyLifecycle.revokePreparedForLocalFailure(permit)).thenThrow(new IllegalStateException("evil-storage phone=13800138000",new java.sql.SQLException("evil-storage credential")));
+        Throwable failure = org.assertj.core.api.Assertions.catchThrowable(() -> executeHandler.handle(new TimerTaskContext("SAFE",1L,1,1L,"worker"),objectMapper.createObjectNode().put("operationNo",no)));
+        assertThat(failure).hasMessage("CREDENTIAL_UNAVAILABLE"); assertThat(failure.getCause().getMessage()).contains("IllegalArgumentException");
+        assertThat(failure.getSuppressed()).hasSize(1); assertThat(failure.getSuppressed()[0].getMessage()).contains("IllegalStateException", "SQLException");
+        var text = new java.io.StringWriter(); failure.printStackTrace(new java.io.PrintWriter(text));
+        assertThat(text.toString()).doesNotContain("13800138000", "evil-credential", "evil-storage");
+        verify(operationExecutorPort, never()).execute(any());
     }
 
     @Test

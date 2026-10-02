@@ -5,6 +5,7 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.Size;
 import lombok.Data;
+import lombok.ToString;
 
 import java.io.Serializable;
 import java.util.Map;
@@ -18,5 +19,6 @@ public class FulfillmentTargetDTO implements Serializable {
             example = "{\"accountType\":\"MOBILE\",\"accountValue\":\"138****0000\"}")
     @NotEmpty(message = "履约目标值不能为空")
     @Size(max = 16, message = "履约目标字段不能超过 16 个")
+    @ToString.Exclude
     private Map<@NotBlank String, @NotBlank String> values;
 }

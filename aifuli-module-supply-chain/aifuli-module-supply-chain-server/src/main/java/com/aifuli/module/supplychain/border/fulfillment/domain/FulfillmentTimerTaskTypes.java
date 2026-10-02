@@ -10,5 +10,7 @@ public final class FulfillmentTimerTaskTypes {
     private FulfillmentTimerTaskTypes() {
     }
 
+    public static final String RECHARGE_FREQUENCY_WAKE = "RECHARGE_FREQUENCY_WAKE";
+
     public static final String OPERATION_EXECUTE = "FULFILLMENT_OPERATION_EXECUTE";
 }

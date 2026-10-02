@@ -71,11 +71,15 @@ class SupplyChainLiquibaseIntegrationTest {
                         "sc_supplier_settlement_account", "sc_supplier_settlement_ledger",
                         "sc_supplier_invoice", "sc_buyer_invoice", "sc_product_type",
                         "sc_std_routing_rule", "sc_std_routing_rule_scope", "sc_std_routing_candidate",
-                        "sc_supplier_sku_daily_quota")
+                        "sc_supplier_sku_daily_quota", "sc_recharge_frequency_queue",
+                        "sc_recharge_frequency_entry", "sc_recharge_frequency_action_audit")
                 .doesNotContain("sc_inventory_asset", "sc_supply_reservation",
                         "sc_standard_product_routing_rule", "sc_standard_product_routing_candidate");
         assertThat(firstStartup.columnNames())
-                .contains("sc_instore_channel_user_binding.source_system",
+                .contains("sc_sensitive_access_audit.project_id",
+                        "sc_sensitive_access_audit.order_no",
+                        "sc_sensitive_access_audit.app_key_version",
+                        "sc_instore_channel_user_binding.source_system",
                         "sc_instore_channel_user_binding.external_tenant_id",
                         "sc_instore_channel_user_binding.project_id",
                         "sc_instore_channel_order.source_system",
@@ -144,7 +148,30 @@ class SupplyChainLiquibaseIntegrationTest {
                         "sc_buyer_sku_pricing_version.override_json",
                         "sc_buyer_sku_pricing_version.effective_config_json",
                         "sc_supply_chain_order.fulfillment_account_value",
-                        "sc_product_category.visible");
+                        "sc_product_category.visible",
+                        "sc_recharge_frequency_queue.mobile_digest",
+                        "sc_recharge_frequency_queue.holder_entry_id",
+                        "sc_recharge_frequency_queue.occupied_alert_active",
+                        "sc_recharge_frequency_queue.backlog_alert_active",
+                        "sc_recharge_frequency_queue.last_occupied_alert_at",
+                        "sc_recharge_frequency_queue.last_backlog_alert_at",
+                        "sc_recharge_frequency_entry.enqueue_sequence",
+                        "sc_recharge_frequency_entry.dispatch_phase",
+                        "sc_recharge_frequency_action_audit.request_fingerprint",
+                        "sc_recharge_frequency_action_audit.operator_user_id",
+                        "sc_fulfillment_acceptance_receipt.fingerprint_version",
+                        "sc_fulfillment_acceptance_receipt.target_schema_version",
+                        "sc_fulfillment_acceptance_receipt.platform_sku_id",
+                        "sc_fulfillment_acceptance_receipt.pricing_quote_id",
+                        "sc_fulfillment_acceptance_receipt.standard_project_key",
+                        "sc_fulfillment_acceptance_receipt.legacy_buyer_key",
+                        "sc_supply_chain_order.fulfillment_account_type",
+                        "sc_supply_chain_order.remark",
+                        "sc_supply_chain_order.standard_project_key",
+                        "sc_supply_chain_order.legacy_buyer_key")
+                .doesNotContain("sc_standard_pricing_quote.buyer_user_id",
+                        "sc_fulfillment_acceptance_receipt.buyer_user_id",
+                        "sc_fulfillment_asset.buyer_user_id");
         assertThat(firstStartup.projectAuthNonceColumnDefinitions()).containsExactly(
                 "app_id:VARCHAR:128:-:NO",
                 "nonce:VARCHAR:128:-:NO",
@@ -152,7 +179,9 @@ class SupplyChainLiquibaseIntegrationTest {
                 "expire_at:DATETIME:-:3:NO");
         assertThat(firstStartup.projectAuthNoncePrimaryKeyColumns())
                 .containsExactly("app_id", "nonce");
-        assertThat(firstStartup.changeSetCount()).isEqualTo(47L);
+        // 052-standard-order-project-key 后基线为 54 个变更集；标准订单/回执双生成列唯一键、购买人身份列删除。
+        // 设计见 docs/superpowers/specs/2026-10-02-standard-acceptance-project-key-design.md#5-052增量历史清理与安全覆盖。
+        assertThat(firstStartup.changeSetCount()).isEqualTo(54L);
         assertThat(firstStartup.uniqueIndexes())
                 .contains("sc_instore_payment_flow.uk_sc_instore_flow_order",
                         "sc_instore_channel_user_binding.uk_sc_instore_user_binding_project",
@@ -163,16 +192,29 @@ class SupplyChainLiquibaseIntegrationTest {
                         "sc_buyer_sku_pricing.uk_sc_buyer_sku_pricing_product",
                         "sc_project_sku_pricing.uk_sc_project_sku_pricing_listing",
                         "sc_standard_pricing_quote.uk_sc_standard_quote_token",
+                        "sc_standard_pricing_quote.uk_sc_standard_quote_project_order",
                         "sc_std_routing_rule.uk_sc_std_rule_code",
                         "sc_std_routing_rule_scope.uk_sc_std_rule_scope",
                         "sc_std_routing_candidate.uk_sc_std_candidate_supplier",
-                        "sc_supplier_sku_daily_quota.uk_sc_supplier_sku_daily_quota");
+                        "sc_supplier_sku_daily_quota.uk_sc_supplier_sku_daily_quota",
+                        "sc_recharge_frequency_queue.uk_sc_recharge_frequency_queue_identity",
+                        "sc_recharge_frequency_entry.uk_sc_recharge_frequency_entry_order",
+                        "sc_recharge_frequency_entry.uk_sc_recharge_frequency_entry_sequence",
+                        "sc_recharge_frequency_action_audit.uk_sc_recharge_frequency_action_no",
+                        "sc_fulfillment_acceptance_receipt.uk_sc_fulfillment_receipt_project",
+                        "sc_fulfillment_acceptance_receipt.uk_sc_fulfillment_receipt_legacy",
+                        "sc_supply_chain_order.uk_sc_order_project_key",
+                        "sc_supply_chain_order.uk_sc_order_legacy_key");
         assertThat(firstStartup.indexes())
                 .contains("sc_buyer.idx_sc_buyer_parent_created",
                         "sc_product_category.idx_sc_category_product_type",
-                        "sc_supply_chain_order.idx_sc_order_purchase_limit",
                         "sc_supply_chain_order.idx_sc_order_phone_bind_limit",
-                        "sc_supply_chain_order.idx_sc_order_supplier_sku_day");
+                        "sc_supply_chain_order.idx_sc_order_supplier_sku_day",
+                        "sc_recharge_frequency_queue.idx_sc_recharge_frequency_queue_check",
+                        "sc_recharge_frequency_entry.idx_sc_recharge_frequency_entry_head",
+                        "sc_recharge_frequency_entry.idx_sc_recharge_frequency_entry_owner_time",
+                        "sc_recharge_frequency_entry.idx_sc_recharge_frequency_entry_time",
+                        "sc_recharge_frequency_action_audit.idx_sc_recharge_frequency_action_queue_time");
         assertThat(firstStartup.collations()).containsOnly("utf8mb4_0900_ai_ci");
         assertThat(firstStartup.importedKeys()).isEmpty();
         assertThat(firstStartup.duplicateChangeSets()).isEmpty();
@@ -183,6 +225,7 @@ class SupplyChainLiquibaseIntegrationTest {
             assertThat(secondStartup.tableNames()).containsExactlyElementsOf(firstStartup.tableNames());
             assertThat(secondStartup.changeSetCount()).isEqualTo(firstStartup.changeSetCount());
             assertThat(secondStartup.duplicateChangeSets()).isEmpty();
+            assertThat(secondStartup.changeSetChecksums()).containsExactlyElementsOf(firstStartup.changeSetChecksums());
         }
     }
 
@@ -210,14 +253,14 @@ class SupplyChainLiquibaseIntegrationTest {
                         FROM information_schema.COLUMNS
                         WHERE TABLE_SCHEMA = DATABASE()
                           AND TABLE_NAME LIKE 'sc\\_%'
-                        """)).isEqualTo(114L);
+                        """)).isEqualTo(121L);
                 assertThat(queryLong(connection, """
                         SELECT COUNT(*)
                         FROM information_schema.COLUMNS
                         WHERE TABLE_SCHEMA = DATABASE()
                           AND TABLE_NAME LIKE 'sc\\_%'
                           AND DATA_TYPE = 'datetime'
-                        """)).isEqualTo(274L);
+                        """)).isEqualTo(291L);
                 assertThat(queryLong(connection, """
                         SELECT COUNT(*)
                         FROM information_schema.COLUMNS
@@ -276,9 +319,9 @@ class SupplyChainLiquibaseIntegrationTest {
                 try (PreparedStatement insertExpired = connection.prepareStatement("""
                         INSERT INTO sc_fulfillment_asset (
                             asset_no, fulfillment_request_id, b_order_id, operation_id, supplier_id, buyer_id,
-                            buyer_user_id, sequence_no, unit_quantity, asset_type, encrypted_payload, masked_value,
+                            sequence_no, unit_quantity, asset_type, encrypted_payload, masked_value,
                             fingerprint, key_version, lifecycle_status, version, created_at, updated_at)
-                        VALUES ('FA_IT_EXPIRED_50', 1, 1, 1, 1, 1, 'it-user', 1, 1, 'VOUCHER_CODE', ?, '****',
+                        VALUES ('FA_IT_EXPIRED_50', 1, 1, 1, 1, 1, 1, 1, 'VOUCHER_CODE', ?, '****',
                             ?, '1', ?, 0, CURRENT_TIMESTAMP(3), CURRENT_TIMESTAMP(3))
                         """)) {
                     insertExpired.setBytes(1, new byte[]{1});
@@ -290,9 +333,9 @@ class SupplyChainLiquibaseIntegrationTest {
                 try (PreparedStatement insertInvalid = connection.prepareStatement("""
                         INSERT INTO sc_fulfillment_asset (
                             asset_no, fulfillment_request_id, b_order_id, operation_id, supplier_id, buyer_id,
-                            buyer_user_id, sequence_no, unit_quantity, asset_type, encrypted_payload, masked_value,
+                            sequence_no, unit_quantity, asset_type, encrypted_payload, masked_value,
                             fingerprint, key_version, lifecycle_status, version, created_at, updated_at)
-                        VALUES ('FA_IT_INVALID_60', 1, 1, 1, 1, 1, 'it-user', 2, 1, 'VOUCHER_CODE', ?, '****',
+                        VALUES ('FA_IT_INVALID_60', 1, 1, 1, 1, 1, 2, 1, 'VOUCHER_CODE', ?, '****',
                             ?, '1', 60, 0, CURRENT_TIMESTAMP(3), CURRENT_TIMESTAMP(3))
                         """)) {
                     insertInvalid.setBytes(1, new byte[]{2});
@@ -400,12 +443,14 @@ class SupplyChainLiquibaseIntegrationTest {
                     GROUP BY ID, AUTHOR, FILENAME
                     HAVING COUNT(*) > 1
                     """);
+            List<String> changeSetChecksums = queryStrings(connection,
+                    "SELECT CONCAT(ID, ':', MD5SUM) FROM DATABASECHANGELOG ORDER BY ORDEREXECUTED");
             long changeSetCount = queryLong(connection, "SELECT COUNT(*) FROM DATABASECHANGELOG");
             return new DatabaseSnapshot(tableNames, columnNames,
                     projectAuthNonceColumnDefinitions, projectAuthNoncePrimaryKeyColumns, uniqueIndexes,
                     indexes,
                     collations, importedKeys,
-                    duplicateChangeSets, changeSetCount);
+                    duplicateChangeSets, changeSetChecksums, changeSetCount);
         }
     }
 
@@ -438,6 +483,7 @@ class SupplyChainLiquibaseIntegrationTest {
             List<String> collations,
             List<String> importedKeys,
             List<String> duplicateChangeSets,
+            List<String> changeSetChecksums,
             long changeSetCount) {
     }
 

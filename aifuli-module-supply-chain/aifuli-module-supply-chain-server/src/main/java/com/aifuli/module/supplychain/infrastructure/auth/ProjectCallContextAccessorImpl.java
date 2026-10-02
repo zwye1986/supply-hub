@@ -35,6 +35,25 @@ public class ProjectCallContextAccessorImpl implements ProjectCallContextAccesso
         return new ProjectContext(context.projectId());
     }
 
+    /**
+     * 标准商品要求 NONE scope、STANDARD_PRODUCT 能力和精确期望操作同时成立。
+     * 只读取验签链写入的包级快照；旧 NONE 回调和其他标准操作不得借用该身份进入业务。
+     * 详见 docs/superpowers/specs/2026-09-30-project-signed-standard-order-http-design.md#21-认证实施边界。
+     */
+    @Override
+    public StandardProductContext requireStandardProductContext(String expectedOperationCode) {
+        ProjectAuthContext context = requireScope(ProjectAuthOperations.ScopeType.NONE);
+        ProjectAuthOperations.Operation operation = ProjectAuthOperations.findByOperationCode(expectedOperationCode)
+                .orElseThrow(() -> exception(BUYER_AUTH_INVALID));
+        if (operation.scopeType() != ProjectAuthOperations.ScopeType.NONE
+                || !ProjectAuthOperations.CAPABILITY_STANDARD_PRODUCT.equals(operation.requiredCapability())
+                || !operation.operationCode().equals(context.operationCode())) {
+            throw exception(BUYER_AUTH_INVALID);
+        }
+        return new StandardProductContext(context.projectId(), context.buyerId(), context.appId(),
+                context.keyVersion(), context.operationCode());
+    }
+
     private ProjectAuthContext requireScope(ProjectAuthOperations.ScopeType expectedScope) {
         ProjectAuthContext context = ProjectAuthContextHolder.get();
         if (context == null || context.scopeType() != expectedScope) {
