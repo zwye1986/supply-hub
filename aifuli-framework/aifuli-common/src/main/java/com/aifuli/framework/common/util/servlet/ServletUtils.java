@@ -54,6 +54,19 @@ public class ServletUtils {
         return ((ServletRequestAttributes) requestAttributes).getRequest();
     }
 
+    /**
+     * 获得响应
+     *
+     * @return HttpServletResponse
+     */
+    public static HttpServletResponse getResponse() {
+        RequestAttributes requestAttributes = RequestContextHolder.getRequestAttributes();
+        if (!(requestAttributes instanceof ServletRequestAttributes)) {
+            return null;
+        }
+        return ((ServletRequestAttributes) requestAttributes).getResponse();
+    }
+
     public static String getUserAgent() {
         HttpServletRequest request = getRequest();
         if (request == null) {

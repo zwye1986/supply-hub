@@ -1,0 +1,247 @@
+package com.aifuli.module.supplychain.application.facade;
+
+import com.aifuli.framework.common.exception.enums.GlobalErrorCodeConstants;
+import com.aifuli.module.supplychain.api.auth.ProjectAuthOperations;
+import com.aifuli.module.supplychain.api.fulfillment.dto.FulfillmentReceiptStatus;
+import com.aifuli.module.supplychain.api.fulfillment.dto.ProjectStandardOrderCreateRespDTO;
+import com.aifuli.module.supplychain.api.order.dto.SupplyChainOrderStatus;
+import com.aifuli.module.supplychain.border.fulfillment.application.FulfillmentAcceptanceLifecycle;
+import com.aifuli.module.supplychain.border.fulfillment.application.FulfillmentAcceptanceLifecycle.AcceptanceSnapshot;
+import com.aifuli.module.supplychain.border.fulfillment.application.FulfillmentAcceptanceLifecycle.BusinessRejection;
+import com.aifuli.module.supplychain.border.fulfillment.application.FulfillmentAcceptanceLifecycle.ClaimResult;
+import com.aifuli.module.supplychain.border.fulfillment.application.FulfillmentAcceptanceLifecycle.IdempotencyConflictException;
+import com.aifuli.module.supplychain.border.fulfillment.application.FulfillmentAcceptanceLifecycle.PreparedAcceptance;
+import com.aifuli.module.supplychain.border.fulfillment.application.FulfillmentAcceptanceLifecycle.ProjectKeyClaimRaceException;
+import com.aifuli.module.supplychain.border.fulfillment.application.FulfillmentAcceptanceLifecycle.TargetSchemaSnapshot;
+import com.aifuli.module.supplychain.border.fulfillment.application.FulfillmentTargetSchemaRegistry;
+import com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyAcceptanceCoordinator;
+import com.aifuli.module.supplychain.border.fulfillment.domain.AcceptanceReceiptStatus;
+import com.aifuli.module.supplychain.border.fulfillment.domain.FulfillmentTargetFields;
+import com.aifuli.module.supplychain.border.fulfillment.domain.StandardAcceptanceFingerprintPolicy;
+import com.aifuli.module.supplychain.infrastructure.identity.BusinessNoGenerator;
+import com.aifuli.module.supplychain.infrastructure.identity.BusinessNoPrefixes;
+import com.aifuli.module.supplychain.infrastructure.security.EnvelopeCryptoPort;
+import com.aifuli.module.supplychain.infrastructure.security.HmacFingerprintPort;
+import com.aifuli.module.supplychain.infrastructure.security.ProjectCallContextAccessor.StandardProductContext;
+import com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock;
+import com.aifuli.module.supplychain.interfaceapi.open.project.dto.ProjectStandardOrderCreateReqDTO;
+import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerProjectAccessResolver;
+import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerProjectAccessResolver.ProjectSnapshot;
+import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerResolver;
+import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerResolver.BuyerSnapshot;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.CannotAcquireLockException;
+import org.springframework.stereotype.Service;
+
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.time.ZoneOffset;
+import java.util.HexFormat;
+import java.util.Map;
+import java.util.TreeMap;
+
+import static com.aifuli.framework.common.exception.util.ServiceExceptionUtil.exception;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BUYER_AUTH_INVALID;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.IDEMPOTENCY_CONFLICT;
+
+/**
+ * 项目标准下单命令门面。
+ *
+ * <p>负责对接已通过项目应用认证的 StandardProductContext，完成项目与采购商快照校验、目标规范化、
+ * Schema 校验、目标加密、格式 2 指纹生成，委派 Lifecycle 与限频排队协调器执行受理，
+ * 并将结果转换为封闭的 ProjectStandardOrderCreateRespDTO，杜绝向外部暴露内部供应商和履约链路细节。
+ * 详见 {@code docs/superpowers/specs/2026-10-02-standard-project-http-transport-design.md#1-controller与严格请求解析}。</p>
+ */
+@Slf4j
+@Service
+@RequiredArgsConstructor
+public class ProjectStandardOrderCommandFacade {
+
+    private final SupplyChainDatabaseClock databaseClock;
+    private final BuyerResolver buyerResolver;
+    private final BuyerProjectAccessResolver projectAccessResolver;
+    private final FulfillmentTargetSchemaRegistry targetSchemaRegistry;
+    private final EnvelopeCryptoPort envelopeCrypto;
+    private final HmacFingerprintPort hmacFingerprint;
+    private final FulfillmentAcceptanceLifecycle lifecycle;
+    private final RechargeFrequencyAcceptanceCoordinator acceptanceCoordinator;
+    private final BusinessNoGenerator businessNoGenerator;
+    private final ObjectMapper objectMapper;
+
+    /**
+     * 标准商品项目下单入口。
+     *
+     * @param context 经 HMAC 认证的可信项目应用快照
+     * @param request 经严格解析后的下单请求输入
+     * @return 封闭的标准下单响应
+     */
+    public ProjectStandardOrderCreateRespDTO create(StandardProductContext context, ProjectStandardOrderCreateReqDTO request) {
+        validateContext(context);
+        if (request == null) {
+            throw exception(GlobalErrorCodeConstants.BAD_REQUEST);
+        }
+
+        log.info("[标准下单][facade] create 入口 projectId={}, buyerId={}, buyerOrderNo={}, buyerSkuCode={}, quantity={}",
+                context.projectId(), context.buyerId(), request.getBuyerOrderNo(), request.getBuyerSkuCode(), request.getQuantity());
+
+        ProjectSnapshot project = projectAccessResolver.requireActive(context.projectId(), context.buyerId());
+        BuyerSnapshot buyer = buyerResolver.requireActiveById(context.buyerId());
+        TargetSchemaSnapshot targetSchema = lifecycle.resolveTargetSchema(buyer.id(), request.getBuyerSkuCode());
+
+        String traceId = businessNoGenerator.next(BusinessNoPrefixes.REQ);
+        PreparedAcceptance prepared = prepare(request, buyer, project, targetSchema, traceId);
+
+        ClaimResult claim;
+        try {
+            claim = claimWithProjectKeyRaceRetry(prepared);
+        } catch (IdempotencyConflictException conflict) {
+            log.warn("[标准下单][facade] 幂等冲突 projectId={}, buyerOrderNo={}",
+                    project.projectId(), request.getBuyerOrderNo());
+            throw exception(IDEMPOTENCY_CONFLICT);
+        }
+
+        if (!claim.executeAcceptance()) {
+            log.info("[标准下单][facade] 抢占后回放 receiptId={}", claim.receiptId());
+            return toResponse(lifecycle.replay(claim.receiptId()));
+        }
+
+        try {
+            AcceptanceSnapshot snapshot = acceptanceCoordinator.accept(claim.receiptId(), prepared);
+            log.info("[标准下单][facade] accept 完成 receiptNo={}, businessNo={}, receiptStatus={}, orderNo={}",
+                    snapshot.receiptNo(), snapshot.buyerOrderNo(), snapshot.status(), snapshot.orderNo());
+            return toResponse(snapshot);
+        } catch (BusinessRejection rejection) {
+            log.warn("[标准下单][facade] 业务拒绝 receiptId={}, code={}",
+                    rejection.receiptId(), rejection.rejectionCode());
+            return toResponse(lifecycle.reject(rejection));
+        }
+    }
+
+    private void validateContext(StandardProductContext context) {
+        if (context == null || !ProjectAuthOperations.STANDARD_ORDER_CREATE.equals(context.operationCode())) {
+            throw exception(BUYER_AUTH_INVALID);
+        }
+    }
+
+    private ClaimResult claimWithProjectKeyRaceRetry(PreparedAcceptance prepared) {
+        try {
+            return lifecycle.claim(prepared);
+        } catch (ProjectKeyClaimRaceException projectKeyRace) {
+            log.info("[标准下单][facade] 项目键并发首创冲突，新事务按项目键重探测 buyerOrderNo={}, traceId={}",
+                    prepared.buyerOrderNo(), prepared.traceId(), projectKeyRace.getCause());
+            return lifecycle.claimAfterProjectKeyRace(prepared);
+        } catch (CannotAcquireLockException lockRace) {
+            log.info("[标准下单][facade] 并发首创锁竞争（死锁/锁超时），按项目键新事务重试 buyerOrderNo={}, traceId={}",
+                    prepared.buyerOrderNo(), prepared.traceId(), lockRace);
+            return lifecycle.claim(prepared);
+        }
+    }
+
+    private PreparedAcceptance prepare(
+            ProjectStandardOrderCreateReqDTO request, BuyerSnapshot buyer,
+            ProjectSnapshot project, TargetSchemaSnapshot targetSchema, String traceId) {
+        Map<String, String> targetValues = request.getTarget();
+        Map<String, String> normalizedTargetValues = new TreeMap<>(targetValues);
+
+        boolean mobileTarget = FulfillmentTargetFields.ACCOUNT_TYPE_MOBILE.equals(
+                normalizedTargetValues.get(FulfillmentTargetFields.ACCOUNT_TYPE));
+        String normalizedTargetMobile = mobileTarget
+                ? FulfillmentTargetFields.normalizeMobile(
+                normalizedTargetValues.get(FulfillmentTargetFields.ACCOUNT_VALUE)) : null;
+        if (normalizedTargetMobile != null) {
+            normalizedTargetValues.put(FulfillmentTargetFields.ACCOUNT_VALUE, normalizedTargetMobile);
+        }
+
+        byte[] targetCanonical = canonicalTarget(normalizedTargetValues, targetSchema);
+        byte[] targetDigest = hmacFingerprint.fingerprint(FulfillmentTargetFields.FINGERPRINT_PURPOSE, targetCanonical);
+        boolean targetValid = targetSchema.available() && (!mobileTarget || normalizedTargetMobile != null);
+        if (targetValid) {
+            try {
+                targetSchemaRegistry.validate(
+                        targetSchema.schemaCode(), targetSchema.schemaVersion(), normalizedTargetValues);
+            } catch (FulfillmentTargetSchemaRegistry.InvalidTargetException invalid) {
+                targetValid = false;
+            }
+        }
+
+        EnvelopeCryptoPort.EncryptedPayload encrypted = null;
+        if (targetValid) {
+            encrypted = envelopeCrypto.encrypt(targetCanonical, associatedData(
+                    buyer.id(), request.getBuyerOrderNo(),
+                    targetSchema.schemaCode(), targetSchema.schemaVersion()));
+        }
+
+        StandardAcceptanceFingerprintPolicy.RequestIdentity identity =
+                new StandardAcceptanceFingerprintPolicy.RequestIdentity(
+                        buyer.id(), project.projectCode(), request.getBuyerOrderNo(),
+                        request.getBuyerSkuCode(),
+                        targetSchema.available() ? targetSchema.platformSkuId() : null,
+                        request.getQuantity(),
+                        targetSchema.schemaCode(), targetSchema.schemaVersion(),
+                        HexFormat.of().formatHex(targetDigest));
+        byte[] canonical = StandardAcceptanceFingerprintPolicy.canonicalRequest(identity);
+        byte[] invariant = sha256(canonical);
+        byte[] fingerprint = sha256(canonical);
+        byte[] buyerOrderDigest = sha256(StandardAcceptanceFingerprintPolicy
+                .canonicalBuyerOrderDigestInput(project.projectCode(), request.getBuyerOrderNo()));
+        String fulfillmentAccountValue = FulfillmentTargetFields.mobileAccountValue(normalizedTargetValues);
+
+        return new PreparedAcceptance(
+                project.projectId(), project.projectCode(), project.projectName(),
+                buyer.id(), buyer.buyerCode(), buyer.buyerName(), request.getBuyerOrderNo(),
+                fulfillmentAccountValue,
+                normalizedTargetValues.get(FulfillmentTargetFields.ACCOUNT_TYPE), request.getBuyerSkuCode(),
+                request.getQuantity(),
+                targetSchema.schemaCode(), targetSchema.schemaVersion(),
+                encrypted == null ? null : encrypted.ciphertext(), targetDigest,
+                encrypted == null ? null : encrypted.keyVersion(), targetValid,
+                invariant, fingerprint, buyerOrderDigest, request.getPreviousReceiptVersion(), traceId);
+    }
+
+    private byte[] canonicalTarget(Map<String, String> targetValues, TargetSchemaSnapshot targetSchema) {
+        Map<String, Object> canonical = new TreeMap<>();
+        canonical.put("schemaCode", targetSchema.schemaCode());
+        canonical.put("schemaVersion", targetSchema.schemaVersion());
+        canonical.put("values", new TreeMap<>(targetValues));
+        try {
+            return objectMapper.writeValueAsBytes(canonical);
+        } catch (JsonProcessingException exception) {
+            throw new IllegalArgumentException("Fulfillment target cannot be canonicalized", exception);
+        }
+    }
+
+    private static byte[] associatedData(Long buyerId, String buyerOrderNo,
+                                         String schemaCode, int schemaVersion) {
+        return (buyerId + "|" + buyerOrderNo + "|" + schemaCode + "|" + schemaVersion)
+                .getBytes(StandardCharsets.UTF_8);
+    }
+
+    private ProjectStandardOrderCreateRespDTO toResponse(AcceptanceSnapshot snapshot) {
+        ProjectStandardOrderCreateRespDTO response = new ProjectStandardOrderCreateRespDTO();
+        response.setRequestId(snapshot.receiptNo());
+        response.setBuyerOrderNo(snapshot.buyerOrderNo());
+        response.setReceiptStatus(FulfillmentReceiptStatus.valueOf(
+                AcceptanceReceiptStatus.fromCode(snapshot.status()).name()));
+        response.setReceiptVersion(snapshot.receiptVersion());
+        response.setOrderNo(snapshot.orderNo());
+        response.setOrderStatus(snapshot.orderStatus() == null
+                ? null : SupplyChainOrderStatus.fromCode(snapshot.orderStatus()));
+        response.setRejectionCode(snapshot.rejectionCode());
+        response.setIdempotentReplay(snapshot.idempotentReplay());
+        response.setAcceptedAt(snapshot.acceptedAt() == null ? null
+                : databaseClock.toInstant(snapshot.acceptedAt()).atOffset(ZoneOffset.UTC));
+        return response;
+    }
+
+    private static byte[] sha256(byte[] value) {
+        try {
+            return MessageDigest.getInstance("SHA-256").digest(value);
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("SHA-256 is unavailable", exception);
+        }
+    }
+}

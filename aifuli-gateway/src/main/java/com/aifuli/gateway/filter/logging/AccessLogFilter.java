@@ -78,23 +78,25 @@ public class AccessLogFilter implements GlobalFilter, Ordered {
         // 方式三：打印到控制台，方便排查错误
         try {
             boolean openMallPath = AccessLogSanitizeUtils.isOpenMallPath(gatewayLog.getRequestUrl());
+            boolean standardOrderPath = AccessLogSanitizeUtils.isStandardOrdersPath(gatewayLog.getRequestUrl());
+            boolean omitBody = openMallPath || standardOrderPath;
             Map<String, Object> values = MapUtil.newHashMap(15, true); // 手工拼接，保证排序；15 保证不用扩容
             values.put("userId", gatewayLog.getUserId());
             values.put("userType", gatewayLog.getUserType());
             values.put("routeId", gatewayLog.getRoute() != null ? gatewayLog.getRoute().getId() : null);
             values.put("schema", gatewayLog.getSchema());
             values.put("requestUrl", gatewayLog.getRequestUrl());
-            values.put("queryParams", gatewayLog.getQueryParams() != null
-                    ? gatewayLog.getQueryParams().toSingleValueMap() : null);
-            // 开放接口禁止记录原始请求体；其它路由对 JSON 做递归脱敏（不改动转发 body）
-            values.put("requestBody", openMallPath ? AccessLogSanitizeUtils.BODY_OMITTED
+            values.put("queryParams", standardOrderPath ? null : (gatewayLog.getQueryParams() != null
+                    ? gatewayLog.getQueryParams().toSingleValueMap() : null));
+            // 开放接口与标准订单禁止记录原始请求体；其它路由对 JSON 做递归脱敏（不改动转发 body）
+            values.put("requestBody", omitBody ? AccessLogSanitizeUtils.BODY_OMITTED
                     : AccessLogSanitizeUtils.sanitizeJsonBody(gatewayLog.getRequestBody()));
             // 请求头脱敏副本，避免 Authorization/Cookie 泄露
             values.put("requestHeaders", JsonUtils.toJsonString(
                     AccessLogSanitizeUtils.sanitizeHeaders(gatewayLog.getRequestHeaders())));
             values.put("userIp", gatewayLog.getUserIp());
-            // 开放接口禁止记录原始响应体；其它路由对 JSON 做递归脱敏
-            values.put("responseBody", openMallPath ? AccessLogSanitizeUtils.BODY_OMITTED
+            // 开放接口与标准订单禁止记录原始响应体；其它路由对 JSON 做递归脱敏
+            values.put("responseBody", omitBody ? AccessLogSanitizeUtils.BODY_OMITTED
                     : AccessLogSanitizeUtils.sanitizeJsonBody(gatewayLog.getResponseBody()));
             values.put("responseHeaders", gatewayLog.getResponseHeaders() != null
                     ? JsonUtils.toJsonString(AccessLogSanitizeUtils.sanitizeHeaders(gatewayLog.getResponseHeaders()))
@@ -117,8 +119,14 @@ public class AccessLogFilter implements GlobalFilter, Ordered {
 
     @Override
     public Mono<Void> filter(ServerWebExchange exchange, GatewayFilterChain chain) {
-        // 将 Request 中可以直接获取到的参数，设置到网关日志
+        // 标准订单路径直接透传原流，不读取或缓存正文，不装饰响应缓冲卡密
         ServerHttpRequest request = exchange.getRequest();
+        String rawPath = request.getURI().getRawPath();
+        if (AccessLogSanitizeUtils.isStandardOrdersPath(rawPath)) {
+            return filterStandardOrder(exchange, chain);
+        }
+
+        // 将 Request 中可以直接获取到的参数，设置到网关日志
         // TODO traceId
         AccessLog gatewayLog = new AccessLog();
         gatewayLog.setRoute(WebFrameworkUtils.getGatewayRoute(exchange));
@@ -137,6 +145,35 @@ public class AccessLogFilter implements GlobalFilter, Ordered {
             return filterWithRequestBody(exchange, chain, gatewayLog);
         }
         return filterWithoutRequestBody(exchange, chain, gatewayLog);
+    }
+
+    private Mono<Void> filterStandardOrder(ServerWebExchange exchange, GatewayFilterChain chain) {
+        ServerHttpRequest request = exchange.getRequest();
+        AccessLog gatewayLog = new AccessLog();
+        gatewayLog.setRoute(WebFrameworkUtils.getGatewayRoute(exchange));
+        gatewayLog.setSchema(request.getURI().getScheme());
+        gatewayLog.setRequestMethod(request.getMethod().name());
+        gatewayLog.setRequestUrl(AccessLogSanitizeUtils.safeStandardOrderUrl(request.getURI().getRawPath()));
+        gatewayLog.setStartTime(LocalDateTime.now());
+        gatewayLog.setUserIp(WebFrameworkUtils.getClientIP(exchange));
+        gatewayLog.setRequestBody(AccessLogSanitizeUtils.BODY_OMITTED);
+        gatewayLog.setResponseBody(AccessLogSanitizeUtils.BODY_OMITTED);
+
+        return chain.filter(exchange)
+                .doOnError(throwable -> {
+                    gatewayLog.setEndTime(LocalDateTime.now());
+                    gatewayLog.setDuration((int) java.time.Duration.between(gatewayLog.getStartTime(), gatewayLog.getEndTime()).toMillis());
+                    gatewayLog.setHttpStatus(exchange.getResponse().getStatusCode() != null
+                            ? HttpStatus.resolve(exchange.getResponse().getStatusCode().value()) : HttpStatus.INTERNAL_SERVER_ERROR);
+                    writeAccessLog(gatewayLog);
+                })
+                .doOnSuccess(aVoid -> {
+                    gatewayLog.setEndTime(LocalDateTime.now());
+                    gatewayLog.setDuration((int) java.time.Duration.between(gatewayLog.getStartTime(), gatewayLog.getEndTime()).toMillis());
+                    gatewayLog.setHttpStatus(exchange.getResponse().getStatusCode() != null
+                            ? HttpStatus.resolve(exchange.getResponse().getStatusCode().value()) : HttpStatus.OK);
+                    writeAccessLog(gatewayLog);
+                });
     }
 
     private Mono<Void> filterWithoutRequestBody(ServerWebExchange exchange, GatewayFilterChain chain, AccessLog accessLog) {

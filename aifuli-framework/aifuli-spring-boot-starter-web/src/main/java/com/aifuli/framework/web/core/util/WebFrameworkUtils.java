@@ -112,10 +112,14 @@ public class WebFrameworkUtils {
             return userType;
         }
         // 2. 其次，基于 URL 前缀的约定
-        if (request.getServletPath().startsWith(properties.getAdminApi().getPrefix())) {
+        if (properties != null && properties.getAdminApi() != null
+                && request.getServletPath() != null
+                && request.getServletPath().startsWith(properties.getAdminApi().getPrefix())) {
             return UserTypeEnum.ADMIN.getValue();
         }
-        if (request.getServletPath().startsWith(properties.getAppApi().getPrefix())) {
+        if (properties != null && properties.getAppApi() != null
+                && request.getServletPath() != null
+                && request.getServletPath().startsWith(properties.getAppApi().getPrefix())) {
             return UserTypeEnum.MEMBER.getValue();
         }
         return null;

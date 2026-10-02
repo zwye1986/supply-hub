@@ -47,4 +47,22 @@ class ApiAccessLogPathUtilsTest {
                 "/edge/supply-chain/rpc-api/supply-chain/instore/channel-command/createPaymentOrder",
                 "/supply-chain")).isFalse();
     }
+
+    @Test
+    void standardOrdersPathsAreIdentifiedAndSanitized() {
+        assertThat(ApiAccessLogPathUtils.isStandardOrdersPath("/open-api/supply-chain/project/v1/orders", "")).isTrue();
+        assertThat(ApiAccessLogPathUtils.isStandardOrdersPath("/open-api/supply-chain/project/v1/orders/query", "")).isTrue();
+        assertThat(ApiAccessLogPathUtils.isStandardOrdersPath("/open-api/supply-chain/project/v1/orders/assets/query", "")).isTrue();
+        assertThat(ApiAccessLogPathUtils.isStandardOrdersPath("/open-api/supply-chain/project/v1/orders/unknown", "")).isTrue();
+        assertThat(ApiAccessLogPathUtils.isStandardOrdersPath("/supply-chain/open-api/supply-chain/project/v1/orders", "/supply-chain")).isTrue();
+
+        assertThat(ApiAccessLogPathUtils.isStandardOrdersPath("/open-api/supply-chain/project/v1/orders-other", "")).isFalse();
+        assertThat(ApiAccessLogPathUtils.isStandardOrdersPath("/open-api/supply-chain/project/v1/other", "")).isFalse();
+
+        assertThat(ApiAccessLogPathUtils.safeStandardOrderUrl("/open-api/supply-chain/project/v1/orders", "")).isEqualTo("/open-api/supply-chain/project/v1/orders");
+        assertThat(ApiAccessLogPathUtils.safeStandardOrderUrl("/open-api/supply-chain/project/v1/orders/query", "")).isEqualTo("/open-api/supply-chain/project/v1/orders/query");
+        assertThat(ApiAccessLogPathUtils.safeStandardOrderUrl("/open-api/supply-chain/project/v1/orders/assets/query", "")).isEqualTo("/open-api/supply-chain/project/v1/orders/assets/query");
+        assertThat(ApiAccessLogPathUtils.safeStandardOrderUrl("/open-api/supply-chain/project/v1/orders/13800138000", "")).isEqualTo("/open-api/supply-chain/project/v1/orders/[protected]");
+        assertThat(ApiAccessLogPathUtils.safeStandardOrderUrl("/supply-chain/open-api/supply-chain/project/v1/orders/13800138000", "/supply-chain")).isEqualTo("/open-api/supply-chain/project/v1/orders/[protected]");
+    }
 }

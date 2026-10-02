@@ -18,7 +18,8 @@ public final class ApiAccessLogPathUtils {
             "/rpc-api/supply-chain/instore/channel-command/",
             "/rpc-api/supply-chain/instore/channel-member/",
             "/rpc-api/supply-chain/instore/buyer-entry/",
-            "/rpc-api/supply-chain/buyer/instore/payment/"
+            "/rpc-api/supply-chain/buyer/instore/payment/",
+            "/open-api/supply-chain/project/v1/orders"
     };
 
     private ApiAccessLogPathUtils() {
@@ -70,6 +71,27 @@ public final class ApiAccessLogPathUtils {
         String path = stripLeadingContextPath(requestUri, contextPath);
         return path.startsWith("/supply-chain/recharge-frequency/")
                 || path.startsWith("/admin-api/supply-chain/recharge-frequency/");
+    }
+
+    /** 标准订单开放路径：包含原始签名正文、手机号与卡券资产，严禁日志记录正文与响应。
+     * 设计见 {@code docs/superpowers/specs/2026-10-02-standard-project-http-transport-design.md#4-共享web保护与影响范围}。 */
+    public static boolean isStandardOrdersPath(String requestUri, String contextPath) {
+        if (requestUri == null) { return false; }
+        String path = stripLeadingContextPath(requestUri, contextPath);
+        return "/open-api/supply-chain/project/v1/orders".equals(path)
+                || path.startsWith("/open-api/supply-chain/project/v1/orders/");
+    }
+
+    /** 标准订单安全URL：避免在未知子路径中泄漏夹带的参数或账号。 */
+    public static String safeStandardOrderUrl(String requestUri, String contextPath) {
+        if (requestUri == null) { return "/open-api/supply-chain/project/v1/orders"; }
+        String path = stripLeadingContextPath(requestUri, contextPath);
+        if ("/open-api/supply-chain/project/v1/orders".equals(path)
+                || "/open-api/supply-chain/project/v1/orders/query".equals(path)
+                || "/open-api/supply-chain/project/v1/orders/assets/query".equals(path)) {
+            return path;
+        }
+        return "/open-api/supply-chain/project/v1/orders/[protected]";
     }
 
     private static String stripLeadingContextPath(String requestUri, String contextPath) {

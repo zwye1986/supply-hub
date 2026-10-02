@@ -91,6 +91,10 @@ public final class ProjectAppAuthFilter extends OncePerRequestFilter {
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
                                     FilterChain filterChain) throws ServletException, IOException {
         ProjectAuthContextHolder.clear();
+        String path = pathWithoutContext(request);
+        if (isStandardOrdersPath(path)) {
+            response.setHeader("Cache-Control", "no-store");
+        }
         try {
             CachedBodyHttpServletRequestWrapper wrapped;
             ProjectAuthContext context;
@@ -330,6 +334,11 @@ public final class ProjectAppAuthFilter extends OncePerRequestFilter {
         ServiceException failure = authInvalid();
         failure.initCause(cause);
         return failure;
+    }
+
+    private static boolean isStandardOrdersPath(String path) {
+        return ProjectAuthOperations.STANDARD_ORDERS_PATH.equals(path)
+                || (path != null && path.startsWith(ProjectAuthOperations.STANDARD_ORDERS_PATH + "/"));
     }
 
     private record ParsedHeaders(String appId, int keyVersion, String contractVersion,

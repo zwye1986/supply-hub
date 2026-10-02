@@ -80,14 +80,31 @@ class ProjectStandardOrderQueryContractTest {
     }
 
     @Test
-    void voucherJsonOnlyEmitsItsCorrespondingDeliveryField() {
-        var asset = new ProjectStandardOrderAssetRespDTO();
-        asset.setAssetType("VOUCHER_CODE");
-        asset.setVoucherCode("voucher-value");
-        var node = json.valueToTree(asset);
-        assertThat(node.has("voucherCode")).isTrue();
-        assertThat(node.has("cardCode")).isFalse();
-        assertThat(node.has("cardSecret")).isFalse();
-        assertThat(node.has("voucherUrl")).isFalse();
+    void createResponseExposesOnlyClosedFieldsAndIsIsolatedFromInternalFields() throws Exception {
+        var dto = new ProjectStandardOrderCreateRespDTO();
+        dto.setRequestId("AR_20261002001");
+        dto.setBuyerOrderNo("PO_20261002001");
+        dto.setReceiptStatus(FulfillmentReceiptStatus.ACCEPTED);
+        dto.setReceiptVersion(1L);
+        dto.setOrderNo("SO_20261002001");
+        dto.setAcceptedAt(OffsetDateTime.parse("2026-10-02T12:00:00+08:00"));
+        dto.setIdempotentReplay(false);
+        var node = json.readTree(json.writeValueAsBytes(dto));
+        var names = new HashSet<String>();
+        node.fieldNames().forEachRemaining(names::add);
+        assertThat(names).containsExactlyInAnyOrder(
+                "requestId",
+                "buyerOrderNo",
+                "receiptStatus",
+                "receiptVersion",
+                "orderNo",
+                "orderStatus",
+                "rejectionCode",
+                "idempotentReplay",
+                "acceptedAt");
+        // 绝不暴露供应商或内部履约请求号或内部备注
+        assertThat(names).doesNotContain("supplierCode", "supplierName", "fulfillmentRequestNo", "remark");
+        assertThat(node.get("orderStatus").isNull()).isTrue();
+        assertThat(node.get("acceptedAt").textValue()).isEqualTo("2026-10-02T12:00:00+08:00");
     }
 }

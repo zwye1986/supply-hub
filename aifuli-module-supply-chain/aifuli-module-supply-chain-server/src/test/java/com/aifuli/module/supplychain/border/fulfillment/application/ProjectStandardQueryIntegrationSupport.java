@@ -45,6 +45,7 @@ class ProjectStandardQueryIntegrationSupport implements AutoCloseable {
         mysql.start();
         context =
                 new SpringApplicationBuilder(Config.class)
+                        .profiles("project-standard-query-test")
                         .web(WebApplicationType.NONE)
                         .properties(
                                 Map.of(
@@ -198,6 +199,7 @@ class ProjectStandardQueryIntegrationSupport implements AutoCloseable {
                 status);
     }
 
+    @Profile("project-standard-query-test")
     @Configuration(proxyBeanMethods = false)
     @Import({
         SupplyChainDataSourceConfiguration.class,

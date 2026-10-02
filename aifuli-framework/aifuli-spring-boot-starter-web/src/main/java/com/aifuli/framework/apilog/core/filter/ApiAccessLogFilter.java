@@ -72,9 +72,10 @@ public class ApiAccessLogFilter extends ApiRequestFilter {
             throws ServletException, IOException {
         // 获得开始时间
         LocalDateTime beginTime = LocalDateTime.now();
-        // 敏感限频正文无需平台日志读取；先判断路径，确保正文仍可供MVC绑定。
-        // 设计见 docs/superpowers/specs/2026-09-30-direct-recharge-mobile-spu-frequency-design.md#7-管理端契约与权限。
-        boolean sensitive = isFrequencyRequest(request);
+        // 敏感限频与标准订单正文无需平台日志读取；先判断路径，确保正文仍可供MVC绑定。
+        // 设计见 docs/superpowers/specs/2026-09-30-direct-recharge-mobile-spu-frequency-design.md#7-管理端契约与权限
+        // 与 docs/superpowers/specs/2026-10-02-standard-project-http-transport-design.md#4-共享web保护与影响范围。
+        boolean sensitive = isSensitiveProtectionRequest(request);
         if (sensitive) { response.setHeader("Cache-Control", "no-store"); }
         // 普通路径继续提前获得参数，避免 XssFilter 过滤处理。
         Map<String, String> queryString = sensitive ? Map.of() : ServletUtils.getParamMap(request);
@@ -102,10 +103,10 @@ public class ApiAccessLogFilter extends ApiRequestFilter {
             }
             apiAccessLogApi.createApiAccessLogAsync(accessLog);
         } catch (Throwable th) {
-            if (isFrequencyRequest(request)) {
+            if (isSensitiveProtectionRequest(request)) {
                 long failures=SENSITIVE_LOG_FAILURES.incrementAndGet();
                 if (failures==1 || failures % SENSITIVE_LOG_FAILURE_SAMPLE_INTERVAL==0) {
-                    log.error("[限频管理访问日志存储失败] failureCount={}, types={}, traceId={}, safeStack={}", failures,
+                    log.error("[敏感业务访问日志存储失败] failureCount={}, types={}, traceId={}, safeStack={}", failures,
                             SensitiveExceptionLogUtils.types(th), TracerUtils.getTraceId(), SensitiveExceptionLogUtils.stack(th));
                 }
                 // 平台访问日志兜底不覆盖已确定业务结果；业务操作审计由供应链同事务严格保存。
@@ -136,17 +137,21 @@ public class ApiAccessLogFilter extends ApiRequestFilter {
             accessLog.setResultCode(result.getCode()).setResultMsg(result.getMsg());
         } else if (ex != null) {
             accessLog.setResultCode(GlobalErrorCodeConstants.INTERNAL_SERVER_ERROR.getCode())
-                    .setResultMsg(isFrequencyRequest(request) ? SensitiveExceptionLogUtils.types(ex) : ExceptionUtil.getRootCauseMessage(ex));
+                    .setResultMsg(isSensitiveProtectionRequest(request) ? SensitiveExceptionLogUtils.types(ex) : ExceptionUtil.getRootCauseMessage(ex));
         } else {
             accessLog.setResultCode(GlobalErrorCodeConstants.SUCCESS.getCode()).setResultMsg("");
         }
         // 设置请求字段
+        boolean standardOrder = ApiAccessLogPathUtils.isStandardOrdersPath(request.getRequestURI(), request.getContextPath());
+        String safeUrl = standardOrder
+                ? ApiAccessLogPathUtils.safeStandardOrderUrl(request.getRequestURI(), request.getContextPath())
+                : request.getRequestURI();
         accessLog.setTraceId(TracerUtils.getTraceId()).setApplicationName(applicationName)
-                .setRequestUrl(request.getRequestURI()).setRequestMethod(request.getMethod())
+                .setRequestUrl(safeUrl).setRequestMethod(request.getMethod())
                 .setUserAgent(ServletUtils.getUserAgent(request)).setUserIp(ServletUtils.getClientIP(request));
         String[] sanitizeKeys = accessLogAnnotation != null ? accessLogAnnotation.sanitizeKeys() : null;
-        Boolean requestEnable = ApiAccessLogPathUtils.isSensitivePlatformPath(
-                request.getRequestURI(), request.getContextPath()) ? Boolean.FALSE
+        Boolean requestEnable = (standardOrder || ApiAccessLogPathUtils.isSensitivePlatformPath(
+                request.getRequestURI(), request.getContextPath())) ? Boolean.FALSE
                 : accessLogAnnotation != null ? accessLogAnnotation.requestEnable() : Boolean.TRUE;
         if (!BooleanUtil.isFalse(requestEnable)) { // 默认记录，所以判断 !false
             Map<String, Object> requestParams = MapUtil.<String, Object>builder()
@@ -154,7 +159,9 @@ public class ApiAccessLogFilter extends ApiRequestFilter {
                     .put("body", sanitizeJson(requestBody, sanitizeKeys)).build();
             accessLog.setRequestParams(toJsonString(requestParams));
         }
-        Boolean responseEnable = accessLogAnnotation != null ? accessLogAnnotation.responseEnable() : Boolean.FALSE;
+        // 标准订单强制禁止记录响应正文，杜绝卡密交付明文被访问日志记录
+        Boolean responseEnable = standardOrder ? Boolean.FALSE
+                : accessLogAnnotation != null ? accessLogAnnotation.responseEnable() : Boolean.FALSE;
         if (BooleanUtil.isTrue(responseEnable)) { // 默认不记录，默认强制要求 true
             accessLog.setResponseBody(sanitizeJson(result, sanitizeKeys));
         }
@@ -179,8 +186,10 @@ public class ApiAccessLogFilter extends ApiRequestFilter {
         return true;
     }
 
-    private static boolean isFrequencyRequest(HttpServletRequest request) {
-        return ApiAccessLogPathUtils.isRechargeFrequencyAdminPath(request.getRequestURI(), request.getContextPath());
+    private static boolean isSensitiveProtectionRequest(HttpServletRequest request) {
+        if (request == null) { return false; }
+        return ApiAccessLogPathUtils.isRechargeFrequencyAdminPath(request.getRequestURI(), request.getContextPath())
+                || ApiAccessLogPathUtils.isStandardOrdersPath(request.getRequestURI(), request.getContextPath());
     }
 
     // ========== 解析 @ApiAccessLog、@Swagger 注解  ==========

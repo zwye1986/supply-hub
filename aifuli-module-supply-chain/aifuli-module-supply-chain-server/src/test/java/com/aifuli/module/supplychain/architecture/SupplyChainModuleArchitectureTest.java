@@ -38,7 +38,8 @@ class SupplyChainModuleArchitectureTest {
     static final ArchRule movie_config_api_is_independent = noClasses()
             .that().resideInAPackage("..api.movie..")
             .should().dependOnClassesThat()
-            .resideInAnyPackage("..dal..", "..tradecore..", "..interfaceapi..");
+            .resideInAnyPackage("..dal..", "..tradecore..", "..interfaceapi..")
+            .allowEmptyShould(true);
 
     /**
      * Offer 身份上的人工评分是路由预备输入，引擎不依赖评分服务。

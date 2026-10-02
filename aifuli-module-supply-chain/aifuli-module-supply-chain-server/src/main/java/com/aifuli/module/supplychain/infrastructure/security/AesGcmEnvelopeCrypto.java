@@ -1,6 +1,7 @@
 package com.aifuli.module.supplychain.infrastructure.security;
 
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 
 import javax.crypto.Cipher;
@@ -14,6 +15,7 @@ import java.security.SecureRandom;
 import java.util.Base64;
 
 /** 目标与资产的 AES-GCM 信封加密，以及不可逆 HMAC 指纹。 */
+@Primary
 @Component
 public final class AesGcmEnvelopeCrypto implements EnvelopeCryptoPort, HmacFingerprintPort {
 

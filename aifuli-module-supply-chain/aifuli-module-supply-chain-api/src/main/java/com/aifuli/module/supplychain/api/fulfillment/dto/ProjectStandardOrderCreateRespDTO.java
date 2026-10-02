@@ -1,0 +1,45 @@
+package com.aifuli.module.supplychain.api.fulfillment.dto;
+
+import com.aifuli.module.supplychain.api.order.dto.SupplyChainOrderStatus;
+import lombok.Data;
+
+import java.time.OffsetDateTime;
+
+/**
+ * 项目标准订单受理封闭响应。
+ *
+ * <p>下单响应复用 CommonResult 外层，data 提供稳定受理回执号、采购商订单号、回执状态、回执版本、
+ * 订单号、订单状态、拒绝码、受理时间与幂等重放标记；未建单字段显式为 null。
+ * 绝不暴露供应商编码/名称、内部履约请求号、内部备注或数字主键。
+ * 详见 {@code docs/superpowers/specs/2026-09-30-project-signed-standard-order-http-design.md#51-响应契约与状态隔离}。</p>
+ */
+@Data
+public class ProjectStandardOrderCreateRespDTO {
+
+    /** 受理回执稳定业务编号（receiptNo） */
+    private String requestId;
+
+    /** 采购商订单号 */
+    private String buyerOrderNo;
+
+    /** 受理回执状态 */
+    private FulfillmentReceiptStatus receiptStatus;
+
+    /** 受理回执乐观锁版本号 */
+    private Long receiptVersion;
+
+    /** 供应链总订单稳定业务编号，未建单时为 null */
+    private String orderNo;
+
+    /** 总订单公共状态，未建单时为 null */
+    private SupplyChainOrderStatus orderStatus;
+
+    /** 稳定拒绝原因码 */
+    private String rejectionCode;
+
+    /** 是否幂等重放 */
+    private Boolean idempotentReplay;
+
+    /** 受理成功时间，未受理成功时为 null */
+    private OffsetDateTime acceptedAt;
+}

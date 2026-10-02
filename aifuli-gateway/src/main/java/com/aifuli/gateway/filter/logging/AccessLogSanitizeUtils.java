@@ -29,6 +29,34 @@ public final class AccessLogSanitizeUtils {
     /** 开放接口路径下 body 的日志占位说明 */
     public static final String BODY_OMITTED = "[omitted]";
 
+    /** 标准订单接口路径前缀：禁止网关消费正文与缓冲响应 */
+    public static final String STANDARD_ORDERS_PATH = "/open-api/supply-chain/project/v1/orders";
+
+    /**
+     * 判断是否为标准订单接口路径。
+     */
+    public static boolean isStandardOrdersPath(String requestUrl) {
+        if (StrUtil.isBlank(requestUrl)) {
+            return false;
+        }
+        return STANDARD_ORDERS_PATH.equals(requestUrl) || requestUrl.startsWith(STANDARD_ORDERS_PATH + "/");
+    }
+
+    /**
+     * 安全的标准订单请求路径，避免在未知路径中泄漏可能夹带的敏感参数。
+     */
+    public static String safeStandardOrderUrl(String requestUrl) {
+        if (StrUtil.isBlank(requestUrl)) {
+            return STANDARD_ORDERS_PATH;
+        }
+        if (STANDARD_ORDERS_PATH.equals(requestUrl)
+                || (STANDARD_ORDERS_PATH + "/query").equals(requestUrl)
+                || (STANDARD_ORDERS_PATH + "/assets/query").equals(requestUrl)) {
+            return requestUrl;
+        }
+        return STANDARD_ORDERS_PATH + "/[protected]";
+    }
+
     /**
      * 需要整键脱敏的字段名（大小写不敏感）；receiver* 前缀单独判断。
      */

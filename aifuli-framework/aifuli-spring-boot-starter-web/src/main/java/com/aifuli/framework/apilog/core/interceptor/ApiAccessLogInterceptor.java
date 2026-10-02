@@ -36,8 +36,10 @@ public class ApiAccessLogInterceptor implements HandlerInterceptor {
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
-        // 内部限频响应包括参数/权限错误均禁止缓存，见 docs/superpowers/specs/2026-09-30-direct-recharge-mobile-spu-frequency-design.md#7-管理端契约与权限。
-        if (ApiAccessLogPathUtils.isRechargeFrequencyAdminPath(request.getRequestURI(), request.getContextPath())) {
+        // 内部限频与标准订单响应包括参数/权限错误均禁止缓存，见 docs/superpowers/specs/2026-09-30-direct-recharge-mobile-spu-frequency-design.md#7-管理端契约与权限
+        // 及 docs/superpowers/specs/2026-10-02-standard-project-http-transport-design.md#4-共享web保护与影响范围。
+        if (ApiAccessLogPathUtils.isRechargeFrequencyAdminPath(request.getRequestURI(), request.getContextPath())
+                || ApiAccessLogPathUtils.isStandardOrdersPath(request.getRequestURI(), request.getContextPath())) {
             response.setHeader("Cache-Control", "no-store");
         }
         // 记录 HandlerMethod，提供给 ApiAccessLogFilter 使用
@@ -48,8 +50,9 @@ public class ApiAccessLogInterceptor implements HandlerInterceptor {
 
         // 打印 request 日志
         if (!SpringUtils.isProd()) {
-            if (ApiAccessLogPathUtils.isSensitivePlatformPath(request.getRequestURI(), request.getContextPath())) {
-                // 开放回调、内部 RPC 与项目应用认证可能包含凭据或签名正文，普通日志一律省略参数。
+            if (ApiAccessLogPathUtils.isSensitivePlatformPath(request.getRequestURI(), request.getContextPath())
+                    || ApiAccessLogPathUtils.isStandardOrdersPath(request.getRequestURI(), request.getContextPath())) {
+                // 开放回调、内部 RPC、项目应用认证与标准订单包含凭据、签名正文或卡密资产，普通日志一律省略参数。
                 log.info("[preHandle][开始请求 URL({}) 参数已省略]", request.getRequestURI());
             } else {
                 Map<String, String> queryString = ServletUtils.getParamMap(request);

@@ -35,6 +35,12 @@ public class GlobalExceptionHandler implements ErrorWebExceptionHandler {
             return Mono.error(ex);
         }
 
+        String rawPath = exchange.getRequest().getURI().getRawPath();
+        boolean standardOrder = com.aifuli.gateway.filter.logging.AccessLogSanitizeUtils.isStandardOrdersPath(rawPath);
+        if (standardOrder) {
+            response.getHeaders().set("Cache-Control", "no-store");
+        }
+
         // 转换成 CommonResult
         CommonResult<?> result;
         if (ex instanceof ResponseStatusException) {
@@ -52,8 +58,14 @@ public class GlobalExceptionHandler implements ErrorWebExceptionHandler {
      */
     private CommonResult<?> responseStatusExceptionHandler(ServerWebExchange exchange,
                                                            ResponseStatusException ex) {
-        // TODO 芋艿：这里要精细化翻译，默认返回用户是看不懂的
         ServerHttpRequest request = exchange.getRequest();
+        String rawPath = request.getURI().getRawPath();
+        if (com.aifuli.gateway.filter.logging.AccessLogSanitizeUtils.isStandardOrdersPath(rawPath)) {
+            log.error("[responseStatusExceptionHandler][safeUri({}/{}) status({}) 发生异常]",
+                    com.aifuli.gateway.filter.logging.AccessLogSanitizeUtils.safeStandardOrderUrl(rawPath),
+                    request.getMethod(), ex.getStatusCode());
+            return CommonResult.error(ex.getStatusCode().value(), "请求失败");
+        }
         log.error("[responseStatusExceptionHandler][uri({}/{}) 发生异常]", request.getURI(), request.getMethod(), ex);
         return CommonResult.error(ex.getStatusCode().value(), ex.getReason());
     }
@@ -65,8 +77,14 @@ public class GlobalExceptionHandler implements ErrorWebExceptionHandler {
     public CommonResult<?> defaultExceptionHandler(ServerWebExchange exchange,
                                                    Throwable ex) {
         ServerHttpRequest request = exchange.getRequest();
+        String rawPath = request.getURI().getRawPath();
+        if (com.aifuli.gateway.filter.logging.AccessLogSanitizeUtils.isStandardOrdersPath(rawPath)) {
+            log.error("[defaultExceptionHandler][safeUri({}/{}) 发生异常: {}]",
+                    com.aifuli.gateway.filter.logging.AccessLogSanitizeUtils.safeStandardOrderUrl(rawPath),
+                    request.getMethod(), ex.getClass().getSimpleName());
+            return CommonResult.error(INTERNAL_SERVER_ERROR.getCode(), INTERNAL_SERVER_ERROR.getMsg());
+        }
         log.error("[defaultExceptionHandler][uri({}/{}) 发生异常]", request.getURI(), request.getMethod(), ex);
-        // TODO 芋艿：是否要插入异常日志呢？
         // 返回 ERROR CommonResult
         return CommonResult.error(INTERNAL_SERVER_ERROR.getCode(), INTERNAL_SERVER_ERROR.getMsg());
     }

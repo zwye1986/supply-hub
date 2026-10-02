@@ -38,6 +38,24 @@ public class BuyerResolver {
                 buyer.getShortName(), binding.getBindingVersion());
     }
 
+    /**
+     * 按采购商主键校验并返回启用快照，供标准商品等由项目可信上下文驱动的流程使用。
+     */
+    public BuyerSnapshot requireActiveById(Long buyerId) {
+        if (buyerId == null) {
+            throw exception(BUYER_NOT_FOUND);
+        }
+        BuyerDO buyer = buyerMapper.selectById(buyerId);
+        if (buyer == null) {
+            throw exception(BUYER_NOT_FOUND);
+        }
+        if (buyer.getStatus() != BuyerStatus.ACTIVE.getCode()) {
+            throw exception(BUYER_DISABLED);
+        }
+        return new BuyerSnapshot(buyer.getId(), buyer.getBuyerCode(), buyer.getBuyerName(),
+                buyer.getShortName(), null);
+    }
+
     public record BuyerSnapshot(Long id, String buyerCode, String buyerName,
                                 String shortName, Integer bindingVersion) {
     }

@@ -47,6 +47,9 @@ aifuli:
       - /rpc-api/supply-chain/instore/channel-member/*
       - /rpc-api/supply-chain/instore/buyer-entry/*
       - /rpc-api/supply-chain/buyer/instore/payment/*
+      - /open-api/supply-chain/project/v1/orders
+      - /open-api/supply-chain/project/v1/orders/query
+      - /open-api/supply-chain/project/v1/orders/assets/query
       - /v3/api-docs
       - /v3/api-docs/**
       - /webjars/**
