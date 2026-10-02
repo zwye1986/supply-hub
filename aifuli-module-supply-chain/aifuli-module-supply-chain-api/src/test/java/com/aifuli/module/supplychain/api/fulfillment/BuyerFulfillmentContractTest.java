@@ -105,6 +105,7 @@ class BuyerFulfillmentContractTest {
         request.setSourceSystem("AIFULI_MALL");
         request.setExternalTenantId("tenant-wusheng");
         request.setFulfillmentRequestNo("FR_01K1XXXXXXXXXXXX");
+        request.setProjectCode("PRJ_KEY_A");
 
         Set<String> properties = validator.validate(request).stream()
                 .map(v -> v.getPropertyPath().toString())
