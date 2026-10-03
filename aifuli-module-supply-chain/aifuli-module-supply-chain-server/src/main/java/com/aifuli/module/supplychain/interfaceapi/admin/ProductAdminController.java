@@ -225,12 +225,37 @@ public class ProductAdminController {
     @PutMapping("/batch-status")
     @PreAuthorize(PRODUCT_UPDATE_STATUS_EXPRESSION)
     @Operation(summary = "批量变更平台商品状态（批量上下架）",
-            description = "支持多选 SPU 或多选 SKU 进行批量上架或下架操作；下架时统一记录下架方式。")
-    public CommonResult<Boolean> batchChangeStatus(@Valid @RequestBody ProductBatchStatusReqVO request) {
-        commandService.batchChangeStatus(new ProductCatalogCommandService.BatchStatusCommand(
-                request.getSpuCodes(), request.getSkuCodes(), request.getTargetStatus(),
-                request.getUnshelveMode(), getLoginUserId()));
-        return success(true);
+            description = "支持多选 SPU 或多选 SKU 进行批量上架或下架操作；下架时统一记录下架方式。"
+                    + "入参整体校验：未选择商品、编码为空白、或 SPU 与 SKU 项数之和超过 200 时整体拒绝，不产生任何写入。"
+                    + "校验通过后逐项独立事务：任一项失败仅回滚该项，已成功项保持下架/上架结果。"
+                    + "响应携带成功列表与失败明细，成功项数与失败项数之和恒等于入参编码总数，前端据此渲染「成功 N 项、失败 M 项」。")
+    public CommonResult<BatchStatusResultVO> batchChangeStatus(@Valid @RequestBody ProductBatchStatusReqVO request) {
+        ProductCatalogCommandService.BatchStatusResult result = commandService.batchChangeStatus(
+                new ProductCatalogCommandService.BatchStatusCommand(
+                        request.getSpuCodes(), request.getSkuCodes(), request.getTargetStatus(),
+                        request.getUnshelveMode(), getLoginUserId()));
+        return success(toBatchStatusResultVO(result));
+    }
+
+    /** 领域结果转对外 VO，保持 admin 包内响应 VO 一律由 {@code @Data} 无参构造 + setter 组装的惯例。 */
+    private static BatchStatusResultVO toBatchStatusResultVO(ProductCatalogCommandService.BatchStatusResult result) {
+        BatchStatusResultVO vo = new BatchStatusResultVO();
+        vo.setSucceeded(result.succeeded());
+        vo.setFailed(result.failed().stream()
+                .map(ProductAdminController::toBatchStatusFailedItemVO)
+                .toList());
+        return vo;
+    }
+
+    /** {@code entityType} 取枚举 {@code code} 而非 {@code name()}，避免枚举常量重命名静默改变前端契约。 */
+    private static BatchStatusFailedItemVO toBatchStatusFailedItemVO(
+            ProductCatalogCommandService.BatchStatusFailedItem item) {
+        BatchStatusFailedItemVO vo = new BatchStatusFailedItemVO();
+        vo.setEntityType(item.entityType().getCode());
+        vo.setCode(item.code());
+        vo.setErrorCode(item.errorCode());
+        vo.setErrorMessage(item.errorMessage());
+        return vo;
     }
 
     @PutMapping("/skus/tax-metadata")
@@ -586,10 +611,19 @@ public class ProductAdminController {
     @Data
     @Schema(description = "商品批量上下架请求")
     public static class ProductBatchStatusReqVO {
-        @Schema(description = "选中的平台 SPU 编码列表")
-        private List<String> spuCodes;
-        @Schema(description = "选中的平台 SKU 编码列表")
-        private List<String> skuCodes;
+        /**
+         * 两个编码列表各自可选（可只选 SPU 或只选 SKU），故不加 {@code @NotEmpty}；
+         * 「至少选择一项」与「两表项数之和 ≤ 200」由服务层统一判定并抛
+         * {@code PRODUCT_BATCH_INPUT_INVALID}，因为跨字段约束无法由单字段注解表达。
+         * 此处的 {@code @Size} 与 {@code @NotBlank} 只是入参层粗筛，与同类
+         * {@code SkuTaxMetadataBatchReqVO} 的写法一致。
+         */
+        @Size(max = 200)
+        @Schema(description = "选中的平台 SPU 编码列表，单项 ≤200 且不得为空白；与 skuCodes 之和 ≤200")
+        private List<@NotBlank String> spuCodes;
+        @Size(max = 200)
+        @Schema(description = "选中的平台 SKU 编码列表，单项 ≤200 且不得为空白；与 spuCodes 之和 ≤200")
+        private List<@NotBlank String> skuCodes;
         @NotNull(message = "目标状态不能为空")
         @JsonFormat(shape = JsonFormat.Shape.STRING)
         @Schema(description = "目标状态：10上架，20下架；字典值以字符串传递", type = "string",
@@ -597,6 +631,29 @@ public class ProductAdminController {
         private Short targetStatus;
         @Schema(description = "下架方式：MANUAL_UNSHELVE手动下架，SYSTEM_UNSHELVE系统下架；下架时可选，缺省为 MANUAL_UNSHELVE", example = "MANUAL_UNSHELVE")
         private String unshelveMode;
+    }
+
+    @Data
+    @Schema(description = "商品批量上下架结果")
+    public static class BatchStatusResultVO {
+        @Schema(description = "成功处理项的业务编码列表（SPU 与 SKU 混合）")
+        private List<String> succeeded;
+
+        @Schema(description = "失败明细列表")
+        private List<BatchStatusFailedItemVO> failed;
+    }
+
+    @Data
+    @Schema(description = "商品批量上下架失败明细项")
+    public static class BatchStatusFailedItemVO {
+        @Schema(description = "实体类型：SPU 或 SKU，取值来自 CatalogEntityType", example = "SPU")
+        private String entityType;
+        @Schema(description = "失败项业务编码", example = "SPU_01ABC")
+        private String code;
+        @Schema(description = "稳定错误码，与 SupplyChainErrorCodeConstants 对齐", example = "1050001079")
+        private Integer errorCode;
+        @Schema(description = "错误消息", example = "平台 SPU 不存在")
+        private String errorMessage;
     }
 
     @Data

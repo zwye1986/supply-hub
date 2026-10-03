@@ -685,11 +685,46 @@ system-server 通过追加变更集 `006-product-list-filter-dictionaries` 写�
 * **设计目的**：支撑商品列表页表头「批量上架」与「批量下架」按钮，支持多选 SPU 或多选 SKU 进行批量状态流转，并在下架时统一打上 `MANUAL_UNSHELVE` 标记。
 * **权限**：使用 `SupplyChainAdminPermissions.PRODUCT_UPDATE_STATUS_EXPRESSION`。
 * **请求体**：`ProductBatchStatusReqVO`
-  * `spuCodes` (List<String>, 可选): 选中的 SPU 编码列表
-  * `skuCodes` (List<String>, 可选): 选中的 SKU 编码列表
+  * `spuCodes` (List<String>, 可选): 选中的 SPU 编码列表，`@Size(max = 200)`
+  * `skuCodes` (List<String>, 可选): 选中的 SKU 编码列表，`@Size(max = 200)`
   * `targetStatus` (Short, 必填): 目标状态（10-上架，20-下架）
   * `unshelveMode` (String, 可选): 下架方式，默认为 `MANUAL_UNSHELVE`
-* **响应**：`CommonResult<Boolean>`
+* **入参校验（D3）**：进入逐项处理前整体校验，任一不通过即整体拒绝、不产生任何写入，统一返回新增错误码 `PRODUCT_BATCH_INPUT_INVALID`（`1_050_001_169`，`RetryDirective.DO_NOT_RETRY`）：
+  * `targetStatus` 非 10/20 → 整体拒绝，仍返回 `PRODUCT_STATUS_INVALID`（`1_050_001_096`，语义为状态机非法迁移，此处贴切）。
+  * `spuCodes.size() + skuCodes.size() == 0`（未选择任何商品）→ `PRODUCT_BATCH_INPUT_INVALID`。
+  * `spuCodes.size() + skuCodes.size() > MAX_BATCH_STATUS_COUNT`（200，与本类 `MAX_BATCH_SKU_COUNT`、`GenericBatchPricingService.MAX_BATCH` 及全仓批量约定同值）→ `PRODUCT_BATCH_INPUT_INVALID`。上限按**两表之和**计，因为真正决定独立事务数量的是总项数而非单表项数；故另立 `MAX_BATCH_STATUS_COUNT` 常量而非复用 `MAX_BATCH_SKU_COUNT`，两者语义不同（后者只约束单表 SKU 数），仅取值恰好相同。
+  * 任一编码为空白 → `PRODUCT_BATCH_INPUT_INVALID`。**不再静默跳过**：与本类 `normalizeSkuCodes` 对空白编码整体拒绝的既有约定对齐；跳过会导致 `succeeded.size() + failed.size() ≠ 入参条数`，前端「成功 N 项、失败 M 项」计数失真。
+  * 上述校验通过后，`succeeded.size() + failed.size()` 恒等于入参编码总数（不含被整体拒绝的请求）。
+  * 错误码取舍理由：不复用 `PRODUCT_STATUS_INVALID`（文案「商品中心实体状态迁移不合法」，用于表达「未选择商品」会误导用户），也不复用 `PRODUCT_SKU_FIELD_INVALID`（文案「SKU 名称、履约模式或价格字段不合法」，对 SPU 编码问题尤其不贴），故新增专用码一处覆盖三 case。
+* **执行语义（2026-10-04 修订，d19 增补；D1/D2 于同日评审定案）**：
+  * **逐项独立事务（D1）**：每个 SPU 与 SKU 的状态迁移在独立事务中完成；任一项失败仅回滚该项，已成功项保持下架/上架结果，不再因其他项失败被回滚。
+    * 事务边界由 `TransactionTemplate` 显式控制，传播行为 **`PROPAGATION_REQUIRES_NEW`**、隔离级别 **`ISOLATION_READ_COMMITTED`**，与 `RechargeFrequencyAdminCommandService` 的既有先例逐字对齐。
+    * `PlatformTransactionManager` 以**手写构造器**参数 `@Qualifier("supplyChainTransactionManager")` 注入，不使用字段注入 + `@PostConstruct`。此处不能沿用本模块应用服务通行的 `@RequiredArgsConstructor`：根 `lombok.config` 未配置 `copyableAnnotations`，Lombok 不会把 `@Qualifier` 复制到生成的构造器参数上，而事务管理器必须按 bean 名显式限定，不能依赖「上下文里恰好只有一个 `PlatformTransactionManager`」的隐式按类型匹配（供应链为独立数据源 + 独立事务管理器，该前提不成立）。手写构造器与 `BusinessCodeLegacyBackfill`、`RechargeFrequencyAdminCommandService` 的既有做法一致。
+    * **为何必须是 `REQUIRES_NEW` 而非默认 `REQUIRED`**：本方法已移除方法级 `@Transactional`，当前唯一生产调用方 `ProductAdminController` 也非事务，故 `REQUIRED` 今天「碰巧」等价于独立事务。但「逐项独立事务」是本节的不变量，必须由代码强制而非依赖调用链恰好无事务——若日后任何调用方包裹本方法，`REQUIRED` 会使各项并入外层事务，且被 catch 的 `ServiceException` 会把外层标记为 rollback-only，提交时抛 `UnexpectedRollbackException`，连带丢掉已成功项，正是本设计要消除的行为。
+    * **无死锁风险（已核实）**：每项事务只锁一行（`requireSpuForUpdate`/`requireSkuForUpdate` 后 `updateById`），不级联子 SKU、不发布领域事件，且各项顺序执行、前一项提交后才开启下一项，不存在嵌套持锁。
+    * **连接占用**：`REQUIRES_NEW` 会挂起外层事务并额外占用一个连接。单请求顺序执行下峰值仅 1~2 个连接；200 条上限即为并发请求叠加时的连接池保护措施。
+  * **失败明细回执**：响应不再是 `Boolean`，而是 `BatchStatusResultVO`，包含 `succeeded`（成功项编码列表）与 `failed`（失败项明细列表）。前端据此渲染「成功 N 项、失败 M 项」并向用户展示失败明细，便于针对失败项重试。
+  * **失败原因分类**：失败项 `errorCode` 复用现有稳定错误码，常见包括 `PLATFORM_SPU_NOT_FOUND`（`1_050_001_079`）、`PLATFORM_SKU_NOT_FOUND`（`1_050_001_080`）、`PRODUCT_STATUS_INVALID`（`1_050_001_096`，状态机非法迁移）、`PRODUCT_CONCURRENT_UPDATE`（`1_050_001_097`，乐观锁冲突）、`PRODUCT_TYPE_INACTIVE`（`1_050_001_082`，商品类型未启用后不允许上架）。
+  * **系统异常处置（D2）**：逐项循环只捕获 `ServiceException` 并计入 `failed`；**非 `ServiceException` 的系统异常（存储故障、连接池耗尽等）向外传播**，由 `GlobalExceptionHandler` 兜底，不伪装为业务拒绝——与本模块 `RechargeFrequencyAdminCommandService` 类注释所载「未确定的存储异常向外传播，不伪装为业务拒绝」的既有原则一致。
+    * 传播前在循环外层记一条 `ERROR` 日志，携带已累积的 `succeeded` 与 `failed` 摘要后**原样 rethrow**（不吞异常、不丢因果，符合 AGENTS.md 规则 6）。
+    * 此路径下用户会看到整体报错、拿不到 `succeeded`/`failed` 回执，但库中已提交项确实生效。**这一缺口由幂等性兜住**：批量上下架是把状态置为固定目标值的幂等操作（同一编码重复设为 20 结果相同），不产生资金事实、无需业务键去重，故用户或前端整体重试不会产生副作用。
+    * 不采用的备选：把系统异常也计入 `failed` 并跑完剩余项，虽能保证 `N+M` 恒等于入参条数，但违反上述仓内原则，且在连接池耗尽这类故障下会对剩余每一项各试一次并刷 N 条日志，触发 AGENTS.md 规则 6 的日志风暴禁令。
+  * **降级契约**：当批量接口因网络/网关问题整体失败时，前端允许降级为 `Promise.allSettled` 逐项调用 `changeProductStatus` 接口，但需在 UI 显式提示「正在重试」并最终汇总成功/失败数。因上一条所述幂等性，降级重跑已提交项是安全的。
+  * **行锁不变量**：每个独立事务仍包含 `selectByCodeForUpdate` 行锁与 `checkTransition` 状态机校验，归档与上架分支保留原有 4 表引用与 Schema 校验约束。移除方法级 `@Transactional` 不改变行锁边界：`applySpuStatus`/`applySkuStatus` 为 private 方法，Spring 代理对其自调用本就不生效，行锁与状态校验必须运行在 `TransactionTemplate` 提供的事务内——这也是本设计选用 `TransactionTemplate` 而非在 private 方法上加 `@Transactional` 的原因。
+* **响应**：`CommonResult<BatchStatusResultVO>`
+  * `succeeded` (List<String>): 成功处理的业务编码（SPU 与 SKU 混合）。
+  * `failed` (List<BatchStatusFailedItemVO>): 失败明细列表。
+    * `entityType` (String): `SPU` 或 `SKU`，取值来自 `CatalogEntityType` 枚举，禁止散落字面量（AGENTS.md 规则 7）。
+    * `code` (String): 失败业务编码（`spuCode` 或 `skuCode`）。
+    * `errorCode` (Integer): 稳定错误码，与 `SupplyChainErrorCodeConstants` 对齐。
+    * `errorMessage` (String): 错误消息，与 `ServiceException#getMessage()` 一致。
+  * **失败项日志**：逐项失败各记一条 `WARN`（含 `entityType`、编码、目标状态、错误码与消息）。单请求条数已被 `MAX_BATCH_STATUS_COUNT` 封顶在 200，且每条携带互不相同的定位信息，不构成 AGENTS.md 规则 6 所禁止的「同一错误反复刷屏」；不做按错误码聚合，否则失败明细的定位价值丢失。
+* **测试门禁**：按 AGENTS.md 规则 9，「逐项独立事务」这一核心不变量必须由 `*IntegrationTest` 在真实 MySQL 下验证，单元测试不能替代。两层职责划分如下：
+  * `ProductBatchStatusTest`（单元）注入 **mock `PlatformTransactionManager`**，使真实 `TransactionTemplate` 得以执行，从而能捕获 `TransactionDefinition` 并断言传播行为为 `REQUIRES_NEW`、隔离级别为 `READ_COMMITTED`，以及每项各一次 `commit`/失败项一次 `rollback`、整体拒绝时 `getTransaction` 从未被调用。
+    * **不得改为 mock `TransactionTemplate`**：那会把待证明的事务配置一并 mock 掉，使断言恒真——本次改造前的写法即犯此错误。
+  * `ProductBatchStatusTransactionIntegrationTest`（集成，真实 MySQL + Testcontainers）证明数据库层面的隔离与回滚：失败项不回滚已成功项、已成功项不随外层事务回滚、整体拒绝前无任何写入。
+    * 其中「已成功项不随外层事务回滚」是 `REQUIRES_NEW` 与 `REQUIRED` 的决定性区分，并已做**变异校验**：临时把传播行为改回 `PROPAGATION_REQUIRED` 后该用例失败，改回后恢复通过，证明它不是恒真断言。
+* **ArchUnit 兼容性**：本接口仍受 `admin_http_endpoints_have_pre_authorize`、`admin_controllers_do_not_depend_on_supplier_adapter` 等既有规则约束；service 不新增 DAL 依赖，仅引入 `TransactionTemplate` 显式控制独立事务边界，未触发任何新增依赖方向。
 
 #### 4.1.11 SKU 税务元数据批量记录：`PUT /supply-chain/products/skus/tax-metadata`
 * **设计目的**：记录并回显商品管理原型中的「是否含税、税率」，不参与任何价格计算。

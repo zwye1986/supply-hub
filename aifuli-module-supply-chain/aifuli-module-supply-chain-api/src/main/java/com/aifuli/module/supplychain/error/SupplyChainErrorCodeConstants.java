@@ -224,6 +224,14 @@ public interface SupplyChainErrorCodeConstants {
             error(1_050_001_168, "供应商[{}]当前连接器未启用[{}]能力，该商品无法上架，"
                     + "请先在『履约技术配置』启用能力并重新发布连接器版本");
 
+    // 批量上下架入参整体拒绝。设计见
+    // docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#4110-批量上下架接口put-supply-chainproductsbatch-status
+    // 一处覆盖三种入参不合法：未选择任何商品、编码为空白、超过单次 200 条上限。
+    // 不复用 PRODUCT_STATUS_INVALID（语义为状态机非法迁移）与 PRODUCT_SKU_FIELD_INVALID（语义为 SKU 名称/履约模式/价格），
+    // 避免向用户展示与真实原因不符的文案。整体拒绝发生在逐项独立事务之前，不产生任何写入。
+    ErrorCode PRODUCT_BATCH_INPUT_INVALID =
+            error(1_050_001_169, "批量上下架入参不合法：未选择商品、商品编码为空或超过单次 200 条上限");
+
     // 项目标准资产查询稳定错误，设计见 docs/superpowers/specs/2026-10-02-project-standard-query-asset-design.md#4-资产结果与封闭载荷。
     ErrorCode ASSET_QUERY_UNSUPPORTED_PRODUCT_TYPE =
             error(1_050_001_158, "此类商品不能查询资产，请通过查单接口获取订单信息");
@@ -414,7 +422,8 @@ public interface SupplyChainErrorCodeConstants {
             entry(PROJECT_APP_CREDENTIAL_STATE_INVALID, RetryDirective.DO_NOT_RETRY),
             entry(SUPPLIER_ALREADY_HAS_PUBLISHED_CONNECTOR, RetryDirective.DO_NOT_RETRY),
             entry(SUPPLIER_NO_PUBLISHED_CONNECTOR, RetryDirective.DO_NOT_RETRY),
-            entry(OFFER_CAPABILITY_MISSING, RetryDirective.DO_NOT_RETRY));
+            entry(OFFER_CAPABILITY_MISSING, RetryDirective.DO_NOT_RETRY),
+            entry(PRODUCT_BATCH_INPUT_INVALID, RetryDirective.DO_NOT_RETRY));
 
     static RetryDirective retryDirective(int errorCode) {
         return RETRY_DIRECTIVES.getOrDefault(errorCode, RetryDirective.DO_NOT_RETRY);

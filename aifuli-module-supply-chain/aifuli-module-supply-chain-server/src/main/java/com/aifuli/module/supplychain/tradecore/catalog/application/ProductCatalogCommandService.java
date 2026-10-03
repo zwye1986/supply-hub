@@ -26,6 +26,7 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSpuMapp
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProductCategoryMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.BuyerListingStatus;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
+import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityType;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.CategoryVisibility;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.DeliveryType;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.FulfillmentType;
@@ -41,11 +42,14 @@ import com.aifuli.module.supplychain.tradecore.profile.domain.ClosedEnums;
 import com.aifuli.module.supplychain.tradecore.profile.domain.SellableCategory;
 import com.aifuli.framework.common.exception.ServiceException;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -56,6 +60,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Consumer;
 
 import static com.aifuli.framework.common.exception.util.ServiceExceptionUtil.exception;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BRAND_NOT_FOUND;
@@ -63,6 +68,7 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BUYER_NOT_FOUND;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PLATFORM_SKU_NOT_FOUND;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PLATFORM_SPU_NOT_FOUND;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_BATCH_INPUT_INVALID;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_CANNOT_DELETE_HAS_BUYER_LISTING;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_CANNOT_DELETE_HAS_BUYER_PRODUCT;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_CANNOT_DELETE_HAS_PROJECT_LISTING;
@@ -81,7 +87,6 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
 
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class ProductCatalogCommandService {
 
     private final SupplyChainDatabaseClock databaseClock;
@@ -97,6 +102,13 @@ public class ProductCatalogCommandService {
     private static final long DEFAULT_PRICE_FEN = 0L;
     /** 单次批量更新 SKU 税务元数据的上限，避免超大事务。 */
     private static final int MAX_BATCH_SKU_COUNT = 200;
+    /**
+     * 单次批量上下架的 SPU 与 SKU 项数之和上限。
+     * <p>每项走一个 {@code REQUIRES_NEW} 独立事务并额外占用一个数据库连接，故总量必须有界；
+     * 取值与 {@link #MAX_BATCH_SKU_COUNT}、{@code GenericBatchPricingService.MAX_BATCH} 及全仓批量约定一致。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#4110-批量上下架接口put-supply-chainproductsbatch-status}。
+     */
+    private static final int MAX_BATCH_STATUS_COUNT = 200;
     /** 与 {@code sc_platform_sku.main_image_url/detail_image_urls} DDL 长度一致。 */
     private static final int MAX_SKU_IMAGE_URL_LENGTH = 512;
     /** 与 {@code sc_platform_sku.description} DDL 长度一致。 */
@@ -134,6 +146,70 @@ public class ProductCatalogCommandService {
     private final ProductDeletionValidator deletionValidator;
     private final FulfillmentTargetSchemaRegistry targetSchemaRegistry;
     private final PlatformSkuSchemaRegistry skuSchemaRegistry;
+
+    /**
+     * 批量上下架「逐项独立事务」模板：传播行为 {@code REQUIRES_NEW}、隔离级别 {@code READ_COMMITTED}。
+     * <p>不变量：每个 SPU/SKU 的状态迁移各自成事务，任一项失败仅回滚该项，已成功项保持结果。
+     * 必须由 {@code REQUIRES_NEW} 强制，不能依赖默认 {@code REQUIRED} —— 本方法已无方法级
+     * {@code @Transactional}，当前唯一调用方 {@code ProductAdminController} 也非事务，故 {@code REQUIRED}
+     * 今天「碰巧」等价；但一旦任何调用方包裹事务，各项将并入外层事务，且被捕获的 {@code ServiceException}
+     * 会把外层标记为 rollback-only，提交时抛 {@code UnexpectedRollbackException} 连带丢掉已成功项。
+     * <p>设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#4110-批量上下架接口put-supply-chainproductsbatch-status}（D1）。
+     */
+    private final TransactionTemplate batchStatusTransactionTemplate;
+
+    /**
+     * 手写构造器而非 {@code @RequiredArgsConstructor}：根 {@code lombok.config} 未配置
+     * {@code copyableAnnotations}，Lombok 不会把 {@code @Qualifier} 复制到生成的构造器参数上，
+     * 而事务管理器必须按 bean 名显式限定，不能依赖「上下文里恰好只有一个」的隐式按类型匹配。
+     * 与 {@code BusinessCodeLegacyBackfill}、{@code RechargeFrequencyAdminCommandService} 的既有做法一致。
+     */
+    public ProductCatalogCommandService(SupplyChainDatabaseClock databaseClock,
+                                        ApplicationEventPublisher eventPublisher,
+                                        BrandMapper brandMapper,
+                                        ProductCategoryMapper categoryMapper,
+                                        PlatformSpuMapper spuMapper,
+                                        PlatformSkuMapper skuMapper,
+                                        PlatformSkuPricingMapper platformSkuPricingMapper,
+                                        BuyerMapper buyerMapper,
+                                        BuyerListingMapper listingMapper,
+                                        BuyerListingAvailabilityMapper availabilityMapper,
+                                        BusinessNoGenerator businessNoGenerator,
+                                        ScopedBusinessCodeService scopedBusinessCodeService,
+                                        BrandAdminService brandAdminService,
+                                        CategoryCommandService categoryCommandService,
+                                        ProductTypeValidationService productTypeValidationService,
+                                        ProductClassificationValidationService productClassificationValidationService,
+                                        ProductSellabilityService sellabilityService,
+                                        ProductDeletionValidator deletionValidator,
+                                        FulfillmentTargetSchemaRegistry targetSchemaRegistry,
+                                        PlatformSkuSchemaRegistry skuSchemaRegistry,
+                                        @Qualifier(TRANSACTION_MANAGER) PlatformTransactionManager supplyChainTransactionManager) {
+        this.databaseClock = databaseClock;
+        this.eventPublisher = eventPublisher;
+        this.brandMapper = brandMapper;
+        this.categoryMapper = categoryMapper;
+        this.spuMapper = spuMapper;
+        this.skuMapper = skuMapper;
+        this.platformSkuPricingMapper = platformSkuPricingMapper;
+        this.buyerMapper = buyerMapper;
+        this.listingMapper = listingMapper;
+        this.availabilityMapper = availabilityMapper;
+        this.businessNoGenerator = businessNoGenerator;
+        this.scopedBusinessCodeService = scopedBusinessCodeService;
+        this.brandAdminService = brandAdminService;
+        this.categoryCommandService = categoryCommandService;
+        this.productTypeValidationService = productTypeValidationService;
+        this.productClassificationValidationService = productClassificationValidationService;
+        this.sellabilityService = sellabilityService;
+        this.deletionValidator = deletionValidator;
+        this.targetSchemaRegistry = targetSchemaRegistry;
+        this.skuSchemaRegistry = skuSchemaRegistry;
+        TransactionTemplate template = new TransactionTemplate(supplyChainTransactionManager);
+        template.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        template.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
+        this.batchStatusTransactionTemplate = template;
+    }
 
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public String createBrand(CreateBrandCommand command) {
@@ -253,30 +329,91 @@ public class ProductCatalogCommandService {
 
     /**
      * 批量变更平台商品（SPU/SKU）状态。
-     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#4110-批量上下架接口put-supply-chainproductsbatch-status}。
+     * <p><b>逐项独立事务（D1）</b>：每个 SPU 与 SKU 各自在 {@code REQUIRES_NEW} 事务内完成状态迁移，
+     * 任一项失败仅回滚该项，已成功项保持下架/上架结果。响应携带成功列表与失败明细，
+     * 前端据此渲染「成功 N 项、失败 M 项」。
+     * <p><b>入参整体拒绝（D3）</b>：未选择商品、编码为空白、或 SPU 与 SKU 项数之和超过
+     * {@link #MAX_BATCH_STATUS_COUNT}，均在进入逐项循环前整体拒绝并抛 {@code PRODUCT_BATCH_INPUT_INVALID}，
+     * 不产生任何写入；故校验通过后 {@code succeeded.size() + failed.size()} 恒等于入参编码总数。
+     * <p><b>系统异常处置（D2）</b>：只捕获 {@link ServiceException} 计入失败明细；存储故障等系统异常
+     * 记一条含已提交清单的 ERROR 后原样上抛，不伪装为业务拒绝。此时用户拿不到回执但已提交项确实生效，
+     * 由本操作的幂等性兜住——同一编码重复置为同一目标状态结果相同，整体重试无副作用。
+     * <p>设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#4110-批量上下架接口put-supply-chainproductsbatch-status}。
      */
-    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
-    public void batchChangeStatus(BatchStatusCommand command) {
+    public BatchStatusResult batchChangeStatus(BatchStatusCommand command) {
         log.info("批量变更商品状态 spuCodes={} skuCodes={} targetStatus={} unshelveMode={} operatorId={}",
                 command.spuCodes(), command.skuCodes(), command.targetStatus(), command.unshelveMode(), command.operatorId());
         CatalogEntityStatus target = CatalogEntityStatus.fromCode(command.targetStatus());
         if (target != CatalogEntityStatus.ACTIVE && target != CatalogEntityStatus.INACTIVE) {
             throw exception(PRODUCT_STATUS_INVALID);
         }
-        if (command.spuCodes() != null) {
-            for (String spuCode : command.spuCodes()) {
-                if (hasText(spuCode)) {
-                    applySpuStatus(spuCode.trim(), target, command.unshelveMode(), command.operatorId());
-                }
+        List<String> spuCodes = normalizeBatchStatusCodes(command.spuCodes());
+        List<String> skuCodes = normalizeBatchStatusCodes(command.skuCodes());
+        if (spuCodes.isEmpty() && skuCodes.isEmpty()) {
+            throw exception(PRODUCT_BATCH_INPUT_INVALID);
+        }
+        if (spuCodes.size() + skuCodes.size() > MAX_BATCH_STATUS_COUNT) {
+            throw exception(PRODUCT_BATCH_INPUT_INVALID);
+        }
+        List<String> succeeded = new ArrayList<>();
+        List<BatchStatusFailedItem> failed = new ArrayList<>();
+        try {
+            applyBatchStatus(spuCodes, CatalogEntityType.SPU, target, succeeded, failed,
+                    code -> applySpuStatus(code, target, command.unshelveMode(), command.operatorId()));
+            applyBatchStatus(skuCodes, CatalogEntityType.SKU, target, succeeded, failed,
+                    code -> applySkuStatus(code, target, command.operatorId()));
+        } catch (RuntimeException ex) {
+            // D2：系统异常不伪装为业务拒绝。succeeded 为就地累积，故此处能给出真实的已提交清单，
+            // 供运维在用户只看到整体报错时追溯库里究竟改了哪些行；原样上抛以保留因果链。
+            log.error("批量变更商品状态因系统异常中断 targetStatus={} operatorId={} 已提交={} 项 succeeded={} 已失败={} 项",
+                    target, command.operatorId(), succeeded.size(), succeeded, failed.size(), ex);
+            throw ex;
+        }
+        log.info("批量变更商品状态完成 succeeded={} failed={} targetStatus={} operatorId={}",
+                succeeded.size(), failed.size(), target, command.operatorId());
+        return new BatchStatusResult(succeeded, failed);
+    }
+
+    /**
+     * 逐项在独立事务内执行状态迁移。已知业务拒绝（{@link ServiceException}）计入 {@code failed} 并继续下一项；
+     * 其余运行时异常向上抛出，由 {@link #batchChangeStatus} 统一记录已提交项后交全局异常处理。
+     *
+     * @param succeeded 出参：成功项编码就地追加，使调用方在中断时仍能报告已提交清单
+     * @param failed    出参：失败明细就地追加
+     * @param mutation  单项状态迁移，运行在 {@link #batchStatusTransactionTemplate} 提供的事务与行锁边界内
+     */
+    private void applyBatchStatus(List<String> codes, CatalogEntityType entityType, CatalogEntityStatus target,
+                                  List<String> succeeded, List<BatchStatusFailedItem> failed,
+                                  Consumer<String> mutation) {
+        for (String code : codes) {
+            try {
+                batchStatusTransactionTemplate.executeWithoutResult(status -> mutation.accept(code));
+                succeeded.add(code);
+            } catch (ServiceException ex) {
+                failed.add(new BatchStatusFailedItem(entityType, code, ex.getCode(), ex.getMessage()));
+                log.warn("批量上下架失败 entityType={} businessCode={} targetStatus={} errorCode={} message={}",
+                        entityType.getCode(), code, target, ex.getCode(), ex.getMessage());
             }
         }
-        if (command.skuCodes() != null) {
-            for (String skuCode : command.skuCodes()) {
-                if (hasText(skuCode)) {
-                    applySkuStatus(skuCode.trim(), target, command.operatorId());
-                }
-            }
+    }
+
+    /**
+     * 批量上下架编码归一化：逐项 trim，任一编码为空白即整体拒绝。
+     * <p>不静默跳过空白项：与本类 {@link #normalizeSkuCodes} 的既有约定一致；
+     * 跳过会让 {@code succeeded + failed} 少于入参条数，前端「成功 N 项、失败 M 项」计数失真。
+     */
+    private static List<String> normalizeBatchStatusCodes(List<String> codes) {
+        if (codes == null) {
+            return List.of();
         }
+        List<String> normalized = new ArrayList<>(codes.size());
+        for (String code : codes) {
+            if (!hasText(code)) {
+                throw exception(PRODUCT_BATCH_INPUT_INVALID);
+            }
+            normalized.add(code.trim());
+        }
+        return normalized;
     }
 
     /**
@@ -302,7 +439,10 @@ public class ProductCatalogCommandService {
 
     /**
      * SPU 状态迁移。归档分支必须与 {@code selectByCodeForUpdate} 行锁处于同一事务，
-     * 否则 4 表引用校验通过后仍可能被并发写入引用，故仅允许由带 {@code @Transactional} 的入口调用。
+     * 否则 4 表引用校验通过后仍可能被并发写入引用，故只允许由已开启事务的入口调用：
+     * 单项入口 {@link #changeSpuStatus} 靠方法级 {@code @Transactional}；
+     * 批量入口 {@link #batchChangeStatus} 靠 {@link #batchStatusTransactionTemplate} 编程式开启
+     * {@code REQUIRES_NEW} 事务——本方法是 private，Spring 代理对自调用不生效，加注解并无作用。
      * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#32-删除强校验规则4-表物理主键与关联路径检查}。
      */
     private void applySpuStatus(String code, CatalogEntityStatus target, Long operatorId) {
@@ -1287,6 +1427,31 @@ public class ProductCatalogCommandService {
             Short targetStatus,
             String unshelveMode,
             Long operatorId) {
+    }
+
+    /**
+     * 批量上下架结果。
+     * <p>{@code succeeded} 列表保留 SPU/SKU 混合业务编码，前端按编码回查展示；
+     * {@code failed} 列表携带每项的稳定错误码与消息，用户可针对失败项重试。
+     */
+    public record BatchStatusResult(
+            List<String> succeeded,
+            List<BatchStatusFailedItem> failed) {
+    }
+
+    /**
+     * 批量上下架失败明细项。
+     *
+     * @param entityType  实体类型，取值见 {@link CatalogEntityType}；对外契约取其 {@code code}
+     * @param code         失败项业务编码
+     * @param errorCode    稳定错误码，与 {@link com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants} 对齐
+     * @param errorMessage  错误消息，与 {@link ServiceException#getMessage()} 一致
+     */
+    public record BatchStatusFailedItem(
+            CatalogEntityType entityType,
+            String code,
+            Integer errorCode,
+            String errorMessage) {
     }
 
     /** SKU 税务展示元数据批量记录命令。 */

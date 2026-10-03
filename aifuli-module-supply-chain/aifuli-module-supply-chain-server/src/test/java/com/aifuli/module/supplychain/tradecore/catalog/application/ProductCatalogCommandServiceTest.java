@@ -95,7 +95,9 @@ class ProductCatalogCommandServiceTest {
             scopedBusinessCodeService,
             brandAdminService, categoryCommandService,
             productTypeValidationService, productClassificationValidationService, sellabilityService, deletionValidator, targetSchemaRegistry,
-            skuSchemaRegistry);
+            skuSchemaRegistry,
+            // 本测试不覆盖批量上下架，事务管理器仅用于满足构造器签名。
+            mock(org.springframework.transaction.PlatformTransactionManager.class));
 
     @BeforeEach
     void setUpCodes() {
