@@ -19,11 +19,13 @@ import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatu
 import com.aifuli.module.supplychain.tradecore.catalog.pricing.PricingDependencyChangedEvent;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierOfferDO;
+import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierOfferVersionDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierSupplyScopeDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferVersionMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierSupplyScopeMapper;
+import com.aifuli.module.supplychain.tradecore.supply.domain.FulfillmentStatus;
 import com.aifuli.module.supplychain.tradecore.supply.domain.OfferFulfillmentScore;
 import com.aifuli.module.supplychain.tradecore.supply.domain.OfferPriceMode;
 import com.aifuli.module.supplychain.tradecore.supply.domain.OfferStatus;
@@ -155,6 +157,9 @@ public class SupplierCooperativeProductService {
         if (offerVersionMapper == null) {
             throw new IllegalStateException("offerVersionMapper is required");
         }
+        // f1：改价改供货模式同样强制外部商品编码非空（"校验与新增相同"），并同步身份列；
+        // 编码变化后与当前版本冻结值不一致，列表投影判为 STALE，须重新上架即发布。
+        requireExternalSkuCode(line.externalSkuCode());
         SupplierOfferDO offer = requireLiveOffer(supplierCode, offerNo);
         SupplierDO supplier = supplierMapper.selectByCode(supplierCode);
         List<SupplierSupplyScopeDO> scopes = scopeMapper.selectBySupplierId(supplier.getId());
@@ -168,6 +173,7 @@ public class SupplierCooperativeProductService {
             throw exception(SUPPLIER_SCOPE_CONFLICT);
         }
         offer.setPlatformSkuId(resolved.sku().getId());
+        offer.setExternalSkuCode(line.externalSkuCode());
         offer.setSupplyScopeId(resolved.scope().getId());
         offer.setPriceMode(resolved.priceMode().name());
         offer.setDraftUnitPrice(resolved.priceMode() == OfferPriceMode.FIXED ? line.unitPriceCents() : null);
@@ -244,6 +250,10 @@ public class SupplierCooperativeProductService {
     private String insertPublished(SupplierDO supplier, List<SupplierSupplyScopeDO> scopes, DraftLine line,
                                    Long operatorId, LocalDateTime now,
                                    ProductCategoryCoverageService.CoverageResolver coverage) {
+        // f1：供应商外部商品编码选品必填，冻结进身份行后再由上架即发布继承进版本行，执行侧据此作为供应商 productId 发出。
+        // 前端另以 @NotBlank 兜底；此处服务层强制，避免编程式调用（createDrafts/集成）绕过。
+        // 设计见 docs/superpowers/specs/2026-10-03-supplier-offer-publication-admin-design.md#54-f1-external_sku_code变更集-053。
+        requireExternalSkuCode(line.externalSkuCode());
         ResolvedOffer resolved = resolveLine(scopes, line, coverage);
         Long existing = offerMapper.selectCount(new LambdaQueryWrapper<SupplierOfferDO>()
                 .eq(SupplierOfferDO::getSupplierId, supplier.getId())
@@ -258,6 +268,7 @@ public class SupplierCooperativeProductService {
                 .offerCode(resolved.sku().getSkuCode() + "_" + offerNo)
                 .supplierId(supplier.getId())
                 .platformSkuId(resolved.sku().getId())
+                .externalSkuCode(line.externalSkuCode())
                 .supplyScopeId(resolved.scope().getId())
                 .priceMode(resolved.priceMode().name())
                 .draftUnitPrice(resolved.priceMode() == OfferPriceMode.FIXED ? line.unitPriceCents() : null)
@@ -277,6 +288,16 @@ public class SupplierCooperativeProductService {
         offerMapper.insert(offer);
         eventPublisher.publishEvent(new PricingDependencyChangedEvent(resolved.sku().getId()));
         return offer.getOfferNo();
+    }
+
+    /**
+     * f1：供应商外部商品编码必填校验，空白即拒绝。新增与改价共用（"校验与新增相同"）。
+     * 设计见 {@code docs/superpowers/specs/2026-10-03-supplier-offer-publication-admin-design.md#54-f1-external_sku_code变更集-053}。
+     */
+    private static void requireExternalSkuCode(String externalSkuCode) {
+        if (externalSkuCode == null || externalSkuCode.isBlank()) {
+            throw new IllegalArgumentException("externalSkuCode is required");
+        }
     }
 
     private ResolvedOffer resolveLine(List<SupplierSupplyScopeDO> scopes, DraftLine line,
@@ -335,11 +356,35 @@ public class SupplierCooperativeProductService {
         return ids;
     }
 
+    /**
+     * i-b 履约就绪度三态纯函数（不落标志列，后端计算）。设计见
+     * {@code docs/superpowers/specs/2026-10-03-supplier-offer-publication-admin-design.md#67-listoffers-投影扩展m1-沿用--i-b}。
+     *
+     * <p>{@code current_version_id==null}（或版本行缺失）→{@link FulfillmentStatus#NOT_CONFIGURED}；
+     * 否则 diff 身份列（external_sku_code/draft_unit_price/draft_min_quantity/draft_max_quantity）与当前版本
+     * 冻结字段（external_sku_code/supplier_settlement_unit_price/min_quantity/max_quantity），任一不一致→
+     * {@link FulfillmentStatus#STALE}，全一致→{@link FulfillmentStatus#READY}。抽为静态纯函数便于 {@code *Test}
+     * 覆盖各分支，且不依赖 Spring/MyBatis。</p>
+     */
+    public static FulfillmentStatus computeFulfillmentStatus(SupplierOfferDO offer,
+                                                             SupplierOfferVersionDO currentVersion) {
+        if (offer.getCurrentVersionId() == null || currentVersion == null) {
+            return FulfillmentStatus.NOT_CONFIGURED;
+        }
+        boolean drift = !java.util.Objects.equals(offer.getExternalSkuCode(), currentVersion.getExternalSkuCode())
+                || !java.util.Objects.equals(offer.getDraftUnitPrice(), currentVersion.getSupplierSettlementUnitPrice())
+                || !java.util.Objects.equals(offer.getDraftMinQuantity(), currentVersion.getMinQuantity())
+                || !java.util.Objects.equals(offer.getDraftMaxQuantity(), currentVersion.getMaxQuantity());
+        return drift ? FulfillmentStatus.STALE : FulfillmentStatus.READY;
+    }
+
     private OfferListItem toListItem(SupplierOfferDO offer) {
         PlatformSkuDO sku = skuMapper.selectById(offer.getPlatformSkuId());
         PlatformSpuDO spu = sku == null ? null : spuMapper.selectById(sku.getSpuId());
         SupplierSupplyScopeDO scope = offer.getSupplyScopeId() == null
                 ? null : scopeMapper.selectById(offer.getSupplyScopeId());
+        SupplierOfferVersionDO currentVersion = offer.getCurrentVersionId() == null
+                ? null : offerVersionMapper.selectById(offer.getCurrentVersionId());
         return new OfferListItem(
                 offer.getOfferNo(),
                 spu == null ? null : spu.getSpuCode(),
@@ -358,7 +403,11 @@ public class SupplierCooperativeProductService {
                 offer.getDraftMinQuantity(),
                 OfferStatus.fromCode(offer.getStatus()).name(),
                 offer.getStabilityScore(),
-                offer.getTimelinessScore());
+                offer.getTimelinessScore(),
+                offer.getExternalSkuCode(),
+                offer.getCurrentVersionId(),
+                offer.getVersion(),
+                computeFulfillmentStatus(offer, currentVersion).code());
     }
 
     private Long resolveSuggestPriceCents(Long skuId) {
@@ -445,12 +494,12 @@ public class SupplierCooperativeProductService {
 
     public record DraftLine(String platformSkuCode, String priceMode, Long unitPriceCents,
                              Integer discountBp, Long suggestedPriceCents, String supplyMode,
-                             Long maxQuantity, Long minQuantity) {
+                             Long maxQuantity, Long minQuantity, String externalSkuCode) {
     }
 
     /**
      * 合作商品列表行。金额单位 CNY 分；status 为枚举名。
-     * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#55-合作商品}。
+     * 设计见 {@code docs/superpowers/specs/2026-10-03-supplier-offer-publication-admin-design.md#67-listoffers-投影扩展m1-沿用--i-b}。
      */
     public record OfferListItem(
             @Schema(description = "供应商报价稳定业务编号") String offerNo,
@@ -470,6 +519,10 @@ public class SupplierCooperativeProductService {
             @Schema(description = "草稿最低起购量") Long minQuantity,
             @Schema(description = "生命周期：PUBLISHED已发布，SUSPENDED暂停") String status,
             @Schema(description = OfferFulfillmentScore.STABILITY_COMMENT) Integer stabilityScore,
-            @Schema(description = OfferFulfillmentScore.TIMELINESS_COMMENT) Integer timelinessScore) {
+            @Schema(description = OfferFulfillmentScore.TIMELINESS_COMMENT) Integer timelinessScore,
+            @Schema(description = "供应商侧商品编码（f1 身份行 external_sku_code），上架时冻结进版本行") String externalSkuCode,
+            @Schema(description = "当前已发布履约版本ID；为空表示尚未配置履约") Long currentVersionId,
+            @Schema(description = "Offer 聚合乐观锁版本号，上架须回传作为 expectedOfferVersion") Long offerVersion,
+            @Schema(description = "i-b 履约就绪度三态：NOT_CONFIGURED未配置，STALE过期，READY就绪") String fulfillmentStatus) {
     }
 }

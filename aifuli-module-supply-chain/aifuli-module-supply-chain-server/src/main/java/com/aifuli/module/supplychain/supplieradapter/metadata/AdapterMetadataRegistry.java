@@ -2,6 +2,7 @@ package com.aifuli.module.supplychain.supplieradapter.metadata;
 
 import org.springframework.stereotype.Component;
 
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -29,5 +30,16 @@ public class AdapterMetadataRegistry {
             throw new IllegalArgumentException("Unsupported adapter type: " + adapterType);
         }
         return metadata;
+    }
+
+    /**
+     * 枚举全部代码注册的适配器元数据（启动期封闭集，运行期不可变）。
+     *
+     * <p>技术菜单 T1 适配器类型目录据此渲染，前端只能从该封闭集选择 adapterType，
+     * 不能自由声明。设计见
+     * docs/superpowers/specs/2026-10-03-supplier-offer-publication-admin-design.md#61-技术菜单只读-get-面supplierconfigurationadmincontroller当前零-get。</p>
+     */
+    public Collection<AdapterMetadata> all() {
+        return metadataByType.values();
     }
 }

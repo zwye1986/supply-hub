@@ -79,9 +79,10 @@ class SupplyChainDatabaseLocalTimeMigrationIntegrationTest {
         // 022 不增表；023 新增开票 2 表；028 新增商品类型 1 表；035 新增通用定价 7 表；
         // 044 路由 PRD 模型新增 3 表并删除旧强类型规则 2 表（净 +1）；045 新增每日配额 1 表。
         // 046业务编码域2表、047项目应用凭证审计1表、048限频3表、049迁移覆盖门禁1表后，
-        // 真实最新库121表，相对021的102表增加19张业务表。
-        assertThat(businessTableCount(jdbc)).isEqualTo(businessTableCountBefore + 19);
-        assertThat(changeSetCount(jdbc)).isEqualTo(51L);
+        // 054 AD-3 凭据集/凭据项 2 表；053/055/056 仅加列/键不增表，
+        // 相对021增加21张业务表。
+        assertThat(businessTableCount(jdbc)).isEqualTo(businessTableCountBefore + 21);
+        assertThat(changeSetCount(jdbc)).isEqualTo(58L);
         assertThat(jdbc.queryForObject("""
                 SELECT COUNT(*) FROM DATABASECHANGELOG WHERE ID = '022-database-local-time'
                 """, Long.class)).isEqualTo(1L);
@@ -89,7 +90,8 @@ class SupplyChainDatabaseLocalTimeMigrationIntegrationTest {
         // 022 迁移后 250 列 + 023 开票表 4 列 + 028 商品类型表 2 列 + 035 定价表 15 列
         // + 044 路由规则/范围/候选三表 5 列 - 044 删除旧强类型规则两表 4 列
         // + 045每日配额2列 = 274；047凭证审计1列、048限频12列及046编码域2列时区注释补齐，
-        // + 049迁移取得及核验时间2列，最新291列。
+        // + 049迁移取得及核验时间2列 = 291；054凭据集/项各2列 created_at/updated_at（Asia/Shanghai）+4，
+        // 053/055/056 不加 datetime 列，最新295列。
         assertThat(jdbc.queryForObject("""
                 SELECT COUNT(*)
                 FROM information_schema.COLUMNS
@@ -98,11 +100,11 @@ class SupplyChainDatabaseLocalTimeMigrationIntegrationTest {
                   AND DATA_TYPE = 'datetime'
                   AND DATETIME_PRECISION = 3
                   AND COLUMN_COMMENT LIKE '%Asia/Shanghai%'
-                """, Long.class)).isEqualTo(291L);
+                """, Long.class)).isEqualTo(295L);
 
         updateRemaining(dataSource);
 
-        assertThat(changeSetCount(jdbc)).isEqualTo(51L);
+        assertThat(changeSetCount(jdbc)).isEqualTo(58L);
         assertThat(brandCreatedAt(jdbc)).isEqualTo(SHANGHAI_WALL_TIME);
     }
 

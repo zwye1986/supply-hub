@@ -23,6 +23,9 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
 import java.util.List;
 
+import static com.aifuli.framework.common.exception.util.ServiceExceptionUtil.exception;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.SUPPLIER_ALREADY_HAS_PUBLISHED_CONNECTOR;
+
 @Service
 @RequiredArgsConstructor
 public class ConnectorPublicationService {
@@ -57,6 +60,12 @@ public class ConnectorPublicationService {
         List<StatusMappingDefinitionDO> statuses = statusMappingMapper.selectByConnectorVersionId(version.getId());
         if (statuses.isEmpty() || statuses.stream().anyMatch(mapping -> mapping.getStatus() != 0)) {
             throw new IllegalStateException("Connector status mappings are not publishable");
+        }
+        // D1 供应商级唯一守卫：同供应商已存在其它已发布连接器（current_version_id 非空的其它行）时，
+        // 先于 DB 唯一键 uk_sc_connector_supplier_published 抛清晰业务异常，避免裸 DuplicateKeyException。
+        // 设计见 docs/superpowers/specs/2026-10-03-supplier-offer-publication-admin-design.md#55-d1-published_flag-唯一键变更集-056。
+        if (connectorMapper.existsOtherPublishedBySupplier(connector.getSupplierId(), connector.getId())) {
+            throw exception(SUPPLIER_ALREADY_HAS_PUBLISHED_CONNECTOR);
         }
 
         version.setStatus(ConnectorVersionStatus.PUBLISHED.getCode());

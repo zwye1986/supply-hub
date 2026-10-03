@@ -428,3 +428,34 @@ SET menu.name = actions.name, menu.type = 3, menu.sort = actions.sort,
     menu.component_name = NULL, menu.status = 0, menu.visible = b'1', menu.keep_alive = b'0',
     menu.always_show = b'1', menu.updater = @sc_creator, menu.update_time = NOW()
 WHERE BINARY menu.application_code = BINARY @sc_app AND menu.deleted = b'0';
+
+-- ===== 供应商履约技术配置（A1 新顶级技术菜单）=====
+-- 设计：docs/superpowers/specs/2026-10-03-supplier-offer-publication-admin-design.md#81-技术菜单a1新顶级菜单
+-- H2 MVP：菜单与按钮统一按 supply-chain:admin 显隐；后端所有端点挂 @PreAuthorize(@ss.hasPermission('supply-chain:admin'))。
+-- 技术配置（连接器/凭据/能力/映射）独立成顶级页面，与业务侧「供应商管理」分离，避免技术配置与业务配置混在一起。
+-- 入口按 supplierCode 维度组织：选供应商 → 4 子页（el-tabs），无需为每个子页单独建菜单。
+INSERT INTO system_menu
+    (application_code, name, permission, type, sort, parent_id, path, icon, component, component_name,
+     status, visible, keep_alive, always_show, creator, create_time, updater, update_time, deleted)
+SELECT @sc_app, '供应商履约技术配置', 'supply-chain:admin', 2, 7, @sc_root_id, 'fulfillment-config',
+       'ep:setting', 'supplier/config/index', 'SupplierFulfillmentConfig',
+       0, b'1', b'1', b'1', @sc_creator, NOW(), @sc_creator, NOW(), b'0'
+WHERE NOT EXISTS (
+    SELECT 1 FROM system_menu
+    WHERE BINARY application_code = BINARY @sc_app
+      AND parent_id = @sc_root_id AND BINARY path = BINARY 'fulfillment-config' AND deleted = b'0'
+);
+
+SET @sc_fulfillment_config_page_id = (
+    SELECT MIN(id) FROM system_menu
+    WHERE BINARY application_code = BINARY @sc_app
+      AND parent_id = @sc_root_id AND BINARY path = BINARY 'fulfillment-config' AND deleted = b'0'
+);
+
+UPDATE system_menu
+SET name = '供应商履约技术配置', permission = 'supply-chain:admin', type = 2, sort = 7,
+    parent_id = @sc_root_id, path = 'fulfillment-config', icon = 'ep:setting',
+    component = 'supplier/config/index', component_name = 'SupplierFulfillmentConfig',
+    status = 0, visible = b'1', keep_alive = b'1', always_show = b'1',
+    updater = @sc_creator, update_time = NOW()
+WHERE id = @sc_fulfillment_config_page_id;

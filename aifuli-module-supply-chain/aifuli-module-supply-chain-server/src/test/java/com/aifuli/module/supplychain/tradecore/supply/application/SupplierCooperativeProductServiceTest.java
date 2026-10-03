@@ -86,7 +86,7 @@ class SupplierCooperativeProductServiceTest {
         when(businessNoGenerator.next(BusinessNoPrefixes.OFR)).thenReturn("OFR_PUBLISHED1");
 
         service.createPublished("SPL_A", List.of(
-                new DraftLine("MOVIE_100", "FIXED", 9_800L, null, null, "API_DIRECT", null, null)), 1L);
+                new DraftLine("MOVIE_100", "FIXED", 9_800L, null, null, "API_DIRECT", null, null, "QNM-MOVIE-100")), 1L);
 
         ArgumentCaptor<SupplierOfferDO> captor = ArgumentCaptor.forClass(SupplierOfferDO.class);
         verify(offerMapper).insert(captor.capture());
@@ -97,6 +97,37 @@ class SupplierCooperativeProductServiceTest {
         assertThat(inserted.getStabilityScore()).isEqualTo(OfferFulfillmentScore.DEFAULT);
         assertThat(inserted.getTimelinessScore()).isEqualTo(OfferFulfillmentScore.DEFAULT);
         verify(eventPublisher).publishEvent(new PricingDependencyChangedEvent(11L));
+    }
+
+    /**
+     * f1：选合作商品时录入的供应商外部商品编码必须冻结进身份行 {@code sc_supplier_offer.external_sku_code}，
+     * 上架即发布时再继承进版本行，执行侧据此作为供应商 productId 发出。
+     * 设计见 {@code docs/superpowers/specs/2026-10-03-supplier-offer-publication-admin-design.md#54-f1-external_sku_code变更集-053}。
+     */
+    @Test
+    void createPublishedPersistsExternalSkuCode() {
+        stubCreatePath();
+        when(businessNoGenerator.next(BusinessNoPrefixes.OFR)).thenReturn("OFR_EXT1");
+
+        service.createPublished("SPL_A", List.of(
+                new DraftLine("MOVIE_100", "FIXED", 9_800L, null, null, "API_DIRECT", null, null,
+                        "QNM-MOVIE-100")), 1L);
+
+        ArgumentCaptor<SupplierOfferDO> captor = ArgumentCaptor.forClass(SupplierOfferDO.class);
+        verify(offerMapper).insert(captor.capture());
+        assertThat(captor.getValue().getExternalSkuCode()).isEqualTo("QNM-MOVIE-100");
+    }
+
+    /** f1：外部商品编码为空白时服务层强制拒绝，不落库（前端另以 {@code @NotBlank} 兜底）。 */
+    @Test
+    void createPublishedRejectsBlankExternalSkuCode() {
+        stubCreatePath();
+
+        assertThatThrownBy(() -> service.createPublished("SPL_A", List.of(
+                new DraftLine("MOVIE_100", "FIXED", 9_800L, null, null, "API_DIRECT", null, null, "  ")), 1L))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("externalSkuCode");
+        verify(offerMapper, never()).insert(any(SupplierOfferDO.class));
     }
 
     @Test
@@ -119,7 +150,7 @@ class SupplierCooperativeProductServiceTest {
         stubSupplierAndOffer(OfferStatus.PUBLISHED);
 
         service.updateCommercial("SPL_A", "OFR_1",
-                new DraftLine("MOVIE_100", "FIXED", 8_800L, null, null, "API_DIRECT", 80L, 1L), 1L);
+                new DraftLine("MOVIE_100", "FIXED", 8_800L, null, null, "API_DIRECT", 80L, 1L, "QNM-MOVIE-100"), 1L);
 
         verify(offerMapper).updateById(any(SupplierOfferDO.class));
         verify(offerVersionMapper, never()).insert(any(com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierOfferVersionDO.class));
@@ -135,13 +166,44 @@ class SupplierCooperativeProductServiceTest {
                 .stabilityScore(80).timelinessScore(70).build());
 
         service.updateCommercial("SPL_A", "OFR_1",
-                new DraftLine("MOVIE_100", "FIXED", 8_800L, null, null, "API_DIRECT", 80L, 1L), 1L);
+                new DraftLine("MOVIE_100", "FIXED", 8_800L, null, null, "API_DIRECT", 80L, 1L, "QNM-MOVIE-100"), 1L);
 
         ArgumentCaptor<SupplierOfferDO> captor = ArgumentCaptor.forClass(SupplierOfferDO.class);
         verify(offerMapper).updateById(captor.capture());
         assertThat(captor.getValue().getStabilityScore()).isEqualTo(80);
         assertThat(captor.getValue().getTimelinessScore()).isEqualTo(70);
         verify(offerVersionMapper, never()).insert(any(com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierOfferVersionDO.class));
+    }
+
+    /**
+     * f1：改价改供货模式时同步更新身份行外部商品编码（"校验与新增相同"）。编码变化后当前版本冻结值与身份列
+     * 不一致，列表投影据此判为 STALE，须重新上架即发布生成新版本。
+     * 设计见 {@code docs/superpowers/specs/2026-10-03-supplier-offer-publication-admin-design.md#54-f1-external_sku_code变更集-053}。
+     */
+    @Test
+    void updateCommercialUpdatesExternalSkuCode() {
+        stubCreatePath();
+        stubSupplierAndOffer(OfferStatus.PUBLISHED);
+
+        service.updateCommercial("SPL_A", "OFR_1",
+                new DraftLine("MOVIE_100", "FIXED", 8_800L, null, null, "API_DIRECT", 80L, 1L, "QNM-MOVIE-100-V2"), 1L);
+
+        ArgumentCaptor<SupplierOfferDO> captor = ArgumentCaptor.forClass(SupplierOfferDO.class);
+        verify(offerMapper).updateById(captor.capture());
+        assertThat(captor.getValue().getExternalSkuCode()).isEqualTo("QNM-MOVIE-100-V2");
+    }
+
+    /** f1：改价路径同样强制外部商品编码非空，空白即拒绝且不落库。 */
+    @Test
+    void updateCommercialRejectsBlankExternalSkuCode() {
+        stubCreatePath();
+        stubSupplierAndOffer(OfferStatus.PUBLISHED);
+
+        assertThatThrownBy(() -> service.updateCommercial("SPL_A", "OFR_1",
+                new DraftLine("MOVIE_100", "FIXED", 8_800L, null, null, "API_DIRECT", 80L, 1L, " "), 1L))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("externalSkuCode");
+        verify(offerMapper, never()).updateById(any(SupplierOfferDO.class));
     }
 
     @Test
@@ -152,7 +214,7 @@ class SupplierCooperativeProductServiceTest {
                 .status(CatalogEntityStatus.ACTIVE.getCode()).build());
 
         assertThatThrownBy(() -> service.createPublished("SPL_A", List.of(
-                new DraftLine("MOVIE_100", "FIXED", 9_800L, null, null, "API_DIRECT", null, null)), 1L))
+                new DraftLine("MOVIE_100", "FIXED", 9_800L, null, null, "API_DIRECT", null, null, "QNM-MOVIE-100")), 1L))
                 .isInstanceOf(ServiceException.class)
                 .extracting(ex -> ((ServiceException) ex).getCode())
                 .isEqualTo(SUPPLIER_OFFER_OUT_OF_SCOPE.getCode());
@@ -175,7 +237,7 @@ class SupplierCooperativeProductServiceTest {
         when(offerMapper.selectCount(any())).thenReturn(0L);
 
         service.createPublished("SPL_A", List.of(
-                new DraftLine("EQUITY_100", "FIXED", 5_000L, null, null, "API_DIRECT", null, null)), 1L);
+                new DraftLine("EQUITY_100", "FIXED", 5_000L, null, null, "API_DIRECT", null, null, "QNM-EQUITY-100")), 1L);
 
         ArgumentCaptor<SupplierOfferDO> captor = ArgumentCaptor.forClass(SupplierOfferDO.class);
         verify(offerMapper).insert(captor.capture());
@@ -202,7 +264,7 @@ class SupplierCooperativeProductServiceTest {
         when(offerMapper.selectCount(any())).thenReturn(0L);
 
         service.createPublished("SPL_A", List.of(
-                new DraftLine("EQUITY_100", "FIXED", 5_000L, null, null, "API_DIRECT", null, null)), 1L);
+                new DraftLine("EQUITY_100", "FIXED", 5_000L, null, null, "API_DIRECT", null, null, "QNM-EQUITY-100")), 1L);
 
         ArgumentCaptor<SupplierOfferDO> captor = ArgumentCaptor.forClass(SupplierOfferDO.class);
         verify(offerMapper).insert(captor.capture());
@@ -226,7 +288,7 @@ class SupplierCooperativeProductServiceTest {
         when(offerMapper.selectCount(any())).thenReturn(0L);
 
         service.createPublished("SPL_A", List.of(
-                new DraftLine("EQUITY_100", "FIXED", 5_000L, null, null, "API_DIRECT", null, null)), 1L);
+                new DraftLine("EQUITY_100", "FIXED", 5_000L, null, null, "API_DIRECT", null, null, "QNM-EQUITY-100")), 1L);
 
         verify(offerMapper).insert(any(SupplierOfferDO.class));
     }
@@ -243,7 +305,7 @@ class SupplierCooperativeProductServiceTest {
         stubEquitySkuAndSpu("CAT_L1");
 
         assertThatThrownBy(() -> service.createPublished("SPL_A", List.of(
-                new DraftLine("EQUITY_100", "FIXED", 5_000L, null, null, "API_DIRECT", null, null)), 1L))
+                new DraftLine("EQUITY_100", "FIXED", 5_000L, null, null, "API_DIRECT", null, null, "QNM-EQUITY-100")), 1L))
                 .isInstanceOf(ServiceException.class)
                 .extracting(ex -> ((ServiceException) ex).getCode())
                 .isEqualTo(SUPPLIER_OFFER_OUT_OF_SCOPE.getCode());
@@ -261,7 +323,7 @@ class SupplierCooperativeProductServiceTest {
         stubEquitySkuAndSpu("CAT_L3");
 
         assertThatThrownBy(() -> service.createPublished("SPL_A", List.of(
-                new DraftLine("EQUITY_100", "FIXED", 5_000L, null, null, "API_DIRECT", null, null)), 1L))
+                new DraftLine("EQUITY_100", "FIXED", 5_000L, null, null, "API_DIRECT", null, null, "QNM-EQUITY-100")), 1L))
                 .isInstanceOf(ServiceException.class)
                 .extracting(ex -> ((ServiceException) ex).getCode())
                 .isEqualTo(SUPPLIER_OFFER_OUT_OF_SCOPE.getCode());
@@ -283,7 +345,7 @@ class SupplierCooperativeProductServiceTest {
         stubEquitySkuAndSpu("CAT_L3");
 
         assertThatThrownBy(() -> service.createPublished("SPL_A", List.of(
-                new DraftLine("EQUITY_100", "FIXED", 5_000L, null, null, "API_DIRECT", null, null)), 1L))
+                new DraftLine("EQUITY_100", "FIXED", 5_000L, null, null, "API_DIRECT", null, null, "QNM-EQUITY-100")), 1L))
                 .isInstanceOf(ServiceException.class)
                 .extracting(ex -> ((ServiceException) ex).getCode())
                 .isEqualTo(SUPPLIER_OFFER_OUT_OF_SCOPE.getCode());

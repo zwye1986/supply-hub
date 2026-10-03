@@ -76,6 +76,8 @@ class SupplyChainAdminPermissionContractTest {
                 Map.entry("createOffers", SUPPLIER_UPDATE_EXPRESSION),
                 Map.entry("updateOffer", SUPPLIER_UPDATE_EXPRESSION),
                 Map.entry("patchOffer", SUPPLIER_UPDATE_EXPRESSION),
+                // B1 上架即发布（设计 §6.6）：业务侧改写 Offer 发布态，与 createOffers/updateOffer 同用 SUPPLIER_UPDATE。
+                Map.entry("listOfferOnShelf", SUPPLIER_UPDATE_EXPRESSION),
                 Map.entry("deleteOffer", SUPPLIER_DELETE_EXPRESSION),
                 Map.entry("createDrafts", SUPPLIER_UPDATE_EXPRESSION),
                 Map.entry("retire", SUPPLIER_DELETE_EXPRESSION),

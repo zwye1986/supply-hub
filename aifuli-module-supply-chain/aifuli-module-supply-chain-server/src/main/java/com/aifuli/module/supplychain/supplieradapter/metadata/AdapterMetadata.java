@@ -2,6 +2,7 @@ package com.aifuli.module.supplychain.supplieradapter.metadata;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
+import java.util.List;
 import java.util.Set;
 
 /**
@@ -23,4 +24,28 @@ public interface AdapterMetadata {
     void validateConnectorConfig(int schemaVersion, JsonNode config);
 
     void validateOfferConfig(int schemaVersion, JsonNode config);
+
+    /**
+     * 该适配器默认的封闭执行画像，服务端在上架发布时注入 offer 版本，前端只读（d2）。
+     * 返回组合须自洽并通过 {@code requireExecutionCapabilities}（所需能力落在 {@link #capabilities()} 内）。
+     */
+    ExecutionProfileDefaults defaultExecutionProfile();
+
+    /**
+     * 该适配器所需的凭据项键，UI 据此渲染凭据表单行数（F1）。
+     * QNM=[secretKey]，HUA_SHENG=[appSecret,privateKey,callbackPublicKey]。
+     */
+    Set<String> credentialKeys();
+
+    /**
+     * 该适配器的状态映射与错误码映射模板，UI『从模板初始化』据此生成映射行（G2）。协议知识单一来源。
+     */
+    MappingTemplates mappingTemplates();
+
+    /**
+     * 多步骤履约编排声明（HUA_SHENG 文 AD-1 使用）；单步适配器继承此默认空列表。
+     */
+    default List<String> fulfillmentSteps() {
+        return List.of();
+    }
 }

@@ -21,7 +21,7 @@ class BusinessCodeAdminCreateContractTest {
     void supplierCreateRejectsExplicitNullCode() throws Exception {
         var request = mapper.readValue("{\"supplierCode\":null}",
                 SupplierAdminController.SupplierSaveReqVO.class);
-        assertThatThrownBy(() -> new SupplierAdminController(null, null, null, null, null, null)
+        assertThatThrownBy(() -> new SupplierAdminController(null, null, null, null, null, null, null)
                 .create(request))
                 .isInstanceOf(ServiceException.class)
                 .extracting(error -> ((ServiceException) error).getCode())

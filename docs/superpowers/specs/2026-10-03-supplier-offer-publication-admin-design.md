@@ -1,56 +1,90 @@
-# 供应商履约配置与 Offer 版本发布（管理端）
+# 供应商履约技术配置与合作商品上架即发布（管理端）
 
-本文设计「供应商履约配置 / Offer 版本发布」管理端能力：在 `supplychainhubweb` 供应商详情抽屉（`SupplierManageDetail`）新增「履约配置」Tab，串起后端 `/supply-chain/supplier-config` 这条纯写链路，让运营能把一条「合作商品」（`sc_supplier_offer`）真正发布成**可履约**的供给版本（`sc_supplier_offer_version`，携带供应商外部商品编码 `externalSkuCode`），从而闭合当前「合作商品新增即 PUBLISHED、但 `current_version_id` 为空、路由直接跳过、无法履约」的缺口。
+> 状态：定案（v4，已通过逐项决策评审，可进入 §13 落地）· 修订日期：2026-10-03
+> 版本说明：本文为 v4，取代同日 v1/v2/v3。v1/v2 假设「独立履约配置 Tab + 分步向导」；v3 收敛为「合作商品列表行内薄对话框发布 + 连接器只读 + 砍连接器向导」。v4 依新一轮评审（Q1–Q9）**再次重开并定案**：连接器相关技术配置**必须在前端 UI 可配**、独立成**技术菜单**、与合作商品业务配置分离；合作商品**上架即发布**可履约版本（不再有独立发布动作）；供应商缺能力时**拒绝上架并明确提示**。被推翻的 v3 决策见 §0「本轮调整」。
+> 命名约定：供应商/适配器一律用 `HUA_SHENG`、`QNM` 表示（对应 `adapterType` `HUA_SHENG_ORDER_V1`/`QNM_GAME_ORDER_V1`、`supplier_code` `HUASHENG`/`QNM`），prose 不用中文名；DB 种子 `supplier_name` 展示值（如 `'华昇卡券'`）保留中文，不在约定覆盖内。
+> 关联设计：`2026-08-07-supply-chain-phase1-detailed-design.md` §7.3 §7.4 §10.1 §10.2 §17
+> 关联设计（价格口径）：`2026-09-22-effective-supply-price-identity-fallback-design.md`
+> 关联设计（适配器实现，共建地基）：`2026-10-02-huasheng-fulfillment-adapter-design.md`（下称「HUA_SHENG 文」）。**本文 §5 是 `AdapterMetadata` 扩展 + AD-3 凭据集 + AD-5 `extra_config` 共享地基规格的唯一出处**，HUA_SHENG 文引用本文、不重复描述（决策②）。
 
-履约执行侧读取 `externalSkuCode` 的链路（不在本文改动范围，仅作为约束背景）：路由 `SupplierRoutingApplicationService.resolveOffer` 要求 `offer.status==PUBLISHED 且 current_version_id!=null` 并加载版本行（`routing/application/SupplierRoutingApplicationService.java:385`）→ 受理把 `offerVersionId` 冻结进 `sc_b_order`（`border/fulfillment/application/FulfillmentAcceptanceLifecycle.java:614`）→ 执行 `FulfillmentOperationExecuteHandler.java:120` 查回版本 → `FulfillmentOperationTicketFactory.java:51` 注入 `OperationTicket.externalSkuCode` → `supplieradapter/qnm/QnmSupplierAdapter.java:123` 作为供应商 `productId` 发出，为空则 `:506` 抛错。
+本文设计两块管理端能力，分属两个菜单、通过 `supplierCode`+`connectorVersionId` 关联：
 
-写契约、请求体校验、发布事务、GET 投影字段以本文为准。金额单位沿用 `docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#a2-身份与金额`（路径身份用业务编码、金额为 CNY 分）。合作商品商业身份维护仍以 `SupplierAdminController`（`/supply-chain/suppliers/{supplierCode}/offers`）为准，本文不改其写语义，仅新增「履约就绪」投影与发布入口。
+1. **供应商履约技术配置（新顶级技术菜单，A1）**：让技术运营在 UI 上配置连接器（草稿→校验→发布→退役）、凭据集、能力声明、状态/错误码映射，产出「已发布连接器版本」这一技术资产。以 `HUA_SHENG` 为参照，但设计**适配器无关**（新增适配器只需后端注册元数据，前端零改动）。
+2. **合作商品上架即发布（业务菜单，B1）**：运营选合作商品时**必填供应商侧商品编码 `externalSkuCode`**（f1），点「上架」即**一步发布可履约供给版本**——服务端自动引用该供应商唯一已发布连接器版本（C3）、自动开通库存（c3）、继承结算价（g3）、注入适配器默认执行画像（d2）；若连接器缺少该商品所需能力，则**拒绝上架并给出明确提示**（要求 #2）。
+
+闭合的缺口：当前「合作商品新增即 PUBLISHED、但 `current_version_id` 为空、路由 `SupplierRoutingApplicationService.resolveOffer` 直接跳过（`routing/application/SupplierRoutingApplicationService.java:385`）、无法履约」。上架即发布后，`current_version_id` 非空，路由命中，执行侧经 `FulfillmentOperationTicketFactory.java:51` 注入 `externalSkuCode`，适配器（QNM `supplieradapter/qnm/QnmSupplierAdapter.java:123`）作为供应商 `productId` 发出。
 
 ## 0. 已确认决策
 
+### 0.1 本轮（技术菜单 + 上架即发布）
+
 | 编号 | 决策 |
 | --- | --- |
-| d1 | 覆盖范围＝**完整配置向导 + 合作商品缺口修复**。向导串起连接器（草稿→校验→发布）、库存来源（创建→启用）、Offer（草稿→发布版本）；并修复「合作商品新增即 PUBLISHED 却不可履约」的语义缺口。 |
-| d2 | `connectorVersionId` / `inventorySourceNo` / 能力码等候选数据当前**后端无 GET 接口**，本期**新增只读查询端点**（§5.1），前端下拉正常选择，不采用「透传上一步写入返回值」或「手填 ID」。 |
-| d3 | 界面落点＝`SupplierManageDetail` 抽屉**新增「履约配置」Tab**（`views/supplier/manage/detail/`），不新建独立路由页。Tab 内所有写操作按钮用 `checkPermi(['supply-chain:admin'])` 控制显隐。 |
-| d4 | 交付物＝本 spec 设计文档；编码在本文评审通过后进行（遵循仓库「设计先行」规则）。 |
-| d5 | 权限门槛统一到 `supply-chain:admin`（`/supplier-config` 类级 `@PreAuthorize(ADMIN_EXPRESSION)`）。拥有 `supply-chain:supplier:update`（可编辑合作商品）**不足以**发布供给版本。 |
-| d6 | 「合作商品缺口修复」不采用「新增即写版本行」——因为合作商品表单不采集 `externalSkuCode`/连接器/库存来源，无法在新增时构造合法版本。改为：合作商品列表新增**履约就绪标识**（是否有 `current_version_id`），并提供跳转到「履约配置」Tab 发布的入口（§5.2）。 |
+| **A1** | 新建**顶级技术菜单「供应商履约技术配置」**，按 `supplierCode` 组织，含 4 子页（连接器 / 凭据 / 能力 / 映射）；业务侧（供应商管理 `SupplierManageDetail`）只留合作商品。两侧仅通过 `supplierCode`+`connectorVersionId` 关联，不互相内嵌表单。技术菜单产出「已发布连接器版本」资产，业务菜单消费它。 |
+| **B1** | **取消独立「发布履约版本」动作**。「选合作商品并上架」一步即发布可履约版本：服务端自动引用连接器版本、自动开通库存、继承结算价、注入执行画像，写入 `sc_supplier_offer_version` 并置 `current_version_id`。**能力校验前置到上架**：缺所需能力则拒绝上架 + 明确提示。v3 的 n1「两写入口」合并为一个上架动作。 |
+| **C3** | 一个供应商同一时刻**至多一个已发布连接器**，「最新已发布连接器版本」天然唯一，无需多连接器选择规则。 |
+| **D1** | C3 强制机制：`sc_supplier_connector` 加生成列 `published_flag`（**`current_version_id` 非空时 1、否则 NULL**）+ `UNIQUE KEY uk_sc_connector_supplier_published (supplier_id, published_flag)`（MySQL 唯一键允许多行 NULL，草稿/退役不受限）；`ConnectorPublicationService.publish`（`:44`）加**服务层预检**，同供应商已有其它已发布连接器则抛清晰业务异常；迁移（换适配器）**显式先退役再发布**，**不在 publish 事务内自动退役**（旧连接器可能有在途履约，自动退役会危及在途单）。**修正（原拟用 `status=10`）**：`createConnectorDraft`（`SupplierConfigurationCommandService.java:115`）建草稿即置 `status=10`，同供应商多个草稿都 `status=10`，用它驱动唯一键会误伤草稿；`publish`（`ConnectorPublicationService.java:75`）置 `current_version_id`、`retire`（`:122-124`）清空它，故「已发布连接器」的唯一真信号是 `current_version_id IS NOT NULL`。 |
+| **E1** | 连接器编辑形态：**公共字段结构化表单**（`baseUrl`/`merchantAccount`/`protocolVersion`/`callbackPath`/`connectTimeoutMs`/`readTimeoutMs`/`rateLimit`/`concurrencyLimit`）+ **adapterType 下拉**（自 `AdapterMetadataRegistry` 注册表）+ **能力勾选**（选项＝该 adapterType 的 `capabilities()`）+ **凭据引用下拉** + **适配器私有 JSON**（`adapter_config_json`/`extra_config`）用**带 Schema 校验的 JSON 编辑器**（保存时后端 `ClosedJsonSchemaValidator` 按 `connectorSchemaResource` 校验，旁展示 Schema 作提示）。**前端零适配器专属代码**。 |
+| **F1-hybrid** | 凭据统一到 **AD-3 凭据集模型**（`sc_credential_set`/`sc_credential_item`，§5.2）；`provider_type` 双路：`ENV`（只录 `env:` 引用，密钥不入库）+ `ENVELOPE`（UI 录密钥值 → `EnvelopeCryptoPort` 信封加密入库，满足自助诉求）。所需凭据项由 `AdapterMetadata.credentialKeys()` 声明，UI 按适配器渲染对应行数。**凭据护栏强制且不受 H2 影响**：录入字段只写不回显、任何 GET/列表只返回 `masked_hint`、AAD 绑定凭据项身份防密文搬移、永不入日志、KMS 主密钥版本化+轮换、每次写入脱敏审计。 |
+| **G2** | 映射：`AdapterMetadata.mappingTemplates()` 声明状态/错误码映射模板（协议知识留代码单一来源）；技术菜单映射页提供「从模板初始化」动作（把 QNM 专用 `initializeQnmStatusMappings`（`SupplierConfigurationAdminController.java:82`）泛化为按 adapterType 从元数据初始化）+ 映射行表格查看 + 追加/调整单条（复用 `addErrorMapping`（`:90`）+ 新增状态映射追加端点），应对线上发现新错误码免发版补录。 |
+| **H2** | **MVP 权限：技术菜单与业务侧统一用 `supply-chain:admin`**（`ADMIN_EXPRESSION`），本阶段不做细粒度 RBAC 分离（H1 `supply-chain:supplier-config:{query,create,validate,publish,credential}` 推迟到后续阶段）。所有新端点仍须各挂 `@PreAuthorize`（满足 `SupplyChainModuleArchitectureTest`「每个管理端映射都有 `@PreAuthorize`」）。**H2 只收敛权限粒度，不放松 F1-hybrid 凭据数据护栏**。 |
+| **I1** | **共享地基先行、单一共建、一次实现**：`AdapterMetadata` 扩展（`defaultExecutionProfile()`/`credentialKeys()`/`mappingTemplates()`，与 HUA_SHENG 文 `fulfillmentSteps()` 同批）+ AD-3 凭据集 + AD-5 `extra_config` 抽为一份地基变更（§5），两文共同引用。技术菜单 UI + B1 上架即发布**对 QNM dogfood + 集成测试**（QNM 元数据最简：配置 `{}`、1 个凭据键、既有状态映射模板）；`HUA_SHENG` 适配器随后落地，因实现同一签名、映射走 G2 模板、凭据走 F1 集模型，**技术菜单 UI 零改动**即可配 `HUA_SHENG`。AD-3 凭据集表**提到地基层**（Phase 1 凭据 UI 依赖它，不再等 HUA_SHENG 适配器）。 |
+
+### 0.2 沿用前轮（仍有效）
+
+| 编号 | 决策 |
+| --- | --- |
+| **f1** | `sc_supplier_offer` 新增 `external_sku_code` 列，选合作商品时（`ProductSelectDialog`）**强制必填**，`(supplier_id, external_sku_code)` 唯一；上架发布时从身份行冻结进版本行。 |
+| **c3** | 发布事务内**自动开通** `REMOTE_ON_DEMAND` 库存来源（复用 `SupplierOfferPublicationService.createRemoteOnDemandInventory:82` + `activateInventorySource:98`）；**触发点由 v3 的独立发布改到 B1 上架动作**。 |
+| **d2** | 执行画像（completionMode/idempotency/unknownResult/partialDelivery/multiplicity）由 `AdapterMetadata.defaultExecutionProfile()` 服务端注入；`primaryCapabilityCode` 由 SKU `fulfillmentType` 推导（§9）。前端不暴露。 |
+| **g3** | Phase 1 仅 `FIXED` 定价；结算单价只读继承身份行 `draft_unit_price`；上架后编辑合作商品商业条款 → 履约配置置『过期』（i-b 捕获）→ 需重新上架。 |
+| **i-b** | 履约就绪度＝后端计算三态 `NOT_CONFIGURED/READY/STALE`（`未配置/就绪/过期`），不加标志列：`current_version_id==null`→未配置；否则 diff 身份列 vs 当前版本冻结字段，有差异→过期，无差异→就绪。 |
+| **k1** | `validFrom` 默认＝上架时刻（后端 `now()`）；`validTo` 默认＝空（长期有效）。再次上架＝新建不可变版本、隐式取代旧版本（旧版本行原样保留，`publish:190`）；`expectedOfferVersion` 从列表行 `offerVersion` 自动带入、用户不可见；并发依赖后端乐观锁（`:133`+`:194`）。 |
+
+### 0.3 本轮调整（推翻 v3）
+
+- **推翻 a3/R5**：连接器配置不再是 Phase 2 / 不再砍向导改 SQL 种子——**连接器/凭据/能力/映射进 Phase 1 技术菜单 UI**（A1/E1/F1/G2）。
+- **推翻 m1 的 `current-connector` GET**：B1 无发布对话框，连接器版本由服务端按 C3 自动引用，前端不需要该端点（技术菜单另有自己的读取面 §6.1）。
+- **推翻 n1「两写入口」**：B1 合并为「上架即发布」单一业务动作。
+- **推翻 v3 §5.6 白名单归 QNM-only 的表述**：白名单灰度保留（§6.8），但技术菜单 UI 本身适配器无关、对 QNM 与 HUA_SHENG 一致。
+
+### 0.4 收尾确认
+
+- **①变更集编号**（现有链至 `052`）：`053`＝f1 `external_sku_code`；`054`＝AD-3 凭据集/项；`055`＝AD-5 `extra_config`；`056`＝D1 `published_flag`+唯一键；`HUA_SHENG` 主数据种子 `057+`（HUA_SHENG 文原计划 `050`/`051` 与现有文件冲突，让位到 `057+`）。
+- **②地基规格出处**：`AdapterMetadata` 扩展 + AD-3 + AD-5 以**本文 §5 为唯一出处**，HUA_SHENG 文引用。
+- **③展示名**：DB 种子 `supplier_name='华昇卡券'` 保留中文（面向运营列表显示）；命名约定只约束 prose/代码标识符。
 
 ## 1. 范围
 
-本期做：
+**Phase 1 做（本文）：**
 
-- 后端在 `SupplierConfigurationAdminController`（`/supply-chain/supplier-config`）新增只读 GET 端点：连接器及当前已发布版本、库存来源、Offer 列表（含 `currentVersionId`/`version`/`status`）、Offer 版本历史、以及一个「发布表单元数据」聚合端点（能力码与各封闭枚举合法值）。
-- 后端在合作商品列表投影 `OfferListItem` 增加履约就绪字段（是否已发布可履约版本），不改写语义。
-- 前端新增 `src/api/supplier/config/`（`index.ts` + `types.ts`），封装 supplier-config 读写接口。
-- 前端在 `SupplierManageDetail` 新增「履约配置」Tab：`FulfillmentConfig.vue`，内含分步向导（连接器 / 库存来源 / Offer 发布）与 Offer 版本发布表单弹窗 `OfferPublishDialog.vue`。
-- 前端在合作商品 Tab（`ProductList.vue`）增加「履约就绪」列与「发布履约配置」入口，跳转到履约配置 Tab 并预选该 Offer。
-- 更新 `docs/集成测试.md`：新增「合作商品→发布供给版本→路由命中→履约下单携带 externalSkuCode」的联调场景与验证点。
+- 共享地基（§5，与 HUA_SHENG 文共建、一次实现）：`AdapterMetadata` 扩展（`defaultExecutionProfile`/`credentialKeys`/`mappingTemplates`）、AD-3 凭据集表 + `ENVELOPE` provider、AD-5 `extra_config` 列、f1 `external_sku_code` 列、D1 `published_flag` 唯一键。
+- 技术菜单后端（§6.1–6.5）：只读 GET 面（当前控制器零 GET，全部新增）+ 连接器生命周期写（含 D1 供应商级守卫）+ 凭据写（ENV/ENVELOPE）+ 能力声明 + 映射模板初始化/追加。
+- 上架即发布后端（§6.6）：合并 `createPublished`+`publish`；C3 连接器自动引用 + 能力缺口校验（专用错误码/文案）+ c3 库存自动开通 + d2 画像注入 + f1/g3 带入；`listOffers` 投影扩展 + i-b 三态计算（§6.7）；adapterType 白名单灰度（§6.8）。
+- 前端（§8）：新技术菜单 4 子页 + api 模块；`ProductSelectDialog` 必填 `externalSkuCode`；`ProductList` 增 `供应商商品编码`/`履约状态` 两列 + `上架` 动作（**无发布对话框**）。
+- 更新 `docs/集成测试.md`（§12）。
 
-本期不做：
+**Phase 1 不做（→ 后续）：**
 
-- 不改履约执行链路（Ticket / Adapter / 路由引擎）。
-- 不改 `SupplierCooperativeProductService.insertPublished` 的「新增即 PUBLISHED」商业语义（仅补投影字段）。
-- 连接器错误码映射（`/connectors/error-mappings`）、QNM 状态映射（`/connectors/qnm-status-mappings`）的可视化编辑（本期向导仅调用，不做映射行编辑器；一期奇那梦映射由 `qnm-status-mappings` 一次性初始化）。
-- `fulfillmentConfigJson` 的动态 Schema 表单：奇那梦一期固定 `{}`，前端只读展示不可编辑（§7.4）。
-- 凭证槽（credential-slots）的列表查询与可视化新建：本期连接器草稿步骤仍需运维提供 `credentialSlotNo`（§11 TODO）。
-- 多适配器类型：一期仅 `QNM_GAME_ORDER_V1`。
+- H1 细粒度技术权限（`supplier-config:{query,create,validate,publish,credential}`）与凭据双人复核——MVP 用 H2 统一 `supply-chain:admin`。
+- `HUA_SHENG` 适配器实现本体（T2–T14，属 HUA_SHENG 文）——本文只保证其 metadata 实现同一地基签名、UI 零改动可配。
+- 非 FIXED 定价、`validTo` 到期自动下架扫描任务。
+- 改履约执行链路（Ticket / Adapter 出网 / 路由引擎）——`extraParameters` 传递链打通属 AD-5/HUA_SHENG 文。
 
 ## 2. 领域不变量
 
-1. 供给版本（`sc_supplier_offer_version`）一经发布**不可变**；改条款＝发布新版本（`version_no+1`），旧版本保留。
-2. 一条 Offer **可履约** 当且仅当 `status==PUBLISHED 且 current_version_id!=null` 且该版本在 `now` 落在 `[valid_from, valid_to)` 内。合作商品「上架」只保证 `status==PUBLISHED`，不保证可履约。
-3. `publish` 是设置 `current_version_id` 的**唯一**入口（`SupplierOfferPublicationService.publish` 194-201 行）；任何其它路径都不得写入 `current_version_id`。
-4. `externalSkuCode` 在同一 connector 下唯一：`sc_supplier_external_sku_binding` 唯一键 `uk_sc_external_sku_connector (connector_id, external_sku_code)`；冲突时业务拒绝「External SKU is already bound to another offer」。
-5. `primaryCapabilityCode` 必须是封闭枚举 `Capability` 之一，且**必须匹配平台 SKU 的 `fulfillmentType`**（§8 表），并在所选连接器版本上 `enabled=1`。
-6. 执行能力联动：`completionMode∈{QUERY,QUERY_OR_CALLBACK}` 或 `unknownResultPolicy==QUERY_ORDER` → 连接器版本必须启用 `QUERY_ORDER`；`completionMode∈{CALLBACK,QUERY_OR_CALLBACK}` 或 `unknownResultPolicy==WAIT_CALLBACK` → 必须启用 `RECEIVE_CALLBACK`。
-7. 跨字段：`unknownResultPolicy==REPLAY_SAME_KEY` 要求 `createIdempotencyMode==REPLAYABLE_RESULT`。
-8. 连接器版本必须是该 supplier 的**当前** `PUBLISHED` 版本（`connector.current_version_id==connectorVersionId`）；库存来源必须 `ACTIVE`+`REMOTE_ON_DEMAND` 且 supplier/platformSku 匹配。
-9. 乐观锁：`publish` 要求 `expectedOfferVersion==offer.version`；新草稿/未发布合作商品传 `0`，每成功发布一次聚合 `version+1`，再次发布须带新 `version`。
-10. 金额 `supplierSettlementUnitPrice` 单位为 CNY 分、`>=0`、`currency` 固定 `CNY`（DDL `ck_sc_offer_price`/`ck_sc_offer_currency`）。
-11. `fulfillmentConfigJson` 一期必须是字符串 `"{}"`（`@NotBlank`，非空 JSON object 会被 `QnmGameOrderV1Metadata.validateOfferConfig` 拒绝）。
-12. DTO `@Schema` 与前端字段注释必须与 DDL `COMMENT` 语义一致（同一业务含义同一表述）。
+1. 供给版本（`sc_supplier_offer_version`）一经发布**不可变**；改条款＝重新上架发布新版本（`version_no+1`），旧版本保留（`SupplierOfferPublicationService.java:172-190`）。
+2. 一条 Offer **可履约** 当且仅当 `status==PUBLISHED 且 current_version_id!=null` 且版本在 `now` 落 `[valid_from, valid_to)`（`valid_to` 空＝长期）。合作商品商业状态 `PUBLISHED` 与履约就绪度是**正交两维**（R②-a 沿用）：就绪度只由 i-b 三态单一表达。
+3. **上架即发布是设置 `current_version_id` 的唯一业务入口**（B1，底层仍走 `SupplierOfferPublicationService.publish:194-201`）；任何其它路径不得写 `current_version_id`。
+4. **一个供应商至多一个已发布连接器**（C3/D1，DB 唯一键 + 服务层预检兜底）；换适配器须显式先退役旧连接器。
+5. `externalSkuCode` 录入源＝身份行 `sc_supplier_offer.external_sku_code`（f1，选品必填，`(supplier_id, external_sku_code)` 唯一）；上架时冻结进版本行并 upsert `sc_supplier_external_sku_binding`（`uk_sc_external_sku_connector (connector_id, external_sku_code)`、`uk_sc_external_sku_offer (offer_id)`，冲突拒绝）。身份行改值后与当前版本冻结值不一致 → i-b 判 `STALE`，须重新上架。
+6. **能力缺口拒绝上架**：`primaryCapabilityCode` 由 SKU `fulfillmentType` 推导（§9），必须在 C3 自动引用的连接器版本上 `enabled=1`（`requireCapability:238-240`、`requireCapabilityMatchesSku:257-266`）。缺失则上架失败并返回**明确文案**（区分「无已发布连接器」与「连接器缺能力」两种）。
+7. 执行画像由 `AdapterMetadata.defaultExecutionProfile()` 注入（d2），注入后仍须自洽通过原跨字段校验（`requireExecutionCapabilities:163`）：`QUERY/QUERY_OR_CALLBACK` 或 `unknownResultPolicy==QUERY_ORDER`→须启用 `QUERY_ORDER`；`CALLBACK/QUERY_OR_CALLBACK` 或 `WAIT_CALLBACK`→须启用 `RECEIVE_CALLBACK`；`REPLAY_SAME_KEY`→`REPLAYABLE_RESULT`。适配器默认值不自洽属实现缺陷，测试 fail-fast。
+8. 库存来源必须 `ACTIVE`+`REMOTE_ON_DEMAND` 且 supplier/platformSku 匹配（`:153-159`）；c3 之下由上架事务自动开通并启用后立即满足；同 offer 已有匹配 ACTIVE 来源时**复用不重建**（`LambdaQueryWrapper` 查，避免多次上架堆积来源，AGENTS.md §8）。
+9. 乐观锁：`publish` 要求 `expectedOfferVersion==offer.version`（`:133`）；前端从列表行 `offerVersion` 自动带入，每次上架 `version+1`（`:193-201`）。
+10. 金额 `supplierSettlementUnitPrice` 单位 CNY 分、`>=0`、`currency` 固定 `CNY`（`ck_sc_offer_price`/`ck_sc_offer_currency`）；g3 之下只读继承 `draft_unit_price`。
+11. **凭据永不存明文、永不回显、永不入日志**（F1-hybrid 护栏）：`ENV` 只存 `env:` 引用；`ENVELOPE` 只存 `EnvelopeCryptoPort` 密文（AAD 绑定凭据项身份）；任何读取只返回 `masked_hint`；`CredentialProvider.resolve→char[]` 调用方不得记录返回值（端口契约 + AGENTS.md §6）。
+12. `adapter_config_json`/`extra_config` 按适配器 `connectorSchemaResource`/`offerSchemaResource` 封闭 Schema 校验（`:167-170`）；**密钥类禁止入 `extra_config`**（AD-5）。DTO `@Schema`/前端注释与 DDL `COMMENT` 同表述（AGENTS.md §5）。
 
 ## 3. 术语与三层编码
 
@@ -58,207 +92,233 @@
 | --- | --- | --- | --- |
 | 采购商侧 | `buyerSkuCode` | `sc_buyer_listing` | 外部下单请求 |
 | 平台侧 | `platformSkuCode` / `platformSkuId` | `sc_platform_sku` | 商品中心 |
-| 供应商侧 | **`externalSkuCode`** | `sc_supplier_offer_version` | **本文的发布表单** |
+| 供应商侧 | **`externalSkuCode`** | `sc_supplier_offer`（身份行，f1 录入源）→ `sc_supplier_offer_version`（上架冻结快照） | **选合作商品时必填（`ProductSelectDialog`）** |
 
-## 4. 数据流（发布一条可履约供给）
+下单时经标准平台 SKU → 命中 offer → 取版本行 `externalSkuCode` → 适配器供应商商品编号（落实要求 #5）。
 
-```
-合作商品新增(SupplierAdminController, 已有)
-  → sc_supplier_offer{status=PUBLISHED, version=0, current_version_id=null}  ← 不可履约
-履约配置 Tab(本文新增)
-  1) 连接器：drafts → validate → publish    → 得 connectorVersionId(PUBLISHED, 当前版本)
-  2) 库存来源：remote-on-demand → activate  → 得 inventorySourceNo(ACTIVE, REMOTE_ON_DEMAND)
-  3) Offer 发布：POST /offers/publish(offerNo=合作商品号, expectedOfferVersion=0,
-        externalSkuCode, connectorVersionId, inventorySourceNo, 商业条款, 能力/模式, "{}", 有效期)
-        → 插入 sc_supplier_offer_version, upsert external_sku_binding,
-          更新 offer{current_version_id=新版本, status=PUBLISHED, version=1}   ← 可履约
-路由命中(resolveOffer) → B 单冻结 offerVersionId → 执行取 externalSkuCode → QNM productId
-```
-
-说明：合作商品已由 `SupplierAdminController` 建好（`offerNo`、`platformSkuCode`、`status=PUBLISHED`、`version=0`），因此履约配置 Tab 的 Offer 发布步骤**直接以合作商品的 `offerNo` 为目标**，不再走 supplier-config 的 `POST /offers`（那条会新建 `status=DRAFT` 的第二条 offer，与合作商品重复）。`POST /offers`（createOffer）仅保留给「无合作商品的纯配置态」场景，本期向导默认不触发（§11 TODO 记录二选一）。
-
-## 5. 后端改动
-
-### 5.1 新增只读 GET 端点（`SupplierConfigurationAdminController`，类级 `@PreAuthorize(ADMIN_EXPRESSION)`）
-
-控制器当前只 import 了 `PostMapping`/`PutMapping`，需补 `GetMapping`/`RequestParam`/`PathVariable`。所有响应包 `CommonResult<T>`，返回投影 VO（不暴露 DO）。金额字段 CNY 分。
-
-| # | 方法 | 路径 | 用途 / 查询参数 | 响应 VO |
-| --- | --- | --- | --- | --- |
-| G1 | GET | `/supply-chain/supplier-config/connectors` | `supplierCode`（必填） | `List<ConnectorOptionView>`：`connectorNo, connectorCode, adapterType, status, currentVersionId, currentVersionNo, enabledCapabilities(List<String>)` |
-| G2 | GET | `/supply-chain/supplier-config/inventory-sources` | `supplierCode`（必填）、`platformSkuCode`（可选，过滤） | `List<InventorySourceOptionView>`：`sourceNo, externalSourceCode, sourceType, status, platformSkuCode, supplierCode` |
-| G3 | GET | `/supply-chain/supplier-config/offers` | `supplierCode`（必填）、`platformSkuCode`（可选） | `List<ConfigOfferView>`：`offerNo, offerCode, platformSkuCode, platformSkuName, fulfillmentType, status, version, currentVersionId, fulfillmentReady(boolean), externalSkuCode(当前版本，可空)` |
-| G4 | GET | `/supply-chain/supplier-config/offers/{offerNo}/versions` | 路径 `offerNo` | `List<OfferVersionView>`：版本历史，字段对齐 §7.4 表单 + `versionNo, publishedAt, validFrom, validTo` |
-| G5 | GET | `/supply-chain/supplier-config/offer-publish-options` | 无 | `OfferPublishOptionsView`：一次性返回所有封闭枚举合法值与能力码，供表单渲染，避免前后端漂移（§5.3） |
-
-设计要点：
-- G1 的 `enabledCapabilities` 来自连接器版本能力表（`connectorVersion` 上 `enabled=1` 的 `Capability`），前端据此做不变量 5/6 的**前置联动校验**（禁用不合法选项），最终以后端 `publish` 校验为准。
-- G3 的 `fulfillmentReady = (status==PUBLISHED && currentVersionId!=null)`；`fulfillmentType` 用于前端预判 `primaryCapabilityCode`（§8）。
-- 投影 VO 定义为控制器内部静态类（与现有 `CreateXxxReqVO` 同风格），`@Schema` 描述与 DDL COMMENT 对齐。
-- 分页：G1/G2/G3 一期数据量小，返回全量 `List`；若后续超阈值再补 `PageResult`（§11 TODO）。
-
-### 5.2 合作商品缺口修复（投影 + 入口，不改写语义）
-
-- `SupplierAdminController.listOffers` 返回的 `OfferListItem` 增加只读字段：
-  - `fulfillmentReady: boolean`（`current_version_id != null`）
-  - `currentVersionId: Long`（可空）
-  - `externalSkuCode: String`（可空，取当前版本）
-  由 `SupplierCooperativeProductService.toListItem(offer)` 关联 `offer.currentVersionId` → 版本行填充。
-- **不改** `insertPublished`（`SupplierCooperativeProductService.java:244-280`）的「新增即 PUBLISHED、`version=0`、不写 `current_version_id`」行为（决策 d6）。
-- 前端 `ProductList.vue` 据此渲染「履约就绪」列与「发布履约配置」按钮（§7.5）。
-
-> 备注：`insertPublished` 产出的 offer 与 supplier-config `createOffer` 产出的 offer 是**同一张表的不同入口**。本期统一以合作商品入口建 offer、以 supplier-config `publish` 发布版本，`createOffer` 不在向导主流程使用。
-
-### 5.3 发布表单元数据聚合端点 G5 的响应结构
+## 4. 数据流
 
 ```
-OfferPublishOptionsView {
-  capabilities: [{code, name, description}]        // Capability 枚举全集(10)，含中文名
-  completionModes: [{code, name}]                  // SYNCHRONOUS/QUERY/CALLBACK/QUERY_OR_CALLBACK
-  createIdempotencyModes: [{code, name}]           // NONE/DEDUP_ONLY/REPLAYABLE_RESULT
-  unknownResultPolicies: [{code, name}]            // QUERY_ORDER/WAIT_CALLBACK/REPLAY_SAME_KEY/MANUAL
-  partialDeliveryModes: [{code, name}]             // FORBIDDEN/ALLOWED
-  resultMultiplicities: [{code, name}]             // NONE/SINGLE/MULTIPLE
-  fulfillmentConfigSchemaVersion: 1                // 服务端生成，前端只读
-  fulfillmentConfigJsonFixed: "{}"                 // 一期固定值，前端只读回填
-}
+【技术菜单】供应商履约技术配置(A1, 技术运营)
+  连接器: 选 adapterType(注册表) → 填公共字段 + 能力勾选 + 凭据引用 + 私有JSON(Schema校验)
+          → 草稿 → 校验(validate, capabilities) → 发布(publish, D1 供应商级唯一守卫) → 已发布连接器版本
+  凭据:   凭据集 + 凭据项(credentialKeys() 声明行数; ENV 引用 或 ENVELOPE 录入加密)
+  映射:   从模板初始化(mappingTemplates()) → 查看/追加单条
+  ⇒ 产出资产: 该供应商唯一『已发布连接器版本』(C3)
+
+【业务菜单】合作商品(SupplierManageDetail, 运营)
+  选品: ProductSelectDialog 必填 externalSkuCode(f1) + 商业条款(draft_unit_price 等)
+  上架(B1, 一步即发布):
+     服务端事务内:
+       - C3 自动引用该供应商唯一已发布连接器版本(叠加 §6.8 白名单)
+       - 能力校验: SKU fulfillmentType→primaryCapability(§9) 是否在连接器版本 enabled
+           缺 → 拒绝上架 + 明确提示(要求#2); 无已发布连接器 → 另一明确提示
+       - c3 自动开通+启用 REMOTE_ON_DEMAND 库存来源(或复用)
+       - f1 externalSkuCode 从身份行带入; g3 结算价继承 draft_unit_price; d2 画像=适配器默认
+       - k1 validFrom=now, validTo=null
+       - 插入 sc_supplier_offer_version; upsert external_sku_binding
+       - 更新 offer{current_version_id=新版本, status=PUBLISHED, version+1}   ← 履约『就绪』
+  ⇒ 路由命中(resolveOffer) → B单冻结 offerVersionId → 执行取 externalSkuCode → 适配器 productId
+  上架后改商业条款/externalSkuCode(g3) → i-b 判『过期』 → 重新上架
 ```
 
-后端这些合法值当前散落在 `SupplierOfferPublicationService` 的硬编码 `Set`（56-63 行）与 `Capability` 枚举。G5 实现须**复用同一份来源**（把 Set 提为可枚举的常量或直接从枚举/元数据派生），禁止在前端和 G5 各写一份导致漂移。`name` 中文取 DDL COMMENT 里的中文（如 `SYNCHRONOUS同步`）。
+## 5. 共享地基规格（唯一出处，与 HUA_SHENG 文共建，I1/②）
 
-## 6. REST 写契约（复用现有端点，不改）
+### 5.1 `AdapterMetadata` 扩展
 
-向导调用以下**已存在**的写端点（`SupplierConfigurationAdminController`），本文仅明确前端调用顺序与字段来源，不改其契约：
+`supplieradapter/metadata/AdapterMetadata.java` 现有 `adapterType/capabilities/connectorSchemaResource/offerSchemaResource/connectorSchemaVersion/offerSchemaVersion/validateConnectorConfig/validateOfferConfig`。新增方法（QNM 与 HUA_SHENG 一致实现）：
 
-1. `POST /connectors/drafts`（`CreateConnectorDraftReqVO`）→ `DraftConnectorResult{connectorNo, connectorVersionId, versionNo}`
-2. `POST /connectors/qnm-status-mappings`（`InitializeQnmMappingsReqVO{connectorVersionId}`）→ 写入条数（一期奇那梦必调）
-3. `POST /connectors/error-mappings`（`AddErrorMappingReqVO`，可选，逐条）
-4. `POST /connectors/validate`（`ValidateConnectorReqVO{connectorVersionId, capabilities[], validMinutes, reason}`）→ `ValidationResult`
-5. `POST /connectors/publish`（`PublishConnectorReqVO{connectorNo, connectorVersionId, expectedConnectorVersion, reason}`）→ `PublishResult{connectorVersionId,...}`
-6. `POST /inventory-sources/remote-on-demand`（`CreateInventorySourceReqVO{supplierCode, platformSkuCode, externalSourceCode}`）→ `sourceNo`
-7. `PUT /inventory-sources/activate`（`ActivateInventorySourceReqVO{sourceNo, expectedVersion}`）
-8. `POST /offers/publish`（`PublishOfferReqVO`，§7.4 逐字段）→ `PublishResult{offerNo, offerVersionId, offerVersionNo, aggregateVersion}`
+```java
+/** 该适配器默认的封闭执行画像，服务端在发布时注入，前端只读（d2）。须自洽通过 requireExecutionCapabilities。 */
+ExecutionProfileDefaults defaultExecutionProfile();
 
-前置：供应商主体（`POST /suppliers`）与凭证槽（`POST /credential-slots`）本期假定已存在（向导第一步只做「选择已有供应商」+ 连接器 `credentialSlotNo` 手填/下拉，见 §11 TODO）。
+/** 该适配器所需的凭据项键，UI 据此渲染凭据表单行数（F1）。QNM=[secretKey]，HUA_SHENG=[appSecret,privateKey,callbackPublicKey]。 */
+Set<String> credentialKeys();
 
-## 7. 前端设计
+/** 该适配器的状态映射与错误码映射模板，UI『从模板初始化』据此生成映射行（G2）。协议知识单一来源。 */
+MappingTemplates mappingTemplates();
 
-### 7.1 落点与 Tab 注册
-
-`views/supplier/manage/detail/index.vue` 现有 `el-tabs`（`basic`/`invoice`/`supply`/`product`，L96-312）。新增第 5 个 Tab：
-
-```
-<el-tab-pane label="履约配置" name="fulfillment" lazy v-if="supplierCode">
-  <FulfillmentConfig ref="fulfillmentConfigRef" :supplier-code="supplierCode" @success="getDetail" />
-</el-tab-pane>
+/** 多步骤履约编排声明（HUA_SHENG 文 AD-1/§5.2.2 使用；QNM 单步）。 */
+default List<String> fulfillmentSteps() { return List.of(); }
 ```
 
-`handleTabChange`（L448）切到 `fulfillment` 时 `nextTick` 后 `fulfillmentConfigRef.value?.reload?.()`（与 `product` Tab 同款）。
+- `ExecutionProfileDefaults`＝封闭记录 `{completionMode, createIdempotencyMode, unknownResultPolicy, partialDeliveryMode, resultMultiplicity, fulfillmentConfigJson}`。
+- `MappingTemplates`＝`{statusMappings: List<...>, errorCodeMappings: List<...>}`，字段对齐 `sc_status_mapping_definition`/`sc_supplier_error_code_map`。
+- `SupplierOfferPublicationService` 硬编码 `Set`（`:56-63`）重构为可枚举常量或由元数据/枚举派生（消除前后端漂移根因）。
+- QNM 实现：`defaultExecutionProfile` 返回自洽组合 + `fulfillmentConfigJson="{}"`（`QnmGameOrderV1Metadata.validateOfferConfig` 要求空对象）；`credentialKeys=[secretKey]`；`mappingTemplates` 迁移自现 `initializeQnmStatusMappings` 的 QNM 一期封闭映射。
 
-### 7.2 API 模块 `src/api/supplier/config/`
+### 5.2 AD-3 凭据集（变更集 `054`）+ `ENVELOPE` provider
 
-按 `src/api/supplier/manage/` 约定：`index.ts`（`export const SupplierConfigApi = {...}` + re-export types）+ `types.ts`（`interface` + JSDoc + `Cents` 字段注明 CNY 分）。`import request from '@/config/axios'`，URL 前缀 `/supply-chain/supplier-config/...`。每个方法 JSDoc 注明后端路由。示例：
+- 新增 `sc_credential_set`（`supplier_id, set_code, status 10/20/90`，`uk (supplier_id,set_code)`）+ `sc_credential_item`（`credential_set_id, item_key, provider_type, secret_ref, masked_hint, active_secret_version, status`，`uk (credential_set_id,item_key)`）。字段语义见 HUA_SHENG 文 §7.1（本文不重复 DDL 全文，仅定编号与用途）。
+- **`provider_type` 支持 `ENV` 与 `ENVELOPE`**（F1-hybrid）：
+  - `ENV`：`secret_ref` 存 `env:NAME`，密钥不入库（今日 `EnvironmentCredentialProvider` 模型）。
+  - `ENVELOPE`：`secret_ref` 存 `EnvelopeCryptoPort` 加密后的密文；新增**集/项解析端口** `CredentialSetResolver`（`resolveSet(credentialSetId) → Map<itemKey, char[]>`，调用方不得记录返回值）+ `EnvelopeCredentialItemResolver`（`supports("ENVELOPE")`），用 KMS DEK 解密、**AAD 绑定 `credential_set_id|item_key`** 防密文搬移（仿 HUA_SHENG 文 AD-2 checkpoint AAD）。**决策（本轮确认，选项甲）**：旧「槽位制」`CredentialProvider`（`resolve(CredentialSlotDO)`，3 个在跑消费方：`ConnectorValidationService`/`MovieSupplierConfigService`/`FulfillmentOperationTicketFactory`）**保持不动**——`CredentialSlotDO` 无 `credential_set_id|item_key`，无法承载 ENVELOPE 的 AAD 绑定；ENVELOPE 走新集/项端口，与旧槽位端口并存。
+- `sc_supplier_connector_version.credential_slot_id` 语义扩展为指向凭据集（HUA_SHENG 文 AD-3）、旧单 `sc_credential_slot` 收敛为「1 项凭据集」、运行时 ticket 工厂由槽位改走集解析——此**槽位→集运行时收敛推迟到 HUA_SHENG 适配器阶段**（§13 Phase 1 地基层只列「表 + ENVELOPE provider」，不含运行时收敛）。Phase 1 QNM dogfood 继续走既有 ENV 槽位路径（`env:QNM_TEST_USERKEY`），技术菜单凭据写（§6.3）落 AD-3 集/项表；QNM 与 HUA_SHENG 共用同一凭据 UI 与后端。
+- 护栏（不变量 11）：录入只写不回显、读取只返回 `masked_hint`、永不入日志、KMS 版本化+轮换、写入脱敏审计。
 
-```ts
-/** 连接器候选：GET /supply-chain/supplier-config/connectors */
-getConnectors: async (supplierCode: string) =>
-  request.get<ConnectorOptionView[]>({ url: '/supply-chain/supplier-config/connectors', params: { supplierCode } }),
-/** 发布供给版本：POST /supply-chain/supplier-config/offers/publish */
-publishOffer: async (data: PublishOfferReqVO) =>
-  request.post<PublishResult>({ url: '/supply-chain/supplier-config/offers/publish', data }),
-```
+### 5.3 AD-5 `extra_config`（变更集 `055`）
 
-权限常量（沿用 `rechargeFrequency.ts` 的 `as const` 风格，放 `config/index.ts`）：
+- `sc_supplier_connector_version` 加 `extra_config JSON NULL`（非秘密可调参数，如 HUA_SHENG `expireTime`/`num`/`outMobile`；**密钥类禁入**）。运行时经 `extraParameters` 传递链注入 ticket（打通属 HUA_SHENG 文 AD-5，本文只负责 UI 可编辑该列，E1）。
 
-```ts
-export const SUPPLIER_CONFIG_PERMISSIONS = { admin: 'supply-chain:admin' } as const
-```
+### 5.4 f1 `external_sku_code`（变更集 `053`）
 
-### 7.3 `FulfillmentConfig.vue` 结构
+- `ALTER TABLE sc_supplier_offer ADD COLUMN external_sku_code VARCHAR(128) NULL COMMENT '供应商外部商品编码，选合作商品时录入' AFTER platform_sku_id;` + `ADD UNIQUE KEY uk_sc_supplier_offer_external_sku (supplier_id, external_sku_code);`
+  - 列可空：历史行无值；MySQL 唯一键允许多行 NULL，不阻塞历史数据。前端对**新建**合作商品强制必填。
+  - `SupplierOfferDO` 加 `private String externalSkuCode;`（注释与 DDL COMMENT 同表述）。
+- 选品写入：`SupplierAdminController` 的 `POST /suppliers/{supplierCode}/offers`（`createOffers:297-306`）请求体 + `SupplierCooperativeProductService.insertPublished`（`:244-280`）补 `externalSkuCode`；`toDraftLine`（`:368-373`）投影补该字段。
 
-顶部 `el-steps`（连接器 → 库存来源 → Offer 发布），下方对应卡片/表格。三块均可独立操作（非强制线性），因为连接器/库存来源可复用、Offer 可多条：
+### 5.5 D1 `published_flag` 唯一键（变更集 `056`）
 
-- **连接器区**：`getConnectors(supplierCode)` 列表；「新建连接器」按钮打开 `ConnectorWizardDialog`（草稿→QNM映射→校验→发布，字段见 §6.1-6.5）。仅 `supply-chain:admin` 可见。
-- **库存来源区**：`getInventorySources(supplierCode, platformSkuCode?)` 列表；「新建库存来源」按钮（`remote-on-demand` → `activate`）。
-- **Offer 发布区**：`getConfigOffers(supplierCode)` 列表，列含 `platformSkuCode/Name`、`status`、`fulfillmentReady`、`currentVersionId`、`externalSkuCode`；每行「发布版本 / 查看历史」按钮 → 打开 `OfferPublishDialog`（§7.4）/ `OfferVersionHistoryDialog`（G4）。
+- `sc_supplier_connector` 加生成列 `published_flag TINYINT GENERATED ALWAYS AS (CASE WHEN current_version_id IS NOT NULL THEN 1 END) STORED` + `UNIQUE KEY uk_sc_connector_supplier_published (supplier_id, published_flag)`。
+- **为何用 `current_version_id` 而非 `status`**：`status=10`（启用）在 `createConnectorDraft`（`SupplierConfigurationCommandService.java:115`）建草稿时即置位，同供应商可有多个 `status=10` 草稿；真正区分「已发布」的是 `publish`（`ConnectorPublicationService.java:75`）写入的 `current_version_id`，`retire`（`:122-124`）退役当前版本时清空它。故生成列以 `current_version_id IS NOT NULL` 为条件，草稿/退役行 `published_flag` 为 NULL（MySQL 唯一键允许多行 NULL），每供应商至多一行 `published_flag=1`。
+- `ConnectorPublicationService.publish`（`:44`，现无供应商级守卫）加预检：同供应商已有其它已发布连接器（`current_version_id` 非空的其它行）→ 抛清晰业务异常（不依赖 DB 唯一键报错兜底）。
 
-从合作商品 Tab 跳转进来时（§7.5）带 `prefillOfferNo`，自动定位 Offer 发布区并打开该 Offer 的发布弹窗。
+## 6. 后端改动
 
-### 7.4 `OfferPublishDialog.vue` 表单字段（对应 `PublishOfferReqVO`）
+### 6.1 技术菜单只读 GET 面（`SupplierConfigurationAdminController`，当前**零 GET**）
 
-控件约定沿用仓库：金额 `el-input-number :controls="false" :precision="2"` + `centsToYuan/yuanToCents`（`views/supplier/utils/constants.ts`）；数量 `:precision="0" :min="1"`；下拉 `el-select` + `el-option`；`el-form ref :model :rules label-width`；提交 `formRef.validate()` → 业务补充校验 `message.warning` → `SupplierConfigApi.publishOffer` → `message.success` → `emit('success')`。
+补 import `GetMapping`/`PathVariable`/`RequestParam`；所有响应 `CommonResult<T>` 投影 VO（不暴露 DO）；每端点挂 `@PreAuthorize(ADMIN_EXPRESSION)`（H2）。
 
-| 表单字段(label) | 提交字段 | 控件 | 来源/候选 | 校验 |
-| --- | --- | --- | --- | --- |
-| 目标合作商品 | `offerNo` | 只读（来自列表行） | G3 | 必填 |
-| 期望版本号 | `expectedOfferVersion` | 隐藏（来自 G3 `version`） | G3 | 乐观锁，原样回传 |
-| 供应商外部商品编码 | `externalSkuCode` | `el-input` maxlength=128 | 手填 | 必填、≤128、同连接器唯一（后端校验，前端提示） |
-| 结算单价(元) | `supplierSettlementUnitPrice` | `el-input-number` | 手填 | `>=0`；提交 `yuanToCents` |
-| 连接器版本 | `connectorVersionId` | `el-select` | G1（仅当前 PUBLISHED 版本） | 必填 |
-| 库存来源 | `inventorySourceNo` | `el-select` | G2（ACTIVE+REMOTE_ON_DEMAND） | 必填 |
-| 最小/最大/步长 | `minQuantity`/`maxQuantity`/`quantityStep` | `el-input-number` | 手填 | `min>=1`、`max>=min`、`step>=1` |
-| 主履约能力 | `primaryCapabilityCode` | `el-select` | G5 `capabilities` | 必填；按 SKU `fulfillmentType` 联动过滤（§8）；须在连接器版本 `enabledCapabilities` 内 |
-| 完成模式 | `completionMode` | `el-select` | G5 | 必填；联动能力校验（不变量6） |
-| 创建幂等模式 | `createIdempotencyMode` | `el-select` | G5 | 必填 |
-| 结果未知策略 | `unknownResultPolicy` | `el-select` | G5 | 必填；`REPLAY_SAME_KEY` 时强制 `createIdempotencyMode=REPLAYABLE_RESULT`（不变量7） |
-| 部分交付模式 | `partialDeliveryMode` | `el-select` | G5 | 必填 |
-| 结果资产数量 | `resultMultiplicity` | `el-select` | G5 | 必填 |
-| 履约私有配置 | `fulfillmentConfigJson` | 只读文本，固定 `{}` | G5 `fulfillmentConfigJsonFixed` | 一期不可编辑 |
-| 生效时间 | `validFrom` | `el-date-picker` datetime | 手填 | 必填 |
-| 失效时间 | `validTo` | `el-date-picker` datetime | 手填 | 可空；填则 `> validFrom` |
-| 发布原因 | `publishReason` | `el-input` textarea maxlength=512 | 手填 | 必填、≤512 |
+| # | 方法 | 路径 | 用途 |
+| --- | --- | --- | --- |
+| T1 | GET | `/supply-chain/supplier-config/adapter-types` | 列出注册表 `AdapterMetadataRegistry` 的适配器类型 + 各自 `connectorSchemaResource`/schema 版本/`capabilities()`/`credentialKeys()`/`mappingTemplates()` 摘要（供 E1 下拉、能力勾选、凭据行数、映射初始化） |
+| T2 | GET | `/supply-chain/supplier-config/{supplierCode}/connectors` | 该供应商连接器列表（connectorNo/code/adapterType/status/currentVersionId + **A1 追加 `latestVersionId`/`latestVersionNo`/`latestVersionStatus`**：Phase 1 连接器与版本 1:1，暴露最新版本使前端刷新后仍能对草稿/已验证态驱动 校验→发布→退役，草稿态 `currentVersionId` 为 null 时据 `latestVersionId` 操作） |
+| T3 | GET | `/supply-chain/supplier-config/connectors/{connectorNo}/versions/{versionId}` | 连接器版本详情（公共字段 + `adapter_config_json`/`extra_config` + 校验态 + 能力启用态；**不含凭据明文**） |
+| T4 | GET | `/supply-chain/supplier-config/{supplierCode}/credential-sets` | 凭据集/项列表（**只返回 `item_key`/`provider_type`/`masked_hint`/`status`，绝不返回 `secret_ref` 值或密文**） |
+| T5 | GET | `/supply-chain/supplier-config/connectors/versions/{versionId}/mappings` | 该版本状态映射 + 错误码映射列表 |
+| T6 | GET | `/supply-chain/supplier-config/credential-slots` | **（A1 新增）** 平台级可用凭据槽列表（连接器「凭据引用下拉」数据源）；**只返回 `slot_no`/`provider_type`/`masked_hint`/`status`，绝不返回 `secret_ref` 值或密文**。凭据槽无 `supplier_id`（全局），故不带 `supplierCode`，只列 `status=ACTIVE`（`CredentialStatus.ACTIVE`） |
 
-联动实现：`primaryCapabilityCode` 的可选集 = `capabilities ∩ 连接器版本.enabledCapabilities ∩ fulfillmentType 约束(§8)`；`completionMode`/`unknownResultPolicy` 变更时重新校验连接器是否具备 `QUERY_ORDER`/`RECEIVE_CALLBACK`，缺失则 `message.warning` 并禁用提交。
+分页：一期数据量小返回全量 `List`；超阈值再补 `PageResult`（§12 TODO）。
 
-### 7.5 合作商品 Tab 入口（`ProductList.vue`）
+### 6.2 连接器生命周期写（复用现有端点 + D1 守卫）
 
-- 新增列「履约就绪」：`fulfillmentReady ? 标签「已配置」: 标签「未发布版本」`（`el-tag` type success/info）。
-- 行操作新增「发布履约配置」按钮：`v-if="checkPermi([SUPPLIER_CONFIG_PERMISSIONS.admin])"`，点击 `emit('publish-fulfillment', row.offerNo)`；`detail/index.vue` 接住后切到 `fulfillment` Tab 并把 `prefillOfferNo` 传给 `FulfillmentConfig`。
+现有 `createConnectorDraft`（`:68`，`CreateConnectorDraftReqVO:194-212`）、`validateConnector`（`:101`）、`publishConnector`（`:111`）、`retireConnector`（`:120`）保留；`publish` 加 D1 供应商级预检（§5.5）。`adapterConfigJson` 与新增 `extraConfigJson`（AD-5）均按 Schema 校验。
 
-### 7.6 字典与枚举兜底
+**`credentialSlotNo` 语义（A1 定案，修正原拟「改指凭据集编号」）**：Phase 1 连接器版本仍绑定 **legacy 平台级凭据槽 `sc_credential_slot`**（`createConnectorDraft` 经 `requireActiveSlot` 校验、运行时 `FulfillmentOperationTicketFactory.resolveSecretKey(credentialSlotId)` 从槽解密），**不改指 AD-3 凭据集编号**。原因：AD-3 凭据集/项 + `ENVELOPE` + `CredentialSetResolver.resolveSet` 已作为地基建成并单测通过，但**尚未接入连接器/履约取密链路**（`resolveSet` 当前仅测试调用）；把连接器改绑凭据集会重开已完成且 GREEN 的后端写/运行时链路，超出 MVP。故 §8.2 连接器「凭据引用下拉」数据源为 **T6 `GET /credential-slots`**（列可用槽，脱敏），凭据集子页（§8.3）作为**前瞻 F1-hybrid 路径**先行建成、暂不被连接器消费。连接器↔凭据集收敛（含 `resolveSet` 接入履约取密、`createCredentialSlot` 去留）推迟到后续阶段（§12 TODO）。
 
-优先 `getStrDictOptions('supply_chain_*')`（若后端已配对应字典），否则用 G5 端点返回值渲染下拉；`views/supplier/utils/constants.ts` 增补 `as const` 兜底常量（`COMPLETION_MODE_OPTIONS` 等）与 `getXxxLabel`，遵循「字典/端点优先 + constants 兜底」既有模式。状态枚举中文（`OfferStatus`/`ConnectorVersionStatus`/`InventorySourceStatus`）用于列表标签。
+### 6.3 凭据写（F1-hybrid）
 
-## 8. `fulfillmentType → primaryCapabilityCode` 约束表
+- 新增 `POST /supply-chain/supplier-config/credential-sets`（建集）+ `POST /supply-chain/supplier-config/credential-items`（建项）。项请求体：`setCode`、`itemKey`（须在 `credentialKeys()` 内）、`providerType`（`ENV`/`ENVELOPE`）、`secretRef`（`ENV` 时 `env:` 前缀）或 `secretValue`（`ENVELOPE` 时明文，**仅入参、服务端立即信封加密、不回显不落日志**）、`maskedHint`、`activeSecretVersion`。
+- **`itemKey` 封闭集校验范围（定案）**：因凭据集/项模型（变更集 054）无 `adapter_type` 列、建项请求体亦不含 `adapterType`，`itemKey` 须落在**所有已注册适配器 `credentialKeys()` 的并集**内（经 `AdapterMetadataRegistry.all()` 聚合，封闭集，杜绝魔法值 AGENTS.md §7）。并集当前为 `{secretKey, appSecret, privateKey, callbackPublicKey}`（QNM ∪ HUA_SHENG）；跨适配器的键互相被接受是此方案的已知取舍，精确到适配器的校验推迟到连接器发布/上架时按 §6.4 能力与适配器核对。
+- `createCredentialSlot`（`:59`）保留兼容或收敛为凭据集的特例（实现时定，§12 TODO）。
 
-来源：`SupplierOfferPublicationService.requireCapabilityMatchesSku`（257-266）；`Capability`（`supplieradapter/metadata/Capability.java`）；`FulfillmentType`（`tradecore/catalog/domain/FulfillmentType.java`）。
+### 6.4 能力声明
 
-| 平台 SKU `fulfillmentType` | 允许的 `primaryCapabilityCode` |
+能力在 `validateConnector`（`:101`，`ValidateConnectorReqVO.capabilities:Set<String>`）时声明并落 `sc_supplier_connector_capability`（`uk_sc_connector_capability (connector_version_id, capability_code)`）。UI 勾选项来自 T1 的 `capabilities()`（封闭集），前端不自由输入。
+
+### 6.5 映射（G2）
+
+- 泛化 `initializeQnmStatusMappings`（`:82`）为 `POST /supply-chain/supplier-config/connectors/mappings/initialize`（入参 `connectorVersionId`，按该版本 adapterType 从 `mappingTemplates()` 初始化状态 + 错误码映射）。
+- 保留 `addErrorMapping`（`:90`）追加单条错误码；新增 `POST /supply-chain/supplier-config/connectors/status-mappings` 追加单条状态映射。
+
+### 6.6 上架即发布服务（B1，核心）
+
+合并 `SupplierCooperativeProductService.insertPublished`（`:244-280`）与 `SupplierOfferPublicationService.publish`（`:129`）为一条上架编排（新应用服务方法，`@Transactional(supplyChainTransactionManager)`）：
+
+1. 校验合作商品身份行（`externalSkuCode` 非空 f1、供应商 ACTIVE、SKU 可售）。
+2. **C3 连接器自动引用**：查该供应商唯一已发布连接器版本（`sc_supplier_connector.current_version_id` 非空的那一行，即 `published_flag=1`），叠加 §6.8 白名单过滤。
+   - 无 → 抛 `SUPPLIER_NO_PUBLISHED_CONNECTOR`，文案「供应商[X]尚无已发布连接器版本，请先在『履约技术配置』发布连接器」。
+3. **能力缺口校验**：SKU `fulfillmentType`→`primaryCapability`（§9），`requireCapability`（`:238-240`）校验其在连接器版本 `enabled=1`。
+   - 缺 → 抛 `OFFER_CAPABILITY_MISSING`，文案「供应商[X]当前连接器未启用『{能力中文名} {code}』能力，该商品无法上架，请先在『履约技术配置』启用能力并重新发布连接器版本」（落实要求 #2）。
+4. c3 库存自动开通/复用（§2 不变量 8）。
+5. 组装发布参数：`externalSkuCode`←身份行、`supplierSettlementUnitPrice`←`draft_unit_price`（g3）、执行画像←`defaultExecutionProfile()`（d2）、`fulfillmentConfigJson`←适配器默认、数量←身份行 `draft_min/max_quantity`、`validFrom=now`/`validTo=null`（k1）、`connectorVersionId`←步骤 2。
+6. 调 `publish` 写版本行 + upsert binding + 置 `current_version_id`/`version+1`（`:190-201`）+ outbox。
+7. 重新上架（`STALE`→`READY`）：带新 `expectedOfferVersion`，新建版本隐式取代旧版本（k1）。
+
+`PublishOfferReqVO`（`:273-294`）在上架编排下**不再由前端逐字段提交**：前端上架只传 `offerNo`（+ 可选 `validTo`）；其余服务端派生。原 `POST /offers/publish` 端点可保留为内部/测试入口（§12 TODO 定去留）。
+
+### 6.7 `listOffers` 投影扩展（m1 沿用 + i-b）
+
+`OfferListItem`（`SupplierCooperativeProductService.java:455`，构建于 `toListItem:338-362`）追加 4 字段：`externalSkuCode`（身份行 f1）、`currentVersionId`、`offerVersion`（聚合 version）、`fulfillmentStatus`（三态，后端计算）。`fulfillmentStatus` 计算抽纯函数便于 `*Test`：`current_version_id==null`→`NOT_CONFIGURED`；否则 diff 身份列（`external_sku_code`/`draft_unit_price`/`draft_min_quantity`/`draft_max_quantity`）与当前版本冻结字段（`external_sku_code`/`supplier_settlement_unit_price`/`min_quantity`/`max_quantity`），任一不一致→`STALE`，全一致→`READY`。
+
+### 6.8 adapterType 白名单灰度（j3 沿用）
+
+上架步骤 2 的连接器候选叠加 adapterType 白名单（配置来源，非硬编码字面量，AGENTS.md §7）：Phase 1 含 `QNM_GAME_ORDER_V1`（dogfood/集成测试）；`HUA_SHENG_ORDER_V1` 待其适配器 + 种子（`057+`）落地后加入白名单翻牌。QNM 无部署种子（仅测试态），故生产可履约供给实际随 HUA_SHENG 上线；白名单确保 UI 可先对 QNM 开发验证而不误导生产。
+
+## 7. REST 契约汇总（Phase 1 前端使用）
+
+**技术菜单（H2 全 `supply-chain:admin`）：** T1–T6 只读（§6.1，T6＝`GET /credential-slots` 连接器凭据引用下拉源）；`POST /connectors/drafts`、`POST /connectors/validate`、`POST /connectors/publish`、`PUT /connectors/retire`（§6.2）；`POST /credential-sets`、`POST /credential-items`（§6.3）；`POST /connectors/mappings/initialize`、`POST /connectors/error-mappings`、`POST /connectors/status-mappings`（§6.5）。
+
+**业务菜单：** `POST /supply-chain/suppliers/{supplierCode}/offers`（选品，f1 必填 `externalSkuCode`，权限 `hasAnyPermissions('supply-chain:admin','supply-chain:supplier:update')`）；**上架动作**（B1，新端点或复用 offer 上架语义，前端只传 `offerNo`+可选 `validTo`）；`GET`（已有）`listOffers`（投影扩展 §6.7）。
+
+## 8. 前端设计（`supplychainhubweb`）
+
+### 8.1 技术菜单（A1，新顶级菜单）
+
+- 新顶级菜单「供应商履约技术配置」，`script/deploy` 部署 SQL 写入 system 库（供应链不写 system 表，AGENTS.md）；菜单/按钮按 `supply-chain:admin` 显隐（H2，`checkPermi`/`v-hasPermi`）。
+- 入口按 `supplierCode` 维度（选供应商 → 4 子页）。
+- 新 api 模块 `src/api/supplier/config/`（`index.ts`+`types.ts`，按 `src/api/supplier/manage/` 约定，`import request from '@/config/axios'`，URL 前缀 `/supply-chain/supplier-config`，每方法 JSDoc 注明后端路由；`as const` 权限常量）。
+
+### 8.2 连接器子页（E1）
+
+列表（T2）+ **新建草稿表单**（连接器版本一经创建即不可变，无「编辑草稿」端点；改配置＝新建连接器）：公共字段结构化控件（`baseUrl`/`merchantAccount`/`protocolVersion`/`callbackPath`/`connectTimeoutMs`/`readTimeoutMs`/`rateLimit`/`concurrencyLimit`）；`adapterType` 下拉（T1，封闭集）；凭据引用下拉（**T6 `GET /credential-slots`**，列平台级可用凭据槽、脱敏只回 `slotNo`/`maskedHint`；**非 T4 凭据集**，因连接器仍绑定 legacy 槽，见 §6.2 A1）；`adapter_config_json` 用 **JSON 文本域**（设计允许「textarea/轻量 code editor」）+ 前端 `isValidJson` 语法即时校验，**保存时后端 `ClosedJsonSchemaValidator` 按 `connectorSchemaResource` 校验并回显逐字段错误**（T1 `AdapterTypeView` 不含 Schema 文本，故前端不旁展 Schema、保持适配器无关；`extra_config` 一期只读展示于 T3 详情，无写端点）。**能力勾选不在草稿表单**（`CreateConnectorDraftReqVO` 无 capabilities 字段），而在**校验步骤**声明（`ValidateConnectorReqVO.capabilities`，§6.4/§8.4）。生命周期按钮按 T2 `latestVersionStatus` 显隐：草稿(0)→**校验**、已验证(5)→**发布**、已发布(10)→**退役**、已退役(90)→仅**详情**；非法跃迁由后端守卫拒绝、错误经 axios 拦截器透传。版本详情（T3）只读。
+
+### 8.3 凭据子页（F1-hybrid）
+
+凭据集列表（T4）+ 新建凭据项：`item_key`（按所选连接器 adapterType 的 `credentialKeys()` 渲染行数）、`provider_type` 单选 `ENV`/`ENVELOPE`；`ENV`→填 `secret_ref`（`env:` 前缀校验）；`ENVELOPE`→填密钥值（`type=password`、**只写不回显**、提交后仅显示 `masked_hint`）。列表/详情**永不展示** `secret_ref` 值或密文。
+
+### 8.4 能力子页
+
+展示连接器版本能力启用态（T3/T1），勾选用在连接器草稿的 `validate` 步骤（§6.4）；本页主要为可视化查看 + 引导到连接器校验。
+
+### 8.5 映射子页（G2）
+
+「从模板初始化」按钮（`mappings/initialize`）→ 映射行表格（T5，状态映射 + 错误码映射）+ 追加单条（`error-mappings`/`status-mappings`）。
+
+### 8.6 业务侧（B1/f1）
+
+- `ProductSelectDialog`：选品表单**新增必填 `供应商商品编码 externalSkuCode`**（`el-input` maxlength=128，f1）。
+- `ProductList.vue`：新增列 `供应商商品编码`（`row.externalSkuCode`）+ `履约状态`（`el-tag` 三态：就绪 success / 未配置 info / 过期 warning）；行操作 `上架`（`未配置`/`过期` 可点，`就绪` 显示「重新上架」），点击调上架端点（只传 `offerNo`），**无发布对话框**。上架失败若返回 `OFFER_CAPABILITY_MISSING`/`SUPPLIER_NO_PUBLISHED_CONNECTOR` → `message.error` 透传后端明确文案（要求 #2）。
+- **不再有** v3 的 `OfferPublishDialog`/`current-connector` 调用。
+
+## 9. `fulfillmentType → primaryCapabilityCode` 推导表（服务端，能力缺口判定依据）
+
+来源：`requireCapabilityMatchesSku`（`:257-266`）、`Capability`、`FulfillmentType`。d2 之下服务端推导，前端不选。
+
+| 平台 SKU `fulfillmentType` | 推导 `primaryCapabilityCode` |
 | --- | --- |
 | `DIRECT_RECHARGE` | `CREATE_RECHARGE` |
 | `VOUCHER_CODE` / `CARD_CODE_SECRET` / `VOUCHER_URL` | `ISSUE_ASSET` |
 | `ACCOUNT_BOUND_BENEFIT` | `BIND_BENEFIT` |
 
-`Capability` 全集（10）：`CREATE_RECHARGE, ISSUE_ASSET, BIND_BENEFIT, QUERY_ORDER, QUERY_ASSET, VOID_ASSET, UNBIND_ASSET, QUERY_BALANCE, QUERY_INVENTORY, RECEIVE_CALLBACK`（仅上表 3 个可作 primary，其余用于连接器能力声明/联动校验）。
+`Capability` 全集（10）：`CREATE_RECHARGE, ISSUE_ASSET, BIND_BENEFIT, QUERY_ORDER, QUERY_ASSET, VOID_ASSET, UNBIND_ASSET, QUERY_BALANCE, QUERY_INVENTORY, RECEIVE_CALLBACK`（HUA_SHENG 文拟增 `CANCEL_ASSET`，共建时同步本表与全集）。推导出的 primary 须在连接器版本 `enabled=1`，否则 §6.6 步骤 3 拒绝上架。
 
-## 9. 校验规则（前后端一致，后端为准）
+## 10. 校验规则（后端为准）
 
-前端做即时提示，后端 `publish`/`validateCommercialTerms` 为最终裁决。二者必须对齐以下规则（不变量 4-11）：`externalSkuCode` 非空且同连接器唯一；`max>=min>=1`、`step>=1`；`primaryCapabilityCode` 匹配 SKU 且在连接器版本启用；`QUERY/CALLBACK` 联动能力；`REPLAY_SAME_KEY→REPLAYABLE_RESULT`；`validTo>validFrom`；`fulfillmentConfigJson=="{}"`；连接器版本为当前 PUBLISHED；库存来源 ACTIVE+REMOTE_ON_DEMAND+匹配。错误码/文案以服务端 `ServiceException` 为准，前端 `message.error` 透传。
+前端仅即时提示（必填/格式/`validTo>validFrom`）；其余由后端裁决：`externalSkuCode` 非空且身份行唯一 + binding 同连接器唯一；结算价 `>=0`；`primaryCapability` 由 SKU 推导且连接器启用（缺→拒绝上架）；执行画像自洽；连接器版本为该供应商唯一已发布（C3/D1）且在白名单；库存自动开通后 ACTIVE+REMOTE_ON_DEMAND+匹配；乐观锁 `expectedOfferVersion==offer.version`；凭据 `ENV` 前缀/`ENVELOPE` 加密与护栏。错误码/文案以服务端 `ServiceException` 为准，前端 `message.error` 透传。
 
-## 10. 测试与门禁
+## 11. 测试与门禁
 
-按 `docs/superpowers/specs/2026-08-07-supply-chain-phase1-detailed-design.md#17-测试与发版门禁`：
+按 `2026-08-07-supply-chain-phase1-detailed-design.md#17-测试与发版门禁`（仅跳过供应链以外模块单测）：
 
-- `*Test`（纯逻辑）：G5 元数据聚合的枚举派生、`fulfillmentReady` 计算、`primaryCapabilityCode` 匹配 SKU 的过滤逻辑。
-- `*IntegrationTest`（真实 MySQL + Liquibase，profile `supply-chain-integration`）：合作商品(PUBLISHED,current_version_id=null) → `publish` → 断言写入版本行、`current_version_id` 指向新版本、`offer.version+1`、`external_sku_binding` upsert、`externalSkuCode` 冲突拒绝；再断言路由 `resolveOffer` 由「跳过」变为「命中」。
-- `*ContractTest`：新增 5 个 GET 端点与 `PublishOfferReqVO` 的字段/校验一致性；G5 返回的枚举集合与后端硬编码 Set 完全相等（防漂移）。
-- `*ArchitectureTest`：新增 GET 端点仍限 `interfaceapi.admin`，投影 VO 不泄漏 DO；确认不触发 `SupplyChainModuleArchitectureTest` 既有约束（Facade 不依赖 `..dal..` 等）。
-- 前端：`OfferPublishDialog` 联动校验单测（若前端测试体系覆盖）；否则以 §11 手工联调为准。
+- `*Test`：`AdapterMetadata.defaultExecutionProfile()` 自洽性（注入后过 `requireExecutionCapabilities`）；`fulfillmentStatus` 三态计算各分支；`fulfillmentType→primaryCapability` 推导；硬编码 Set 重构后枚举一致性；C3 连接器选择（唯一已发布）；能力缺口错误码分支；`fulfillmentConfigJson` 按适配器 Schema 校验。
+- `*IntegrationTest`（真实 MySQL+Liquibase，profile `supply-chain-integration`）：① `053`–`056` 迁移生效（`external_sku_code` 唯一、`published_flag` 唯一）；② 技术菜单链路：建凭据集/项（ENV+ENVELOPE，断言密文入库、读取只回 `masked_hint`）→ 建连接器草稿 → validate → publish（断言 D1：同供应商二次发布另一连接器被拒）→ 映射模板初始化；③ 上架即发布：合作商品(未配置) → 上架 → 断言自动开通库存、版本行冻结 `external_sku_code`、结算价==`draft_unit_price`、画像==适配器默认、`current_version_id` 非空、`version+1`、binding upsert、路由由跳过变命中；④ 能力缺口：连接器未启用所需能力 → 上架拒绝 + 错误码；⑤ 改身份列 → `fulfillmentStatus` READY→STALE → 重新上架；⑥ 再次上架带新 `expectedOfferVersion` 成功、旧号失败。
+- `*ContractTest`：T1–T5 GET 与新写端点契约；凭据端点**任何响应不含 `secret_ref`/密文/明文**（安全契约）；`mappingTemplates()`/`credentialKeys()` 与元数据一致；`OfferListItem` 4 新字段序列化。
+- `*ArchitectureTest`：新 GET/写端点仍限 `interfaceapi.admin` 且各挂 `@PreAuthorize`；投影 VO 不泄漏 DO；凭据密文/明文不出现在日志与响应（可加规则）；不触发既有约束（Facade 不依赖 `..dal..` 等）。
+- 前端：连接器 JSON 编辑器 Schema 错误回显、凭据只写不回显、上架能力缺口提示（若前端测试体系覆盖），否则以 §12 手工联调为准。
 
-## 11. 集成测试文档与未决项
+## 12. 集成测试文档与未决项
 
-- 更新 `docs/集成测试.md`：新增场景「合作商品发布供给版本后履约链路贯通」，前置（供应商/凭证槽/连接器已发布、库存来源已启用、平台 SKU 有 `fulfillmentType`），步骤（合作商品新增→履约配置 Tab 发布版本→下单），验证点（`sc_supplier_offer_version.external_sku_code` 写入、路由命中、QNM 请求 `productId==externalSkuCode`）。
+- 更新 `docs/集成测试.md`：技术菜单配置链路（连接器/凭据/能力/映射）+ 合作商品上架即发布 + 能力缺口拒绝 + 路由命中 + 下单 `productId==externalSkuCode`；QNM dogfood 与 HUA_SHENG 翻牌（白名单）。
 - TODO（附本文锚点，禁止裸 TODO）：
-  - 凭证槽列表 GET 与可视化新建（本文 §5.1 未含）——见 `docs/superpowers/specs/2026-10-03-supplier-offer-publication-admin-design.md#51-新增只读-get-端点`。
-  - 连接器错误码/状态映射可视化编辑器（本文 §1 不做）。
-  - supplier-config `POST /offers`（createOffer）与合作商品入口二选一的收敛（本文 §4 说明）——避免同表双入口产生重复 offer。
-  - G1/G2/G3 数据量增长后的分页化（本文 §5.1）。
+  - H1 细粒度技术权限 + 凭据双人复核（MVP 用 H2）——见 `#0-已确认决策`。
+  - `createCredentialSlot` 与凭据集端点的收敛/去留——见 `#63-凭据写f1-hybrid`。
+  - 原 `POST /offers/publish` 端点在 B1 下的去留（内部/测试保留 or 下线）——见 `#66-上架即发布服务b1核心`。
+  - T2/T3/T5 数据量增长后的分页化——见 `#61-技术菜单只读-get-面`。
+  - `validTo` 到期自动下架扫描任务（k1 默认长期）——见 `#0-已确认决策`。
 
-## 12. 落地顺序（评审通过后）
+## 13. 落地顺序（Phase 1）
 
-1. 后端：新增 5 个 GET 端点 + 投影 VO + `OfferListItem` 履约就绪字段 + G5 枚举来源收敛（含单测/契约测试）。
-2. 后端：`*IntegrationTest` 覆盖 publish→可履约→路由命中。
-3. 前端：`src/api/supplier/config/` 模块。
-4. 前端：`FulfillmentConfig.vue` + `ConnectorWizardDialog` + `OfferPublishDialog` + 版本历史弹窗 + Tab 注册。
-5. 前端：`ProductList.vue` 履约就绪列与跳转入口。
-6. 文档：更新 `docs/集成测试.md`；本文与实现同一次变更内对齐（仓库规则）。
+1. **共享地基**（与 HUA_SHENG 文共建，§5）：`AdapterMetadata` 扩展（`defaultExecutionProfile`/`credentialKeys`/`mappingTemplates`）+ 硬编码 Set 重构 + AD-3 凭据集表(`054`)+`ENVELOPE` provider + AD-5 `extra_config`(`055`) + f1 `external_sku_code`(`053`) + D1 `published_flag`(`056`)，含 `*Test`。
+2. 技术菜单后端：T1–T5 GET + 连接器生命周期（D1 守卫）+ 凭据写 + 映射模板初始化/追加（§6.1–6.5），含 `*ContractTest`/`*IntegrationTest`。
+3. 上架即发布后端：B1 编排 + C3 引用 + 能力缺口 + c3 库存 + 投影扩展 + i-b 三态 + 白名单（§6.6–6.8），含 `*IntegrationTest`。
+4. 前端：`src/api/supplier/config/` + 技术菜单 4 子页（§8.1–8.5）。
+5. 前端：`ProductSelectDialog` 必填 `externalSkuCode` + `ProductList` 两列 + 上架动作（§8.6）。
+6. 文档：更新 `docs/集成测试.md`；本文与实现同一次变更内对齐（AGENTS.md §1）。
+7. HUA_SHENG 适配器（HUA_SHENG 文 T2–T14）随后落地，翻白名单，UI 零改动。
+
+## 14. 与 HUA_SHENG 文协调（I1/②）
+
+- **地基单一出处**：`AdapterMetadata` 扩展 + AD-3 凭据集 + AD-5 `extra_config` 规格以**本文 §5 为准**，HUA_SHENG 文引用本文、不重复描述；两文对 `defaultExecutionProfile()`/`credentialKeys()`/`mappingTemplates()`/`fulfillmentSteps()` 签名与语义达成一致。
+- **变更集编号**：本文占 `053`–`056`；HUA_SHENG 主数据种子让位到 `057+`（其原 `050`/`051` 与现有 `050-project-standard-asset-audit`/`051-standard-quote-permanent-key` 冲突）；落地前对齐 `db.changelog-1.0.0.yaml` 登记顺序。
+- **上线排序**：QNM 仅测试态，本文 UI 对 QNM dogfood；生产可履约供给随 HUA_SHENG（适配器 + `057+` 种子 + 凭据集 + `extra_config`）落地后由白名单翻牌。技术菜单 UI 与 HUA_SHENG 适配器可并行推进，仅在 §5 地基与变更集编号上协调。

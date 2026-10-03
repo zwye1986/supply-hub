@@ -302,7 +302,7 @@ class RechargeFrequencyAdminContractTest {
             assertThat(new ObjectMapper().findAndRegisterModules().writeValueAsString(dto)).doesNotContain("13800138000","secret-value");
             assertThat(dto.getRequestParams()).isEqualTo("{}");
         }
-        var failures=logs.list.stream().filter(event->event.getFormattedMessage().contains("限频管理异常日志存储失败")).toList();
+        var failures=logs.list.stream().filter(event->event.getFormattedMessage().contains("敏感路径异常日志存储失败")).toList();
         assertThat(failures).hasSize(3);
         assertThat(failures.stream().map(ILoggingEvent::getFormattedMessage).toList())
                 .satisfiesExactly(first->assertThat(first).contains("failureCount=1,"),
@@ -320,7 +320,7 @@ class RechargeFrequencyAdminContractTest {
         assertThat(ERRORS.get().getLast().getRequestParams()).contains("ordinary-body");
         assertThat(logs.list.stream().filter(event->event.getFormattedMessage().startsWith("[createExceptionLog]")).toList())
                 .singleElement().satisfies(event->{assertThat(event.getFormattedMessage()).contains("/admin-api/ordinary","ordinary-primary");assertThat(event.getThrowableProxy()).isNotNull();});
-        assertThat(logs.list.stream().filter(event->event.getFormattedMessage().contains("限频管理异常日志存储失败"))).hasSize(3);
+        assertThat(logs.list.stream().filter(event->event.getFormattedMessage().contains("敏感路径异常日志存储失败"))).hasSize(3);
     }
     @Test void accessFilterUpstreamAndLoggerFailureKeepSafeCausesAndBusinessResult() throws Exception {
         var request=new MockHttpServletRequest("POST",prefix+"/search");request.setContentType("application/json");

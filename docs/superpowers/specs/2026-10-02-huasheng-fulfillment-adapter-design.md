@@ -1,15 +1,18 @@
 # 供应商履约参照实现切换：从 QNM 到 HUA_SHENG — 修改方案（修订版 v2）
 
-> 状态：草案（待评审）· 修订日期：2026-10-03
-> 版本说明：本文为 v2，取代同日初版 v1。v1 存在三处 P0 缺陷（误判 checkpoint 机制可用、误判 DDL 无 CHECK 约束、误判 extraParameters 可用），修订依据见 §3。
+> 状态：草案（待评审）· 修订日期：2026-10-03（v2.1：对齐供给发布文 v4 的共享地基与变更集编号，统一命名）
+> 版本说明：本文为 v2，取代同日初版 v1。v1 存在三处 P0 缺陷（误判 checkpoint 机制可用、误判 DDL 无 CHECK 约束、误判 extraParameters 可用），修订依据见 §3。v2.1 不改动协议与架构决策，仅按供给发布文 v4 定案同步地基出处、变更集编号与命名。
+> 命名约定：供应商/适配器一律用 `HUA_SHENG`、`QNM` 表示（对应 `adapterType` `HUA_SHENG_ORDER_V1`/`QNM_GAME_ORDER_V1`、`supplier_code` `HUASHENG`/`QNM`），prose 与代码标识符不用中文名；DB 种子 `supplier_name` 展示值（`'华昇卡券'`）保留中文，不在约定覆盖内。
 > 关联设计：`2026-08-07-supply-chain-phase1-detailed-design.md` §7.3 §7.4 §10.1 §10.2
+> 关联设计（管理端供给发布，共建地基）：`2026-10-03-supplier-offer-publication-admin-design.md`（**v4 已定案**）。**该文 §5 是 `AdapterMetadata` 扩展（`defaultExecutionProfile()`/`credentialKeys()`/`mappingTemplates()`/`fulfillmentSteps()`）+ AD-3 凭据集 + AD-5 `extra_config` 共享地基规格的唯一出处**；本文引用其规格、不重复描述，只落地 HUA_SHENG 专属部分（协议适配器、多步骤编排、回调入口、token、种子）。两文协调点见该文 §14 与本文 §7.0。
+> ⚠ 变更集编号（已对齐 v4 §0.4 ①，作废本文原 `050`/`051` 计划）：现有链至 `052-standard-order-project-key.sql`；供给发布文占 `053`（f1 `external_sku_code`）/`054`（AD-3 凭据集/项建表）/`055`（AD-5 `extra_config` 列）/`056`（D1 `published_flag`）。**AD-3 建表与 AD-5 加列属共享地基，由 `054`/`055` 交付（规格出处 v4 §5.2/§5.3）；本文 HUA_SHENG 主数据种子让位到 `057+`**（原 `050`/`051` 与 `050-project-standard-asset-audit`/`051-standard-quote-permanent-key` 冲突，作废）。落地前对齐 `db.changelog-1.0.0.yaml` 登记顺序。
 > 旧系统参照：`/Users/mac/Documents/codeSpace/cardshop` `huasheng` 包
 
 ---
 
 ## 1. 目标与边界
 
-**语义**：以 HUA_SHENG（华昇卡券）作为新的首要参照实现完整落地；QNM 代码与测试保留，作为多供应商扩展性的第二验证用例。
+**语义**：以 HUA_SHENG 作为新的首要参照实现完整落地；QNM 代码与测试保留，作为多供应商扩展性的第二验证用例。
 
 **目标**：
 
@@ -35,7 +38,7 @@
 | 鉴权 | 每次带 userkey | `access_token`（7200s，提前 300s 刷新，61 失效自动重试一次） | 需新增 TokenManager |
 | 下单 | 一段式 `Send`/`SendKm` | **两段式** `placeOrder`→`confirmOrder` | **需新建编排** |
 | 取券 | 同步返回 | 主动 `POST /api/order/takeCard` | 需新增 step |
-| 双号 | `billno` | `outOrderSn`（本地）+ `orderSn`（华昇） | ✅ `billno` / `external_order_no` |
+| 双号 | `billno` | `outOrderSn`（本地）+ `orderSn`（HUA_SHENG） | ✅ `billno` / `external_order_no` |
 | 回调 | 明文表单 | AES-CBC hex body + `Appid`/`X-Sign`，RSA 公钥验签 | 需新增 Controller |
 | 错误码 | 散落常量 | 30+ 码三级分类（明确失败/待查单/补单） | ✅ `sc_supplier_error_code_map` 已支持 |
 | 状态映射 | 3 状态 | 5 状态 | ✅ `sc_status_mapping_definition` 已支持 |
@@ -127,13 +130,15 @@ ck_sc_supplier_connector_capability_code CHECK (capability_code IN (...,10 项))
 - `aad` = `operationNo|bOrderNo|adapterStepCode`，绑定操作身份，防密文跨操作重放。
 - 明文结构（不含任何密钥）：
   ```json
-  {"schemaVersion":1,"orderSn":"<华昇单号>","couponId":123,"num":1,
+  {"schemaVersion":1,"orderSn":"<HUA_SHENG 单号>","couponId":123,"num":1,
    "expireTime":300,"outOrderSn":"<本地单号>","placePayloadHash":"<sha256>"}
   ```
 
 **恢复**：`FulfillmentOperationTicketFactory:61` 已在传**密文**。由持有 `EnvelopeCryptoPort` 的 `FulfillmentOperationExecuteHandler`（`:59` 已注入）解密，经 `OperationTicket` 新字段 `checkpointPlaintext` 传给适配器。**保持适配器无加解密依赖**。
 
 ### AD-3：三密钥材料注入
+
+> **地基出处**：凭据集表（`sc_credential_set`/`sc_credential_item`）的规格、变更集编号（`054`）、`provider_type` 双路模型（`ENV`+`ENVELOPE`）、`AdapterMetadata.credentialKeys()` 契约与凭据护栏，**以供给发布文 v4 §5.2 为唯一出处**，本文不重复。本 AD-3 只定义 HUA_SHENG 专属的 **ticket 承载契约**（`CredentialMaterial`）与注入路径；所需凭据项键 `[appSecret, privateKey, callbackPublicKey]` 由 HUA_SHENG 的 `credentialKeys()` 声明（v4 §5.1），凭据 UI 据此渲染行数。
 
 **问题**：`OperationTicket.secretKey` 是单 String，无法承载三密钥。
 
@@ -156,8 +161,8 @@ public record OperationTicket(
 
 **注入路径**：
 
-1. 新增 `sc_credential_set` + `sc_credential_item`（§7.1），`sc_supplier_connector_version.credential_slot_id` 语义扩展为指向凭据集。
-2. `CredentialProvider` 增加 `resolveSet(Long credentialSetId)` 返回 `Map<String, char[]>`（键 `appSecret`/`privateKey`/`callbackPublicKey`）。
+1. 凭据集表由**共享地基变更集 `054`** 建（规格出处 v4 §5.2；本文 §7.1 给出建表 DDL 全文，HUA_SHENG 凭据集/项种子见 §7.2）；`sc_supplier_connector_version.credential_slot_id` 语义扩展为指向凭据集。
+2. `CredentialProvider` 增加 `resolveSet(Long credentialSetId)` 返回 `Map<String, char[]>`（键 `appSecret`/`privateKey`/`callbackPublicKey`）；`ENVELOPE` 项由 v4 §5.2 的 `EnvelopeCredentialProvider` 解密（AAD 绑定 `credential_set_id|item_key`）。
 3. `FulfillmentOperationTicketFactory` 组装 `CredentialMaterial`，**明文仅存在于 ticket 内存**，调用后丢弃，禁日志（沿用 `safeFailureSummary` 脱敏惯例）。
 
 ### AD-4：token 由应用层注入，适配器不访问 Redis
@@ -180,8 +185,10 @@ public interface TokenAuthenticatedExecutor {
 
 ### AD-5：打通 extraParameters 真实传递链
 
+> **地基出处**：`sc_supplier_connector_version.extra_config` 列的规格与变更集编号（`055`）**以供给发布文 v4 §5.3 为唯一出处**（非秘密可调参数、密钥类禁入、UI 可编辑见 v4 E1）。本 AD-5 只定义 HUA_SHENG 专属的**运行时传递链**（把该列的值经 `extraParameters` 注入 ticket）。
+
 1. `FulfillmentOperationTicketFactory.create` 增加 `Map<String,String> extraParameters` 入参。
-2. 参数来源为 `sc_supplier_connector_version.extra_config`（新增 JSON 列，存 `expireTime`/`outMobile`/`num` 等非秘密可调参数；**密钥类禁止入此列**）。
+2. 参数来源为 `sc_supplier_connector_version.extra_config`（**地基变更集 `055` 新增的 JSON 列**，存 `expireTime`/`outMobile`/`num` 等非秘密可调参数；**密钥类禁止入此列**）。
 3. 应用层注入的 token 合并进同一 Map。
 
 ### AD-6：HUA_SHENG 一期固定 `num=1`，协议层拒绝越界
@@ -215,7 +222,7 @@ supplieradapter/huasheng/
   HuashengErrorCode.java            # 错误码枚举 + 三级分类
   HuashengProperties.java           # @ConfigurationProperties
 supplieradapter/metadata/
-  HuashengOrderV1Metadata.java      # TYPE = "HUA_SHENG_ORDER_V1"
+  HuashengOrderV1Metadata.java      # TYPE = "HUA_SHENG_ORDER_V1"；实现 v4 §5.1 全部元数据方法（credentialKeys=[appSecret,privateKey,callbackPublicKey]、mappingTemplates=§7.2 状态/错误码映射、defaultExecutionProfile、fulfillmentSteps=[PLACE_ORDER,CONFIRM_ORDER,TAKE_CARD]）
 interfaceapi/callback/
   SupplierCallbackController.java   # /callbacks/suppliers/**
   SupplierCallbackRouter.java
@@ -231,8 +238,8 @@ border/fulfillment/domain/FulfillmentExceptionReasonCodes.java  # +HS_* 原因�
 border/fulfillment/application/SupplierOrderLifecycle.java     # handleAccepted 落库+串联；isRechargeOperation 扩展
 border/fulfillment/application/FulfillmentOperationExecuteHandler.java  # 解密 checkpoint、串联下一步骤
 border/fulfillment/application/FulfillmentOperationTicketFactory.java   # extraParameters + credentialMaterial
-infrastructure/security/CredentialProvider.java        # +resolveSet
-supplieradapter/metadata/AdapterMetadata.java          # +fulfillmentSteps() 默认方法
+infrastructure/security/CredentialProvider.java        # +resolveSet（凭据集解析；provider 模型见 v4 §5.2）
+supplieradapter/metadata/AdapterMetadata.java          # 共享地基（v4 §5.1 唯一出处）：+defaultExecutionProfile()/credentialKeys()/mappingTemplates()；本文共建 +fulfillmentSteps() 默认方法
 ```
 
 ### 5.2 关键设计
@@ -317,13 +324,13 @@ private void handleAccepted(FulfillmentOperationDO operation, BOrderDO bOrder,
 
 #### 5.2.4 回调 Controller 与 Parser
 
-`HuashengCallbackParser`：验签（华昇公钥 `SHA512withRSA`）→ AES 解密 → 必填字段与 ±300s 时间窗校验 → nonce 防重 → 双号一致性校验 → 券码数量校验 → 事实提取。
+`HuashengCallbackParser`：验签（HUA_SHENG 公钥 `SHA512withRSA`）→ AES 解密 → 必填字段与 ±300s 时间窗校验 → nonce 防重 → 双号一致性校验 → 券码数量校验 → 事实提取。
 
 `SupplierCallbackController`（`/callbacks/suppliers/huasheng/callback`，`consumes = text/plain`）：
 
 - 验签/解密/字段非法 → **400**（不重试）
 - 业务冲突（券码数量不符、终态不一致） → **409**
-- 内部异常 → **500**（让华昇重试）
+- 内部异常 → **500**（让 HUA_SHENG 重试）
 - 成功/幂等 → **200 `success`**
 - 分布式锁 `HUASHENG_CALLBACK:{orderSn}`，审计写 `sc_fulfillment_call_log.direction='INBOUND'`
 
@@ -359,86 +366,109 @@ static final ArchRule callback_entry_points_only_depend_on_callback_parsers =
 
 ## 7. 数据库修改方案
 
-### 7.1 变更集 `050-huasheng-supplier-master.sql`
+### 7.0 变更集分配（对齐供给发布文 v4 §0.4 ①）
+
+| 变更集 | 归属 | 内容 | 规格出处 |
+| --- | --- | --- | --- |
+| `053` | 共享地基（供给发布文） | `sc_supplier_offer.external_sku_code`（f1） | v4 §5.4 |
+| `054` | 共享地基 | `sc_credential_set`/`sc_credential_item` 建表（AD-3） | v4 §5.2（DDL 全文见本文 §7.1） |
+| `055` | 共享地基 | `sc_supplier_connector_version.extra_config` 加列（AD-5） | v4 §5.3（DDL 全文见本文 §7.1） |
+| `056` | 共享地基（供给发布文） | `sc_supplier_connector.published_flag` + 唯一键（D1） | v4 §5.5 |
+| `057` | **本文（HUA_SHENG）** | HUA_SHENG 供应商/凭据集数据/连接器/版本/能力/映射种子 | 本文 §7.2 |
+| `058` | **本文（HUA_SHENG）** | `capability_code` CHECK 扩 `CANCEL_ASSET`（若 §6 采纳） | 本文 §7.3 |
+
+> `054`/`055` 是**共享地基**，Phase 1 凭据/连接器 UI 即依赖，先于 HUA_SHENG 适配器交付；本文给出其可执行 DDL 全文（v4 只定编号与用途、不重复 DDL）。`057`/`058` 是 HUA_SHENG 专属种子，随适配器落地。落地前统一对齐 `db.changelog-1.0.0.yaml` 登记顺序。
+> 下文 `@hs_*` 为示意变量，实现时以子查询按业务键（`supplier_code`/`connector_code`/`set_code`）绑定真实主键，不硬编码 ID。
+
+### 7.1 地基变更集 DDL 全文（`054` 凭据集 + `055` extra_config）
+
+> 规格出处：v4 §5.2（凭据集）/§5.3（extra_config）。以下为**已落地（as-built）** DDL，与 `db/changelog/releases/1.0.0/054-credential-set.sql`、`055-connector-version-extra-config.sql` 一致；changelog 文件为权威来源。新表建于 022 本地时区迁移之后，datetime 列注释统一 `Asia/Shanghai`；`secret_ref` 对齐 `sc_credential_slot` 用 `VARCHAR(512)`（容纳 ENVELOPE 信封密文）；`published_flag`（056）DDL 见 v4 §5.5。
 
 ```sql
--- 1) 连接器版本扩展可调参数（AD-5）
+-- 变更集 055：连接器版本扩展可调参数（AD-5；规格出处 v4 §5.3）
 ALTER TABLE sc_supplier_connector_version
     ADD COLUMN extra_config JSON NULL
-    COMMENT '连接器版本非秘密可调参数，如expireTime秒、outMobile；密钥类禁止入此列';
+    COMMENT '连接器版本非秘密可调参数，如expireTime秒、outMobile；密钥类禁止入此列' AFTER adapter_config_json;
 
--- 2) 供应商主数据（默认 SUSPENDED，联调后启用）
-INSERT INTO sc_supplier (supplier_code, supplier_name, supplier_type, status, created_at, updated_at)
-VALUES ('HUASHENG', '华昇卡券', 'STANDARD_SUPPLIER', 20, NOW(3), NOW(3));
-
--- 3) 凭据集与凭据项（AD-3）
+-- 变更集 054：凭据集与凭据项（AD-3；规格出处 v4 §5.2）
 CREATE TABLE sc_credential_set (
     id BIGINT NOT NULL AUTO_INCREMENT COMMENT '供应商凭据集内部主键',
-    supplier_id BIGINT NOT NULL COMMENT '所属供应商内部主键',
+    supplier_id BIGINT NOT NULL COMMENT '所属供应商内部主键，逻辑引用sc_supplier.id',
     set_code VARCHAR(32) NOT NULL COMMENT '凭据集编号，供应商内唯一',
     status SMALLINT NOT NULL COMMENT '凭据集状态：10可用，20停用，90归档',
-    created_at DATETIME(3) NOT NULL COMMENT '创建时间，UTC',
-    updated_at DATETIME(3) NOT NULL COMMENT '最后更新时间，UTC',
+    created_at DATETIME(3) NOT NULL COMMENT '创建时间，Asia/Shanghai',
+    updated_at DATETIME(3) NOT NULL COMMENT '最后更新时间，Asia/Shanghai',
     PRIMARY KEY (id),
     UNIQUE KEY uk_sc_credential_set (supplier_id, set_code),
     CONSTRAINT ck_sc_credential_set_status CHECK (status IN (10, 20, 90))
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='供应商凭据集，多密钥材料集合';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='供应商凭据集，多密钥材料集合';
 
 CREATE TABLE sc_credential_item (
     id BIGINT NOT NULL AUTO_INCREMENT COMMENT '凭据项内部主键',
-    credential_set_id BIGINT NOT NULL COMMENT '凭据集主键',
-    item_key VARCHAR(32) NOT NULL COMMENT '凭据项键：appSecret、privateKey、callbackPublicKey',
-    provider_type VARCHAR(32) NOT NULL COMMENT '提供方类型：KMS、ENVELOPE、ENV',
-    secret_ref VARCHAR(256) NOT NULL COMMENT '密钥引用，禁止存明文，如env:HUASHENG_APP_SECRET',
-    masked_hint VARCHAR(128) NULL COMMENT '脱敏提示，禁止含可还原信息',
+    credential_set_id BIGINT NOT NULL COMMENT '凭据集主键，逻辑引用sc_credential_set.id',
+    item_key VARCHAR(32) NOT NULL COMMENT '凭据项键，如appSecret、privateKey、callbackPublicKey、secretKey',
+    provider_type VARCHAR(32) NOT NULL COMMENT '密钥托管类型：ENV环境变量引用，ENVELOPE信封加密密文，KMS托管',
+    secret_ref VARCHAR(512) NOT NULL COMMENT '密钥系统中的秘密引用或信封密文，不是秘密明文；ENV存env:NAME',
+    masked_hint VARCHAR(128) NULL COMMENT '供后台识别的脱敏提示，禁止含可还原信息',
     active_secret_version INT NOT NULL DEFAULT 1 COMMENT '当前生效密钥版本',
     status SMALLINT NOT NULL COMMENT '凭据项状态：10可用，20停用，90归档',
-    created_at DATETIME(3) NOT NULL COMMENT '创建时间，UTC',
-    updated_at DATETIME(3) NOT NULL COMMENT '最后更新时间，UTC',
+    created_at DATETIME(3) NOT NULL COMMENT '创建时间，Asia/Shanghai',
+    updated_at DATETIME(3) NOT NULL COMMENT '最后更新时间，Asia/Shanghai',
     PRIMARY KEY (id),
     UNIQUE KEY uk_sc_credential_item (credential_set_id, item_key),
     CONSTRAINT ck_sc_credential_item_status CHECK (status IN (10, 20, 90))
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='凭据集内的单个密钥项引用';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='凭据集内的单个密钥项引用';
+```
 
--- 4) 连接器与版本
+### 7.2 HUA_SHENG 种子变更集 `057-huasheng-supplier-seed.sql`
+
+> 供应商、凭据集/项无服务层计算列，可直接 SQL 种子；连接器/版本/能力/映射含服务层计算列（`config_digest` 等），推荐经技术菜单 UI 或服务层落地（见本节末实现提示）。
+
+```sql
+-- 1) 供应商主数据（默认 SUSPENDED=20，联调后启用；supplier_name 为面向运营的中文展示值）
+INSERT INTO sc_supplier (supplier_code, supplier_name, supplier_type, status, created_at, updated_at)
+VALUES ('HUASHENG', '华昇卡券', 'STANDARD_SUPPLIER', 20, NOW(3), NOW(3));
+
+-- 2) 凭据集与凭据项数据（表由 054 建；provider_type=ENV，密钥不入库）
+INSERT INTO sc_credential_set (supplier_id, set_code, status, created_at, updated_at)
+VALUES (@hs_supplier_id, 'HS_MAIN', 10, NOW(3), NOW(3));
+
+INSERT INTO sc_credential_item (credential_set_id, item_key, provider_type, secret_ref, masked_hint, active_secret_version, status, created_at, updated_at) VALUES
+    (@hs_set_id, 'appSecret',         'ENV', 'env:HUASHENG_APP_SECRET',          '****',       1, 10, NOW(3), NOW(3)),
+    (@hs_set_id, 'privateKey',        'ENV', 'env:HUASHENG_PRIVATE_KEY',         '**** PKCS8', 1, 10, NOW(3), NOW(3)),
+    (@hs_set_id, 'callbackPublicKey', 'ENV', 'env:HUASHENG_CALLBACK_PUBLIC_KEY', '**** RSA',   1, 10, NOW(3), NOW(3));
+
+-- 3) 连接器与版本（credential_slot_id 语义扩展为指向凭据集，AD-3；列名对齐 001-identity-and-master.sql）
 INSERT INTO sc_supplier_connector (supplier_id, connector_code, adapter_type, current_version_id, status, created_at, updated_at)
 VALUES (@hs_supplier_id, 'HS_DEFAULT', 'HUA_SHENG_ORDER_V1', NULL, 10, NOW(3), NOW(3));
 
 INSERT INTO sc_supplier_connector_version (
     connector_id, version_no, base_url, merchant_account, credential_slot_id,
-    protocol_version, callback_path, connect_timeout_ms, read_timeout_ms, write_timeout_ms,
-    max_concurrent_calls, rate_limit_per_second, status, published_at, created_at, updated_at, extra_config)
+    protocol_version, callback_path, connect_timeout_ms, read_timeout_ms,
+    rate_limit, concurrency_limit, adapter_config_schema_version, adapter_config_json,
+    validation_status, validated_at, config_digest, status, published_at, created_at, updated_at, extra_config)
 VALUES (
-    @hs_connector_id, 1, 'https://coupon-api.jshstkj.cn', @hs_app_id, @hs_credential_set_id,
-    'HUA_SHENG_ORDER_V1', '/callbacks/suppliers/huasheng/callback',
-    10000, 20000, 20000, 10, 5, 10, NOW(3), NOW(3), NOW(3),
-    JSON_OBJECT('expireTime', 300, 'num', 1));
+    @hs_connector_id, 1, 'https://coupon-api.jshstkj.cn', @hs_app_id, @hs_set_id,
+    'HUA_SHENG_ORDER_V1', '/callbacks/suppliers/huasheng/callback', 10000, 20000,
+    5, 10, 1, '{}',
+    10, NOW(3), @hs_config_digest, 10, NOW(3), NOW(3), NOW(3), JSON_OBJECT('expireTime', 300, 'num', 1));
 
--- 5) 凭据集与凭据项数据
-INSERT INTO sc_credential_set (supplier_id, set_code, status, created_at, updated_at)
-VALUES (@hs_supplier_id, 'HS_MAIN', 10, NOW(3), NOW(3));
-
-INSERT INTO sc_credential_item (credential_set_id, item_key, provider_type, secret_ref, masked_hint, active_secret_version, status, created_at, updated_at) VALUES
-    (@hs_set_id, 'appSecret', 'ENV', 'env:HUASHENG_APP_SECRET', '****', 1, 10, NOW(3), NOW(3)),
-    (@hs_set_id, 'privateKey', 'ENV', 'env:HUASHENG_PRIVATE_KEY', '**** PKCS8', 1, 10, NOW(3), NOW(3)),
-    (@hs_set_id, 'callbackPublicKey', 'ENV', 'env:HUASHENG_CALLBACK_PUBLIC_KEY', '**** RSA', 1, 10, NOW(3), NOW(3));
-
--- 6) 能力（不含 CANCEL_ASSET 时去掉末行）
+-- 4) 能力（不含 CANCEL_ASSET；如 §6 采纳，先执行 058 扩 CHECK，再在此追加 CANCEL_ASSET 行）
 INSERT INTO sc_supplier_connector_capability (connector_version_id, capability_code, enabled, metadata_version, created_at) VALUES
-    (@hs_version_id, 'ISSUE_ASSET', 1, 1, NOW(3)),
-    (@hs_version_id, 'QUERY_ORDER', 1, 1, NOW(3)),
+    (@hs_version_id, 'ISSUE_ASSET',      1, 1, NOW(3)),
+    (@hs_version_id, 'QUERY_ORDER',      1, 1, NOW(3)),
     (@hs_version_id, 'RECEIVE_CALLBACK', 1, 1, NOW(3)),
-    (@hs_version_id, 'QUERY_BALANCE', 1, 1, NOW(3));
+    (@hs_version_id, 'QUERY_BALANCE',    1, 1, NOW(3));
 
--- 7) 状态映射
+-- 5) 状态映射（5 状态；与附录 B 一致）
 INSERT INTO sc_status_mapping_definition (connector_version_id, mapping_version, external_status, external_sub_status, business_phase, fact_type, terminal_flag, priority, status, published_at, created_at) VALUES
     (@hs_version_id, 1, 'WAIT',       '', 'CREATE',     'ACCEPTED',  0, 10, 10, NOW(3), NOW(3)),
     (@hs_version_id, 1, 'SUCCESS_HD', '', 'PROCESSING', 'ACCEPTED',  0,  5, 10, NOW(3), NOW(3)),
     (@hs_version_id, 1, 'SUCCESS',    '', 'DELIVERY',   'SUCCEEDED', 1, 20, 10, NOW(3), NOW(3)),
     (@hs_version_id, 1, 'FAILED',     '', 'CREATE',     'REJECTED',  1, 20, 10, NOW(3), NOW(3)),
-    (@hs_version_id, 1, 'CANCEL',     '', 'CREATE',     'REJECTED',  1, 20, NOW(3), NOW(3));
+    (@hs_version_id, 1, 'CANCEL',     '', 'CREATE',     'REJECTED',  1, 20, 10, NOW(3), NOW(3));
 
--- 8) 错误码映射（0 为成功码，不属错误映射，禁止写入）
+-- 6) 错误码映射（0 为成功码，不属错误映射，禁止写入）
 INSERT INTO sc_supplier_error_code_map (connector_version_id, mapping_version, external_error_code, external_sub_code, error_class, action_type, retryable_flag, status, published_at, created_at) VALUES
     (@hs_version_id, 1, '7018', '', 'BUSINESS_REJECTED', 'REJECT',      0, 10, NOW(3), NOW(3)),
     (@hs_version_id, 1, '7022', '', 'BUSINESS_REJECTED', 'REJECT',      0, 10, NOW(3), NOW(3)),
@@ -456,9 +486,12 @@ INSERT INTO sc_supplier_error_code_map (connector_version_id, mapping_version, e
     (@hs_version_id, 1, '61',   '', 'RETRYABLE',         'RETRY_SAFE',  1, 10, NOW(3), NOW(3));
 ```
 
-### 7.2 变更集 `051-huasheng-capability-check.sql`
+> **UI 等价路径**：本节种子也可由技术菜单（供给发布文 v4 A1/E1/F1/G2）自助录入——连接器草稿、凭据集/项、能力勾选、映射「从模板初始化」（`mappingTemplates()` 即本节 5)/6) 内容）+ 追加。SQL 种子用于一键初始化与集成测试基线，UI 路径用于线上自助与灰度翻牌；两者写同一批表，`mappingTemplates()` 是映射的代码单一来源。
+> **实现提示**：`sc_supplier_connector_version.config_digest`（规范化配置 SHA-256）、`adapter_config_schema_version`、`validation_status` 由服务层（`createConnectorDraft`/`validate`/`publish`）计算与流转，raw SQL 难以正确生成 `config_digest` 且会绕过「先校验后发布」。故连接器/版本/能力/映射种子**推荐经技术菜单 UI 或服务层落地**（v4 §6.2/§6.5）；§7.2 SQL 仅作集成测试基线示意，直接执行须补齐 `config_digest` 等 NOT NULL 列（上文以 `@hs_config_digest` 占位）或改走服务层。
 
-**仅在 §6 采纳新增 `CANCEL_ASSET` 时执行**：
+### 7.3 HUA_SHENG 能力 CHECK 变更集 `058-huasheng-capability-check.sql`
+
+**仅在 §6 采纳新增 `CANCEL_ASSET` 时执行**（须先于 §7.2 能力种子追加 `CANCEL_ASSET` 行）：
 
 ```sql
 ALTER TABLE sc_supplier_connector_capability
@@ -472,9 +505,9 @@ ALTER TABLE sc_supplier_connector_capability
 
 `adapter_step_code`、`result_class` 无 CHECK 约束，扩展无需 ALTER（§3.3）。若采纳"取券复用 `FULFILL`"，`operation_kind` 亦无需变更。
 
-### 7.3 部署 SQL
+### 7.4 部署 SQL
 
-`script/deploy` 下新增 HUA_SHENG 供应商菜单（按 `supplier_code` 过滤），菜单与字典写入 system 库（供应链不得写 system 表，须走部署脚本）。
+`script/deploy` 下新增 HUA_SHENG 供应商菜单（按 `supplier_code` 过滤），菜单与字典写入 system 库（供应链不得写 system 表，须走部署脚本）。技术菜单「供应商履约技术配置」的部署 SQL 由供给发布文 v4 §8.1 交付，本文不重复。
 
 ---
 
@@ -540,7 +573,7 @@ ALTER TABLE sc_supplier_connector_capability
 | **T9** | **`extra_config` 列 + `extraParameters` 传递链打通** | T1 | **新增** |
 | **T10** | **checkpoint 落库与恢复（`handleAccepted` 加密写库 + 工厂解密）** | T1 | **新增** |
 | **T11** | **多步骤编排：`FulfillmentStepSequencer` + `isRechargeOperation` 扩展 + `ACCEPTED` 串联** | T10 | **新增，风险最高** |
-| T12 | DDL 变更集 050/051 + 部署 SQL | T7,T8 | — |
+| T12 | DDL 变更集 `057`（HUA_SHENG 种子）/`058`（能力 CHECK）+ 部署 SQL；地基 `054`/`055` 随供给发布文 §5 交付 | T7,T8 | 编号对齐 §7.0 |
 | T13 | `SupplierCallbackController` + `Router` + `CallbackParser` + 架构规则 | T6 | — |
 | T14 | 集成测试（闭环/续履约/回调/补单/num 拒绝） | T11,T13 | — |
 | T15 | 文档同步与门禁验证 | T14 | — |

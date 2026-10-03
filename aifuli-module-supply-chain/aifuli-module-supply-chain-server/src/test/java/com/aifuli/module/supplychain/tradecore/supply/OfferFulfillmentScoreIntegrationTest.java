@@ -85,8 +85,8 @@ class OfferFulfillmentScoreIntegrationTest {
             scopes.replaceAll(supplierCode, List.of(new ScopeLine(
                     "MOVIE", "MOVIE", "MOVIE_TICKET", List.of("API_DIRECT"), 100L, 1L)), 1L);
             List<String> offerNos = offers.createPublished(supplierCode, List.of(
-                    new DraftLine("SKU_001_100", "FIXED", 9_800L, null, null, "API_DIRECT", 100L, 1L),
-                    new DraftLine("SKU_001_200", "FIXED", 19_800L, null, null, "API_DIRECT", 50L, 1L)), 1L);
+                    new DraftLine("SKU_001_100", "FIXED", 9_800L, null, null, "API_DIRECT", 100L, 1L, "QNM-SKU-001-100"),
+                    new DraftLine("SKU_001_200", "FIXED", 19_800L, null, null, "API_DIRECT", 50L, 1L, "QNM-SKU-001-200")), 1L);
             assertThat(offerNos).hasSize(2);
 
             SupplierOfferDO created = offerMapper.selectByNo(offerNos.getFirst());
@@ -126,7 +126,7 @@ class OfferFulfillmentScoreIntegrationTest {
             assertThat(movie200.timelinessScore()).isEqualTo(70);
 
             offers.updateCommercial(supplierCode, movie100.offerNo(),
-                    new DraftLine("SKU_001_100", "FIXED", 8_800L, null, null, "API_DIRECT", 80L, 1L), 1L);
+                    new DraftLine("SKU_001_100", "FIXED", 8_800L, null, null, "API_DIRECT", 80L, 1L, "QNM-SKU-001-100"), 1L);
             assertThat(scores.getSkuScores("SKU_001_100").items().getFirst().stabilityScore()).isEqualTo(90);
 
             offers.retire(supplierCode, movie200.offerNo(), 1L);

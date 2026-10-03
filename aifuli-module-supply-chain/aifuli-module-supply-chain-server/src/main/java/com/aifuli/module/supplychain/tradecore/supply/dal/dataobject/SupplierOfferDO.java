@@ -23,6 +23,8 @@ public class SupplierOfferDO {
     private String offerCode;
     private Long supplierId;
     private Long platformSkuId;
+    /** 供应商外部商品编码，选合作商品时录入 */
+    private String externalSkuCode;
     private Long supplyScopeId;
     private String priceMode;
     private Long draftUnitPrice;

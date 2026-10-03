@@ -686,3 +686,67 @@ databaseChangeLog:
             encoding: UTF-8
             splitStatements: true
             stripComments: false
+  - changeSet:
+      id: 053-offer-external-sku-code
+      author: supply-chain
+      # f1：供给身份行新增 external_sku_code（可空）+ (supplier_id, external_sku_code) 唯一键。
+      # 列全新加入，存量行该列均为 NULL，唯一键不可能冲突，无需 HALT 预条件。
+      # 设计见 docs/superpowers/specs/2026-10-03-supplier-offer-publication-admin-design.md#54-f1-external_sku_code变更集-053
+      changes:
+        - sqlFile:
+            path: 053-offer-external-sku-code.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 054-credential-set
+      author: supply-chain
+      # AD-3：新建 sc_credential_set / sc_credential_item 两表（F1-hybrid ENV+ENVELOPE 凭据模型）。
+      # 全新建表，无存量数据，无需 HALT 预条件。
+      # 设计见 docs/superpowers/specs/2026-10-03-supplier-offer-publication-admin-design.md#52-ad-3-凭据集变更集-054-envelope-provider
+      changes:
+        - sqlFile:
+            path: 054-credential-set.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 055-connector-version-extra-config
+      author: supply-chain
+      # AD-5：连接器版本新增 extra_config（可空 JSON，非秘密可调参数）。
+      # 列全新加入，无需 HALT 预条件。
+      # 设计见 docs/superpowers/specs/2026-10-03-supplier-offer-publication-admin-design.md#53-ad-5-extra_config变更集-055
+      changes:
+        - sqlFile:
+            path: 055-connector-version-extra-config.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 056-connector-published-flag
+      author: supply-chain
+      # D1：sc_supplier_connector 加生成列 published_flag（current_version_id 非空→1，否则 NULL）
+      # + (supplier_id, published_flag) 唯一键，强制每供应商至多一个已发布连接器（C3）。
+      # 加唯一键前的历史阻断检查：存量若已有供应商持有 2+ 已发布连接器（current_version_id 非空）即 HALT，
+      # 保留原数据供离线核实，不自动修复。设计见
+      # docs/superpowers/specs/2026-10-03-supplier-offer-publication-admin-design.md#55-d1-published_flag-唯一键变更集-056
+      preConditions:
+        - onFail: HALT
+          onError: HALT
+          sqlCheck:
+            expectedResult: 0
+            sql: >-
+              SELECT COUNT(*) FROM (
+                SELECT supplier_id FROM sc_supplier_connector
+                WHERE current_version_id IS NOT NULL
+                GROUP BY supplier_id HAVING COUNT(*) > 1) dup_published_connector
+      changes:
+        - sqlFile:
+            path: 056-connector-published-flag.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false

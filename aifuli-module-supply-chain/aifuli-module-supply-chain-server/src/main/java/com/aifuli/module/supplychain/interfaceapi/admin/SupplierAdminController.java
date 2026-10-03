@@ -15,6 +15,7 @@ import com.aifuli.module.supplychain.tradecore.supply.application.SupplierInvoic
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierCooperativeProductService;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierCooperativeProductService.DraftLine;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierCooperativeProductService.OfferListItem;
+import com.aifuli.module.supplychain.tradecore.supply.application.SupplierOfferPublicationService;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierProfileCommandService;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierProfileCommandService.ContactLine;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierProfileCommandService.CreateSupplierProfileCommand;
@@ -91,6 +92,8 @@ public class SupplierAdminController {
     private final SupplierCooperativeProductService cooperativeProductService;
     private final SupplierInvoiceService invoiceService;
     private final OfferFulfillmentScoreService offerFulfillmentScoreService;
+    /** B1 上架即发布编排（§6.6）：合作商品一步发布为可履约供给版本。 */
+    private final SupplierOfferPublicationService offerPublicationService;
 
     @GetMapping
     @PreAuthorize(SUPPLIER_QUERY_EXPRESSION)
@@ -329,6 +332,24 @@ public class SupplierAdminController {
         return success(true);
     }
 
+    @PostMapping("/{supplierCode}/offers/{offerNo}/list-on-shelf")
+    @PreAuthorize(SUPPLIER_UPDATE_EXPRESSION)
+    @Operation(summary = "上架即发布合作商品（B1）",
+            description = "一步把合作商品发布为可履约供给版本：服务端自动引用该供应商唯一已发布连接器版本（C3）、"
+                    + "自动开通/复用 REMOTE_ON_DEMAND 库存（c3）、继承身份行结算价（g3）、注入适配器默认执行画像（d2）。"
+                    + "前端只传 offerNo（路径）+ 可选 validTo（空＝长期有效，k1），无发布对话框。"
+                    + "连接器缺失返回 SUPPLIER_NO_PUBLISHED_CONNECTOR、能力缺口返回 OFFER_CAPABILITY_MISSING，前端 message.error 透传明确文案。"
+                    + "设计见 docs/superpowers/specs/2026-10-03-supplier-offer-publication-admin-design.md#66-上架即发布服务b1核心。")
+    public CommonResult<SupplierOfferPublicationService.PublishResult> listOfferOnShelf(
+            @PathVariable String supplierCode,
+            @PathVariable String offerNo,
+            @Valid @RequestBody(required = false) ListOnShelfReqVO request) {
+        LocalDateTime validTo = request == null ? null : request.getValidTo();
+        return success(offerPublicationService.listOnShelf(
+                new SupplierOfferPublicationService.ListOnShelfCommand(
+                        supplierCode, offerNo, validTo, getLoginUserId(), traceId(), null, null)));
+    }
+
     @DeleteMapping("/{supplierCode}/offers/{offerNo}")
     @PreAuthorize(SUPPLIER_DELETE_EXPRESSION)
     @Operation(summary = "移除合作商品",
@@ -369,7 +390,7 @@ public class SupplierAdminController {
         return new DraftLine(
                 line.getPlatformSkuCode(), line.getPriceMode(), line.getUnitPriceCents(),
                 line.getDiscountBp(), line.getSuggestedPriceCents(), line.getSupplyMode(),
-                line.getMaxQuantity(), line.getMinQuantity());
+                line.getMaxQuantity(), line.getMinQuantity(), line.getExternalSkuCode());
     }
 
     /**
@@ -705,6 +726,13 @@ public class SupplierAdminController {
     }
 
     @Data
+    @Schema(description = "上架即发布（B1）请求体：前端只传可选 validTo，其余服务端派生")
+    public static class ListOnShelfReqVO {
+        @Schema(description = "履约版本失效时间（UTC）；空＝长期有效（k1）。须晚于 validFrom（=上架时刻）")
+        private LocalDateTime validTo;
+    }
+
+    @Data
     @Schema(description = "兼容批量新增")
     public static class BatchDraftReqVO {
         @NotEmpty
@@ -736,6 +764,9 @@ public class SupplierAdminController {
         @Min(1)
         @Schema(description = "草稿最低起购量，空则取1，不继承供货配置预留字段")
         private Long minQuantity;
+        @NotBlank
+        @Schema(description = "供应商外部商品编码，选合作商品时录入")
+        private String externalSkuCode;
     }
 
     @Data

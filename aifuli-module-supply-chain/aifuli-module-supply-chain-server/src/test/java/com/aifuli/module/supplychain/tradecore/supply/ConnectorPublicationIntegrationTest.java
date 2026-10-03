@@ -1,9 +1,11 @@
 package com.aifuli.module.supplychain.tradecore.supply;
 
+import com.aifuli.framework.common.exception.ServiceException;
 import com.aifuli.module.supplychain.infrastructure.configuration.SupplyChainDataSourceConfiguration;
 import com.aifuli.module.supplychain.infrastructure.identity.BusinessNoGenerator;
 import com.aifuli.module.supplychain.infrastructure.identity.UlidGenerator;
 import com.aifuli.module.supplychain.infrastructure.outbox.OutboxEventRepository;
+import com.aifuli.module.supplychain.infrastructure.security.AdapterTypeAllowList;
 import com.aifuli.module.supplychain.infrastructure.security.EnvironmentCredentialProvider;
 import com.aifuli.module.supplychain.infrastructure.security.SupplierEndpointPolicy;
 import com.aifuli.module.supplychain.supplieradapter.metadata.AdapterMetadataRegistry;
@@ -50,6 +52,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.SUPPLIER_ALREADY_HAS_PUBLISHED_CONNECTOR;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -116,14 +119,14 @@ class ConnectorPublicationIntegrationTest {
             SupplierConfigurationCommandService.DraftConnectorResult unsafe =
                     configuration.createConnectorDraft(draft(
                             slotNo, QnmGameOrderV1Metadata.TYPE, "https://127.0.0.1", "{}", "UNSAFE"));
-            configuration.initializeQnmStatusMappings(unsafe.connectorVersionId(), 1L);
+            configuration.initializeMappings(unsafe.connectorVersionId(), 1L);
             assertThatThrownBy(() -> validation.validate(validate(unsafe.connectorVersionId())))
                     .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("local or private");
 
             SupplierConfigurationCommandService.DraftConnectorResult draft =
                     configuration.createConnectorDraft(draft(
                             slotNo, QnmGameOrderV1Metadata.TYPE, "https://api.qinameng.com", "{}", "PRIMARY"));
-            assertThat(configuration.initializeQnmStatusMappings(draft.connectorVersionId(), 1L)).isEqualTo(7);
+            assertThat(configuration.initializeMappings(draft.connectorVersionId(), 1L)).isEqualTo(7);
             configuration.addErrorCodeMapping(
                     new SupplierConfigurationCommandService.AddErrorCodeMappingCommand(
                             draft.connectorVersionId(), "TIMEOUT", "", "RESULT_UNKNOWN",
@@ -142,6 +145,25 @@ class ConnectorPublicationIntegrationTest {
                     new ConnectorPublicationService.PublishConnectorCommand(
                             draft.connectorNo(), draft.connectorVersionId(), 0L, 1L,
                             "一期奇那梦正式发布", "trace-connector", null, null));
+
+            // D1 供应商级唯一守卫：同供应商已存在一个已发布连接器（draft）时，再发布第二个连接器
+            // 必须被服务层预检拒绝为清晰业务异常，而不是落到 DB 唯一键
+            // uk_sc_connector_supplier_published 抛裸 DuplicateKeyException。
+            // 设计见 docs/superpowers/specs/2026-10-03-supplier-offer-publication-admin-design.md#55-d1-published_flag-唯一键变更集-056。
+            SupplierConfigurationCommandService.DraftConnectorResult secondConnector =
+                    configuration.createConnectorDraft(draft(
+                            slotNo, QnmGameOrderV1Metadata.TYPE, "https://api.qinameng.com", "{}", "SECONDARY"));
+            configuration.initializeMappings(secondConnector.connectorVersionId(), 1L);
+            validation.validate(validate(secondConnector.connectorVersionId()));
+            assertThatThrownBy(() -> publication.publish(
+                    new ConnectorPublicationService.PublishConnectorCommand(
+                            secondConnector.connectorNo(), secondConnector.connectorVersionId(), 0L, 1L,
+                            "同供应商第二个连接器发布应被 D1 守卫拒绝", "trace-connector-second", null, null)))
+                    .isInstanceOf(ServiceException.class)
+                    .extracting(error -> ((ServiceException) error).getCode())
+                    .isEqualTo(SUPPLIER_ALREADY_HAS_PUBLISHED_CONNECTOR.getCode());
+            // 被拒绝的第二个连接器不得写入当前版本，仍停留在已验证态。
+            assertThat(connectorMapper.selectByNo(secondConnector.connectorNo()).getCurrentVersionId()).isNull();
 
             PublishedConnectorConfigurationResolver.PublishedConnectorConfiguration runtime =
                     runtimeResolver.resolve(draft.connectorVersionId());
@@ -203,8 +225,10 @@ class ConnectorPublicationIntegrationTest {
             assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_outbox_event "
                     + "WHERE CAST(payload_json AS CHAR) LIKE ?", Long.class,
                     "%" + TEST_SECRET + "%")).isZero();
+            // 3 条发布记录：draft 校验(VALIDATE) + draft 连接器发布(PUBLISH) + SECONDARY 校验(VALIDATE)；
+            // 被 D1 守卫拒绝的 SECONDARY 发布在任何写入前抛异常，不产生记录。
             assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_supplier_config_publish_record",
-                    Long.class)).isEqualTo(2L);
+                    Long.class)).isEqualTo(3L);
             assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_outbox_event", Long.class)).isEqualTo(3L);
 
             publication.retire(new ConnectorPublicationService.RetireConnectorVersionCommand(
@@ -304,6 +328,9 @@ class ConnectorPublicationIntegrationTest {
             QnmGameOrderV1Metadata.class, AdapterMetadataRegistry.class,
             ClosedJsonSchemaValidator.class,
             EnvironmentCredentialProvider.class, SupplierEndpointPolicy.class,
+            // SupplierOfferPublicationService 构造器依赖 AdapterTypeAllowList（B1 上架即发布 §6.8 白名单闸门）；
+            // 本测试只走 publish/createOffer，不触发 listOnShelf 的白名单校验，故仅需注册该 bean，无需配置 allowed-adapter-types。
+            AdapterTypeAllowList.class,
             SupplierConfigurationCommandService.class, ConnectorValidationRecordService.class,
             ConnectorValidationService.class, ConnectorPublicationService.class,
             SupplierOfferPublicationService.class, PublishedConnectorConfigurationResolver.class})

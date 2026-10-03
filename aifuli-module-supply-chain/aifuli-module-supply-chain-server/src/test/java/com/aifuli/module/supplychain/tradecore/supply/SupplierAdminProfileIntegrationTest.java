@@ -169,14 +169,14 @@ class SupplierAdminProfileIntegrationTest {
                     .isEqualTo(SUPPLIER_SCOPE_CONFLICT.getCode());
 
             List<String> offerNos = offers.createDrafts(supplierCode, List.of(
-                    new DraftLine("SKU_001_100", "FIXED", 9_800L, null, null, "API_DIRECT", 100L, 1L),
-                    new DraftLine("SKU_001_200", "FIXED", 19_800L, null, null, "API_DIRECT", 50L, 1L)), 1L);
+                    new DraftLine("SKU_001_100", "FIXED", 9_800L, null, null, "API_DIRECT", 100L, 1L, "QNM-SKU-001-100"),
+                    new DraftLine("SKU_001_200", "FIXED", 19_800L, null, null, "API_DIRECT", 50L, 1L, "QNM-SKU-001-200")), 1L);
             assertThat(offerNos).hasSize(2);
             SupplierDetail afterOffers = query.get(supplierCode);
             assertThat(afterOffers.spuCount()).isEqualTo(1L);
 
             assertThatThrownBy(() -> offers.createDrafts(supplierCode, List.of(
-                    new DraftLine("SKU_001_100", "FIXED", 9_800L, null, null, "API_DIRECT", 100L, 1L)), 1L))
+                    new DraftLine("SKU_001_100", "FIXED", 9_800L, null, null, "API_DIRECT", 100L, 1L, "QNM-SKU-001-100")), 1L))
                     .isInstanceOf(ServiceException.class)
                     .extracting(ex -> ((ServiceException) ex).getCode())
                     .isEqualTo(SUPPLIER_SCOPE_CONFLICT.getCode());
@@ -187,7 +187,9 @@ class SupplierAdminProfileIntegrationTest {
                     .doesNotContain(offerNos.getFirst());
 
             List<String> readded = offers.createDrafts(supplierCode, List.of(
-                    new DraftLine("SKU_001_100", "FIXED", 9_500L, null, null, "API_DIRECT", 80L, 1L)), 1L);
+                    // 重新选品用新的外部商品编码：uk_sc_supplier_offer_external_sku (supplier_id, external_sku_code)
+                    // 不含状态列，已退役身份行仍占用原编码，故再上架同一平台SKU须换一个供应商侧编码（变更集053）。
+                    new DraftLine("SKU_001_100", "FIXED", 9_500L, null, null, "API_DIRECT", 80L, 1L, "QNM-SKU-001-100-RE")), 1L);
             assertThat(readded).hasSize(1);
             List<SupplierOfferDO> live = offers.listLive(supplierCode);
             assertThat(live).hasSize(2);

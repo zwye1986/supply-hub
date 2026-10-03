@@ -269,7 +269,9 @@ class OrderAdminIntegrationTest {
         SupplyChainOrderDO order = SupplyChainOrderDO.builder()
                 .orderNo("SC_" + label + "_" + suffix).orderType(orderType)
                 .buyerId((long) label.hashCode() & Integer.MAX_VALUE).buyerCodeSnapshot("BYR_" + label)
-                .buyerNameSnapshot(label + "分销商").buyerUserId("user-" + label)
+                // 052 变更集（提交 8fa03c9）新增 ck_sc_order_card_user_identity：CARD 标准商品订单无购买人身份，
+                // buyer_user_id 必须为空；INSTORE/O2O 场景受理时固化故保留。详见 docs/集成测试.md §7.75 Task4 身份移除。
+                .buyerNameSnapshot(label + "分销商").buyerUserId(card ? null : "user-" + label)
                 .buyerOrderNo(o2o ? null : "BUYER_" + label + "_" + suffix)
                 .acceptanceReceiptId(card ? Math.abs((long) (label + suffix).hashCode()) + 1L : null)
                 .displaySupplierId(o2o || !card ? 701L : 702L).displaySupplierCode("SPL_" + label)

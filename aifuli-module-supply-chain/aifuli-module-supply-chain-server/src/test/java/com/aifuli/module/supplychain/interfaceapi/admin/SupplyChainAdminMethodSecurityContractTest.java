@@ -26,6 +26,7 @@ import com.aifuli.module.supplychain.tradecore.catalog.application.ProductCatalo
 import com.aifuli.module.supplychain.tradecore.catalog.application.ProductCatalogQueryService;
 import com.aifuli.module.supplychain.tradecore.catalog.application.PlatformSkuQueryService;
 import com.aifuli.module.supplychain.tradecore.supply.application.OfferFulfillmentScoreService;
+import com.aifuli.module.supplychain.tradecore.supply.application.SupplierOfferPublicationService;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierCooperativeProductService;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierInvoiceService;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierProfileCommandService;
@@ -463,7 +464,8 @@ class SupplyChainAdminMethodSecurityContractTest {
                     mock(SupplierSupplyScopeService.class),
                     mock(SupplierCooperativeProductService.class),
                     mock(SupplierInvoiceService.class),
-                    mock(OfferFulfillmentScoreService.class));
+                    mock(OfferFulfillmentScoreService.class),
+                    mock(SupplierOfferPublicationService.class));
         }
 
         @Bean

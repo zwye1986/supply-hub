@@ -9,7 +9,7 @@ import com.aifuli.module.supplychain.infrastructure.identity.BusinessNoGenerator
 import com.aifuli.module.supplychain.supplieradapter.metadata.AdapterMetadata;
 import com.aifuli.module.supplychain.supplieradapter.metadata.AdapterMetadataRegistry;
 import com.aifuli.module.supplychain.supplieradapter.metadata.ClosedJsonSchemaValidator;
-import com.aifuli.module.supplychain.supplieradapter.metadata.QnmGameOrderV1Metadata;
+import com.aifuli.module.supplychain.supplieradapter.metadata.MappingTemplates;
 import com.aifuli.module.supplychain.supplieradapter.metadata.StatusMappingDefinitionDO;
 import com.aifuli.module.supplychain.supplieradapter.metadata.StatusMappingDefinitionMapper;
 import com.aifuli.module.supplychain.supplieradapter.metadata.SupplierErrorCodeMapDO;
@@ -33,7 +33,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
-import java.util.List;
 import java.util.Set;
 
 @Service
@@ -48,6 +47,9 @@ public class SupplierConfigurationCommandService {
             "BUSINESS_REJECTED", "RETRYABLE", "RESULT_UNKNOWN", "MANUAL_REQUIRED");
     private static final Set<String> ERROR_ACTIONS = Set.of(
             "REJECT", "RETRY_SAFE", "QUERY_FIRST", "MANUAL");
+    private static final Set<String> STATUS_FACTS = Set.of(
+            "ACCEPTED", "SUCCEEDED", "REJECTED", "RESULT_UNKNOWN");
+    private static final Set<String> BUSINESS_PHASES = Set.of("CREATE", "QUERY", "CALLBACK");
 
     private final SupplierMapper supplierMapper;
     private final CredentialSlotMapper credentialSlotMapper;
@@ -132,37 +134,77 @@ public class SupplierConfigurationCommandService {
         return new DraftConnectorResult(connector.getConnectorNo(), version.getId(), 1);
     }
 
+    /**
+     * 从适配器 {@link AdapterMetadata#mappingTemplates()} 为草稿连接器版本批量初始化状态映射与错误码映射（G2）。
+     *
+     * <p>适配器无关：协议知识单一来源于各适配器元数据，新增适配器无需改动此方法。仅当版本仍为草稿、
+     * 且尚未初始化过映射时执行；模板列表顺序即插入顺序。设计见
+     * docs/superpowers/specs/2026-10-03-supplier-offer-publication-admin-design.md#65-映射g2。</p>
+     *
+     * @return 初始化的映射总行数（状态映射 + 错误码映射）
+     */
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
-    public int initializeQnmStatusMappings(Long connectorVersionId, Long operatorId) {
+    public int initializeMappings(Long connectorVersionId, Long operatorId) {
         SupplierConnectorVersionDO version = versionMapper.selectById(connectorVersionId);
         if (version == null || version.getStatus() != ConnectorVersionStatus.DRAFT.getCode()) {
             throw new IllegalStateException("Only a draft connector version can initialize mappings");
         }
         SupplierConnectorDO connector = connectorMapper.selectById(version.getConnectorId());
-        if (connector == null || !QnmGameOrderV1Metadata.TYPE.equals(connector.getAdapterType())) {
-            throw new IllegalArgumentException("Connector version is not QNM_GAME_ORDER_V1");
+        if (connector == null) {
+            throw new IllegalStateException("Connector does not exist");
         }
         if (!statusMappingMapper.selectByConnectorVersionId(connectorVersionId).isEmpty()) {
-            throw new IllegalStateException("QNM status mappings have already been initialized");
+            throw new IllegalStateException("Connector mappings have already been initialized");
         }
+        MappingTemplates templates = metadataRegistry.require(connector.getAdapterType()).mappingTemplates();
         LocalDateTime now = now();
-        List<StatusMappingSeed> seeds = List.of(
-                new StatusMappingSeed("ResCode=1", "CREATE", "ACCEPTED", false),
-                new StatusMappingSeed("ResCode=OK", "CREATE", "ACCEPTED", false),
-                new StatusMappingSeed("orderStatus=0", "QUERY", "ACCEPTED", false),
-                new StatusMappingSeed("orderStatus=1", "QUERY", "SUCCEEDED", true),
-                new StatusMappingSeed("orderStatus=2", "QUERY", "REJECTED", true),
-                new StatusMappingSeed("status=1", "CALLBACK", "SUCCEEDED", true),
-                new StatusMappingSeed("status=2", "CALLBACK", "REJECTED", true));
-        for (StatusMappingSeed seed : seeds) {
+        int count = 0;
+        for (MappingTemplates.StatusMappingTemplate seed : templates.statusMappings()) {
             statusMappingMapper.insert(StatusMappingDefinitionDO.builder()
                     .connectorVersionId(connectorVersionId).mappingVersion(version.getVersionNo())
-                    .externalStatus(seed.externalStatus()).externalSubStatus("")
+                    .externalStatus(seed.externalStatus())
+                    .externalSubStatus(seed.externalSubStatus() == null ? "" : seed.externalSubStatus())
                     .businessPhase(seed.businessPhase()).factType(seed.factType())
                     .terminalFlag((short) (seed.terminal() ? 1 : 0)).priority(0)
                     .status((short) 0).createdBy(operatorId).createdAt(now).build());
+            count++;
         }
-        return seeds.size();
+        for (MappingTemplates.ErrorCodeMappingTemplate seed : templates.errorCodeMappings()) {
+            errorCodeMapMapper.insert(SupplierErrorCodeMapDO.builder()
+                    .connectorVersionId(connectorVersionId).mappingVersion(version.getVersionNo())
+                    .externalErrorCode(seed.externalErrorCode())
+                    .externalSubCode(seed.externalSubCode() == null ? "" : seed.externalSubCode())
+                    .errorClass(seed.errorClass()).actionType(seed.actionType())
+                    .retryableFlag((short) (seed.retryable() ? 1 : 0)).status((short) 0)
+                    .createdBy(operatorId).createdAt(now).build());
+            count++;
+        }
+        return count;
+    }
+
+    /**
+     * 向草稿连接器版本追加单条状态映射（G2：模板初始化后运营按需补充）。
+     *
+     * <p>事实类型与业务阶段限定在封闭集合内，避免散落魔法值（AGENTS.md §7）。设计见
+     * docs/superpowers/specs/2026-10-03-supplier-offer-publication-admin-design.md#65-映射g2。</p>
+     */
+    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
+    public void addStatusMapping(AddStatusMappingCommand command) {
+        SupplierConnectorVersionDO version = versionMapper.selectById(command.connectorVersionId());
+        if (version == null || version.getStatus() != ConnectorVersionStatus.DRAFT.getCode()) {
+            throw new IllegalStateException("Only a draft connector version can add status mappings");
+        }
+        if (!STATUS_FACTS.contains(command.factType()) || !BUSINESS_PHASES.contains(command.businessPhase())) {
+            throw new IllegalArgumentException(
+                    "Status mapping fact type or business phase is outside the closed set");
+        }
+        statusMappingMapper.insert(StatusMappingDefinitionDO.builder()
+                .connectorVersionId(version.getId()).mappingVersion(version.getVersionNo())
+                .externalStatus(command.externalStatus())
+                .externalSubStatus(command.externalSubStatus() == null ? "" : command.externalSubStatus())
+                .businessPhase(command.businessPhase()).factType(command.factType())
+                .terminalFlag((short) (command.terminal() ? 1 : 0)).priority(0)
+                .status((short) 0).createdBy(command.operatorId()).createdAt(now()).build());
     }
 
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
@@ -264,7 +306,8 @@ public class SupplierConfigurationCommandService {
                                              String actionType, boolean retryable, Long operatorId) {
     }
 
-    private record StatusMappingSeed(String externalStatus, String businessPhase,
-                                     String factType, boolean terminal) {
+    public record AddStatusMappingCommand(Long connectorVersionId, String externalStatus,
+                                          String externalSubStatus, String businessPhase,
+                                          String factType, boolean terminal, Long operatorId) {
     }
 }

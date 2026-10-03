@@ -5,6 +5,8 @@ import com.aifuli.framework.common.util.monitor.TracerUtils;
 import com.aifuli.module.supplychain.tradecore.supply.application.ConnectorPublicationService;
 import com.aifuli.module.supplychain.tradecore.supply.application.ConnectorValidationService;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierConfigurationCommandService;
+import com.aifuli.module.supplychain.tradecore.supply.application.SupplierConfigurationQueryService;
+import com.aifuli.module.supplychain.tradecore.supply.application.SupplierCredentialCommandService;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierOfferPublicationService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -19,6 +21,8 @@ import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -27,6 +31,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 
@@ -43,9 +48,58 @@ import static com.aifuli.framework.security.core.util.SecurityFrameworkUtils.get
 public class SupplierConfigurationAdminController {
 
     private final SupplierConfigurationCommandService configurationService;
+    private final SupplierConfigurationQueryService queryService;
+    private final SupplierCredentialCommandService credentialService;
     private final ConnectorValidationService validationService;
     private final ConnectorPublicationService publicationService;
     private final SupplierOfferPublicationService offerService;
+
+    @GetMapping("/adapter-types")
+    @Operation(summary = "列出代码注册的适配器类型目录",
+            description = "技术菜单 T1：封闭集，暴露能力/凭据键/映射模板计数供前端渲染。")
+    public CommonResult<List<SupplierConfigurationQueryService.AdapterTypeView>> listAdapterTypes() {
+        return success(queryService.listAdapterTypes());
+    }
+
+    @GetMapping("/{supplierCode}/connectors")
+    @Operation(summary = "列出某供应商的连接器",
+            description = "技术菜单 T2：含当前已发布版本 id，null 表示尚未发布。")
+    public CommonResult<List<SupplierConfigurationQueryService.ConnectorListItem>> listConnectors(
+            @PathVariable("supplierCode") String supplierCode) {
+        return success(queryService.listConnectors(supplierCode));
+    }
+
+    @GetMapping("/connectors/{connectorNo}/versions/{versionId}")
+    @Operation(summary = "查询连接器版本详情",
+            description = "技术菜单 T3：非秘密连接参数 + 适配器配置 + 能力启用态，不含凭据明文。")
+    public CommonResult<SupplierConfigurationQueryService.ConnectorVersionDetail> getConnectorVersionDetail(
+            @PathVariable("connectorNo") String connectorNo,
+            @PathVariable("versionId") Long versionId) {
+        return success(queryService.getConnectorVersionDetail(connectorNo, versionId));
+    }
+
+    @GetMapping("/{supplierCode}/credential-sets")
+    @Operation(summary = "列出某供应商的凭据集与凭据项",
+            description = "技术菜单 T4：凭据项只返回 itemKey/providerType/maskedHint/status，绝不返回 secretRef 或密文。")
+    public CommonResult<List<SupplierConfigurationQueryService.CredentialSetView>> listCredentialSets(
+            @PathVariable("supplierCode") String supplierCode) {
+        return success(queryService.listCredentialSets(supplierCode));
+    }
+
+    @GetMapping("/credential-slots")
+    @Operation(summary = "列出可用凭据槽（连接器「凭据引用下拉」数据源）",
+            description = "技术菜单 A1（§8.2）：凭据槽为平台级（sc_credential_slot 无 supplier_id），只回 "
+                    + "slotNo/providerType/maskedHint/status，绝不返回 secret_ref 值或密文（F1-hybrid 只写不回显）。")
+    public CommonResult<List<SupplierConfigurationQueryService.CredentialSlotView>> listCredentialSlots() {
+        return success(queryService.listActiveCredentialSlots());
+    }
+
+    @GetMapping("/connectors/versions/{versionId}/mappings")
+    @Operation(summary = "查询连接器版本的状态与错误码映射明细", description = "技术菜单 T5。")
+    public CommonResult<SupplierConfigurationQueryService.MappingsView> getMappings(
+            @PathVariable("versionId") Long versionId) {
+        return success(queryService.getMappings(versionId));
+    }
 
     @PostMapping("/suppliers")
     @Operation(summary = "创建供应商主体")
@@ -65,6 +119,27 @@ public class SupplierConfigurationAdminController {
                         request.getActiveSecretVersion(), getLoginUserId())));
     }
 
+    @PostMapping("/credential-sets")
+    @Operation(summary = "创建供应商凭据集", description = "技术菜单 §6.3：供应商内 setCode 唯一，初始可用。")
+    public CommonResult<Long> createCredentialSet(@Valid @RequestBody CreateCredentialSetReqVO request) {
+        return success(credentialService.createCredentialSet(
+                new SupplierCredentialCommandService.CreateCredentialSetCommand(
+                        request.getSupplierCode(), request.getSetCode(), getLoginUserId())));
+    }
+
+    @PostMapping("/credential-items")
+    @Operation(summary = "向凭据集添加凭据项",
+            description = "技术菜单 §6.3（F1-hybrid）：ENV 只录 env: 引用；ENVELOPE 录 secretValue 明文，"
+                    + "服务端立即信封加密入库，secretValue 仅入参、不回显、不落日志。")
+    public CommonResult<Boolean> createCredentialItem(@Valid @RequestBody CreateCredentialItemReqVO request) {
+        credentialService.addCredentialItem(
+                new SupplierCredentialCommandService.AddCredentialItemCommand(
+                        request.getSupplierCode(), request.getSetCode(), request.getItemKey(),
+                        request.getProviderType(), request.getSecretRef(), request.getSecretValue(),
+                        request.getMaskedHint(), request.getActiveSecretVersion(), getLoginUserId()));
+        return success(true);
+    }
+
     @PostMapping("/connectors/drafts")
     @Operation(summary = "创建连接器及首个草稿版本",
             description = "适配器配置 Schema 版本由服务端按 adapterType 生成。")
@@ -79,11 +154,12 @@ public class SupplierConfigurationAdminController {
                         request.getAdapterConfigJson(), getLoginUserId())));
     }
 
-    @PostMapping("/connectors/qnm-status-mappings")
-    @Operation(summary = "为奇那梦草稿写入一期封闭状态映射")
-    public CommonResult<Integer> initializeQnmStatusMappings(
-            @Valid @RequestBody InitializeQnmMappingsReqVO request) {
-        return success(configurationService.initializeQnmStatusMappings(
+    @PostMapping("/connectors/mappings/initialize")
+    @Operation(summary = "按适配器模板初始化连接器草稿的状态与错误码映射",
+            description = "适配器无关：从该版本 adapterType 的 mappingTemplates() 播种（G2）。")
+    public CommonResult<Integer> initializeMappings(
+            @Valid @RequestBody InitializeMappingsReqVO request) {
+        return success(configurationService.initializeMappings(
                 request.getConnectorVersionId(), getLoginUserId()));
     }
 
@@ -95,6 +171,17 @@ public class SupplierConfigurationAdminController {
                         request.getConnectorVersionId(), request.getExternalErrorCode(),
                         request.getExternalSubCode(), request.getErrorClass(), request.getActionType(),
                         request.getRetryable(), getLoginUserId()));
+        return success(true);
+    }
+
+    @PostMapping("/connectors/status-mappings")
+    @Operation(summary = "向连接器草稿追加单条封闭状态映射")
+    public CommonResult<Boolean> addStatusMapping(@Valid @RequestBody AddStatusMappingReqVO request) {
+        configurationService.addStatusMapping(
+                new SupplierConfigurationCommandService.AddStatusMappingCommand(
+                        request.getConnectorVersionId(), request.getExternalStatus(),
+                        request.getExternalSubStatus(), request.getBusinessPhase(),
+                        request.getFactType(), request.getTerminal(), getLoginUserId()));
         return success(true);
     }
 
@@ -192,6 +279,30 @@ public class SupplierConfigurationAdminController {
     }
 
     @Data
+    @Schema(description = "创建凭据集请求")
+    public static class CreateCredentialSetReqVO {
+        @NotBlank private String supplierCode;
+        @NotBlank @Size(max = 64) @Schema(description = "凭据集编号，供应商内唯一") private String setCode;
+    }
+
+    @Data
+    @Schema(description = "创建凭据项请求（F1-hybrid）")
+    public static class CreateCredentialItemReqVO {
+        @NotBlank private String supplierCode;
+        @NotBlank @Size(max = 64) private String setCode;
+        @NotBlank @Size(max = 64)
+        @Schema(description = "凭据项键，须在适配器 credentialKeys() 并集内，如 secretKey") private String itemKey;
+        @NotBlank @Schema(description = "ENV 或 ENVELOPE") private String providerType;
+        @Size(max = 512) @Schema(description = "ENV 时的秘密引用，须以 env: 前缀；ENVELOPE 时留空")
+        private String secretRef;
+        @Schema(description = "ENVELOPE 时的秘密明文，仅入参、服务端立即信封加密、不回显不落日志；ENV 时留空",
+                accessMode = Schema.AccessMode.WRITE_ONLY)
+        private String secretValue;
+        @Size(max = 128) private String maskedHint;
+        @NotNull private Integer activeSecretVersion;
+    }
+
+    @Data
     @Schema(description = "创建连接器草稿请求")
     public static class CreateConnectorDraftReqVO {
         @NotBlank private String supplierCode;
@@ -212,7 +323,7 @@ public class SupplierConfigurationAdminController {
     }
 
     @Data
-    public static class InitializeQnmMappingsReqVO {
+    public static class InitializeMappingsReqVO {
         @NotNull private Long connectorVersionId;
     }
 
@@ -225,6 +336,18 @@ public class SupplierConfigurationAdminController {
         @NotBlank @Schema(description = "REJECT、RETRY_SAFE、QUERY_FIRST 或 MANUAL")
         private String actionType;
         @NotNull private Boolean retryable;
+    }
+
+    @Data
+    public static class AddStatusMappingReqVO {
+        @NotNull private Long connectorVersionId;
+        @NotBlank @Size(max = 128) private String externalStatus;
+        @Size(max = 128) private String externalSubStatus;
+        @NotBlank @Schema(description = "CREATE、QUERY 或 CALLBACK")
+        private String businessPhase;
+        @NotBlank @Schema(description = "ACCEPTED、SUCCEEDED、REJECTED 或 RESULT_UNKNOWN")
+        private String factType;
+        @NotNull private Boolean terminal;
     }
 
     @Data

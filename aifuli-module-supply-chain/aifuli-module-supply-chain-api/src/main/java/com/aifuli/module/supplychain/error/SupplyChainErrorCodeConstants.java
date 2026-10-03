@@ -209,6 +209,21 @@ public interface SupplyChainErrorCodeConstants {
     ErrorCode PROJECT_APP_CONFIRMATION_REQUIRED = error(1_050_001_164, "吊销项目应用凭证须确认并填写原因");
     ErrorCode PROJECT_APP_CREDENTIAL_STATE_INVALID = error(1_050_001_165, "项目应用凭证状态异常");
 
+    // 供应商履约技术配置：连接器发布的供应商级唯一守卫（D1）。
+    // 设计见 docs/superpowers/specs/2026-10-03-supplier-offer-publication-admin-design.md#55-d1-published_flag-唯一键变更集-056。
+    // 服务层预检先于 DB 唯一键 uk_sc_connector_supplier_published 报错，返回清晰业务异常而非裸 DuplicateKeyException。
+    ErrorCode SUPPLIER_ALREADY_HAS_PUBLISHED_CONNECTOR =
+            error(1_050_001_166, "供应商已存在其它已发布连接器版本，请先退役原版本后再发布");
+
+    // 上架即发布（B1）能力缺口与连接器缺失守卫。设计见
+    // docs/superpowers/specs/2026-10-03-supplier-offer-publication-admin-design.md#66-上架即发布服务b1核心。
+    // 文案含 {} 占位符，经 exception(code, args...) 格式化；前端 message.error 透传（要求 #2）。
+    ErrorCode SUPPLIER_NO_PUBLISHED_CONNECTOR =
+            error(1_050_001_167, "供应商[{}]尚无已发布连接器版本，请先在『履约技术配置』发布连接器");
+    ErrorCode OFFER_CAPABILITY_MISSING =
+            error(1_050_001_168, "供应商[{}]当前连接器未启用[{}]能力，该商品无法上架，"
+                    + "请先在『履约技术配置』启用能力并重新发布连接器版本");
+
     // 项目标准资产查询稳定错误，设计见 docs/superpowers/specs/2026-10-02-project-standard-query-asset-design.md#4-资产结果与封闭载荷。
     ErrorCode ASSET_QUERY_UNSUPPORTED_PRODUCT_TYPE =
             error(1_050_001_158, "此类商品不能查询资产，请通过查单接口获取订单信息");
@@ -396,7 +411,10 @@ public interface SupplyChainErrorCodeConstants {
             entry(PROJECT_APP_ALREADY_ENABLED, RetryDirective.DO_NOT_RETRY),
             entry(PROJECT_APP_NOT_ENABLED, RetryDirective.RETRY_SAME_KEY_AFTER_CONDITION_CHANGE),
             entry(PROJECT_APP_CONFIRMATION_REQUIRED, RetryDirective.DO_NOT_RETRY),
-            entry(PROJECT_APP_CREDENTIAL_STATE_INVALID, RetryDirective.DO_NOT_RETRY));
+            entry(PROJECT_APP_CREDENTIAL_STATE_INVALID, RetryDirective.DO_NOT_RETRY),
+            entry(SUPPLIER_ALREADY_HAS_PUBLISHED_CONNECTOR, RetryDirective.DO_NOT_RETRY),
+            entry(SUPPLIER_NO_PUBLISHED_CONNECTOR, RetryDirective.DO_NOT_RETRY),
+            entry(OFFER_CAPABILITY_MISSING, RetryDirective.DO_NOT_RETRY));
 
     static RetryDirective retryDirective(int errorCode) {
         return RETRY_DIRECTIVES.getOrDefault(errorCode, RetryDirective.DO_NOT_RETRY);

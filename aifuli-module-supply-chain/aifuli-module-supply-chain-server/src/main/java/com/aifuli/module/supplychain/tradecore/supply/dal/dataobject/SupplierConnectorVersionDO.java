@@ -28,6 +28,8 @@ public class SupplierConnectorVersionDO {
     private Integer concurrencyLimit;
     private Integer adapterConfigSchemaVersion;
     private String adapterConfigJson;
+    /** 连接器版本非秘密可调参数，如expireTime秒、outMobile；密钥类禁止入此列 */
+    private String extraConfig;
     private Short validationStatus;
     private LocalDateTime validatedAt;
     private LocalDateTime validationExpiresAt;
