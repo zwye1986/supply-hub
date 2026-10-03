@@ -525,3 +525,15 @@ Ticket 同时携带冻结 `connectTimeoutMs/readTimeoutMs`，供后续 HUA_SHENG
 5. **重发、时间与金额不能靠模拟证明**：旧代码只在按 outOrderSn 查单返回7014且本地尚无 orderSn时考虑补单，但没有供应商幂等期限/一致性证据，幂等/一致性证据及恢复规格补齐前不得自动开启补单；confirm/take 的重复调用能否回放同资产、FAILED/CANCEL后是否仍可能发券亦待供应商证据。61只允许刷新token后同业务payload至多重试一次，不设全局无界 RETRY_SAFE。token读取data.expires_in。validTime仅有日期夹具，不能猜测时区和当日截止时刻。
 
 Task3 开始写实现前必须完成：协议解析与端点的完整契约、资产载荷契约、受控步骤事务及查单恢复的详细规格、对应文件与测试计划，并完成规格审查。问题可凭真实协议材料解决的优先核实；关键业务语义仍不清时向用户确认，不按旧系统的错误实现推断。
+
+### 12.5 第三切片通信核验与拆分边界
+
+2026-10-03只读核验记录，依据旧 HuashengConstants/Client/TokenManager/TradeServiceImpl 与本仓 QnmHttpExecutor、PublishedConnectorConfigurationResolver、OperationTicket。以下记录实现事实，不是供应商正式保证，也不授权缺证据的生产重发。
+
+1. **请求构造事实**：旧实现每次post复制业务Map，再覆盖秒级timestamp和去连字符UUID nonce；JSON经AES小写hex加密后对原hex字符串做RSA签名。token端点同样加密签名，只是不带Bearer。业务字段重试复用，但每次重新生成nonce、读取timestamp并重新加密/签名，不是复用整个报文。出站头为X-AppId/X-Sign，回调Appid单独处理。业务响应为明文JSON，不能拿响应去AES解密。
+2. **端点与载荷事实**：token `/api/token` 使用app_id/app_secret；place `/api/order/placeOrder` 使用outOrderSn/couponId/num/expireTime/notifyUrl及可选outMobile；confirm `/api/order/confirmOrder` 与take `/api/order/takeCard` 只使用orderSn；query `/api/order/queryOrder` 使用orderSn或outOrderSn二选一。目录、余额、取消不纳入第一条卡券闭环。旧expireTime钳制60–1800和token默认7200均是旧实现选择，不冒充正式协议范围。
+3. **token缺口**：旧token manager读取access_token/expires_in，缺字段或非正TTL会兜底7200，只有实例级单账号缓存；历史一次7200观察不能证明缺字段安全。新的完整通信设计应采用严格类型、正TTL及保守过期计算，限定刷新次数与并发，按冻结连接器/通信身份隔离，短TTL不无限刷新。业务code61后是否能安全重发仍须供应商保证；刷新失败不得把已经发送的业务标为未发送。旧token的全局缓存不能直接移植，多实例授权是否互相使token失效尚未证实。
+4. **复用能力核验**：本仓不存在HttpClientPort。QnmHttpExecutor仅支持form与QNM头、合并秒级超时，不适合发送密文raw body；不为HS改QNM行为。当前Ticket已冻结baseUrl、连接/读取毫秒值、merchantAccount与CredentialMaterial，出站不含回调公钥。HS appId唯一来源及Schema尚须定案，不能从多个字段同时取值。现有extraConfig保护拒绝含token的参数名，不能直接加入旧tokenRefreshAheadSeconds。通信组件可使用已有OkHttp依赖，明确禁自动重试/重定向、响应长度界限与严格JSON；这些是本地防御策略，不替代协议证据。
+5. **失败事实边界**：本地构造/签名前失败、网络失败、非2xx、结构非法、供应商code61和其它业务code分别表达通信事实。业务端点超时、HTTP408/429/5xx、非法响应不能证明未执行；7014/FAILED/CANCEL不在通信层直接触发重下、切供应商或释放资金。请求/响应正文、token、签名、密文、目标和券字段不进日志或诊断toString，异常保留内部因果但对外使用固定摘要。
+
+Task3拆为三个仍未实施的规格切片：A为隔离HTTP/token/严格parser及独立JCA/HTTP挡板测试（不注册适配器、不接Timer/资金）；B为无损资产契约，先核实203/303字段和一期支持范围，再统一事实/指纹/加密载荷/两套查询DTO与实际前端展示；C为受控步骤事务和持久化查单恢复，先明确重发保证或明确禁止重发，再实现唯一下一步/代次围栏。每个切片先完整设计和测试计划再代码；本节仅保存核验事实与边界，不标记Task3完成。
