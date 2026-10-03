@@ -8,7 +8,7 @@
 
 **技术栈：** Java/JCA、Spring Boot、MyBatis Plus、Liquibase、JUnit 5、MockWebServer、Testcontainers MySQL 8.4、Vue 管理端。
 
-**设计来源：** `docs/superpowers/specs/2026-10-02-huasheng-fulfillment-adapter-design.md#12-闭环推进与实施前核验2026-10-03`。第一切片规格已明确；涉及业务下单方式的后续受理改动待用户回答，不能由实施者猜测。
+**设计来源：** `docs/superpowers/specs/2026-10-02-huasheng-fulfillment-adapter-design.md#12-闭环推进与实施前核验2026-10-03`。第一、二切片已完成；2026-10-03用户同意项目直接下单、中台按配置首冻，增量规格与实施计划见同日 `standard-project-direct-order-price-freeze` 文档。供应商协议保证仍待取得正式证据，不能由实施者猜测。
 
 ## Task 1：通信密码协议（可独立实施）
 
@@ -51,7 +51,7 @@ RED/GREEN 重点用实际连接器服务及本地 Fake SET metadata 验证；HS 
 
 ## Task 5：业务入口与自动化全配置闭环
 
-- [ ] 根据用户确认的下单方式先更新对应详细设计，再接报价生成/消费；不能让调用方提交分销金额覆盖服务端定价。
+- [ ] 用户已确认直接下单；先依 `2026-10-03-standard-project-direct-order-price-freeze-design.md` 完成可信自动首冻，再接全配置闭环；不能让调用方提交分销金额覆盖服务端定价。
 - [ ] 测试配置接口建立真实商品、供应商、连接器、合作商品上架、分销定价、项目选品/凭证和路由，再经真实 Controller 下单，Timer 走本地供应商 HTTP 挡板完成资产交付。
 - [ ] 验证成功、明确失败、结果未知、同号幂等、跨项目隔离、改价后原单冻结金额与资产审计；自动化不直接改订单状态制造成功。
 - [ ] 当前源码运行供应链全量单测/契约/架构及 supply-chain-integration，前端改动文件检查与构建；记录准确执行范围。

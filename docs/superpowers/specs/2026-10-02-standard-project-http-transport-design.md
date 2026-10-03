@@ -47,12 +47,12 @@ ApiAccessLogInterceptor正文/参数省略；GlobalExceptionHandler对标准参�
 
 ## 5. 自动化HTTP闭环与完成判定
 
-以实际SupplyChainServerApplication、真实MySQL/Liquibase/Mapper/事务、真实HMAC/app凭证/nonce与生产Controller执行；本地HTTP供应商模拟服务只能模拟外部供应商，不能用测试Controller/Mock Facade模拟本阶段三个业务接口。报价通过真实内部报价入口/服务先冻结，生产受理和Handler产生真实订单/资产。
+以实际SupplyChainServerApplication、真实MySQL/Liquibase/Mapper/事务、真实HMAC/app凭证/nonce与生产Controller执行；本地HTTP供应商模拟服务只能模拟外部供应商，不能用测试Controller/Mock Facade模拟本阶段三个业务接口。2026-10-03确认改为HTTP直接下单自动首冻，生产受理和Handler产生真实订单/资产；保留内部RPC预签兼容场景，增量规格见 `2026-10-03-standard-project-direct-order-price-freeze-design.md`。
 
 至少覆盖：
 
-- 虚拟卡券内部报价→签名下单成功→新nonce同参重放stable requestId/orderNo、钱/quote/Outbox不重复→签名查单真实PROCESSING→未交付资产[]+hint→真实履约结果生产加密资产→资产查询对应封闭明文与独立审计、SUCCEEDED摘要/assetAvailable。
-- 实际MOBILE直充内部报价→READY覆盖与同手机号SPU队列→签名下单/查单→本地模拟供应商可信终态→查单成功且assetAvailable=false→资产接口不支持提示。未READY不受理、不绕过。非手机号直充与卡券跳过每人限购仅内部备注，HTTP不泄漏。
+- 虚拟卡券无预签报价→签名下单自动首冻成功→新nonce同参重放stable requestId/orderNo、钱/quote/Outbox不重复→签名查单真实PROCESSING→未交付资产[]+hint→真实履约结果生产加密资产→资产查询对应封闭明文与独立审计、SUCCEEDED摘要/assetAvailable。
+- 实际MOBILE直充无预签报价→READY覆盖与同手机号SPU队列→签名下单/查单→本地模拟供应商可信终态→查单成功且assetAvailable=false→资产接口不支持提示。未READY不受理、不绕过。非手机号直充与卡券跳过每人限购仅内部备注，HTTP不泄漏。
 - 同buyer两project同buyerOrderNo各下单/查询/资产、另一项目无同号返回统一不存在，合法同号不串；鉴权ACTIVE/SUSPENDED只有query、cap关闭/凭证吊销/轮换/nonce重放/body改动，普通头身份spoof无效。
 - 严格字段/数量/目标/CAS/duplicateJSON/尾随/媒体类型/非法编码/查询参数矩阵，拒绝无受理副作用。异参业务号冲突、普通拒绝重放、同CAS并发只一次，已有accepted在Listing变动仍重放。
 - 资产各种等待/manual/拒绝/终态/类型不支持/缺资产/解密/解析/审计故障均正确CommonResult、无部分明文、no-store；真实审计在异常回滚后存在。

@@ -34,7 +34,7 @@ claim按projectId+buyerOrderNo非锁定首次探测＋唯一键裁决创建，�
 - ACCEPTED/REJECTED_FINAL相同身份：只回放，不重路由/预占/追加备注。accepted传CAS也不能开启新下单。
 - REJECTED_RETRYABLE普通重发：只回放；携带当前positive previousReceiptVersion才CAS重开，不能要求调用方更换Listing版本。CAS失败返回原状态或稳定版本冲突；同一CAS并发只一新尝试。
 
-条件重试固定原target和已冻结quoteId；读当前可售同商品兼容Schema，可以采用新的服务端Listing版本。缺首次报价明确业务拒绝且可在内部形成首次报价后按CAS重新尝试，不能下单时定价；首次已有报价的拒绝/重试不改价格或绑定。商品身份变更、目标变化及最终拒绝需新订单号。
+条件重试固定原target和已冻结quoteId；读当前可售同商品兼容Schema，可以采用新的服务端Listing版本。2026-10-03用户确认HTTP直接下单：claim执行新尝试后，在最终accept之前独立短事务生成或复用首次报价，详见 `2026-10-03-standard-project-direct-order-price-freeze-design.md`；内部RPC受理仍消费已预签报价。缺报价实际返回稳定错误并保留PROCESSING，不虚构已保存的拒绝回执；首次已有报价的拒绝/重试不改价格或绑定。商品身份变更、目标变化及最终拒绝需新订单号。
 
 受理保留原锁顺序及频率门禁：MOBILE写回执/入队/SEND都核验既有READY密钥覆盖，临时门禁关闭不固化为终拒；ACCEPTED相同身份重放在门禁关闭仍可读回执。资金金额取永久报价快照，消费/订单/请求/路由/资金/队列/Outbox在同一供应链事务。业务拒绝按原独立reject收敛，系统故障不能虚构已受理。
 
@@ -48,7 +48,7 @@ SkuPurchaseLimitService移除buyerUserId参数；以已验证的targetAccountTyp
 
 新订单冻结实际targetAccountType及仅MOBILE的fulfillmentAccountValue，独立字段代表履约目标，不是购买人身份。平台SKU锁串行限购校验＋订单插入，真实MySQL并发不能超额；不得只把查询换手机号而放开原锁。
 
-管理端前端实际仓库`/Users/mac/.codex/worktrees/project-app-access/supplychainhubweb`，`src/views/supplier/product/list/form/index.vue`、`detail/index.vue`增加“每人周期限购仅对实际手机号直充有效，卡券及非手机号直充忽略并记录订单备注”的配置说明。保留配置可编辑，不擅自禁用/清空卡券或非手机号商品的规则。
+管理端前端实际仓库`/Users/mac/Documents/codeSpace/supplychainhubweb`，`src/views/supplier/product/list/form/index.vue`、`detail/index.vue`增加“每人周期限购仅对实际手机号直充有效，卡券及非手机号直充忽略并记录订单备注”的配置说明。保留配置可编辑，不擅自禁用/清空卡券或非手机号商品的规则。
 
 ## 5. 052增量、历史清理与安全覆盖
 

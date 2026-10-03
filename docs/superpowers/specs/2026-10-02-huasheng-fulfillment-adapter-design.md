@@ -476,7 +476,7 @@ HUA_SHENG 三项凭据为 appSecret/privateKey/callbackPublicKey，使用显式 
 1. **凭据身份分离**：现有 `credential_slot_id` 是 `sc_credential_slot` 的逻辑引用，已有 QNM 发布与运行时都按此查询。不得重新解释为 `sc_credential_set.id`；HUA_SHENG 必须使用新增显式 `credential_set_id`，由元数据声明凭据模式，在连接器创建、校验、发布和运行时统一校验供应商归属及完整项键。054/055/056/057 已交付 SQL 不修改。
 2. **步骤推进不伪造拒绝**：现有 `confirmTrustedRejectedAndContinue` 必须携带手机号频控资格且只对可信拒绝有效。卡券 PLACE_ORDER/CONFIRM_ORDER 的 ACCEPTED 不得冒充 REJECTED；新增明确的多步骤推进事务，复用订单/请求/B 单锁、原外呼资格和资产资金收敛边界。前一步完成、下一步创建、checkpoint 冻结和 Timer 注册同事务提交，并发/重放不产生第二步；预下单或确认成功尚不代表券已交付，不扣最终资金。
 3. **结果未知保持原订单**：网络错误、非法响应和外部单号不一致不得释放预占或切换供应商；先用原 outOrderSn/orderSn 查单，取得可信状态后决定恢复步骤。只有最终取得完整的一张券或可信失败才收敛资金。
-4. **报价入口待业务确认**：当前实现要求先经内部 `StandardPricingQuoteApi` 冻结后再 HTTP 下单。用户正在确认期望「直接下单时冻结」还是「业务系统先确认价格」，本项未确认前不修改受理、定价或对外契约。
+4. **报价入口已确认（2026-10-03）**：用户同意项目直接下单，中台按配置价格首次冻结；已有内部 `StandardPricingQuoteApi` 保留兼容。具体事务、来源、准入及回滚契约见 `2026-10-03-standard-project-direct-order-price-freeze-design.md`，本切片实施中。
 
 实施顺序及每个切片的测试证据维护在 `docs/superpowers/plans/2026-10-03-huasheng-card-closure.md`；人工联调入口及实际结果维护在 `docs/集成测试.md`。
 
@@ -515,7 +515,7 @@ Ticket 同时携带冻结 `connectTimeoutMs/readTimeoutMs`，供后续 HUA_SHENG
 
 ### 12.4 第三切片实施前的协议证据缺口
 
-本节是只读核验结果，尚不是 Task3 可直接实施的完整规格。核验来源：cardshop 的 `HuashengSupplierTradeServiceImpl`、`HuashengConstants`、`HuashengClient`、`HuashengCardMapper` 及对应测试；本仓 `OperationAssetFact`、`SupplierOrderLifecycle.persistAssets`、`ProjectStandardAssetPayloadDecoder` 与项目资产响应 DTO。真实供应商沙箱未执行。
+本节是只读核验结果，尚不是 Task3 可直接实施的完整规格。旧仓 HuashengConstants 注释提供 Apifox「华昇卡券API接口文档」项目57114177-5188-44e4-99f8-2a8581e4be12的位置线索，但本地未发现协议正文。旧仓 `doc/华昇卡券预生产部署手册.md#9-本次测试环境实际联调结果` 记录2026-09-08 token及type304的place→confirm→take成功；这是内部历史观察，缺原始脱敏报文和正式供应商保证，不能据此证明金额单位、重复调用安全或其它类型。核验来源：cardshop 的 `HuashengSupplierTradeServiceImpl`、`HuashengConstants`、`HuashengClient`、`HuashengCardMapper` 及对应测试；本仓 `OperationAssetFact`、`SupplierOrderLifecycle.persistAssets`、`ProjectStandardAssetPayloadDecoder` 与项目资产响应 DTO。真实供应商沙箱未执行。
 
 1. **状态不能直接代表交付**：旧供应商常量只含 WAIT/SUCCESS/FAILED/CANCEL；SUCCESS_HD 是旧系统本地待交付状态。PLACE 返回 SUCCESS 时旧流程跳过 CONFIRM；QUERY 返回 SUCCESS 时仍尝试 TAKE。完整 TAKE 响应或可信成功回调均须核验 orderSn 一致、num 与预期一致、list 完整且形态可识别，才能产生最终资产事实。
 2. **金额单位尚无协议证据**：旧 PLACE/CONFIRM 将 totalPrice 原文（测试样例含四位小数）用于日志/remark；旧 TAKE 解析只读取 orderSn/num/list，夹具未提供 totalPrice，无法证明远端响应永不包含该字段。不能据此断言 totalPrice 单位或四位小数的舍入规则。未取得正式协议证据时 reportedSettlementAmount 不填写，原文只可经脱敏摘要观察，不能当成本核对通过或用于最终账本扣减。

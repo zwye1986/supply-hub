@@ -1,6 +1,6 @@
 # 标准商品内部首次报价永久冻结适配
 
-日期：2026-10-02。状态：承接用户已确认方案的实现细化，尚未实施。
+日期：2026-10-02。永久冻结已实施；2026-10-03用户确认HTTP直接下单自动首冻，增量规格为 `2026-10-03-standard-project-direct-order-price-freeze-design.md`，该增量实施中。
 
 依据`2026-09-30-project-signed-standard-order-http-design.md` §4、§7、§8：继续使用现有`StandardPricingQuoteApi`内部入口；永久键为项目＋项目订单号，首次成功报价冻结价格，本期无报价有效期/paidAt校验，下单HTTP不提交token。本文取代旧`2026-09-15-generic-batch-pricing-design.md` §7中标准商品用户手机号绑定及15分钟重签语义，不改变其通用定价计算、费用/税务快照和资金职责。
 
@@ -14,7 +14,7 @@
 
 ## 2. 首次签发与重放
 
-在供应链事务中，项目行锁串行首次签发，按`project_id,buyer_order_no`读取唯一报价；DB唯一约束提供最后一道保护。匹配判断核对buyerId/projectId、quantity和冻结的platformSkuCode。不同商品或数量明确幂等冲突，不能覆盖旧快照。
+在供应链事务中，项目行锁串行首次签发，按`project_id,buyer_order_no`当前读读取唯一报价（避免来源解析的RR旧快照漏看并发提交）；DB唯一约束提供最后一道保护。匹配判断核对buyerId/projectId、quantity和冻结的platformSkuCode。不同商品或数量明确幂等冲突，不能覆盖旧快照。
 
 已有ISSUED或CONSUMED报价且不变量匹配时直接返回原报价的全部冻结价格/版本/文案；不调用ensureCurrentProjectVersion，不比较当前时间与旧expiresAt，不换token。不把“已消费后查询首次报价”误判为再次签发，但不允许再次消费给另一订单。
 
@@ -24,7 +24,7 @@
 
 ## 3. 受理内查取与唯一消费
 
-增加可信项目消费入口，消费上下文只含buyerId/projectId/platformSkuId/buyerOrderNo/quantity。通过项目永久键`SELECT ... FOR UPDATE`取得已冻结报价；缺报价使用稳定业务错误STANDARD_PRICING_QUOTE_MISSING，重试指令RETRY_SAME_KEY_AFTER_CONDITION_CHANGE；共享受理将其保存为可条件重试的拒绝回执，内部首次报价形成后由调用方携带回执版本CAS重试。不计算新价格、不任取最新历史报价。验证分销商/项目/SKU/数量与报价一致，并返回不可变FrozenQuote及listingId等必要商品身份快照供共享受理校验。
+增加可信项目消费入口，消费上下文只含buyerId/projectId/platformSkuId/buyerOrderNo/quantity。通过项目永久键`SELECT ... FOR UPDATE`取得已冻结报价；缺报价使用稳定业务错误STANDARD_PRICING_QUOTE_MISSING，重试指令RETRY_SAME_KEY_AFTER_CONDITION_CHANGE；当前实际实现返回该错误并保留PROCESSING回执，不生成REJECTED_RETRYABLE，不要求伪造CAS。纯消费入口不计算新价格、不任取最新历史报价；HTTP直接首冻在claim后独立事务完成，详见2026-10-03增量设计§2。验证分销商/项目/SKU/数量与报价一致，并返回不可变FrozenQuote及listingId等必要商品身份快照供共享受理校验。
 
 共用受理最终统一使用这一入口。过渡阶段旧内部受理的token入口可适配到同一个项目键并额外核对token指向该唯一报价；该过渡不保留user/paidAt作为报价绑定或有效期条件，完整标准DTO/PreparedAcceptance身份清理由下一阶段完成。过渡入口不是新增外部协议。
 
