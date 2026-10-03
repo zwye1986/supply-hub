@@ -45,6 +45,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.transaction.annotation.Transactional;
@@ -56,6 +57,7 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.SUPPLIER_NO_PUBLISHED_CONNECTOR;
 
 @Service
+@Slf4j
 @RequiredArgsConstructor
 public class SupplierOfferPublicationService {
 
@@ -243,6 +245,8 @@ public class SupplierOfferPublicationService {
      */
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public PublishResult listOnShelf(ListOnShelfCommand command) {
+        log.info("合作商品上架 supplierCode={} offerNo={} validTo={} operatorId={}",
+                command.supplierCode(), command.offerNo(), command.validTo(), command.operatorId());
         SupplierOfferDO offer = offerMapper.selectByNoForUpdate(command.offerNo());
         if (offer == null || offer.getStatus() == OfferStatus.RETIRED.getCode()) {
             throw new IllegalStateException("Supplier offer is not listable: " + command.offerNo());
@@ -336,7 +340,19 @@ public class SupplierOfferPublicationService {
         SupplierExternalSkuBindingDO conflict = externalSkuBindingMapper.selectByConnectorAndExternalSku(
                 connector.getId(), version.getExternalSkuCode());
         if (conflict != null && !conflict.getOfferId().equals(offer.getId())) {
-            throw new IllegalStateException("External SKU is already bound to another offer");
+            // 退役不可恢复，且 057 唯一键保证同供应商只有一个未退役身份占用外部编码。
+            // 仅回收已退役身份的路由绑定；历史身份及版本保留供在途订单和审计使用。
+            // 删除与新版本发布共用供应链事务，发布失败会恢复旧绑定。设计见
+            // docs/superpowers/specs/2026-10-03-supplier-offer-publication-admin-design.md#154-退役商品释放外部编码。
+            SupplierOfferDO previousOffer = offerMapper.selectById(conflict.getOfferId());
+            if (previousOffer == null || previousOffer.getStatus() == null || previousOffer.getStatus() != OfferStatus.RETIRED.getCode()) {
+                throw new IllegalStateException("External SKU is already bound to another offer");
+            }
+            if (externalSkuBindingMapper.deleteById(conflict.getId()) != 1) {
+                throw new IllegalStateException("Retired external SKU binding changed during publication");
+            }
+            log.info("回收退役商品绑定 connectorId={} retiredOfferId={} replacementOfferId={} offerVersionId={}",
+                    connector.getId(), previousOffer.getId(), offer.getId(), version.getId());
         }
         SupplierExternalSkuBindingDO binding = externalSkuBindingMapper.selectByOfferIdForUpdate(offer.getId());
         if (binding == null) {

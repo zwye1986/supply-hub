@@ -5,7 +5,7 @@
 > 命名约定：供应商/适配器一律用 `HUA_SHENG`、`QNM` 表示（对应 `adapterType` `HUA_SHENG_ORDER_V1`/`QNM_GAME_ORDER_V1`、`supplier_code` `HUASHENG`/`QNM`），prose 与代码标识符不用中文名；DB 种子 `supplier_name` 展示值（`'华昇卡券'`）保留中文，不在约定覆盖内。
 > 关联设计：`2026-08-07-supply-chain-phase1-detailed-design.md` §7.3 §7.4 §10.1 §10.2
 > 关联设计（管理端供给发布，共建地基）：`2026-10-03-supplier-offer-publication-admin-design.md`（**v4 已定案**）。**该文 §5 是 `AdapterMetadata` 扩展（`defaultExecutionProfile()`/`credentialKeys()`/`mappingTemplates()`/`fulfillmentSteps()`）+ AD-3 凭据集 + AD-5 `extra_config` 共享地基规格的唯一出处**；本文引用其规格、不重复描述，只落地 HUA_SHENG 专属部分（协议适配器、多步骤编排、回调入口、token、种子）。两文协调点见该文 §14 与本文 §7.0。
-> ⚠ 变更集编号（已对齐 v4 §0.4 ①，作废本文原 `050`/`051` 计划）：现有链至 `052-standard-order-project-key.sql`；供给发布文占 `053`（f1 `external_sku_code`）/`054`（AD-3 凭据集/项建表）/`055`（AD-5 `extra_config` 列）/`056`（D1 `published_flag`）。**AD-3 建表与 AD-5 加列属共享地基，由 `054`/`055` 交付（规格出处 v4 §5.2/§5.3）；本文 HUA_SHENG 主数据种子让位到 `057+`**（原 `050`/`051` 与 `050-project-standard-asset-audit`/`051-standard-quote-permanent-key` 冲突，作废）。落地前对齐 `db.changelog-1.0.0.yaml` 登记顺序。
+> ⚠ 变更集编号（已对齐 v4 §0.4 ①，作废本文原 `050`/`051` 计划）：现有链至 `052-standard-order-project-key.sql`；供给发布文占 `053`（f1 `external_sku_code`）/`054`（AD-3 凭据集/项建表）/`055`（AD-5 `extra_config` 列）/`056`（D1 `published_flag`）。**AD-3 建表与 AD-5 加列属共享地基，由 `054`/`055` 交付（规格出处 v4 §5.2/§5.3）；本文 HUA_SHENG 主数据种子让位到 `058+`**（原 `050`/`051` 与 `050-project-standard-asset-audit`/`051-standard-quote-permanent-key` 冲突，作废）。落地前对齐 `db.changelog-1.0.0.yaml` 登记顺序。
 > 旧系统参照：`/Users/mac/Documents/codeSpace/cardshop` `huasheng` 包
 
 ---
@@ -374,10 +374,10 @@ static final ArchRule callback_entry_points_only_depend_on_callback_parsers =
 | `054` | 共享地基 | `sc_credential_set`/`sc_credential_item` 建表（AD-3） | v4 §5.2（DDL 全文见本文 §7.1） |
 | `055` | 共享地基 | `sc_supplier_connector_version.extra_config` 加列（AD-5） | v4 §5.3（DDL 全文见本文 §7.1） |
 | `056` | 共享地基（供给发布文） | `sc_supplier_connector.published_flag` + 唯一键（D1） | v4 §5.5 |
-| `057` | **本文（HUA_SHENG）** | HUA_SHENG 供应商/凭据集数据/连接器/版本/能力/映射种子 | 本文 §7.2 |
-| `058` | **本文（HUA_SHENG）** | `capability_code` CHECK 扩 `CANCEL_ASSET`（若 §6 采纳） | 本文 §7.3 |
+| `058` | **本文（HUA_SHENG）** | HUA_SHENG 供应商/凭据集数据/连接器/版本/能力/映射种子 | 本文 §7.2 |
+| `059` | **本文（HUA_SHENG）** | `capability_code` CHECK 扩 `CANCEL_ASSET`（若 §6 采纳） | 本文 §7.3 |
 
-> `054`/`055` 是**共享地基**，Phase 1 凭据/连接器 UI 即依赖，先于 HUA_SHENG 适配器交付；本文给出其可执行 DDL 全文（v4 只定编号与用途、不重复 DDL）。`057`/`058` 是 HUA_SHENG 专属种子，随适配器落地。落地前统一对齐 `db.changelog-1.0.0.yaml` 登记顺序。
+> `054`/`055` 是**共享地基**，Phase 1 凭据/连接器 UI 即依赖，先于 HUA_SHENG 适配器交付；本文给出其可执行 DDL 全文（v4 只定编号与用途、不重复 DDL）。`058`/`059` 是 HUA_SHENG 专属种子，随适配器落地。落地前统一对齐 `db.changelog-1.0.0.yaml` 登记顺序。
 > 下文 `@hs_*` 为示意变量，实现时以子查询按业务键（`supplier_code`/`connector_code`/`set_code`）绑定真实主键，不硬编码 ID。
 
 ### 7.1 地基变更集 DDL 全文（`054` 凭据集 + `055` extra_config）
@@ -420,7 +420,7 @@ CREATE TABLE sc_credential_item (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='凭据集内的单个密钥项引用';
 ```
 
-### 7.2 HUA_SHENG 种子变更集 `057-huasheng-supplier-seed.sql`
+### 7.2 HUA_SHENG 种子变更集 `058-huasheng-supplier-seed.sql`
 
 > 供应商、凭据集/项无服务层计算列，可直接 SQL 种子；连接器/版本/能力/映射含服务层计算列（`config_digest` 等），推荐经技术菜单 UI 或服务层落地（见本节末实现提示）。
 
@@ -453,7 +453,7 @@ VALUES (
     5, 10, 1, '{}',
     10, NOW(3), @hs_config_digest, 10, NOW(3), NOW(3), NOW(3), JSON_OBJECT('expireTime', 300, 'num', 1));
 
--- 4) 能力（不含 CANCEL_ASSET；如 §6 采纳，先执行 058 扩 CHECK，再在此追加 CANCEL_ASSET 行）
+-- 4) 能力（不含 CANCEL_ASSET；如 §6 采纳，先执行 059 扩 CHECK，再在此追加 CANCEL_ASSET 行）
 INSERT INTO sc_supplier_connector_capability (connector_version_id, capability_code, enabled, metadata_version, created_at) VALUES
     (@hs_version_id, 'ISSUE_ASSET',      1, 1, NOW(3)),
     (@hs_version_id, 'QUERY_ORDER',      1, 1, NOW(3)),
@@ -489,7 +489,7 @@ INSERT INTO sc_supplier_error_code_map (connector_version_id, mapping_version, e
 > **UI 等价路径**：本节种子也可由技术菜单（供给发布文 v4 A1/E1/F1/G2）自助录入——连接器草稿、凭据集/项、能力勾选、映射「从模板初始化」（`mappingTemplates()` 即本节 5)/6) 内容）+ 追加。SQL 种子用于一键初始化与集成测试基线，UI 路径用于线上自助与灰度翻牌；两者写同一批表，`mappingTemplates()` 是映射的代码单一来源。
 > **实现提示**：`sc_supplier_connector_version.config_digest`（规范化配置 SHA-256）、`adapter_config_schema_version`、`validation_status` 由服务层（`createConnectorDraft`/`validate`/`publish`）计算与流转，raw SQL 难以正确生成 `config_digest` 且会绕过「先校验后发布」。故连接器/版本/能力/映射种子**推荐经技术菜单 UI 或服务层落地**（v4 §6.2/§6.5）；§7.2 SQL 仅作集成测试基线示意，直接执行须补齐 `config_digest` 等 NOT NULL 列（上文以 `@hs_config_digest` 占位）或改走服务层。
 
-### 7.3 HUA_SHENG 能力 CHECK 变更集 `058-huasheng-capability-check.sql`
+### 7.3 HUA_SHENG 能力 CHECK 变更集 `059-huasheng-capability-check.sql`
 
 **仅在 §6 采纳新增 `CANCEL_ASSET` 时执行**（须先于 §7.2 能力种子追加 `CANCEL_ASSET` 行）：
 
@@ -573,7 +573,7 @@ ALTER TABLE sc_supplier_connector_capability
 | **T9** | **`extra_config` 列 + `extraParameters` 传递链打通** | T1 | **新增** |
 | **T10** | **checkpoint 落库与恢复（`handleAccepted` 加密写库 + 工厂解密）** | T1 | **新增** |
 | **T11** | **多步骤编排：`FulfillmentStepSequencer` + `isRechargeOperation` 扩展 + `ACCEPTED` 串联** | T10 | **新增，风险最高** |
-| T12 | DDL 变更集 `057`（HUA_SHENG 种子）/`058`（能力 CHECK）+ 部署 SQL；地基 `054`/`055` 随供给发布文 §5 交付 | T7,T8 | 编号对齐 §7.0 |
+| T12 | DDL 变更集 `058`（HUA_SHENG 种子）/`059`（能力 CHECK）+ 部署 SQL；地基 `054`/`055` 随供给发布文 §5 交付 | T7,T8 | 编号对齐 §7.0 |
 | T13 | `SupplierCallbackController` + `Router` + `CallbackParser` + 架构规则 | T6 | — |
 | T14 | 集成测试（闭环/续履约/回调/补单/num 拒绝） | T11,T13 | — |
 | T15 | 文档同步与门禁验证 | T14 | — |
@@ -604,3 +604,5 @@ ALTER TABLE sc_supplier_connector_capability
 | `SUCCESS` | DELIVERY | SUCCEEDED | 1 |
 | `FAILED` | CREATE | REJECTED | 1 |
 | `CANCEL` | CREATE | REJECTED | 1 |
+
+> 2026-10-03 评审修复编号补充：057 已用于未退役 Offer 外部编码唯一约束修正，本文尚未实施的种子和 CHECK 顺延至 058/059；语义见 `docs/superpowers/specs/2026-10-03-supplier-offer-publication-admin-design.md#154-退役商品释放外部编码`。

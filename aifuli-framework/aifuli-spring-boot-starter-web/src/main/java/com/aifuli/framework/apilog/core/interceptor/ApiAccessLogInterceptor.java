@@ -38,8 +38,7 @@ public class ApiAccessLogInterceptor implements HandlerInterceptor {
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
         // 内部限频与标准订单响应包括参数/权限错误均禁止缓存，见 docs/superpowers/specs/2026-09-30-direct-recharge-mobile-spu-frequency-design.md#7-管理端契约与权限
         // 及 docs/superpowers/specs/2026-10-02-standard-project-http-transport-design.md#4-共享web保护与影响范围。
-        if (ApiAccessLogPathUtils.isRechargeFrequencyAdminPath(request.getRequestURI(), request.getContextPath())
-                || ApiAccessLogPathUtils.isStandardOrdersPath(request.getRequestURI(), request.getContextPath())) {
+        if (ApiAccessLogPathUtils.isSensitiveProtectionPath(request.getRequestURI(), request.getContextPath())) {
             response.setHeader("Cache-Control", "no-store");
         }
         // 记录 HandlerMethod，提供给 ApiAccessLogFilter 使用

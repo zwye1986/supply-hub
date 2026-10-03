@@ -48,6 +48,27 @@ public final class ApiAccessLogPathUtils {
             "/rpc-api/supply-chain/buyer/instore/payment/",
     };
 
+    /**
+     * 凭据写入含秘密明文或环境引用，保护精确根及其子路径，兼容管理端前缀与部署 context path。
+     * 不覆盖 credential-items-other 等相似路径。设计见
+     * docs/superpowers/specs/2026-10-03-supplier-offer-publication-admin-design.md#151-凭据写入日志保护。
+     */
+    private static final String[] SUPPLIER_CREDENTIAL_WRITE_PATHS = {
+            "/supply-chain/supplier-config/credential-items",
+            "/admin-api/supply-chain/supplier-config/credential-items",
+            "/supply-chain/supplier-config/credential-slots",
+            "/admin-api/supply-chain/supplier-config/credential-slots"
+    };
+
+    public static boolean isSupplierCredentialWritePath(String requestUri, String contextPath) {
+        if (requestUri == null) { return false; }
+        String path = stripLeadingContextPath(requestUri, contextPath);
+        for (String root : SUPPLIER_CREDENTIAL_WRITE_PATHS) {
+            if (path.equals(root) || path.startsWith(root + "/")) { return true; }
+        }
+        return false;
+    }
+
     private ApiAccessLogPathUtils() {
     }
 
@@ -82,7 +103,7 @@ public final class ApiAccessLogPathUtils {
         }
         String path = stripLeadingContextPath(requestUri, contextPath);
         // 标准订单路径精确保留根与子路径，排除 orders-other 等相似前缀
-        if (matchesStandardOrdersPath(path)) {
+        if (matchesStandardOrdersPath(path) || isSupplierCredentialWritePath(requestUri, contextPath)) {
             return true;
         }
         for (String prefix : SENSITIVE_PLATFORM_PATH_PREFIXES) {
@@ -101,7 +122,7 @@ public final class ApiAccessLogPathUtils {
     }
 
     /**
-     * 判断请求路径是否需要"安全异常处理"（仅限频管理与标准订单两类敏感路径）。
+     * 判断请求路径是否需要"安全异常处理"（限频管理、标准订单与供应商凭据写入路径）。
      *
      * <p>供 Servlet 栈访问日志 Filter 与全局异常处理器共用同一份判断，避免各自私有组装
      * {@code ||} 导致规则漂移。设计见
@@ -114,7 +135,8 @@ public final class ApiAccessLogPathUtils {
     public static boolean isSensitiveProtectionPath(String requestUri, String contextPath) {
         if (requestUri == null) { return false; }
         String path = stripLeadingContextPath(requestUri, contextPath);
-        return matchesStandardOrdersPath(path) || matchesRechargeFrequencyAdminPath(path);
+        return matchesStandardOrdersPath(path) || matchesRechargeFrequencyAdminPath(path)
+                || isSupplierCredentialWritePath(requestUri, contextPath);
     }
 
     /** 标准订单开放路径：包含原始签名正文、手机号与卡券资产，严禁日志记录正文与响应。

@@ -12,7 +12,7 @@ import java.util.stream.Collectors;
  *
  * <p>配置来源（非硬编码字面量，AGENTS.md §7），属性 {@code aifuli.supply-chain.connector.allowed-adapter-types}，
  * 逗号分隔。Phase 1 含 {@code QNM_GAME_ORDER_V1}（dogfood/集成测试）；{@code HUA_SHENG_ORDER_V1} 待其适配器与
- * 种子（057+）落地后翻牌。fail-closed：空配置拒绝一切，避免未配置时误放生产。设计见
+ * 种子（058+）落地后翻牌。fail-closed：空配置拒绝一切，避免未配置时误放生产。设计见
  * {@code docs/superpowers/specs/2026-10-03-supplier-offer-publication-admin-design.md#68-adaptertype-白名单灰度j3-沿用}。</p>
  */
 @Component

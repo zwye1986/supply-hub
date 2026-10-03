@@ -34,7 +34,7 @@
 
 | 编号 | 决策 |
 | --- | --- |
-| **f1** | `sc_supplier_offer` 新增 `external_sku_code` 列，选合作商品时（`ProductSelectDialog`）**强制必填**，`(supplier_id, external_sku_code)` 唯一；上架发布时从身份行冻结进版本行。 |
+| **f1** | `sc_supplier_offer` 新增 `external_sku_code` 列，选合作商品时（`ProductSelectDialog`）**强制必填**，`(supplier_id, external_sku_code)` 在未退役身份行间唯一（057 修正，见 §15.4）；上架发布时从身份行冻结进版本行。 |
 | **c3** | 发布事务内**自动开通** `REMOTE_ON_DEMAND` 库存来源（复用 `SupplierOfferPublicationService.createRemoteOnDemandInventory:82` + `activateInventorySource:98`）；**触发点由 v3 的独立发布改到 B1 上架动作**。 |
 | **d2** | 执行画像（completionMode/idempotency/unknownResult/partialDelivery/multiplicity）由 `AdapterMetadata.defaultExecutionProfile()` 服务端注入；`primaryCapabilityCode` 由 SKU `fulfillmentType` 推导（§9）。前端不暴露。 |
 | **g3** | Phase 1 仅 `FIXED` 定价；结算单价只读继承身份行 `draft_unit_price`；上架后编辑合作商品商业条款 → 履约配置置『过期』（i-b 捕获）→ 需重新上架。 |
@@ -50,7 +50,7 @@
 
 ### 0.4 收尾确认
 
-- **①变更集编号**（现有链至 `052`）：`053`＝f1 `external_sku_code`；`054`＝AD-3 凭据集/项；`055`＝AD-5 `extra_config`；`056`＝D1 `published_flag`+唯一键；`HUA_SHENG` 主数据种子 `057+`（HUA_SHENG 文原计划 `050`/`051` 与现有文件冲突，让位到 `057+`）。
+- **①变更集编号**（现有链至 `052`）：`053`＝f1 `external_sku_code`；`054`＝AD-3 凭据集/项；`055`＝AD-5 `extra_config`；`056`＝D1 `published_flag`+唯一键；`057`＝退役 Offer 释放外部编码唯一槽（§15.4）；`HUA_SHENG` 主数据种子 `058+`（HUA_SHENG 文原计划 `050`/`051` 与现有文件冲突，让位到 `058+`）。
 - **②地基规格出处**：`AdapterMetadata` 扩展 + AD-3 + AD-5 以**本文 §5 为唯一出处**，HUA_SHENG 文引用。
 - **③展示名**：DB 种子 `supplier_name='华昇卡券'` 保留中文（面向运营列表显示）；命名约定只约束 prose/代码标识符。
 
@@ -77,7 +77,7 @@
 2. 一条 Offer **可履约** 当且仅当 `status==PUBLISHED 且 current_version_id!=null` 且版本在 `now` 落 `[valid_from, valid_to)`（`valid_to` 空＝长期）。合作商品商业状态 `PUBLISHED` 与履约就绪度是**正交两维**（R②-a 沿用）：就绪度只由 i-b 三态单一表达。
 3. **上架即发布是设置 `current_version_id` 的唯一业务入口**（B1，底层仍走 `SupplierOfferPublicationService.publish:194-201`）；任何其它路径不得写 `current_version_id`。
 4. **一个供应商至多一个已发布连接器**（C3/D1，DB 唯一键 + 服务层预检兜底）；换适配器须显式先退役旧连接器。
-5. `externalSkuCode` 录入源＝身份行 `sc_supplier_offer.external_sku_code`（f1，选品必填，`(supplier_id, external_sku_code)` 唯一）；上架时冻结进版本行并 upsert `sc_supplier_external_sku_binding`（`uk_sc_external_sku_connector (connector_id, external_sku_code)`、`uk_sc_external_sku_offer (offer_id)`，冲突拒绝）。身份行改值后与当前版本冻结值不一致 → i-b 判 `STALE`，须重新上架。
+5. `externalSkuCode` 录入源＝身份行 `sc_supplier_offer.external_sku_code`（f1，选品必填，`(supplier_id, external_sku_code)` 在未退役身份行间唯一（057 修正，见 §15.4））；上架时冻结进版本行并 upsert `sc_supplier_external_sku_binding`（`uk_sc_external_sku_connector (connector_id, external_sku_code)`、`uk_sc_external_sku_offer (offer_id)`，仅允许回收已退役身份的绑定，其他冲突拒绝，见 §15.4）。身份行改值后与当前版本冻结值不一致 → i-b 判 `STALE`，须重新上架。
 6. **能力缺口拒绝上架**：`primaryCapabilityCode` 由 SKU `fulfillmentType` 推导（§9），必须在 C3 自动引用的连接器版本上 `enabled=1`（`requireCapability:238-240`、`requireCapabilityMatchesSku:257-266`）。缺失则上架失败并返回**明确文案**（区分「无已发布连接器」与「连接器缺能力」两种）。
 7. 执行画像由 `AdapterMetadata.defaultExecutionProfile()` 注入（d2），注入后仍须自洽通过原跨字段校验（`requireExecutionCapabilities:163`）：`QUERY/QUERY_OR_CALLBACK` 或 `unknownResultPolicy==QUERY_ORDER`→须启用 `QUERY_ORDER`；`CALLBACK/QUERY_OR_CALLBACK` 或 `WAIT_CALLBACK`→须启用 `RECEIVE_CALLBACK`；`REPLAY_SAME_KEY`→`REPLAYABLE_RESULT`。适配器默认值不自洽属实现缺陷，测试 fail-fast。
 8. 库存来源必须 `ACTIVE`+`REMOTE_ON_DEMAND` 且 supplier/platformSku 匹配（`:153-159`）；c3 之下由上架事务自动开通并启用后立即满足；同 offer 已有匹配 ACTIVE 来源时**复用不重建**（`LambdaQueryWrapper` 查，避免多次上架堆积来源，AGENTS.md §8）。
@@ -233,7 +233,7 @@ default List<String> fulfillmentSteps() { return List.of(); }
 
 ### 6.8 adapterType 白名单灰度（j3 沿用）
 
-上架步骤 2 的连接器候选叠加 adapterType 白名单（配置来源，非硬编码字面量，AGENTS.md §7）：Phase 1 含 `QNM_GAME_ORDER_V1`（dogfood/集成测试）；`HUA_SHENG_ORDER_V1` 待其适配器 + 种子（`057+`）落地后加入白名单翻牌。QNM 无部署种子（仅测试态），故生产可履约供给实际随 HUA_SHENG 上线；白名单确保 UI 可先对 QNM 开发验证而不误导生产。
+上架步骤 2 的连接器候选叠加 adapterType 白名单（配置来源，非硬编码字面量，AGENTS.md §7）：Phase 1 含 `QNM_GAME_ORDER_V1`（dogfood/集成测试）；`HUA_SHENG_ORDER_V1` 待其适配器 + 种子（`058+`）落地后加入白名单翻牌。QNM 无部署种子（仅测试态），故生产可履约供给实际随 HUA_SHENG 上线；白名单确保 UI 可先对 QNM 开发验证而不误导生产。
 
 ## 7. REST 契约汇总（Phase 1 前端使用）
 
@@ -320,5 +320,29 @@ default List<String> fulfillmentSteps() { return List.of(); }
 ## 14. 与 HUA_SHENG 文协调（I1/②）
 
 - **地基单一出处**：`AdapterMetadata` 扩展 + AD-3 凭据集 + AD-5 `extra_config` 规格以**本文 §5 为准**，HUA_SHENG 文引用本文、不重复描述；两文对 `defaultExecutionProfile()`/`credentialKeys()`/`mappingTemplates()`/`fulfillmentSteps()` 签名与语义达成一致。
-- **变更集编号**：本文占 `053`–`056`；HUA_SHENG 主数据种子让位到 `057+`（其原 `050`/`051` 与现有 `050-project-standard-asset-audit`/`051-standard-quote-permanent-key` 冲突）；落地前对齐 `db.changelog-1.0.0.yaml` 登记顺序。
-- **上线排序**：QNM 仅测试态，本文 UI 对 QNM dogfood；生产可履约供给随 HUA_SHENG（适配器 + `057+` 种子 + 凭据集 + `extra_config`）落地后由白名单翻牌。技术菜单 UI 与 HUA_SHENG 适配器可并行推进，仅在 §5 地基与变更集编号上协调。
+- **变更集编号**：本文占 `053`–`057`（含评审修复）；HUA_SHENG 主数据种子让位到 `058+`（其原 `050`/`051` 与现有 `050-project-standard-asset-audit`/`051-standard-quote-permanent-key` 冲突）；落地前对齐 `db.changelog-1.0.0.yaml` 登记顺序。
+- **上线排序**：QNM 仅测试态，本文 UI 对 QNM dogfood；生产可履约供给随 HUA_SHENG（适配器 + `058+` 种子 + 凭据集 + `extra_config`）落地后由白名单翻牌。技术菜单 UI 与 HUA_SHENG 适配器可并行推进，仅在 §5 地基与变更集编号上协调。
+
+## 15. 评审修复（2026-10-03）
+
+### 15.1 凭据写入日志保护
+
+`/supply-chain/supplier-config/credential-items` 与 legacy `credential-slots`（含 `/admin-api` 前缀及部署 context path）统一作为敏感写入路径。Servlet 访问日志 Filter 不读取/保存请求正文与查询参数、不保存响应正文；非生产 Interceptor 只记路径与耗时；异常处理使用既有安全异常路径，不记录原始参数、异常消息与拒绝值。网关按相同 common 路径规则省略请求/响应正文与查询参数，转发正文保持原样。网关 JSON 脱敏集合补充 `secretValue`/`secretRef` 作为防御补充。审计保留非秘密业务字段；不关闭整站日志，不改变其它模块安全或 RPC 配置。
+
+### 15.2 技术子页刷新
+
+连接器创建、校验、发布、退役成功后，连接器面板发出 `changed`，父页提升配置修订号；能力与映射子页监听修订号并重新加载连接器列表及当前选中详情。切换技术标签同样提升修订号，以便加载其他会话产生的新配置。保留有效选择，若连接器已不存在则清空选择与详情。供应商切换仍通过已有 key 隔离。此方案不依赖首次懒挂载，已访问的标签也会刷新。
+
+### 15.3 能力声明契约
+
+沿用后端 `ConnectorValidationService` 的完整集合契约：校验声明必须等于所选适配器 `capabilities()`。前端打开校验对话框时复制完整能力集合，展示只读勾选与明确说明，提交前再次验证集合一致且非空；适配器目录加载失败时不得发送空声明。此次不引入可选能力子集，不改变执行画像和能力缺口语义。
+
+### 15.4 退役商品释放外部编码
+
+不修改已交付 053 的内容或校验和。新增 `057-offer-live-external-sku-code.sql`：生成列 `live_external_sku_code` 对 `status != RETIRED(90)` 返回原 `external_sku_code`，退役行返回 NULL；同一 ALTER 中替换原唯一键为 `(supplier_id, live_external_sku_code)`。草稿、发布、暂停状态均占用编码；退役行保留原编码和不可变历史版本，但允许新身份重用。053 的全行唯一约束已经保证存量数据满足新约束，无需删除或重写历史数据。HUA_SHENG 尚未实施的种子/能力 CHECK 顺延为 058/059。
+
+已上架商品退役后仍可能保留 `sc_supplier_external_sku_binding`。新商品发布时，在同一发布事务中核对冲突绑定所指身份：仅原身份存在且为 RETIRED 时移除旧绑定并写入新绑定；非退役或身份缺失仍拒绝。绑定为当前可用供给索引，历史履约依据原 Offer 版本，不修改历史版本或订单冻结字段。唯一键仍裁决并发；发布后续失败时旧绑定删除与新版本一并回滚。
+
+### 15.5 回归门禁
+
+供应链自动化覆盖：真实 MySQL/Liquibase 057 升级与重复迁移、未退役冲突/跨供应商/NULL/退役释放；未上架商品移除→同码重建；已上架商品移除→同码重建→上架，新绑定指向新版本且旧身份/版本仍在；发布失败时旧绑定回滚。安全链路用供应链测试直接执行 Servlet Filter/Interceptor/异常处理及网关实际日志组装，验证模拟密钥在成功/失败、非法 JSON、带 context path 时均不落日志，转发正文不变。共享 common 与网关模块编译；供应链全量单测和架构门禁照常执行。前端使用真实 Vue SFC setup + renderer 验证修订号触发列表/详情刷新、保留/清空选择，以及校验提交完整集合、目录缺失拒绝提交；再跑现有 Node 测试、改动文件 lint 与构建。联调步骤维护于 `docs/集成测试.md`。

@@ -79,15 +79,14 @@ public class AccessLogFilter implements GlobalFilter, Ordered {
         // 方式三：打印到控制台，方便排查错误
         try {
             boolean openMallPath = AccessLogSanitizeUtils.isOpenMallPath(gatewayLog.getRequestUrl());
-            boolean standardOrderPath = AccessLogSanitizeUtils.isStandardOrdersPath(gatewayLog.getRequestUrl());
-            boolean omitBody = openMallPath || standardOrderPath;
+            boolean omitBody = openMallPath || AccessLogSanitizeUtils.isProtectedBodyPath(gatewayLog.getRequestUrl());
             Map<String, Object> values = MapUtil.newHashMap(15, true); // 手工拼接，保证排序；15 保证不用扩容
             values.put("userId", gatewayLog.getUserId());
             values.put("userType", gatewayLog.getUserType());
             values.put("routeId", gatewayLog.getRoute() != null ? gatewayLog.getRoute().getId() : null);
             values.put("schema", gatewayLog.getSchema());
             values.put("requestUrl", gatewayLog.getRequestUrl());
-            values.put("queryParams", standardOrderPath ? null : (gatewayLog.getQueryParams() != null
+            values.put("queryParams", omitBody ? null : (gatewayLog.getQueryParams() != null
                     ? gatewayLog.getQueryParams().toSingleValueMap() : null));
             // 开放接口与标准订单禁止记录原始请求体；其它路由对 JSON 做递归脱敏（不改动转发 body）
             values.put("requestBody", omitBody ? AccessLogSanitizeUtils.BODY_OMITTED
@@ -120,11 +119,11 @@ public class AccessLogFilter implements GlobalFilter, Ordered {
 
     @Override
     public Mono<Void> filter(ServerWebExchange exchange, GatewayFilterChain chain) {
-        // 标准订单路径直接透传原流，不读取或缓存正文，不装饰响应缓冲卡密
+        // 标准订单及凭据写入路径直接透传原流，不读取或缓存正文，不装饰响应缓冲卡密
         ServerHttpRequest request = exchange.getRequest();
         String rawPath = request.getURI().getRawPath();
-        if (AccessLogSanitizeUtils.isStandardOrdersPath(rawPath)) {
-            return filterStandardOrder(exchange, chain);
+        if (AccessLogSanitizeUtils.isProtectedBodyPath(rawPath)) {
+            return filterProtectedBody(exchange, chain);
         }
 
         // 将 Request 中可以直接获取到的参数，设置到网关日志
@@ -149,29 +148,32 @@ public class AccessLogFilter implements GlobalFilter, Ordered {
     }
 
     /**
-     * 标准订单路径专用分支：在任何 bodyToMono/codec/buffer 操作之前直接透传原请求与响应流，
+     * 标准订单及供应商凭据写入路径专用分支：在任何 bodyToMono/codec/buffer 操作之前直接透传原请求与响应流，
      * 仅在完成或异常时采集 method、注册操作路径、route、状态、耗时等安全元数据，
      * 保证签名正文与卡密响应不经过任何读取、重编码或缓冲。
-     * 设计见 {@code docs/superpowers/specs/2026-10-02-standard-project-http-transport-design.md#3-gateway精确路由与不消费正文}。
+     * 设计见 {@code docs/superpowers/specs/2026-10-02-standard-project-http-transport-design.md#3-gateway精确路由与不消费正文}
+     * 及 {@code docs/superpowers/specs/2026-10-03-supplier-offer-publication-admin-design.md#151-凭据写入日志保护}。
      */
-    private Mono<Void> filterStandardOrder(ServerWebExchange exchange, GatewayFilterChain chain) {
+    private Mono<Void> filterProtectedBody(ServerWebExchange exchange, GatewayFilterChain chain) {
         ServerHttpRequest request = exchange.getRequest();
         AccessLog gatewayLog = new AccessLog();
         gatewayLog.setRoute(WebFrameworkUtils.getGatewayRoute(exchange));
         gatewayLog.setSchema(request.getURI().getScheme());
         gatewayLog.setRequestMethod(request.getMethod().name());
-        gatewayLog.setRequestUrl(AccessLogSanitizeUtils.safeStandardOrderUrl(request.getURI().getRawPath()));
+        String rawPath = request.getURI().getRawPath();
+        gatewayLog.setRequestUrl(AccessLogSanitizeUtils.isStandardOrdersPath(rawPath)
+                ? AccessLogSanitizeUtils.safeStandardOrderUrl(rawPath) : rawPath);
         gatewayLog.setStartTime(LocalDateTime.now());
         gatewayLog.setUserIp(WebFrameworkUtils.getClientIP(exchange));
         gatewayLog.setRequestBody(AccessLogSanitizeUtils.BODY_OMITTED);
         gatewayLog.setResponseBody(AccessLogSanitizeUtils.BODY_OMITTED);
 
         return chain.filter(exchange)
-                .doFinally(signal -> finishStandardOrderLog(exchange, gatewayLog, signal));
+                .doFinally(signal -> finishProtectedBodyLog(exchange, gatewayLog, signal));
     }
 
-    /** 标准订单透传分支的统一收尾：补齐耗时与状态后写安全访问日志，成功与异常共用同一逻辑。 */
-    private void finishStandardOrderLog(ServerWebExchange exchange, AccessLog gatewayLog, SignalType signal) {
+    /** 敏感正文透传分支的统一收尾：补齐耗时与状态后写安全访问日志，成功与异常共用同一逻辑。 */
+    private void finishProtectedBodyLog(ServerWebExchange exchange, AccessLog gatewayLog, SignalType signal) {
         gatewayLog.setEndTime(LocalDateTime.now());
         gatewayLog.setDuration((int) java.time.Duration.between(gatewayLog.getStartTime(), gatewayLog.getEndTime()).toMillis());
         HttpStatus fallback = signal == SignalType.ON_ERROR ? HttpStatus.INTERNAL_SERVER_ERROR : HttpStatus.OK;

@@ -750,3 +750,15 @@ databaseChangeLog:
             encoding: UTF-8
             splitStatements: true
             stripComments: false
+  - changeSet:
+      id: 057-offer-live-external-sku-code
+      author: supply-chain
+      # 未退役身份行占用外部编码，退役行保留原值但释放唯一槽；不修改已交付053校验和。
+      # 设计见 docs/superpowers/specs/2026-10-03-supplier-offer-publication-admin-design.md#134-退役商品释放外部编码
+      changes:
+        - sqlFile:
+            path: 057-offer-live-external-sku-code.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false

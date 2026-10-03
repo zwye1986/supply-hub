@@ -259,6 +259,45 @@ class OfferListOnShelfIntegrationTest {
             assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_supplier_external_sku_binding "
                     + "WHERE offer_id = ?", Long.class, listed.getId())).isEqualTo(1L);
 
+            // 057：未上架商品移除后同码重建，旧身份保留；能力缺口继续按原守卫拒绝。
+            offers.retire(supplierCode, boundOfferNo, 1L);
+            String rebuiltBound = offers.createPublished(supplierCode, List.of(new DraftLine(
+                    BOUND_SKU, "FIXED", 8_800L, null, null, "API_DIRECT", 300L, 1L,
+                    "QNM-BOUND-100")), 1L).getFirst();
+            assertThat(rebuiltBound).isNotEqualTo(boundOfferNo);
+
+            // 已上架商品移除→重建→上架：回收旧当前绑定，不改原身份和两个历史版本。
+            offers.retire(supplierCode, directOfferNo, 1L);
+            String replacement = offers.createPublished(supplierCode, List.of(new DraftLine(
+                    DIRECT_SKU, "FIXED", 9_400L, null, null, "API_DIRECT", 500L, 1L,
+                    DIRECT_EXTERNAL_CODE)), 1L).getFirst();
+            org.springframework.transaction.support.TransactionTemplate rollback =
+                    new org.springframework.transaction.support.TransactionTemplate(context.getBean(
+                            "supplyChainTransactionManager", org.springframework.transaction.PlatformTransactionManager.class));
+            assertThatThrownBy(() -> rollback.executeWithoutResult(status -> {
+                offerPublication.listOnShelf(new ListOnShelfCommand(
+                        supplierCode, replacement, null, 1L, "trace-rollback", null, null));
+                throw new IllegalStateException("测试发布后续失败，必须恢复旧绑定");
+            })).isInstanceOf(IllegalStateException.class).hasMessage("测试发布后续失败，必须恢复旧绑定");
+            assertThat(jdbc.queryForObject("SELECT offer_id FROM sc_supplier_external_sku_binding "
+                    + "WHERE external_sku_code = ?", Long.class, DIRECT_EXTERNAL_CODE)).isEqualTo(listed.getId());
+            assertThat(offerMapper.selectByNo(replacement).getCurrentVersionId()).isNull();
+
+            PublishResult replacementResult = offerPublication.listOnShelf(new ListOnShelfCommand(
+                    supplierCode, replacement, null, 1L, "trace-replacement", null, null));
+            SupplierOfferDO replacementOffer = offerMapper.selectByNo(replacement);
+            assertThat(jdbc.queryForObject("SELECT offer_id FROM sc_supplier_external_sku_binding "
+                    + "WHERE external_sku_code = ?", Long.class, DIRECT_EXTERNAL_CODE))
+                    .isEqualTo(replacementOffer.getId());
+            assertThat(jdbc.queryForObject("SELECT offer_version_id FROM sc_supplier_external_sku_binding "
+                    + "WHERE offer_id = ?", Long.class, replacementOffer.getId()))
+                    .isEqualTo(replacementResult.offerVersionId());
+            assertThat(offerMapper.selectByNo(directOfferNo).getStatus()).isEqualTo(OfferStatus.RETIRED.getCode());
+            assertThat(offerVersionMapper.selectById(version.getId())).isEqualTo(version);
+            assertThat(offerVersionMapper.selectById(secondVersion.getId())).isEqualTo(secondVersion);
+            assertThat(offerMapper.selectPublishedBySupplierAndSku(supplierId, directSkuId))
+                    .extracting(SupplierOfferDO::getId).containsExactly(replacementOffer.getId());
+
             // 凭据密钥永不入库（F1-hybrid 护栏，§2 不变量 11）。
             assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_credential_slot "
                     + "WHERE secret_ref LIKE ?", Long.class, "%" + TEST_SECRET + "%")).isZero();

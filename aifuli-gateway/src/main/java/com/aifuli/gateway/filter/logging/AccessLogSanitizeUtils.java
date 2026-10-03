@@ -41,6 +41,15 @@ public final class AccessLogSanitizeUtils {
     }
 
     /**
+     * 凭据写入与标准订单使用同一不消费正文分支，日志不读取查询参数、请求/响应流。
+     * 设计见 docs/superpowers/specs/2026-10-03-supplier-offer-publication-admin-design.md#151-凭据写入日志保护。
+     */
+    public static boolean isProtectedBodyPath(String requestUrl) {
+        return isStandardOrdersPath(requestUrl)
+                || ApiAccessLogPathUtils.isSupplierCredentialWritePath(requestUrl, "");
+    }
+
+    /**
      * 安全的标准订单请求路径，避免在未知路径中泄漏可能夹带的敏感参数。
      */
     public static String safeStandardOrderUrl(String requestUrl) {
@@ -65,6 +74,8 @@ public final class AccessLogSanitizeUtils {
             "h5url",
             "sign",
             "secretkey",
+            "secretvalue",
+            "secretref",
             "apikey",
             "password"
     );

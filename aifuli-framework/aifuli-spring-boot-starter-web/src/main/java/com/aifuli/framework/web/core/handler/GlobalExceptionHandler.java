@@ -406,10 +406,9 @@ public class GlobalExceptionHandler {
      */
     private CommonResult<?> handleSensitiveSystemException(HttpServletRequest req, Throwable ex, SensitivePathKind kind) {
         boolean standardOrder = kind == SensitivePathKind.STANDARD_ORDER;
-        if (standardOrder) {
-            ensureNoStore();
-        }
+        if (standardOrder || kind == SensitivePathKind.SUPPLIER_CREDENTIAL) { ensureNoStore(); }
         if (isParameterFailure(ex)) {
+            if (kind == SensitivePathKind.SUPPLIER_CREDENTIAL) { return safeCredentialParameterFailure(ex); }
             return standardOrder ? safeStandardOrderParameterFailure(ex) : safeParameterFailure(ex);
         }
         if (ex instanceof ServiceException service) {
@@ -418,7 +417,11 @@ public class GlobalExceptionHandler {
         if (ex.getCause() instanceof ServiceException service) {
             return CommonResult.error(service.getCode(), service.getMessage());
         }
-        String label = standardOrder ? "[标准订单系统异常]" : "[限频管理系统异常]";
+        String label = switch (kind) {
+            case STANDARD_ORDER -> "[标准订单系统异常]";
+            case SUPPLIER_CREDENTIAL -> "[供应商凭据系统异常]";
+            default -> "[限频管理系统异常]";
+        };
         log.error("{} types={}, traceId={}", label, SensitiveExceptionLogUtils.types(ex), TracerUtils.getTraceId());
         createExceptionLog(req, ex);
         return CommonResult.error(INTERNAL_SERVER_ERROR);
@@ -470,7 +473,9 @@ public class GlobalExceptionHandler {
         errorLog.setTraceId(TracerUtils.getTraceId());
         errorLog.setApplicationName(applicationName);
         String requestUrl;
-        if (frequency) {
+        if (kind == SensitivePathKind.SUPPLIER_CREDENTIAL) {
+            requestUrl = "/supply-chain/supplier-config/[credential-protected]";
+        } else if (frequency) {
             requestUrl = "/supply-chain/recharge-frequency/[protected]";
         } else if (standardOrder) {
             requestUrl = ApiAccessLogPathUtils.safeStandardOrderUrl(request.getRequestURI(), request.getContextPath());
@@ -493,10 +498,10 @@ public class GlobalExceptionHandler {
      * 普通路径不受影响。分类只认登记的精确路径，避免相似前缀误伤。
      */
     private enum SensitivePathKind {
-        STANDARD_ORDER, RECHARGE_FREQUENCY, NONE
+        STANDARD_ORDER, RECHARGE_FREQUENCY, SUPPLIER_CREDENTIAL, NONE
     }
 
-    /** 只保护登记的标准订单路径与限频管理路径，八个进程其他路径保持原有错误契约。设计见
+    /** 只保护登记的标准订单、限频管理与供应商凭据写入路径，八个进程其他路径保持原有错误契约。设计见
      * {@code docs/superpowers/specs/2026-10-02-standard-project-http-transport-design.md#4-共享web保护与影响范围}、
      * {@code docs/superpowers/specs/2026-09-30-direct-recharge-mobile-spu-frequency-design.md#7-管理端契约与权限}。 */
     private static SensitivePathKind classifySensitivePath(HttpServletRequest request) {
@@ -509,6 +514,9 @@ public class GlobalExceptionHandler {
         if (ApiAccessLogPathUtils.isRechargeFrequencyAdminPath(request.getRequestURI(), request.getContextPath())) {
             return SensitivePathKind.RECHARGE_FREQUENCY;
         }
+        if (ApiAccessLogPathUtils.isSupplierCredentialWritePath(request.getRequestURI(), request.getContextPath())) {
+            return SensitivePathKind.SUPPLIER_CREDENTIAL;
+        }
         return SensitivePathKind.NONE;
     }
 
@@ -519,6 +527,7 @@ public class GlobalExceptionHandler {
      */
     private static CommonResult<?> safeParameterFailureIfSensitive(HttpServletRequest request, Throwable ex) {
         SensitivePathKind kind = classifySensitivePath(request);
+        if (kind == SensitivePathKind.SUPPLIER_CREDENTIAL) { return safeCredentialParameterFailure(ex); }
         if (kind == SensitivePathKind.STANDARD_ORDER) { return safeStandardOrderParameterFailure(ex); }
         if (kind == SensitivePathKind.RECHARGE_FREQUENCY) { return safeParameterFailure(ex); }
         return null;
@@ -531,6 +540,11 @@ public class GlobalExceptionHandler {
      */
     private static CommonResult<?> safeErrorResponseIfSensitive(HttpServletRequest request, Throwable ex, ErrorCode errorCode) {
         SensitivePathKind kind = classifySensitivePath(request);
+        if (kind == SensitivePathKind.SUPPLIER_CREDENTIAL) {
+            ensureNoStore();
+            log.warn("[供应商凭据HTTP错误] type={}, traceId={}", ex.getClass().getSimpleName(), TracerUtils.getTraceId());
+            return CommonResult.error(errorCode);
+        }
         if (kind == SensitivePathKind.STANDARD_ORDER) {
             ensureNoStore();
             log.warn("[标准订单HTTP错误] type={}, traceId={}", ex.getClass().getSimpleName(), TracerUtils.getTraceId());
@@ -549,6 +563,11 @@ public class GlobalExceptionHandler {
      */
     private static CommonResult<?> safeBusinessRejectionIfSensitive(HttpServletRequest request, ServiceException ex) {
         SensitivePathKind kind = classifySensitivePath(request);
+        if (kind == SensitivePathKind.SUPPLIER_CREDENTIAL) {
+            ensureNoStore();
+            log.warn("[供应商凭据业务拒绝] code={}, traceId={}", ex.getCode(), TracerUtils.getTraceId());
+            return CommonResult.error(ex.getCode(), ex.getMessage());
+        }
         if (kind == SensitivePathKind.STANDARD_ORDER) {
             ensureNoStore();
             log.warn("[标准订单业务拒绝] code={}, message={}, traceId={}", ex.getCode(), ex.getMessage(), TracerUtils.getTraceId());
@@ -568,6 +587,14 @@ public class GlobalExceptionHandler {
         if (response != null) {
             response.setHeader("Cache-Control", "no-store");
         }
+    }
+
+    /** 凭据参数异常可携带明文拒绝值，只保留类型和链路标识。设计见
+     * {@code docs/superpowers/specs/2026-10-03-supplier-offer-publication-admin-design.md#151-凭据写入日志保护}。 */
+    private static CommonResult<?> safeCredentialParameterFailure(Throwable ex) {
+        ensureNoStore();
+        log.warn("[供应商凭据参数错误] type={}, traceId={}", ex.getClass().getSimpleName(), TracerUtils.getTraceId());
+        return CommonResult.error(BAD_REQUEST.getCode(), "请求参数不正确");
     }
 
     private static CommonResult<?> safeStandardOrderParameterFailure(Throwable ex) {

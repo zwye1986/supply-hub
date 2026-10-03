@@ -160,7 +160,10 @@ public class ApiAccessLogFilter extends ApiRequestFilter {
             accessLog.setRequestParams(toJsonString(requestParams));
         }
         // 标准订单强制禁止记录响应正文，杜绝卡密交付明文被访问日志记录
-        Boolean responseEnable = standardOrder ? Boolean.FALSE
+        // 凭据写入成功、绑定错误与系统异常均不允许保存响应正文，避免错误报文夹带拒绝值。
+        // 设计见 docs/superpowers/specs/2026-10-03-supplier-offer-publication-admin-design.md#151-凭据写入日志保护。
+        Boolean responseEnable = (standardOrder || ApiAccessLogPathUtils.isSupplierCredentialWritePath(
+                request.getRequestURI(), request.getContextPath())) ? Boolean.FALSE
                 : accessLogAnnotation != null ? accessLogAnnotation.responseEnable() : Boolean.FALSE;
         if (BooleanUtil.isTrue(responseEnable)) { // 默认不记录，默认强制要求 true
             accessLog.setResponseBody(sanitizeJson(result, sanitizeKeys));

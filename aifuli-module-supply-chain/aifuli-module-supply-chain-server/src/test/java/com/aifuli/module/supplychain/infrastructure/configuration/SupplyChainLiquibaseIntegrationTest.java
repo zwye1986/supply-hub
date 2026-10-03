@@ -179,9 +179,9 @@ class SupplyChainLiquibaseIntegrationTest {
                 "expire_at:DATETIME:-:3:NO");
         assertThat(firstStartup.projectAuthNoncePrimaryKeyColumns())
                 .containsExactly("app_id", "nonce");
-        // 052-standard-order-project-key 后基线为 54 个变更集；标准订单/回执双生成列唯一键、购买人身份列删除。
-        // 设计见 docs/superpowers/specs/2026-10-02-standard-acceptance-project-key-design.md#5-052增量历史清理与安全覆盖。
-        assertThat(firstStartup.changeSetCount()).isEqualTo(54L);
+        // 057 后基线为 59 个变更集（含 054 新增的凭据集/项两表），启动重放不可重复执行。
+        // 设计见 docs/superpowers/specs/2026-10-03-supplier-offer-publication-admin-design.md#155-回归门禁。
+        assertThat(firstStartup.changeSetCount()).isEqualTo(59L);
         assertThat(firstStartup.uniqueIndexes())
                 .contains("sc_instore_payment_flow.uk_sc_instore_flow_order",
                         "sc_instore_channel_user_binding.uk_sc_instore_user_binding_project",
@@ -253,14 +253,15 @@ class SupplyChainLiquibaseIntegrationTest {
                         FROM information_schema.COLUMNS
                         WHERE TABLE_SCHEMA = DATABASE()
                           AND TABLE_NAME LIKE 'sc\\_%'
-                        """)).isEqualTo(121L);
+                        """)).isEqualTo(123L);
+                // 054 凭据集/项各增加 2 个 Asia/Shanghai DATETIME(3)，原 291 列增加至 295。
                 assertThat(queryLong(connection, """
                         SELECT COUNT(*)
                         FROM information_schema.COLUMNS
                         WHERE TABLE_SCHEMA = DATABASE()
                           AND TABLE_NAME LIKE 'sc\\_%'
                           AND DATA_TYPE = 'datetime'
-                        """)).isEqualTo(291L);
+                        """)).isEqualTo(295L);
                 assertThat(queryLong(connection, """
                         SELECT COUNT(*)
                         FROM information_schema.COLUMNS

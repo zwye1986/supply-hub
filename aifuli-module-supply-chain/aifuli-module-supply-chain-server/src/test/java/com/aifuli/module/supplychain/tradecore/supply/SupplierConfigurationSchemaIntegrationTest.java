@@ -22,9 +22,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * 供给发布共享地基 DDL（变更集 053-056）的真实 MySQL 模式不变量验证。
+ * 供给发布共享地基 DDL（变更集 053-057）的真实 MySQL 模式不变量验证。
  *
- * <p>锁定四条地基约束：f1 供应商外部商品编码每供应商唯一（053）、AD-3 凭据集/项建表与唯一键（054）、
+ * <p>锁定四条地基约束：f1 未退役商品外部编码每供应商唯一（053/057）、AD-3 凭据集/项建表与唯一键（054）、
  * AD-5 连接器版本 {@code extra_config} 可空 JSON 列（055）、D1 每供应商至多一个已发布连接器
  * （{@code current_version_id} 非空）的 {@code published_flag} 生成列唯一键（056）。设计见
  * {@code docs/superpowers/specs/2026-10-03-supplier-offer-publication-admin-design.md#5-共享地基规格唯一出处与-hua_sheng-文共建i1}。</p>
@@ -44,19 +44,29 @@ class SupplierConfigurationSchemaIntegrationTest {
             MYSQL.start();
         }
         DataSource dataSource = dataSource();
+        jdbc = new JdbcTemplate(dataSource);
         try (Connection connection = dataSource.getConnection()) {
             Database database = DatabaseFactory.getInstance()
                     .findCorrectDatabaseImplementation(new JdbcConnection(connection));
             try (Liquibase liquibase = new Liquibase(
                     "db/changelog/db.changelog-master.yaml",
                     new ClassLoaderResourceAccessor(), database)) {
+                // 先重放至 056（58 个已登记变更集），植入退役历史，验证 057 的存量升级及重复启动。
+                // 设计见 docs/superpowers/specs/2026-10-03-supplier-offer-publication-admin-design.md#154-退役商品释放外部编码。
+                liquibase.update(58, new Contexts(), new LabelExpression());
+                insertOffer(900_051L, "OFR_PRE_057", "EXT-PRE-057");
+                jdbc.update("UPDATE sc_supplier_offer SET status = 90 WHERE offer_no = 'OFR_PRE_057'");
                 liquibase.update(new Contexts(), new LabelExpression());
+                liquibase.update(new Contexts(), new LabelExpression());
+                assertThat(jdbc.queryForObject("SELECT external_sku_code FROM sc_supplier_offer "
+                        + "WHERE offer_no = 'OFR_PRE_057'", String.class)).isEqualTo("EXT-PRE-057");
+                insertOffer(900_051L, "OFR_POST_057", "EXT-PRE-057");
+                assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM DATABASECHANGELOG", Long.class)).isEqualTo(59L);
             }
         }
-        jdbc = new JdbcTemplate(dataSource);
     }
 
-    /** 053：同一供应商下 external_sku_code 唯一；历史/未录入的多行 NULL 不冲突，跨供应商可复用同码。 */
+    /** 053/057：同一供应商下未退役 external_sku_code 唯一；历史/未录入的多行 NULL 不冲突，跨供应商可复用同码。 */
     @Test
     void externalSkuCodeIsUniquePerSupplierButNullable() {
         long supplierId = 900_101L;
@@ -67,6 +77,26 @@ class SupplierConfigurationSchemaIntegrationTest {
         insertOffer(supplierId, "OFR_EXT_NULL_1", null);
         insertOffer(supplierId, "OFR_EXT_NULL_2", null);
         insertOffer(supplierId + 1, "OFR_EXT_OTHER", "EXT-1");
+    }
+
+    /** 057：退役行保留原编码但释放唯一槽；草稿、发布和暂停仍互斥。 */
+    @Test
+    void retiredOfferReleasesExternalSkuWithoutErasingHistory() {
+        long supplierId = 900_151L;
+        insertOffer(supplierId, "OFR_RETIRED", "EXT-REUSE");
+        jdbc.update("UPDATE sc_supplier_offer SET status = 90 WHERE offer_no = 'OFR_RETIRED'");
+        insertOffer(supplierId, "OFR_REPLACEMENT", "EXT-REUSE");
+        assertThat(jdbc.queryForObject("SELECT external_sku_code FROM sc_supplier_offer "
+                + "WHERE offer_no = 'OFR_RETIRED'", String.class)).isEqualTo("EXT-REUSE");
+        for (short status : new short[]{0, 10, 20}) {
+            jdbc.update("UPDATE sc_supplier_offer SET status = ? WHERE offer_no = 'OFR_REPLACEMENT'", status);
+            assertThatThrownBy(() -> insertOffer(supplierId, "OFR_DUPLICATE", "EXT-REUSE"))
+                    .isInstanceOf(DuplicateKeyException.class);
+        }
+        jdbc.update("UPDATE sc_supplier_offer SET status = 90 WHERE offer_no = 'OFR_REPLACEMENT'");
+        insertOffer(supplierId, "OFR_REPLACEMENT_2", "EXT-REUSE");
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_supplier_offer WHERE supplier_id = ? "
+                + "AND external_sku_code = 'EXT-REUSE'", Long.class, supplierId)).isEqualTo(3L);
     }
 
     /** 054：凭据集 (supplier_id,set_code) 唯一、凭据项 (credential_set_id,item_key) 唯一。 */
