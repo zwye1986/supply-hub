@@ -256,7 +256,7 @@ default List<String> fulfillmentSteps() { return List.of(); }
 
 ### 8.1 技术菜单（A1，新顶级菜单）
 
-- 新顶级菜单「供应商履约技术配置」，`script/deploy` 部署 SQL 写入 system 库（供应链不写 system 表，AGENTS.md）；菜单/按钮按 `supply-chain:admin` 显隐（H2，`checkPermi`/`v-hasPermi`）。
+- 新顶级菜单「供应商履约技术配置」，由 `aifuli-module-system-server` 的 Liquibase 变更集 `013-supplier-fulfillment-config-menu`（`013-supplier-fulfillment-config-menu.sql`）管理并在下次部署时自动执行落库；同时保留 `script/deploy` 下的同名幂等部署脚本；供应链服务不跨库访问 system 表（AGENTS.md）。菜单/按钮按 `supply-chain:admin` 显隐（H2，`checkPermi`/`v-hasPermi`）。
 - 入口按 `supplierCode` 维度（选供应商 → 4 子页）。
 - 新 api 模块 `src/api/supplier/config/`（`index.ts`+`types.ts`，按 `src/api/supplier/manage/` 约定，`import request from '@/config/axios'`，URL 前缀 `/supply-chain/supplier-config`，每方法 JSDoc 注明后端路由；`as const` 权限常量）。
 

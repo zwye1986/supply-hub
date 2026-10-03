@@ -10,13 +10,16 @@ import java.util.List;
 @Data
 public class BuyerCatalogChangeBatchRespDTO implements Serializable {
 
+    /** 本批变更 */
     @Schema(description = "本批变更", requiredMode = Schema.RequiredMode.REQUIRED)
     private List<BuyerCatalogChangeRespDTO> changes;
 
+    /** 本批处理完成后应持久化的游标 */
     @Schema(description = "本批处理完成后应持久化的游标", requiredMode = Schema.RequiredMode.REQUIRED,
             example = "128")
     private Long nextCursor;
 
+    /** 是否仍有后续变更 */
     @Schema(description = "是否仍有后续变更", requiredMode = Schema.RequiredMode.REQUIRED, example = "false")
     private Boolean hasMore;
 }

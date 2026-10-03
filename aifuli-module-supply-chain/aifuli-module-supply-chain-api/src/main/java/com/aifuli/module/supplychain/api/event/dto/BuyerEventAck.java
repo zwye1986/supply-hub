@@ -10,18 +10,30 @@ import java.time.OffsetDateTime;
 @Data
 public class BuyerEventAck implements Serializable {
 
-    @Schema(description = "被确认的事件号", requiredMode = Schema.RequiredMode.REQUIRED,
+    /**
+     * 被消费的Outbox事件稳定业务编号
+     */
+    @Schema(description = "被消费的Outbox事件稳定业务编号", requiredMode = Schema.RequiredMode.REQUIRED,
             example = "EVT_01K1XXXXXXXXXXXXXXXXXXXXX")
     private String eventId;
 
-    @Schema(description = "接收结果", requiredMode = Schema.RequiredMode.REQUIRED,
+    /**
+     * 采购商商城事件接收结果：ACCEPTED-已接收
+     */
+    @Schema(description = "采购商商城事件接收结果：ACCEPTED-已接收", requiredMode = Schema.RequiredMode.REQUIRED,
             example = "ACCEPTED")
     private BuyerEventAckStatus status;
 
-    @Schema(description = "商城已经应用或保留的详情版本", example = "3")
+    /**
+     * 采购商商城已经应用或保留的详情版本
+     */
+    @Schema(description = "采购商商城已经应用或保留的详情版本", example = "3")
     private Long detailVersion;
 
-    @Schema(description = "商城完成持久化处理的时间", requiredMode = Schema.RequiredMode.REQUIRED,
+    /**
+     * 商城完成持久化处理的时间，Asia/Shanghai
+     */
+    @Schema(description = "商城完成持久化处理的时间，Asia/Shanghai", requiredMode = Schema.RequiredMode.REQUIRED,
             example = "2026-08-11T02:31:01Z")
     private OffsetDateTime processedAt;
 }
