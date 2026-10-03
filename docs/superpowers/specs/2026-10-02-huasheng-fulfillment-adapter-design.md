@@ -147,6 +147,8 @@ public record OperationTicket(
 
 **决策**：`HuashengTokenManager` 置于 `border.fulfillment.application`，不放在 `supplieradapter`。
 
+2026-10-04隔离通信切片的可实施规格见`2026-10-04-huasheng-http-token-parser-design.md#8-tokenmanager缓存与有界-61`，已通过独立规格复审。该规格保留本AD的应用所有权，由应用CommunicationFacade组合manager、builder、transport和parser，token仅入当次请求构造；下面TokenAuthenticatedExecutor与ExecuteHandler注入示例是旧生产接线草案，不在A实施。真实Timer接线须在Task3-C另行定案，不能把示例当已实现接口。
+
 **理由**：适配器只做协议转换；token 缓存是横切关注点。
 
 **契约**：
@@ -569,4 +571,4 @@ Task3拆为三个仍未实施的规格切片：A为隔离HTTP/token/严格parser
 
 #### 12.6.3 下一切片仍须先定案的设计
 
-协议基本语义缺口已由正式资料和用户补充解决，尚未完成可实施的多步骤/回调规格：持久化checkpoint金额来源、旧认领/恢复代次围栏、QUERY后PLACE/CONFIRM/TAKE恢复、未知结果截止与人工处置、token缓存隔离和有界61重试、type额外字段无损表达、validTime保真、回调冻结版本定位与防重都须写清并审查。第一张目标为固定价/一张卡号卡密；其余类型不允许丢字段后标成功。未注册 HUA_SHENG metadata、未写执行器、未做供应商调用，不标Task3–6完成。
+协议基本语义缺口已由正式资料和用户补充解决；隔离HTTP/token/严格parser及协议卡片保真详细设计已完成并独立复审通过，见`2026-10-04-huasheng-http-token-parser-design.md`，尚未实施。它细化有界61、缓存身份、validTime及七型协议DTO，保留AD-4分层；7200秒缓存接受上限是本地策略，不能冒称官方上限。仍未完成生产多步骤/回调规格：持久化checkpoint金额来源、旧认领/恢复代次围栏、QUERY后PLACE/CONFIRM/TAKE恢复、未知结果截止与人工处置、分布式授权协调、冻结凭据项身份真实投影、类型化协议卡片到资产的无损桥接、回调冻结版本定位与防重。第一张目标为固定价/type201一张卡号卡密；其余尚未桥接类型失败关闭，不要求首单先实现全部七型资产业务。未注册 HUA_SHENG metadata、未写执行器、未做供应商调用，不标Task3–6完成。
