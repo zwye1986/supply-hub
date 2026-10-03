@@ -84,7 +84,7 @@ CARD_CODE_SECRET 不受这个具体问题影响；项目资产 decoder 兼容 ca
 
 ## 5. 需运行环境核验的条件风险
 
-- **菜单组件：** `script/deploy/aifuli-test/sql/system-supply-chain-admin-menus.sql:181`、`:197` 指向 supplier/order/index，前端该文件不存在，实际是 supplier/order/platform/index.vue 等；routerHelper:186 起找不到组件返回 undefined。若运行环境使用该 SQL，订单页不可正常加载；实际 system 菜单未知。菜单修复由部署 SQL 写 system 库，不允许供应链进程跨库修改。
+- **菜单组件：** `script/deploy/aifuli-test/sql/system-supply-chain-admin-menus.sql:181`、`:197` 指向 supplier/order/index，前端该文件不存在，实际是 supplier/order/platform/index.vue 等；同一SQL的`:226`、`:229`、`:231`、`:233`指向不存在的supplier/product-center目录，商品/分类/品牌/类型实际为supplier/product/list、category、brand、type/index.vue。routerHelper:186 起找不到组件返回 undefined。若运行环境使用该 SQL，商品中心四页与订单页不可正常加载；实际 system 菜单未知。菜单修复由部署 SQL 写 system 库，不允许供应链进程跨库修改。
 - **适配器白名单：** AdapterTypeAllowList 默认空且 fail-closed，上架检查名单；仓库配置未找到生产设置。外部 Nacos/ENV 可注入，因此只列联调前置核对，不断言现网缺配置。
 - **外呼约束：** 核对独立供应链进程实际 endpoint allow-hosts、凭据 ENV 与网络许可，不读取或输出秘密。
 - **权限体验：** 路由写按钮没有前端权限门控、下拉请求异常变空数组；Controller 有权限，属于体验与诊断问题，不是已确认越权。
@@ -93,7 +93,7 @@ CARD_CODE_SECRET 不受这个具体问题影响；项目资产 decoder 兼容 ca
 ## 6. 调整后的推进顺序与完成判据
 
 1. **完成正在实施的自动首冻切片。** 真实 HTTP/MySQL 验首次首冻、同号与 CAS、并发、停用窗口、报价留存与资金回滚，完成规格和质量复审；仍需预置 BuyerListing，必须标明边界。
-2. **首先设计并接通“UI 选品 → 订单受理目录”。** 明确 §3.1 语义，再实现前后端/版本生命周期一致性。同步解决订单菜单旧路径、QNM 单槽准备入口、黑名单既有端点错配，以及券码管理详情；这些项各按设计与实际影响测试，不能一次猜测重构领域。
+2. **首先设计并接通“UI 选品 → 订单受理目录”。** 明确 §3.1 语义，再实现前后端/版本生命周期一致性。同步核验并解决商品中心四页与订单菜单旧路径、QNM 单槽准备入口、黑名单既有端点错配，以及券码管理详情；这些项各按设计与实际影响测试，不能一次猜测重构领域。
 3. **从空环境建立一条全配置自动化基准链。** 先用已实现 QNM、FIXED、quantity=1、已知支持的标准卡券或直充 SKU；真实管理 Controller 建商品/供给/分销/项目/凭证/路由，不依赖直接 SQL 补 BuyerListing；真实签名下单、Timer + 本地供应商 HTTP 挡板、查单/资产/账本断言。基准链不等于华昇验收。
 4. **实施华昇协议和履约。** 取得正式协议，按既有 Task3–4 设计先行实现多步骤、查单恢复与回调，并复用上一步配置基准验华昇目标 SKU。未知结果不得猜失败、重下或切供应商。
 5. **开展真实环境验收。** 先核实有效菜单和配置，再管理端全新配置、签名下单、供应商终态/资产与资金核对。未执行保持未验收。
