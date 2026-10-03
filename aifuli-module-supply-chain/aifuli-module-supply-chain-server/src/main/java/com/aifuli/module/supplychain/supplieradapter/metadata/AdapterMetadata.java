@@ -11,6 +11,13 @@ import java.util.Set;
 public interface AdapterMetadata {
     String adapterType();
 
+    /** 旧单槽适配器兼容默认；集模式必须显式声明，不能推断或混用主键。 */
+    default CredentialBindingMode credentialBindingMode() { return CredentialBindingMode.SINGLE_SLOT; }
+
+    /** 非秘密扩展参数的封闭 Schema，默认沿用连接器 Schema。 */
+    default String extraConfigSchemaResource() { return connectorSchemaResource(); }
+
+
     Set<Capability> capabilities();
 
     String connectorSchemaResource();

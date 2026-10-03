@@ -99,4 +99,23 @@ class ApiAccessLogPathUtilsTest {
         assertThat(ApiAccessLogPathUtils.safeStandardOrderUrl("/open-api/supply-chain/project/v1/orders/13800138000", "")).isEqualTo("/open-api/supply-chain/project/v1/orders/[protected]");
         assertThat(ApiAccessLogPathUtils.safeStandardOrderUrl("/supply-chain/open-api/supply-chain/project/v1/orders/13800138000", "/supply-chain")).isEqualTo("/open-api/supply-chain/project/v1/orders/[protected]");
     }
+    /** 草稿 extraConfig 为 JSON 字符串，整条写入路径必须复用秘密日志保护，不能靠递归 JSON 脱敏。 */
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "/supply-chain/supplier-config/connectors/drafts",
+            "/admin-api/supply-chain/supplier-config/connectors/drafts"
+    })
+    void connectorDraftsProtectExactRootChildrenAndLeadingContext(String root) {
+        for (String path : new String[]{root, root + "/", root + "/child"}) {
+            assertThat(ApiAccessLogPathUtils.isSupplierCredentialWritePath(path, "")).isTrue();
+            assertThat(ApiAccessLogPathUtils.isSensitivePlatformPath(path)).isTrue();
+            assertThat(ApiAccessLogPathUtils.isSensitiveProtectionPath("/sc" + path, "/sc")).isTrue();
+        }
+        for (String path : new String[]{root + "-other", root + "foo", "/edge/sc" + root}) {
+            assertThat(ApiAccessLogPathUtils.isSupplierCredentialWritePath(path, "/sc")).isFalse();
+            assertThat(ApiAccessLogPathUtils.isSensitivePlatformPath(path, "/sc")).isFalse();
+            assertThat(ApiAccessLogPathUtils.isSensitiveProtectionPath(path, "/sc")).isFalse();
+        }
+    }
+
 }

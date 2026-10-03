@@ -56,6 +56,7 @@ public class SupplierCredentialCommandService {
     private final AdapterMetadataRegistry metadataRegistry;
     private final EnvelopeCryptoPort envelopeCryptoPort;
     private final SupplyChainDatabaseClock databaseClock;
+    private final com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierConnectorVersionMapper connectorVersionMapper;
 
     /**
      * 建凭据集：供应商内 {@code setCode} 唯一（uk_sc_credential_set），初始状态可用。
@@ -93,11 +94,21 @@ public class SupplierCredentialCommandService {
         if (set == null || !isActive(set.getStatus())) {
             throw new IllegalArgumentException("Active credential set does not exist: " + command.setCode());
         }
+        // 集是追加与绑定的共同锁入口，锁后版本引用与项集合必须当前读，不能沿用 RR 快照。
+        // 设计见 docs/superpowers/specs/2026-10-02-huasheng-fulfillment-adapter-design.md#123-第二切片显式凭据集绑定与运行时配置。
+        set = credentialSetMapper.selectByIdForUpdate(set.getId());
+        if (set == null || !isActive(set.getStatus()) || !supplier.getId().equals(set.getSupplierId())) {
+            throw new IllegalArgumentException("Active credential set does not belong to supplier");
+        }
+        if (!connectorVersionMapper.selectByCredentialSetForUpdate(set.getId()).isEmpty()) {
+            throw new IllegalStateException("Credential set is already bound; rotate with a new set and version");
+        }
+        var currentItems = credentialItemMapper.selectListBySetIdForUpdate(set.getId());
         if (!allowedItemKeys().contains(command.itemKey())) {
             throw new IllegalArgumentException(
                     "Credential item key is outside the closed set: " + command.itemKey());
         }
-        if (credentialItemMapper.selectBySetAndKey(set.getId(), command.itemKey()) != null) {
+        if (currentItems.stream().anyMatch(item -> command.itemKey().equals(item.getItemKey()))) {
             throw new IllegalArgumentException(
                     "Credential item already exists in set: " + command.itemKey());
         }
@@ -124,7 +135,7 @@ public class SupplierCredentialCommandService {
                         "ENV credential item must not carry a plaintext secret value");
             }
             String ref = command.secretRef();
-            if (ref == null || !ref.startsWith(ENV_REF_PREFIX)) {
+            if (ref == null || ref.length() > 512 || !ref.startsWith(ENV_REF_PREFIX)) {
                 throw new IllegalArgumentException("ENV credential item requires an env: secret reference");
             }
             return ref;
@@ -137,8 +148,14 @@ public class SupplierCredentialCommandService {
             if (!hasText(command.secretValue())) {
                 throw new IllegalArgumentException("ENVELOPE credential item requires a plaintext secret value");
             }
+            if (command.secretValue().length() > 8192) {
+                throw new IllegalArgumentException("Credential plaintext character limit exceeded");
+            }
             byte[] plaintext = command.secretValue().getBytes(StandardCharsets.UTF_8);
             try {
+                if (plaintext.length > 16384) {
+                    throw new IllegalArgumentException("Credential plaintext byte limit exceeded");
+                }
                 EnvelopeCryptoPort.EncryptedPayload payload = envelopeCryptoPort.encrypt(
                         plaintext, EnvelopeCredentialItemResolver.aad(setId, command.itemKey()));
                 return EnvelopeCredentialItemResolver.encodeSecretRef(payload);

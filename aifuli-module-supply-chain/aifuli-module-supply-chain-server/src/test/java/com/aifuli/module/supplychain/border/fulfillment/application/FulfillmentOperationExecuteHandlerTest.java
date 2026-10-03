@@ -76,6 +76,8 @@ class FulfillmentOperationExecuteHandlerTest {
     @Mock
     private EnvelopeCryptoPort envelopeCrypto;
     @Mock
+    private com.aifuli.module.supplychain.infrastructure.security.CredentialSetResolver credentialSetResolver;
+    @Mock
     private OperationExecutorPort operationExecutorPort;
     @Mock
     private SupplierOrderLifecycle supplierOrderLifecycle;
@@ -104,7 +106,7 @@ class FulfillmentOperationExecuteHandlerTest {
                 operationExecutorPort,
                 supplierOrderLifecycle,
                 objectMapper,
-                new FulfillmentOperationTicketFactory(credentialSlotMapper, List.of(credentialProvider), callbackProperties), frequencyLifecycle
+                new FulfillmentOperationTicketFactory(credentialSlotMapper, List.of(credentialProvider), callbackProperties, List.of(credentialSetResolver)), frequencyLifecycle
         );
     }
 
@@ -149,7 +151,12 @@ class FulfillmentOperationExecuteHandlerTest {
     }
 
     @Test
-    void happyPathAssemblesTicketAndInvokesExecutorAndLifecycle() {
+    void happyPathAssemblesTicketAndInvokesExecutorAndLifecycle() { executeHappyPath(false); }
+
+    @Test
+    void productionHandlerPassesSetMaterialThroughExistingResolveAndCreateChain() { executeHappyPath(true); }
+
+    private void executeHappyPath(boolean setBinding) {
         String operationNo = "OP_EXEC_01";
         TimerTaskContext context = new TimerTaskContext("TASK_04", 4L, 1, 100L, "worker-1");
         JsonNode payload = objectMapper.createObjectNode().put("operationNo", operationNo);
@@ -209,6 +216,13 @@ class FulfillmentOperationExecuteHandlerTest {
                 "/qnm/callback",
                 Set.of(Capability.CREATE_RECHARGE));
 
+        if (setBinding) {
+            connectorConfig = new PublishedConnectorConfiguration("CONN_01",6L,1,"TEST_SET","https://supplier.example.com","merchant123",null,
+                    "/qnm/callback",Set.of(Capability.CREATE_RECHARGE),42L,
+                    com.aifuli.module.supplychain.supplieradapter.metadata.CredentialBindingMode.CREDENTIAL_SET,1500,2501,java.util.Map.of("expireTime","60"));
+        }
+        java.util.Map<String,char[]> materials=java.util.Map.of("appSecret","synthetic-app".toCharArray(),
+                "privateKey","synthetic-private".toCharArray(),"callbackPublicKey","synthetic-callback".toCharArray());
         CredentialSlotDO slot = CredentialSlotDO.builder()
                 .id(9L)
                 .providerType("CONFIG_PROPERTIES")
@@ -222,9 +236,13 @@ class FulfillmentOperationExecuteHandlerTest {
         when(supplierMapper.selectById(5L)).thenReturn(supplier);
         when(offerVersionMapper.selectById(7L)).thenReturn(offerVersion);
         when(connectorResolver.resolve(6L)).thenReturn(connectorConfig);
-        when(credentialSlotMapper.selectById(9L)).thenReturn(slot);
-        when(credentialProvider.supports("CONFIG_PROPERTIES")).thenReturn(true);
-        when(credentialProvider.resolve(slot)).thenReturn("secret_key_123".toCharArray());
+        if (setBinding) {
+            when(credentialSetResolver.resolveSet(42L)).thenReturn(materials);
+        } else {
+            when(credentialSlotMapper.selectById(9L)).thenReturn(slot);
+            when(credentialProvider.supports("CONFIG_PROPERTIES")).thenReturn(true);
+            when(credentialProvider.resolve(slot)).thenReturn("secret_key_123".toCharArray());
+        }
 
         // Target ciphertext decrypt mock
         String targetJson = "{\"schemaCode\":\"DIRECT_RECHARGE_TARGET\",\"schemaVersion\":1,\"values\":{\"accountValue\":\"13812345678\"}}";
@@ -248,12 +266,20 @@ class FulfillmentOperationExecuteHandlerTest {
         OperationTicket ticket = ticketCaptor.getValue();
         assertThat(ticket.bOrderNo()).isEqualTo("BO_EXEC_01");
         assertThat(ticket.supplierCode()).isEqualTo("QNM");
-        assertThat(ticket.adapterType()).isEqualTo("QNM");
+        assertThat(ticket.adapterType()).isEqualTo(setBinding ? "TEST_SET" : "QNM");
         assertThat(ticket.externalSkuCode()).isEqualTo("QNM_SKU_001");
         assertThat(ticket.rechargeAccount()).isEqualTo("13812345678");
         assertThat(ticket.merchantAccount()).isEqualTo("merchant123");
-        assertThat(ticket.secretKey()).isEqualTo("secret_key_123");
-        assertThat(ticket.timeoutSeconds()).isEqualTo(10);
+        if (setBinding) {
+            assertThat(ticket.secretKey()).isNull();assertThat(ticket.credentialMaterial().appSecret()).isEqualTo("synthetic-app");
+            assertThat(ticket.credentialMaterial().privateKeyPem()).isEqualTo("synthetic-private");
+            assertThat(ticket.extraParameters()).containsEntry("expireTime","60");assertThat(ticket.timeoutSeconds()).isEqualTo(3);
+            assertThat(ticket.connectTimeoutMs()).isEqualTo(1500);assertThat(ticket.readTimeoutMs()).isEqualTo(2501);
+            materials.values().forEach(chars->assertThat(chars).containsOnly('\0'));
+            org.mockito.Mockito.verifyNoInteractions(credentialSlotMapper);
+        } else {
+            assertThat(ticket.secretKey()).isEqualTo("secret_key_123");assertThat(ticket.timeoutSeconds()).isEqualTo(10);
+        }
         assertThat(ticket.callbackUrl()).isEqualTo("https://api.aifuli.com/qnm/callback");
 
         org.mockito.InOrder inOrder = inOrder(supplierOrderLifecycle, operationExecutorPort);

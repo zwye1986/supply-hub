@@ -36,6 +36,7 @@ import java.util.stream.Collectors;
 
 /** 在业务事务之外完成配置、凭证和连通边界验证，再交由短事务记录结果。 */
 @Service
+@lombok.extern.slf4j.Slf4j
 @RequiredArgsConstructor
 public class ConnectorValidationService {
 
@@ -57,9 +58,14 @@ public class ConnectorValidationService {
     private final SupplierEndpointPolicy endpointPolicy;
     private final ConnectorValidationRecordService recordService;
     private final ObjectMapper objectMapper;
+    private final ConnectorCredentialBindingValidator credentialBindingValidator;
+    private final List<com.aifuli.module.supplychain.infrastructure.security.CredentialSetResolver> credentialSetResolvers;
 
     @Transactional(propagation = Propagation.NEVER)
+    /** 实际解析凭据并擦除临时材料，验证不能仅判断引用存在；设计见 docs/superpowers/specs/2026-10-02-huasheng-fulfillment-adapter-design.md#123-第二切片显式凭据集绑定与运行时配置。 */
     public ValidationResult validate(ValidateConnectorCommand command) {
+        log.info("[validateConnector] connectorVersionId={} capabilities={} operatorId={} traceId={}",
+                command.connectorVersionId(),command.capabilities(),command.operatorId(),command.traceId());
         SupplierConnectorVersionDO version = versionMapper.selectById(command.connectorVersionId());
         if (version == null || version.getStatus() != ConnectorVersionStatus.DRAFT.getCode()) {
             throw new IllegalStateException("Only a draft connector version can be validated");
@@ -75,11 +81,30 @@ public class ConnectorValidationService {
         endpointPolicy.validate(version.getBaseUrl());
         validateLimits(version);
 
-        CredentialSlotDO slot = credentialSlotMapper.selectById(version.getCredentialSlotId());
-        if (slot == null || slot.getStatus() != CredentialSlotStatus.ACTIVE.getCode() || credentialProviders.stream()
-                .filter(provider -> provider.supports(slot.getProviderType()))
-                .noneMatch(provider -> provider.isResolvable(slot))) {
-            throw new IllegalStateException("Credential reference cannot be resolved");
+        credentialBindingValidator.verify(metadata, connector.getSupplierId(), version, false);
+        credentialBindingValidator.extraParameters(metadata, version.getExtraConfig());
+        if (version.getCredentialSetId() != null) {
+            var resolver = credentialSetResolvers.stream().findFirst().orElseThrow(
+                    () -> new IllegalStateException("Credential set resolver is unavailable"));
+            var values = resolver.resolveSet(version.getCredentialSetId());
+            try {
+                if (!values.keySet().equals(metadata.credentialKeys()) || values.values().stream()
+                        .anyMatch(chars -> chars == null || chars.length == 0)) {
+                    throw new IllegalStateException("Credential material is incomplete");
+                }
+            } finally {
+                values.values().forEach(chars -> { if (chars != null) java.util.Arrays.fill(chars, '\0'); });
+            }
+        } else {
+            CredentialSlotDO slot = credentialSlotMapper.selectById(version.getCredentialSlotId());
+            var provider = credentialProviders.stream().filter(value -> value.supports(slot.getProviderType()))
+                    .findFirst().orElseThrow(() -> new IllegalStateException("Credential reference cannot be resolved"));
+            char[] chars = provider.resolve(slot);
+            try {
+                if (chars == null || chars.length == 0) throw new IllegalStateException("Credential reference cannot be resolved");
+            } finally {
+                if (chars != null) java.util.Arrays.fill(chars, '\0');
+            }
         }
 
         Set<Capability> requested = command.capabilities().stream().map(Capability::valueOf)

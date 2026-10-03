@@ -19,6 +19,7 @@ import java.sql.Connection;
 import java.time.LocalDateTime;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
@@ -56,12 +57,21 @@ class SupplierConfigurationSchemaIntegrationTest {
                 liquibase.update(58, new Contexts(), new LabelExpression());
                 insertOffer(900_051L, "OFR_PRE_057", "EXT-PRE-057");
                 jdbc.update("UPDATE sc_supplier_offer SET status = 90 WHERE offer_no = 'OFR_PRE_057'");
+                liquibase.update(1, new Contexts(), new LabelExpression());
+                jdbc.update("INSERT INTO sc_credential_slot(id,slot_no,provider_type,secret_ref,masked_hint,active_secret_version,status,created_at,updated_at) VALUES(70001,'CRD_PRE_058','ENV','env:QNM_LEGACY','masked','v1',10,?,?)",now(),now());
+                insertConnector(900_052L, "CON_PRE_058", null);
+                Long legacyConnector = jdbc.queryForObject("SELECT id FROM sc_supplier_connector WHERE connector_no='CON_PRE_058'",Long.class);
+                jdbc.update("INSERT INTO sc_supplier_connector_version(connector_id,version_no,base_url,credential_slot_id,protocol_version,connect_timeout_ms,read_timeout_ms,adapter_config_schema_version,adapter_config_json,validation_status,config_digest,status,created_at,updated_at) VALUES(?,1,'https://api.qinameng.com',70001,'V1',1000,2000,1,'{}',10,?,10,?,?)",legacyConnector,new byte[32],now(),now());
                 liquibase.update(new Contexts(), new LabelExpression());
                 liquibase.update(new Contexts(), new LabelExpression());
+                assertThat(jdbc.queryForObject("SELECT credential_slot_id FROM sc_supplier_connector_version WHERE connector_id=?",Long.class,legacyConnector)).isEqualTo(70001L);
+                assertThat(jdbc.queryForObject("SELECT credential_set_id FROM sc_supplier_connector_version WHERE connector_id=?",Long.class,legacyConnector)).isNull();
+                assertThat(jdbc.queryForObject("SELECT credential_item_snapshot FROM sc_supplier_connector_version WHERE connector_id=?",String.class,legacyConnector)).isNull();
+                assertThat(jdbc.queryForObject("SELECT config_digest FROM sc_supplier_connector_version WHERE connector_id=?",byte[].class,legacyConnector)).isEqualTo(new byte[32]);
                 assertThat(jdbc.queryForObject("SELECT external_sku_code FROM sc_supplier_offer "
                         + "WHERE offer_no = 'OFR_PRE_057'", String.class)).isEqualTo("EXT-PRE-057");
                 insertOffer(900_051L, "OFR_POST_057", "EXT-PRE-057");
-                assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM DATABASECHANGELOG", Long.class)).isEqualTo(59L);
+                assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM DATABASECHANGELOG", Long.class)).isEqualTo(60L);
             }
         }
     }
@@ -115,6 +125,34 @@ class SupplierConfigurationSchemaIntegrationTest {
         insertCredentialItem(setId, "appSecret");
         assertThatThrownBy(() -> insertCredentialItem(setId, "appSecret"))
                 .isInstanceOf(DuplicateKeyException.class);
+    }
+
+    @Test
+    void explicitCredentialBindingColumnsAndLongEnvelopeStorage() {
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() "
+                + "AND TABLE_NAME='sc_supplier_connector_version' AND COLUMN_NAME IN ('credential_set_id','credential_item_snapshot')", Long.class)).isEqualTo(2L);
+        assertThat(jdbc.queryForObject("SELECT DATA_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() "
+                + "AND TABLE_NAME='sc_credential_item' AND COLUMN_NAME='secret_ref'", String.class)).isEqualTo("text");
+    }
+
+    @Test
+    void credentialBindingCheckRequiresExactlyOneReference() {
+        insertConnector(900_301L,"CON_XOR",null);
+        Long connector=jdbc.queryForObject("SELECT id FROM sc_supplier_connector WHERE connector_no='CON_XOR'",Long.class);
+        String sql="INSERT INTO sc_supplier_connector_version(connector_id,version_no,base_url,credential_slot_id,credential_set_id,protocol_version,connect_timeout_ms,read_timeout_ms,adapter_config_schema_version,adapter_config_json,validation_status,config_digest,status,created_at,updated_at) VALUES(?,?,'https://api.qinameng.com',?,?,'V1',1000,2000,1,'{}',0,?,0,?,?)";
+        for (Long[] references : java.util.List.of(new Long[]{null,null}, new Long[]{1L,2L})) {
+            Throwable failure = catchThrowable(() -> jdbc.update(sql,connector,1,references[0],references[1],new byte[32],now(),now()));
+            assertThat(failure).isInstanceOf(org.springframework.dao.DataAccessException.class);
+            Throwable cause = failure;
+            while (cause.getCause() != null) cause = cause.getCause();
+            assertThat(cause).isInstanceOf(java.sql.SQLException.class);
+            assertThat(((java.sql.SQLException) cause).getErrorCode()).isEqualTo(3819);
+            assertThat(cause.getMessage()).contains("chk_sc_connector_credential_binding");
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_supplier_connector_version WHERE connector_id=?",Long.class,connector)).isZero();
+        }
+        jdbc.update(sql,connector,1,1L,null,new byte[32],now(),now());
+        jdbc.update(sql,connector,2,null,2L,new byte[32],now(),now());
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_supplier_connector_version WHERE connector_id=?",Long.class,connector)).isEqualTo(2L);
     }
 
     /** 055：连接器版本新增 extra_config 为可空 JSON 列（密钥类禁入由服务层守卫，模式层只验列形态）。 */

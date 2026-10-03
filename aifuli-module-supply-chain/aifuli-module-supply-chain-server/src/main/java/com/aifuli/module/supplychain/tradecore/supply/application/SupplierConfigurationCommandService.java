@@ -23,7 +23,6 @@ import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierConnecto
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierConnectorVersionMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierMapper;
 import com.aifuli.module.supplychain.tradecore.supply.domain.ConnectorVersionStatus;
-import com.aifuli.module.supplychain.tradecore.supply.domain.CredentialSlotStatus;
 import com.aifuli.module.supplychain.tradecore.supply.domain.SupplierStatus;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -36,6 +35,7 @@ import java.time.LocalDateTime;
 import java.util.Set;
 
 @Service
+@lombok.extern.slf4j.Slf4j
 @RequiredArgsConstructor
 public class SupplierConfigurationCommandService {
 
@@ -62,6 +62,7 @@ public class SupplierConfigurationCommandService {
     private final BusinessNoGenerator businessNoGenerator;
     private final ScopedBusinessCodeService scopedBusinessCodeService;
     private final ObjectMapper objectMapper;
+    private final ConnectorCredentialBindingValidator credentialBindingValidator;
 
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public String createSupplier(CreateSupplierCommand command) {
@@ -101,10 +102,16 @@ public class SupplierConfigurationCommandService {
     }
 
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
+    /** 创建非秘密配置并冻结显式引用；设计见 docs/superpowers/specs/2026-10-02-huasheng-fulfillment-adapter-design.md#123-第二切片显式凭据集绑定与运行时配置。 */
     public DraftConnectorResult createConnectorDraft(CreateConnectorDraftCommand command) {
+        log.info("[createConnectorDraft] supplierCode={} connectorCode={} adapterType={} credentialSlotNo={} credentialSetCode={} connectTimeoutMs={} readTimeoutMs={} operatorId={}",
+                command.supplierCode(),command.connectorCode(),command.adapterType(),command.credentialSlotNo(),command.credentialSetCode(),
+                command.connectTimeoutMs(),command.readTimeoutMs(),command.operatorId());
         SupplierDO supplier = requireActiveStandardSupplier(command.supplierCode());
-        CredentialSlotDO slot = requireActiveSlot(command.credentialSlotNo());
         AdapterMetadata metadata = metadataRegistry.require(command.adapterType());
+        ConnectorCredentialBindingValidator.Binding binding = credentialBindingValidator.bindDraft(
+                metadata, supplier.getId(), command.credentialSlotNo(), command.credentialSetCode());
+        String extra = credentialBindingValidator.normalizeExtra(metadata, command.extraConfig());
         int schemaVersion = metadata.connectorSchemaVersion();
         JsonNode config = parseObject(command.adapterConfigJson());
         schemaValidator.validate(metadata.connectorSchemaResource(), config);
@@ -118,10 +125,11 @@ public class SupplierConfigurationCommandService {
                 .updatedBy(command.operatorId()).updatedAt(now).build();
         connectorMapper.insert(connector);
 
-        byte[] digest = connectorDigest(command, connector.getId(), slot.getId(), schemaVersion, normalizedConfig);
+        byte[] digest = connectorDigest(command, connector.getId(), binding, metadata.credentialBindingMode(), schemaVersion, normalizedConfig, extra);
         SupplierConnectorVersionDO version = SupplierConnectorVersionDO.builder()
                 .connectorId(connector.getId()).versionNo(1).baseUrl(command.baseUrl())
-                .merchantAccount(command.merchantAccount()).credentialSlotId(slot.getId())
+                .merchantAccount(command.merchantAccount()).credentialSlotId(binding.credentialSlotId())
+                .credentialSetId(binding.credentialSetId()).credentialItemSnapshot(binding.itemSnapshot()).extraConfig(extra)
                 .protocolVersion(command.protocolVersion()).callbackPath(command.callbackPath())
                 .connectTimeoutMs(command.connectTimeoutMs()).readTimeoutMs(command.readTimeoutMs())
                 .rateLimit(command.rateLimit()).concurrencyLimit(command.concurrencyLimit())
@@ -235,14 +243,6 @@ public class SupplierConfigurationCommandService {
         return supplier;
     }
 
-    private CredentialSlotDO requireActiveSlot(String slotNo) {
-        CredentialSlotDO slot = credentialSlotMapper.selectByNo(slotNo);
-        if (slot == null || slot.getStatus() != CredentialSlotStatus.ACTIVE.getCode()) {
-            throw new IllegalArgumentException("Active credential slot does not exist: " + slotNo);
-        }
-        return slot;
-    }
-
     private JsonNode parseObject(String json) {
         try {
             JsonNode node = objectMapper.readTree(json);
@@ -264,9 +264,12 @@ public class SupplierConfigurationCommandService {
     }
 
     private static byte[] connectorDigest(CreateConnectorDraftCommand command, Long connectorId,
-                                          Long slotId, int schemaVersion, String normalizedConfig) {
+                                          ConnectorCredentialBindingValidator.Binding binding,
+                                          com.aifuli.module.supplychain.supplieradapter.metadata.CredentialBindingMode mode,
+                                          int schemaVersion, String normalizedConfig, String extra) {
         return ConfigurationDigest.sha256(String.valueOf(connectorId), command.baseUrl(),
-                value(command.merchantAccount()), String.valueOf(slotId), command.protocolVersion(),
+                value(command.merchantAccount()), mode.name(), value(binding.credentialSlotId()), value(binding.credentialSetId()),
+                value(binding.itemSnapshot()), extra, command.protocolVersion(),
                 value(command.callbackPath()), String.valueOf(command.connectTimeoutMs()),
                 String.valueOf(command.readTimeoutMs()), value(command.rateLimit()),
                 value(command.concurrencyLimit()), String.valueOf(schemaVersion),
@@ -295,7 +298,15 @@ public class SupplierConfigurationCommandService {
                                               String callbackPath, int connectTimeoutMs, int readTimeoutMs,
                                               Integer rateLimit, Integer concurrencyLimit,
                                               String adapterConfigJson,
-                                              Long operatorId) {
+                                              Long operatorId, String credentialSetCode, String extraConfig) {
+        /** 保留旧单槽调用，不推断集身份；设计见 docs/superpowers/specs/2026-10-02-huasheng-fulfillment-adapter-design.md#123-第二切片显式凭据集绑定与运行时配置。 */
+        public CreateConnectorDraftCommand(String supplierCode, String connectorCode, String adapterType,
+                String baseUrl, String merchantAccount, String credentialSlotNo, String protocolVersion,
+                String callbackPath, int connectTimeoutMs, int readTimeoutMs, Integer rateLimit,
+                Integer concurrencyLimit, String adapterConfigJson, Long operatorId) {
+            this(supplierCode,connectorCode,adapterType,baseUrl,merchantAccount,credentialSlotNo,protocolVersion,
+                    callbackPath,connectTimeoutMs,readTimeoutMs,rateLimit,concurrencyLimit,adapterConfigJson,operatorId,null,null);
+        }
     }
 
     public record DraftConnectorResult(String connectorNo, Long connectorVersionId, int versionNo) {

@@ -39,6 +39,7 @@ public class DefaultCredentialSetResolver implements CredentialSetResolver {
         }
         List<CredentialItemDO> items = credentialItemMapper.selectListBySetId(credentialSetId);
         Map<String, char[]> resolved = new LinkedHashMap<>();
+        try {
         for (CredentialItemDO item : items) {
             if (!isActive(item.getStatus())) {
                 continue;
@@ -47,6 +48,10 @@ public class DefaultCredentialSetResolver implements CredentialSetResolver {
         }
         if (resolved.isEmpty()) {
             throw new IllegalStateException("Credential set has no active items: " + credentialSetId);
+        }
+        } catch (RuntimeException failure) {
+            resolved.values().forEach(chars -> { if (chars != null) java.util.Arrays.fill(chars, '\0'); });
+            throw failure;
         }
         // 仅记录集主键与项键名（非秘密），绝不记录 secret_ref 或明文（不变量 11）。
         log.debug("[resolveSet] credentialSetId={} resolvedItemKeys={}", credentialSetId, resolved.keySet());

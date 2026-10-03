@@ -19,7 +19,12 @@ public class SupplierConnectorVersionDO {
     private Integer versionNo;
     private String baseUrl;
     private String merchantAccount;
+    /** 凭证槽主键，逻辑引用sc_credential_slot.id */
     private Long credentialSlotId;
+    /** 凭据集主键，逻辑引用sc_credential_set.id */
+    private Long credentialSetId;
+    /** 连接器冻结的凭据项身份与版本快照，不含秘密 */
+    private String credentialItemSnapshot;
     private String protocolVersion;
     private String callbackPath;
     private Integer connectTimeoutMs;

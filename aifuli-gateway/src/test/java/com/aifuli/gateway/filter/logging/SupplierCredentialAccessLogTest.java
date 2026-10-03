@@ -67,6 +67,47 @@ class SupplierCredentialAccessLogTest {
         } finally { logger.detachAppender(appender); appender.stop(); }
     }
 
+
+    /** JSON 字符串 extraConfig 内的秘密不能依赖普通 JSON 递归脱敏，成功与异常都直接透传原字节。 */
+    @ParameterizedTest
+    @ValueSource(strings = {"/admin-api/supply-chain/supplier-config/connectors/drafts",
+            "/supply-chain/supplier-config/connectors/drafts/child"})
+    void draftExtraConfigBodyResponseQueryAndFailureNeverEnterGatewayLogs(String path) {
+        Logger logger = (Logger) LoggerFactory.getLogger(AccessLogFilter.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start(); logger.addAppender(appender);
+        try {
+            for (String extra : new String[]{"{}", "{\"token\":\"" + SECRET + "\"}", "{invalid:" + SECRET}) {
+                String body = com.aifuli.framework.common.util.json.JsonUtils.toJsonString(java.util.Map.of("extraConfig", extra));
+                for (boolean failing : new boolean[]{false, true}) {
+                    var exchange = MockServerWebExchange.from(MockServerHttpRequest.post(path + "?token=" + SECRET)
+                            .contentType(org.springframework.http.MediaType.APPLICATION_JSON).body(body));
+                    AccessLogFilter filter = new AccessLogFilter();
+                    ReflectionTestUtils.setField(filter, "codecConfigurer", ServerCodecConfigurer.create());
+                    Mono<Void> execution = filter.filter(exchange, forwarded -> DataBufferUtils.join(forwarded.getRequest().getBody())
+                            .flatMap(buffer -> {
+                                byte[] bytes = new byte[buffer.readableByteCount()]; buffer.read(bytes);
+                                DataBufferUtils.release(buffer);
+                                assertThat(bytes).isEqualTo(body.getBytes(StandardCharsets.UTF_8));
+                                return failing ? Mono.error(new IllegalStateException(SECRET))
+                                        : forwarded.getResponse().writeWith(Mono.just(forwarded.getResponse().bufferFactory()
+                                                .wrap(SECRET.getBytes(StandardCharsets.UTF_8))));
+                            }));
+                    if (failing) {
+                        assertThatThrownBy(execution::block).isInstanceOf(IllegalStateException.class).hasMessage(SECRET);
+                    } else {
+                        execution.block();
+                        assertThat(exchange.getResponse().getBodyAsString().block()).isEqualTo(SECRET);
+                    }
+                }
+            }
+            assertThat(appender.list).isNotEmpty().allSatisfy(event -> {
+                assertThat(event.getFormattedMessage()).doesNotContain(SECRET);
+                assertThat(event.getThrowableProxy()).isNull();
+            });
+        } finally { logger.detachAppender(appender); appender.stop(); }
+    }
+
     @Test
     void secretValueAndSecretRefAreAlsoMaskedOnOrdinaryJsonPaths() {
         assertThat(AccessLogSanitizeUtils.sanitizeJsonBody("{\"secretValue\":\"" + SECRET

@@ -234,7 +234,7 @@ class SupplierConfigurationQueryIntegrationTest {
     }
 
     @Configuration(proxyBeanMethods = false)
-    @Import({SupplyChainDataSourceConfiguration.class, UlidGenerator.class, BusinessNoGenerator.class,
+    @Import({com.aifuli.module.supplychain.tradecore.supply.application.ConnectorCredentialBindingValidator.class,SupplyChainDataSourceConfiguration.class, UlidGenerator.class, BusinessNoGenerator.class,
             OutboxEventRepository.class, ProductCatalogCommandService.class, ProductCenterTestConfiguration.class,
             QnmGameOrderV1Metadata.class, AdapterMetadataRegistry.class, ClosedJsonSchemaValidator.class,
             EnvironmentCredentialProvider.class, SupplierEndpointPolicy.class,

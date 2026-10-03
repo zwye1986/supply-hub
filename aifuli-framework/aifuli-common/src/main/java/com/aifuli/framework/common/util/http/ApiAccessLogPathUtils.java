@@ -49,15 +49,19 @@ public final class ApiAccessLogPathUtils {
     };
 
     /**
-     * 凭据写入含秘密明文或环境引用，保护精确根及其子路径，兼容管理端前缀与部署 context path。
+     * 凭据写入含秘密明文或环境引用；连接器草稿 extraConfig 是 JSON 字符串，可能夹带非法秘密字段。
+     * 两者均整体省略正文、参数、响应和敏感异常，保护精确根及其子路径，兼容管理端前缀与部署 context path。
      * 不覆盖 credential-items-other 等相似路径。设计见
-     * docs/superpowers/specs/2026-10-03-supplier-offer-publication-admin-design.md#151-凭据写入日志保护。
+     * docs/superpowers/specs/2026-10-03-supplier-offer-publication-admin-design.md#151-凭据写入日志保护，
+     * 草稿保护见 docs/superpowers/specs/2026-10-02-huasheng-fulfillment-adapter-design.md#123-第二切片显式凭据集绑定与运行时配置。
      */
     private static final String[] SUPPLIER_CREDENTIAL_WRITE_PATHS = {
             "/supply-chain/supplier-config/credential-items",
             "/admin-api/supply-chain/supplier-config/credential-items",
             "/supply-chain/supplier-config/credential-slots",
-            "/admin-api/supply-chain/supplier-config/credential-slots"
+            "/admin-api/supply-chain/supplier-config/credential-slots",
+            "/supply-chain/supplier-config/connectors/drafts",
+            "/admin-api/supply-chain/supplier-config/connectors/drafts"
     };
 
     public static boolean isSupplierCredentialWritePath(String requestUri, String contextPath) {

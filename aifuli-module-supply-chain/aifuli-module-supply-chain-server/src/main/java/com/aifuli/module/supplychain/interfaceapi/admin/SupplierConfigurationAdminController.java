@@ -151,7 +151,7 @@ public class SupplierConfigurationAdminController {
                         request.getBaseUrl(), request.getMerchantAccount(), request.getCredentialSlotNo(),
                         request.getProtocolVersion(), request.getCallbackPath(), request.getConnectTimeoutMs(),
                         request.getReadTimeoutMs(), request.getRateLimit(), request.getConcurrencyLimit(),
-                        request.getAdapterConfigJson(), getLoginUserId())));
+                        request.getAdapterConfigJson(), getLoginUserId(), request.getCredentialSetCode(), request.getExtraConfig())));
     }
 
     @PostMapping("/connectors/mappings/initialize")
@@ -297,7 +297,7 @@ public class SupplierConfigurationAdminController {
         private String secretRef;
         @Schema(description = "ENVELOPE 时的秘密明文，仅入参、服务端立即信封加密、不回显不落日志；ENV 时留空",
                 accessMode = Schema.AccessMode.WRITE_ONLY)
-        private String secretValue;
+        @Size(max = 8192) @lombok.ToString.Exclude private String secretValue;
         @Size(max = 128) private String maskedHint;
         @NotNull private Integer activeSecretVersion;
     }
@@ -311,7 +311,12 @@ public class SupplierConfigurationAdminController {
         private String adapterType;
         @NotBlank @Size(max = 512) private String baseUrl;
         @Size(max = 128) private String merchantAccount;
-        @NotBlank private String credentialSlotNo;
+        /** 凭证槽编号，SINGLE_SLOT 模式条件必填，与凭据集编号互斥。 */
+        private String credentialSlotNo;
+        /** 凭据集编号，供应商内唯一；CREDENTIAL_SET 模式条件必填。 */
+        @Size(max = 64) private String credentialSetCode;
+        /** 连接器版本非秘密可调参数，如expireTime秒、outMobile；密钥类禁止入此列 */
+        private String extraConfig;
         @NotBlank @Size(max = 32) private String protocolVersion;
         @Size(max = 256) private String callbackPath;
         @Min(1) private int connectTimeoutMs;

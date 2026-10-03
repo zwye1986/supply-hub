@@ -125,6 +125,34 @@ class CredentialSetResolverTest {
                 .isInstanceOf(IllegalStateException.class);
     }
 
+    @Test
+    void wipesAlreadyResolvedArraysWhenLaterItemFails() {
+        char[] first = "private-material".toCharArray();
+        CredentialItemResolver provider = mock(CredentialItemResolver.class);
+        when(provider.supports("TEST")).thenReturn(true);
+        when(provider.resolve(org.mockito.ArgumentMatchers.any())).thenReturn(first)
+                .thenThrow(new IllegalStateException("unavailable"));
+        resolver = new DefaultCredentialSetResolver(setMapper, itemMapper, List.of(provider));
+        givenActiveSetWithItems(
+                CredentialItemDO.builder().itemKey("appSecret").providerType("TEST").status((short)10).build(),
+                CredentialItemDO.builder().itemKey("privateKey").providerType("TEST").status((short)10).build());
+        assertThatThrownBy(() -> resolver.resolveSet(SET_ID)).hasMessage("unavailable");
+        assertThat(first).containsOnly('\0');
+    }
+
+    @Test
+    void nullEarlyArrayCannotMaskLaterResolverFailure() {
+        CredentialItemResolver provider = mock(CredentialItemResolver.class);
+        when(provider.supports("TEST")).thenReturn(true);
+        when(provider.resolve(org.mockito.ArgumentMatchers.any())).thenReturn(null)
+                .thenThrow(new IllegalStateException("unavailable"));
+        resolver = new DefaultCredentialSetResolver(setMapper, itemMapper, List.of(provider));
+        givenActiveSetWithItems(
+                CredentialItemDO.builder().itemKey("appSecret").providerType("TEST").status((short)10).build(),
+                CredentialItemDO.builder().itemKey("privateKey").providerType("TEST").status((short)10).build());
+        assertThatThrownBy(() -> resolver.resolveSet(SET_ID)).isInstanceOf(IllegalStateException.class).hasMessage("unavailable");
+    }
+
     private void givenActiveSetWithItems(CredentialItemDO... items) {
         when(setMapper.selectById(SET_ID)).thenReturn(CredentialSetDO.builder().id(SET_ID)
                 .status(CredentialStatus.ACTIVE.getCode()).build());

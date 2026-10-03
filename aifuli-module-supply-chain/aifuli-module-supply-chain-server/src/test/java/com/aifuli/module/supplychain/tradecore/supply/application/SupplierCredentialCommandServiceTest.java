@@ -73,7 +73,18 @@ class SupplierCredentialCommandServiceTest {
         AdapterMetadataRegistry registry =
                 new AdapterMetadataRegistry(List.of(new QnmGameOrderV1Metadata()));
         service = new SupplierCredentialCommandService(supplierMapper, credentialSetMapper,
-                credentialItemMapper, registry, crypto, databaseClock);
+                credentialItemMapper, registry, crypto, databaseClock, org.mockito.Mockito.mock(com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierConnectorVersionMapper.class));
+    }
+
+    @Test
+    void envelopeRejectsCharacterAndUtf8ByteOverflowBeforePersistence() {
+        givenActiveSet();
+        for (String tooLarge : List.of("x".repeat(8193), "密".repeat(6000))) {
+            assertThatThrownBy(() -> service.addCredentialItem(new SupplierCredentialCommandService.AddCredentialItemCommand(
+                    SUPPLIER_CODE, SET_CODE, "secretKey", "ENVELOPE", null, tooLarge, "masked", 1, 1L)))
+                    .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("limit");
+        }
+        verify(credentialItemMapper, never()).insert(any(CredentialItemDO.class));
     }
 
     @Test
@@ -113,7 +124,7 @@ class SupplierCredentialCommandServiceTest {
     @Test
     void addEnvelopeItemEncryptsSecretValueAndNeverStoresPlaintext() {
         givenActiveSet();
-        when(credentialItemMapper.selectBySetAndKey(SET_ID, "secretKey")).thenReturn(null);
+
         when(databaseClock.now()).thenReturn(NOW);
 
         service.addCredentialItem(new SupplierCredentialCommandService.AddCredentialItemCommand(
@@ -137,7 +148,7 @@ class SupplierCredentialCommandServiceTest {
     @Test
     void addEnvItemStoresEnvReferenceWithoutPlaintext() {
         givenActiveSet();
-        when(credentialItemMapper.selectBySetAndKey(SET_ID, "secretKey")).thenReturn(null);
+
         when(databaseClock.now()).thenReturn(NOW);
 
         service.addCredentialItem(new SupplierCredentialCommandService.AddCredentialItemCommand(
@@ -217,6 +228,7 @@ class SupplierCredentialCommandServiceTest {
     }
 
     private void givenActiveSet() {
+        when(credentialSetMapper.selectByIdForUpdate(SET_ID)).thenReturn(CredentialSetDO.builder().id(SET_ID).supplierId(SUPPLIER_ID).status((short)10).build());
         givenActiveSupplier();
         when(credentialSetMapper.selectBySupplierAndCode(SUPPLIER_ID, SET_CODE))
                 .thenReturn(CredentialSetDO.builder().id(SET_ID).supplierId(SUPPLIER_ID)

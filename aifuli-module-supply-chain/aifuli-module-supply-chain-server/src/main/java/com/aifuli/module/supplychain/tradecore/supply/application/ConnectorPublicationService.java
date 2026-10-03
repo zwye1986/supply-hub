@@ -27,6 +27,7 @@ import static com.aifuli.framework.common.exception.util.ServiceExceptionUtil.ex
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.SUPPLIER_ALREADY_HAS_PUBLISHED_CONNECTOR;
 
 @Service
+@lombok.extern.slf4j.Slf4j
 @RequiredArgsConstructor
 public class ConnectorPublicationService {
 
@@ -42,14 +43,31 @@ public class ConnectorPublicationService {
     private final SupplierConfigPublishRecordMapper publishRecordMapper;
     private final BusinessNoGenerator businessNoGenerator;
     private final OutboxEventRepository outboxRepository;
+    private final com.aifuli.module.supplychain.tradecore.supply.dal.mysql.CredentialSetMapper credentialSetMapper;
+    private final com.aifuli.module.supplychain.supplieradapter.metadata.AdapterMetadataRegistry metadataRegistry;
+    private final ConnectorCredentialBindingValidator credentialBindingValidator;
 
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public PublishResult publish(PublishConnectorCommand command) {
+        log.info("[publishConnector] connectorNo={} connectorVersionId={} expectedConnectorVersion={} operatorId={} traceId={}",
+                command.connectorNo(),command.connectorVersionId(),command.expectedConnectorVersion(),command.operatorId(),command.traceId());
+        // 只读定位集后按集→连接器→版本→项锁序重读；追加项同样集→版本，避免锁序倒置。
+        // 设计见 docs/superpowers/specs/2026-10-02-huasheng-fulfillment-adapter-design.md#123-第二切片显式凭据集绑定与运行时配置。
+        SupplierConnectorVersionDO located = versionMapper.selectById(command.connectorVersionId());
+        if (located == null) throw new IllegalArgumentException("Connector version does not exist");
+        Long setId = located.getCredentialSetId();
+        if (setId != null && credentialSetMapper.selectByIdForUpdate(setId) == null) {
+            throw new IllegalArgumentException("Credential set does not exist");
+        }
         SupplierConnectorDO connector = connectorMapper.selectByNoForUpdate(command.connectorNo());
         SupplierConnectorVersionDO version = versionMapper.selectByIdForUpdate(command.connectorVersionId());
         if (connector == null || version == null || !connector.getId().equals(version.getConnectorId())) {
             throw new IllegalArgumentException("Connector or connector version does not exist");
         }
+        if (!java.util.Objects.equals(setId, version.getCredentialSetId())) {
+            throw new IllegalStateException("Connector credential association changed during publication");
+        }
+        credentialBindingValidator.verify(metadataRegistry.require(connector.getAdapterType()), connector.getSupplierId(), version, true);
         LocalDateTime now = now();
         if (connector.getVersion() != command.expectedConnectorVersion()
                 || version.getStatus() != ConnectorVersionStatus.VALIDATED.getCode()

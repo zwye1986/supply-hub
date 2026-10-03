@@ -164,10 +164,19 @@ class RechargeFrequencyAcceptanceIntegrationTest {
         }
         assertThat(freezes(jdbc)).isZero();
     }
-    /** 测试复制有效种子关系，所有引用仍在真实供应链库中。 */
+    /**
+     * 测试复制有效种子关系，所有引用仍在真实供应链库中。
+     * 仅根据 MySQL 元数据跳过 VIRTUAL/STORED GENERATED 计算列；DEFAULT_GENERATED 仍可写，
+     * 不能借修夹具删除业务列或覆盖生产生成表达式。
+     * 设计见 docs/superpowers/specs/2026-10-02-huasheng-fulfillment-adapter-design.md#123-第二切片显式凭据集绑定与运行时配置。
+     */
     static long cloneRow(JdbcTemplate jdbc, String table, long id, Map<String, Object> overrides) {
         var values = new LinkedHashMap<>(jdbc.queryForMap("SELECT * FROM " + table + " WHERE id=?", id));
         values.remove("id"); values.putAll(overrides);
+        var generatedColumns = jdbc.queryForList("SELECT COLUMN_NAME FROM information_schema.COLUMNS "
+                + "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? "
+                + "AND (EXTRA LIKE '%VIRTUAL GENERATED%' OR EXTRA LIKE '%STORED GENERATED%')", String.class, table);
+        values.keySet().removeAll(generatedColumns);
         var keys = new GeneratedKeyHolder();
         jdbc.update(connection -> {
             var sql = "INSERT INTO " + table + " (" + String.join(",", values.keySet()) + ") VALUES (" + String.join(",", Collections.nCopies(values.size(), "?")) + ")";

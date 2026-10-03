@@ -109,6 +109,15 @@ class SupplierConfigurationAdminRestContractTest {
                 .contains("adapterType", "capabilities", "credentialKeys");
     }
 
+    @Test
+    void explicitBindingRequestAndSafeDetailMatchContract() {
+        assertThat(Arrays.stream(SupplierConfigurationAdminController.CreateConnectorDraftReqVO.class.getDeclaredFields())
+                .map(java.lang.reflect.Field::getName)).contains("credentialSetCode", "extraConfig");
+        assertThat(recordComponentNames(SupplierConfigurationQueryService.AdapterTypeView.class)).contains("credentialBindingMode");
+        assertThat(recordComponentNames(SupplierConfigurationQueryService.ConnectorVersionDetail.class))
+                .contains("credentialBindingMode", "credentialSlotNo", "credentialSetCode").doesNotContain("secretRef", "secretValue", "credentialItemSnapshot");
+    }
+
     private static void assertRootMapping(Class<?> controller, String expectedRoot) {
         RequestMapping root = controller.getAnnotation(RequestMapping.class);
         assertThat(root).as("%s 必须有类级 @RequestMapping", controller.getSimpleName()).isNotNull();

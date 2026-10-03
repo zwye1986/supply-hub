@@ -64,7 +64,7 @@ public class SupplierConfigurationQueryService {
                     metadata.capabilities().stream().map(Enum::name).toList(),
                     List.copyOf(metadata.credentialKeys()),
                     templates.statusMappings().size(),
-                    templates.errorCodeMappings().size());
+                    templates.errorCodeMappings().size(), metadata.credentialBindingMode().name());
         }).toList();
     }
 
@@ -120,6 +120,8 @@ public class SupplierConfigurationQueryService {
                         capability.getCapabilityCode(),
                         capability.getEnabled() != null && capability.getEnabled() == 1))
                 .toList();
+        CredentialSlotDO slot = version.getCredentialSlotId() == null ? null : credentialSlotMapper.selectById(version.getCredentialSlotId());
+        CredentialSetDO set = version.getCredentialSetId() == null ? null : credentialSetMapper.selectById(version.getCredentialSetId());
         return new ConnectorVersionDetail(
                 version.getId(), connector.getConnectorNo(), connector.getAdapterType(),
                 version.getVersionNo(), version.getStatus(), version.getBaseUrl(),
@@ -127,7 +129,9 @@ public class SupplierConfigurationQueryService {
                 version.getConnectTimeoutMs(), version.getReadTimeoutMs(), version.getRateLimit(),
                 version.getConcurrencyLimit(), version.getAdapterConfigSchemaVersion(),
                 version.getAdapterConfigJson(), version.getExtraConfig(),
-                version.getValidationStatus(), version.getPublishedAt(), capabilities);
+                version.getValidationStatus(), version.getPublishedAt(), capabilities,
+                metadataRegistry.require(connector.getAdapterType()).credentialBindingMode().name(),
+                slot == null ? null : slot.getSlotNo(), set == null ? null : set.getSetCode());
     }
 
     /**
@@ -194,7 +198,7 @@ public class SupplierConfigurationQueryService {
     /** T1 适配器类型目录项。capabilities/credentialKeys 为封闭集字符串，计数来自映射模板。 */
     public record AdapterTypeView(String adapterType, List<String> capabilities,
                                   List<String> credentialKeys, int statusMappingTemplateCount,
-                                  int errorCodeMappingTemplateCount) {
+                                  int errorCodeMappingTemplateCount, String credentialBindingMode) {
     }
 
     /**
@@ -215,7 +219,8 @@ public class SupplierConfigurationQueryService {
                                          Integer concurrencyLimit, Integer adapterConfigSchemaVersion,
                                          String adapterConfigJson, String extraConfig,
                                          Short validationStatus, java.time.LocalDateTime publishedAt,
-                                         List<CapabilityView> capabilities) {
+                                         List<CapabilityView> capabilities, String credentialBindingMode,
+                                         String credentialSlotNo, String credentialSetCode) {
     }
 
     /** T3 能力启用态。capabilityCode 落在 {@link com.aifuli.module.supplychain.supplieradapter.metadata.Capability} 封闭集。 */
