@@ -14,15 +14,19 @@ import java.io.Serializable;
 @Data
 public class CancelPaymentFlowRespDTO implements Serializable {
 
+    /** 拉起采购商收银台的稳定外部交易号 */
     @Schema(description = "拉起采购商收银台的稳定外部交易号", example = "IPF_OTN")
     private String outTradeNo;
 
+    /** 取消转退款生成的中台退款稳定业务编号；未转退款为空 */
     @Schema(description = "取消转退款生成的中台退款稳定业务编号；未转退款为空", example = "IRC_C")
     private String refundCaseNo;
 
+    /** 是否已转全额退款（已支付流水取消） */
     @Schema(description = "是否已转全额退款（已支付流水取消）", example = "true")
     private Boolean convertedToRefund;
 
+    /** 是否抢占派发（转退款后立即外呼收银台） */
     @Schema(description = "是否抢占派发（转退款后立即外呼收银台）", example = "true")
     private Boolean claimedForDispatch;
 }

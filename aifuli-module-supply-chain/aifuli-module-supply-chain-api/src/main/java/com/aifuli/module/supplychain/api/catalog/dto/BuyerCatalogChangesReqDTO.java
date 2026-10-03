@@ -14,23 +14,27 @@ import java.io.Serializable;
 @Data
 public class BuyerCatalogChangesReqDTO implements Serializable {
 
+    /** 调用来源系统编码 */
     @Schema(description = "调用来源系统编码", requiredMode = Schema.RequiredMode.REQUIRED, example = "AIFULI_MALL")
     @NotBlank(message = "调用来源系统不能为空")
     @Size(max = 64)
     private String sourceSystem;
 
+    /** 来源系统中的外部租户标识 */
     @Schema(description = "来源系统中的外部租户标识", requiredMode = Schema.RequiredMode.REQUIRED,
             example = "tenant-wusheng")
     @NotBlank(message = "外部租户标识不能为空")
     @Size(max = 128)
     private String externalTenantId;
 
-    @Schema(description = "上次成功持久化的游标；首次拉取传 0", requiredMode = Schema.RequiredMode.REQUIRED,
+    /** 采购商商品变更游标，同一采购商范围内单调递增但允许有间隙；首次拉取传 0 */
+    @Schema(description = "采购商商品变更游标，同一采购商范围内单调递增但允许有间隙；首次拉取传 0", requiredMode = Schema.RequiredMode.REQUIRED,
             example = "0")
     @NotNull(message = "商品变更游标不能为空")
     @Min(value = 0, message = "商品变更游标不能小于 0")
     private Long cursor;
 
+    /** 单次拉取上限 */
     @Schema(description = "单次拉取上限", requiredMode = Schema.RequiredMode.REQUIRED, example = "100")
     @NotNull(message = "拉取上限不能为空")
     @Min(value = 1, message = "拉取上限最小为 1")

@@ -39,6 +39,7 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PLATFORM_SPU_NOT_FOUND;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_BATCH_INPUT_INVALID;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_STATUS_INVALID;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_STATUS_TRANSITION_NOT_ALLOWED;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
@@ -377,5 +378,128 @@ class ProductBatchStatusTest {
         // 已成功项已提交，失败的系统异常项只回滚自己，不影响前一项。
         verify(transactionManager, times(1)).commit(transactionStatus);
         verify(transactionManager, times(1)).rollback(transactionStatus);
+    }
+
+    /** 方案 A：SPU 与 SKU 当前已是目标状态（如 INACTIVE）时，同状态变更幂等放行，计入 succeeded。 */
+    @Test
+    void batchIdempotentWhenAlreadyInactiveStatus() {
+        stubSpuWithStatus(1L, "SPU_001", CatalogEntityStatus.INACTIVE);
+        stubSkuWithStatus(10L, "SKU_001", CatalogEntityStatus.INACTIVE);
+
+        BatchStatusResult result = service.batchChangeStatus(new BatchStatusCommand(
+                List.of("SPU_001"), List.of("SKU_001"), CatalogEntityStatus.INACTIVE.getCode(), null, 99L));
+
+        assertThat(result.succeeded()).containsExactly("SPU_001", "SKU_001");
+        assertThat(result.failed()).isEmpty();
+        verify(spuMapper).updateById(any(PlatformSpuDO.class));
+        verify(skuMapper).updateById(any(PlatformSkuDO.class));
+    }
+
+    /** 方案 A：当前已是 ACTIVE 时再次上架，幂等成功放行。 */
+    @Test
+    void batchIdempotentWhenAlreadyActiveStatus() {
+        stubSpuWithStatus(2L, "SPU_002", CatalogEntityStatus.ACTIVE);
+        stubSkuWithStatus(20L, "SKU_002", CatalogEntityStatus.ACTIVE);
+
+        BatchStatusResult result = service.batchChangeStatus(new BatchStatusCommand(
+                List.of("SPU_002"), List.of("SKU_002"), CatalogEntityStatus.ACTIVE.getCode(), null, 99L));
+
+        assertThat(result.succeeded()).containsExactly("SPU_002", "SKU_002");
+        assertThat(result.failed()).isEmpty();
+        verify(productTypeValidationService).requireActiveForUpdate(any());
+        verify(spuMapper).updateById(any(PlatformSpuDO.class));
+        verify(skuMapper).updateById(any(PlatformSkuDO.class));
+    }
+
+    /** 方案 A：草稿状态 SPU 不支持直接下架，拒绝并返回 PRODUCT_STATUS_TRANSITION_NOT_ALLOWED 且附带中文提示。 */
+    @Test
+    void batchTransitionNotAllowedForDraftToInactive() {
+        stubSpuWithStatus(3L, "SPU_DRAFT", CatalogEntityStatus.DRAFT);
+
+        BatchStatusResult result = service.batchChangeStatus(new BatchStatusCommand(
+                List.of("SPU_DRAFT"), null, CatalogEntityStatus.INACTIVE.getCode(), null, 99L));
+
+        assertThat(result.succeeded()).isEmpty();
+        assertThat(result.failed()).hasSize(1);
+        BatchStatusFailedItem item = result.failed().get(0);
+        assertThat(item.code()).isEqualTo("SPU_DRAFT");
+        assertThat(item.errorCode()).isEqualTo(PRODUCT_STATUS_TRANSITION_NOT_ALLOWED.getCode());
+        assertThat(item.errorMessage())
+                .contains("测试商品_SPU_DRAFT")
+                .contains("SPU_DRAFT")
+                .contains("草稿")
+                .contains("停用");
+    }
+
+    /** 方案 A：草稿状态 SKU 不支持直接下架，拒绝并返回包含 SKU 名称与编码的错误提示。 */
+    @Test
+    void batchTransitionNotAllowedForDraftSkuToInactive() {
+        stubSkuWithStatus(30L, "SKU_DRAFT", CatalogEntityStatus.DRAFT);
+
+        BatchStatusResult result = service.batchChangeStatus(new BatchStatusCommand(
+                null, List.of("SKU_DRAFT"), CatalogEntityStatus.INACTIVE.getCode(), null, 99L));
+
+        assertThat(result.succeeded()).isEmpty();
+        assertThat(result.failed()).hasSize(1);
+        BatchStatusFailedItem item = result.failed().get(0);
+        assertThat(item.code()).isEqualTo("SKU_DRAFT");
+        assertThat(item.errorCode()).isEqualTo(PRODUCT_STATUS_TRANSITION_NOT_ALLOWED.getCode());
+        assertThat(item.errorMessage())
+                .contains("测试规格_SKU_DRAFT")
+                .contains("SKU_DRAFT")
+                .contains("草稿")
+                .contains("停用");
+    }
+
+    /** 方案 A：已归档状态 SPU 终态不可流转，拒绝并返回清晰提示。 */
+    @Test
+    void batchTransitionNotAllowedForArchived() {
+        // 注：selectByCodeForUpdate 查出已在库但状态为 ARCHIVED 的实体
+        when(spuMapper.selectByCodeForUpdate("SPU_ARCHIVED")).thenReturn(PlatformSpuDO.builder()
+                .id(4L)
+                .spuCode("SPU_ARCHIVED")
+                .spuName("已归档商品")
+                .status(CatalogEntityStatus.ARCHIVED.getCode())
+                .version(0L)
+                .build());
+
+        BatchStatusResult result = service.batchChangeStatus(new BatchStatusCommand(
+                List.of("SPU_ARCHIVED"), null, CatalogEntityStatus.INACTIVE.getCode(), null, 99L));
+
+        assertThat(result.succeeded()).isEmpty();
+        assertThat(result.failed()).hasSize(1);
+        BatchStatusFailedItem item = result.failed().get(0);
+        assertThat(item.code()).isEqualTo("SPU_ARCHIVED");
+        // 查实体时若已归档会按 PLATFORM_SPU_NOT_FOUND 处理（requireSpuForUpdate 拦截已归档），符合领域安全边界
+        assertThat(item.errorCode()).isIn(
+                PRODUCT_STATUS_TRANSITION_NOT_ALLOWED.getCode(),
+                PLATFORM_SPU_NOT_FOUND.getCode());
+    }
+
+    private void stubSpuWithStatus(long id, String spuCode, CatalogEntityStatus status) {
+        when(spuMapper.selectByCodeForUpdate(spuCode)).thenReturn(PlatformSpuDO.builder()
+                .id(id)
+                .spuCode(spuCode)
+                .spuName("测试商品_" + spuCode)
+                .status(status.getCode())
+                .productType("EQUITY_PRODUCT")
+                .version(0L)
+                .build());
+        when(spuMapper.updateById(any(PlatformSpuDO.class))).thenReturn(1);
+    }
+
+    private void stubSkuWithStatus(long id, String skuCode, CatalogEntityStatus status) {
+        when(skuMapper.selectByCodeForUpdate(skuCode)).thenReturn(PlatformSkuDO.builder()
+                .id(id)
+                .skuCode(skuCode)
+                .skuName("测试规格_" + skuCode)
+                .status(status.getCode())
+                .targetSchemaCode("DIRECT_RECHARGE_TARGET")
+                .targetSchemaVersion(1)
+                .resultSchemaCode(com.aifuli.module.supplychain.border.fulfillment.domain.FulfillmentResultSchemaCode.DIRECT_RECHARGE_RESULT.name())
+                .resultSchemaVersion(1)
+                .version(0L)
+                .build());
+        when(skuMapper.updateById(any(PlatformSkuDO.class))).thenReturn(1);
     }
 }

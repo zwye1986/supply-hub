@@ -82,6 +82,7 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_SKU_FIELD_INVALID;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_SKU_REQUIRED;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_STATUS_INVALID;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_STATUS_TRANSITION_NOT_ALLOWED;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_FULFILLMENT_TYPE_IMMUTABLE;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_SUGGESTED_PRICE_RULE_INVALID;
 
@@ -452,7 +453,7 @@ public class ProductCatalogCommandService {
     private void applySpuStatus(String code, CatalogEntityStatus target, String unshelveMode, Long operatorId) {
         log.info("变更平台 SPU 状态 spuCode={} targetStatus={} unshelveMode={} operatorId={}", code, target, unshelveMode, operatorId);
         PlatformSpuDO entity = requireSpuForUpdate(code);
-        checkTransition(entity.getStatus(), target);
+        checkTransition(entity.getStatus(), target, entity.getSpuCode(), entity.getSpuName());
         if (target == CatalogEntityStatus.ACTIVE) {
             productTypeValidationService.requireActiveForUpdate(entity.getProductType());
             entity.setUnshelveMode(null);
@@ -471,7 +472,7 @@ public class ProductCatalogCommandService {
     private void applySkuStatus(String code, CatalogEntityStatus target, Long operatorId) {
         log.info("变更平台 SKU 状态 skuCode={} targetStatus={} operatorId={}", code, target, operatorId);
         PlatformSkuDO entity = requireSkuForUpdate(code);
-        checkTransition(entity.getStatus(), target);
+        checkTransition(entity.getStatus(), target, entity.getSkuCode(), entity.getSkuName());
         if (target == CatalogEntityStatus.ACTIVE) {
             validateSchema(entity.getTargetSchemaCode(), entity.getTargetSchemaVersion(), entity.getResultSchemaCode(),
                     entity.getResultSchemaVersion(), true);
@@ -1173,10 +1174,30 @@ public class ProductCatalogCommandService {
         return entity;
     }
 
-    private static void checkTransition(short currentCode, CatalogEntityStatus target) {
+    /**
+     * 校验商品生命周期状态迁移。
+     * <p><b>同状态幂等放行（方案 A）</b>：当实体当前状态与目标状态一致时直接放行，视为幂等成功，
+     * 避免运营人员在批量操作已达目标状态的商品时大面积报错。
+     * <p><b>非法流转精准业务拒绝</b>：当状态不合法时，抛出 {@code PRODUCT_STATUS_TRANSITION_NOT_ALLOWED}
+     * 并动态携带商品名称、编码、当前状态与操作约束提示，告别模糊晦涩的底层技术报错。
+     * <p>设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#4110-批量上下架接口put-supply-chainproductsbatch-status}。
+     */
+    private static void checkTransition(short currentCode, CatalogEntityStatus target,
+                                        String businessCode, String businessName) {
         CatalogEntityStatus current = CatalogEntityStatus.fromCode(currentCode);
+        if (current == target) {
+            return;
+        }
         if (!current.canTransitionTo(target)) {
-            throw exception(PRODUCT_STATUS_INVALID);
+            String targetDesc = target.getChineseName();
+            if (current == CatalogEntityStatus.DRAFT && target == CatalogEntityStatus.INACTIVE) {
+                targetDesc = target.getChineseName() + "（草稿请先上架或归档）";
+            } else if (current == CatalogEntityStatus.ARCHIVED) {
+                targetDesc = target.getChineseName() + "（已归档商品不可变更状态）";
+            }
+            String nameDesc = hasText(businessName) ? businessName.trim() : (hasText(businessCode) ? businessCode.trim() : "-");
+            String codeDesc = hasText(businessCode) ? businessCode.trim() : "-";
+            throw exception(PRODUCT_STATUS_TRANSITION_NOT_ALLOWED, nameDesc, codeDesc, current.getChineseName(), targetDesc);
         }
     }
 

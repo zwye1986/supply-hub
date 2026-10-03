@@ -19,22 +19,26 @@ import java.io.Serializable;
 @Data
 public class ReportRefundResultReqDTO implements Serializable {
 
+    /** 中台退款稳定业务编号 */
     @Schema(description = "中台退款稳定业务编号",
             requiredMode = Schema.RequiredMode.REQUIRED, example = "IRC_9")
     @NotBlank(message = "中台退款编号不能为空")
     @Size(max = 32, message = "中台退款编号不能超过 32 个字符")
     private String refundCaseNo;
 
+    /** 采购商实际退款金额，单位为分 */
     @Schema(description = "采购商实际退款金额，单位为分",
             requiredMode = Schema.RequiredMode.REQUIRED, example = "3000")
     @NotNull(message = "实际退款金额不能为空")
     @Positive(message = "实际退款金额必须大于 0")
     private Long actualAmountCny;
 
+    /** 采购商收银台退款单引用 */
     @Schema(description = "采购商收银台退款单引用", example = "CRF_1")
     @Size(max = 128, message = "收银台退款单引用不能超过 128 个字符")
     private String cashierRefundReference;
 
+    /** 链路追踪标识，缺省由服务端生成 */
     @Schema(description = "链路追踪标识，缺省由服务端生成", example = "trace-cb-001")
     @Size(max = 128, message = "链路追踪标识不能超过 128 个字符")
     private String traceId;

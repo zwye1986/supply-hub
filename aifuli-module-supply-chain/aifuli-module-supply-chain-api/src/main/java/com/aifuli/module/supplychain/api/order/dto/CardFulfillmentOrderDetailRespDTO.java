@@ -11,33 +11,41 @@ import java.time.OffsetDateTime;
 @Data
 public class CardFulfillmentOrderDetailRespDTO implements Serializable {
 
-    @Schema(description = "履约请求号", requiredMode = Schema.RequiredMode.REQUIRED,
+    /** 履约请求稳定业务编号 */
+    @Schema(description = "履约请求稳定业务编号", requiredMode = Schema.RequiredMode.REQUIRED,
             example = "FR_01K1XXXXXXXXXXXXXXXXXXXXXX")
     private String fulfillmentRequestNo;
 
-    @Schema(description = "采购商商品编码", requiredMode = Schema.RequiredMode.REQUIRED,
+    /** 采购商范围内的商品编码 */
+    @Schema(description = "采购商范围内的商品编码", requiredMode = Schema.RequiredMode.REQUIRED,
             example = "TELCO-100")
     private String buyerSkuCode;
 
-    @Schema(description = "受理时采购商商品发布版本", requiredMode = Schema.RequiredMode.REQUIRED,
+    /** 受理时冻结的采购商商品版本主键 */
+    @Schema(description = "受理时冻结的采购商商品版本主键", requiredMode = Schema.RequiredMode.REQUIRED,
             example = "42")
     private Long listingVersion;
 
+    /** 请求履约数量 */
     @Schema(description = "请求履约数量", requiredMode = Schema.RequiredMode.REQUIRED, example = "1")
     private Long requestedQuantity;
 
-    @Schema(description = "已确认交付数量", requiredMode = Schema.RequiredMode.REQUIRED, example = "0")
+    /** 已经成功交付的数量 */
+    @Schema(description = "已经成功交付的数量", requiredMode = Schema.RequiredMode.REQUIRED, example = "0")
     private Long deliveredQuantity;
 
-    @Schema(description = "标准履约状态", requiredMode = Schema.RequiredMode.REQUIRED,
+    /** 履约请求状态：0待路由，10路由中，20履约中，40成功，50失败，90人工处理；一期不支持部分成功 */
+    @Schema(description = "履约请求状态：0待路由，10路由中，20履约中，40成功，50失败，90人工处理；一期不支持部分成功", requiredMode = Schema.RequiredMode.REQUIRED,
             example = "PROCESSING")
     private FulfillmentStatus fulfillmentStatus;
 
+    /** 是否已有可授权查询的敏感资产 */
     @Schema(description = "是否已有可授权查询的敏感资产", requiredMode = Schema.RequiredMode.REQUIRED,
             example = "false")
     private Boolean assetAvailable;
 
-    @Schema(description = "履约详情最后更新时间", requiredMode = Schema.RequiredMode.REQUIRED,
+    /** 履约请求最后更新时间，Asia/Shanghai */
+    @Schema(description = "履约请求最后更新时间，Asia/Shanghai", requiredMode = Schema.RequiredMode.REQUIRED,
             example = "2026-08-11T02:31:00Z")
     private OffsetDateTime updatedAt;
 }

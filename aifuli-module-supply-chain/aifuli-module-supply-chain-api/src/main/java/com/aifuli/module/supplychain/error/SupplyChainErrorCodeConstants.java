@@ -114,7 +114,7 @@ public interface SupplyChainErrorCodeConstants {
     ErrorCode PRODUCT_CANNOT_DELETE_HAS_PROJECT_LISTING =
             error(1_050_001_094, "商品仍有关联项目商品，禁止删除");
     ErrorCode PRODUCT_SCHEMA_INVALID = error(1_050_001_095, "商品履约 Schema 配置不合法");
-    ErrorCode PRODUCT_STATUS_INVALID = error(1_050_001_096, "商品中心实体状态迁移不合法");
+    ErrorCode PRODUCT_STATUS_INVALID = error(1_050_001_096, "商品状态不合法或不支持当前流转");
     ErrorCode PRODUCT_CONCURRENT_UPDATE = error(1_050_001_097, "商品中心实体已被并发修改");
     ErrorCode PRODUCT_DELIVERY_TYPE_INVALID = error(1_050_001_098, "商品配送履约模式不合法");
     ErrorCode PRODUCT_QUANTITY_RANGE_INVALID = error(1_050_001_099, "商品起购量与限购量区间不合法");
@@ -231,6 +231,11 @@ public interface SupplyChainErrorCodeConstants {
     // 避免向用户展示与真实原因不符的文案。整体拒绝发生在逐项独立事务之前，不产生任何写入。
     ErrorCode PRODUCT_BATCH_INPUT_INVALID =
             error(1_050_001_169, "批量上下架入参不合法：未选择商品、商品编码为空或超过单次 200 条上限");
+
+    // 非法状态迁移专用错误（含动态占位符：商品名称、编码、当前状态、目标状态）。设计见
+    // docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#4110-批量上下架接口put-supply-chainproductsbatch-status
+    ErrorCode PRODUCT_STATUS_TRANSITION_NOT_ALLOWED =
+            error(1_050_001_170, "商品【{}】（{}）当前状态【{}】不支持变更为【{}】");
 
     // 项目标准资产查询稳定错误，设计见 docs/superpowers/specs/2026-10-02-project-standard-query-asset-design.md#4-资产结果与封闭载荷。
     ErrorCode ASSET_QUERY_UNSUPPORTED_PRODUCT_TYPE =
@@ -423,7 +428,8 @@ public interface SupplyChainErrorCodeConstants {
             entry(SUPPLIER_ALREADY_HAS_PUBLISHED_CONNECTOR, RetryDirective.DO_NOT_RETRY),
             entry(SUPPLIER_NO_PUBLISHED_CONNECTOR, RetryDirective.DO_NOT_RETRY),
             entry(OFFER_CAPABILITY_MISSING, RetryDirective.DO_NOT_RETRY),
-            entry(PRODUCT_BATCH_INPUT_INVALID, RetryDirective.DO_NOT_RETRY));
+            entry(PRODUCT_BATCH_INPUT_INVALID, RetryDirective.DO_NOT_RETRY),
+            entry(PRODUCT_STATUS_TRANSITION_NOT_ALLOWED, RetryDirective.DO_NOT_RETRY));
 
     static RetryDirective retryDirective(int errorCode) {
         return RETRY_DIRECTIVES.getOrDefault(errorCode, RetryDirective.DO_NOT_RETRY);

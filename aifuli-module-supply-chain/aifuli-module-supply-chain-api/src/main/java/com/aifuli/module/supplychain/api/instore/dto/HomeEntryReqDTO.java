@@ -17,11 +17,13 @@ import java.io.Serializable;
 @Data
 public class HomeEntryReqDTO implements Serializable {
 
+    /** 经度 */
     @Schema(description = "经度", requiredMode = Schema.RequiredMode.REQUIRED, example = "121.4737")
     @NotBlank(message = "经度不能为空")
     @Size(max = 32, message = "经度不能超过 32 个字符")
     private String longitude;
 
+    /** 纬度 */
     @Schema(description = "纬度", requiredMode = Schema.RequiredMode.REQUIRED, example = "31.2304")
     @NotBlank(message = "纬度不能为空")
     @Size(max = 32, message = "纬度不能超过 32 个字符")

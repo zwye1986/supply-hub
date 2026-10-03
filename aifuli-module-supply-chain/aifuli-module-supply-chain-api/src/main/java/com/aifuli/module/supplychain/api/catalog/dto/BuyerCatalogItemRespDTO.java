@@ -10,56 +10,72 @@ import java.time.OffsetDateTime;
 @Data
 public class BuyerCatalogItemRespDTO implements Serializable {
 
-    @Schema(description = "采购商商品编码", requiredMode = Schema.RequiredMode.REQUIRED,
+    /** 采购商范围内的商品编码 */
+    @Schema(description = "采购商范围内的商品编码", requiredMode = Schema.RequiredMode.REQUIRED,
             example = "TELCO-100")
     private String buyerSkuCode;
 
-    @Schema(description = "采购商商品发布版本", requiredMode = Schema.RequiredMode.REQUIRED, example = "42")
+    /** 当前已发布采购商商品版本主键 */
+    @Schema(description = "当前已发布采购商商品版本主键", requiredMode = Schema.RequiredMode.REQUIRED, example = "42")
     private Long listingVersion;
 
-    @Schema(description = "标准 SKU 编码", requiredMode = Schema.RequiredMode.REQUIRED, example = "TELCO_100")
+    /** 平台SKU永久业务编码 */
+    @Schema(description = "平台SKU永久业务编码", requiredMode = Schema.RequiredMode.REQUIRED, example = "TELCO_100")
     private String platformSkuCode;
 
-    @Schema(description = "标准 SPU 编码", requiredMode = Schema.RequiredMode.REQUIRED, example = "TELCO_RECHARGE")
+    /** 平台SPU永久业务编码 */
+    @Schema(description = "平台SPU永久业务编码", requiredMode = Schema.RequiredMode.REQUIRED, example = "TELCO_RECHARGE")
     private String platformSpuCode;
 
-    @Schema(description = "商品展示名称", requiredMode = Schema.RequiredMode.REQUIRED,
+    /** 平台SKU标准名称 */
+    @Schema(description = "平台SKU标准名称", requiredMode = Schema.RequiredMode.REQUIRED,
             example = "话费直充 100 元")
     private String displayName;
 
-    @Schema(description = "品牌编码", requiredMode = Schema.RequiredMode.REQUIRED, example = "CMCC")
+    /** 平台品牌永久编码 */
+    @Schema(description = "平台品牌永久编码", requiredMode = Schema.RequiredMode.REQUIRED, example = "CMCC")
     private String brandCode;
 
-    @Schema(description = "品牌名称", requiredMode = Schema.RequiredMode.REQUIRED, example = "中国移动")
+    /** 品牌中文或标准名称 */
+    @Schema(description = "品牌中文或标准名称", requiredMode = Schema.RequiredMode.REQUIRED, example = "中国移动")
     private String brandName;
 
-    @Schema(description = "类目编码", requiredMode = Schema.RequiredMode.REQUIRED, example = "DIRECT_RECHARGE")
+    /** 平台类目永久编码 */
+    @Schema(description = "平台类目永久编码", requiredMode = Schema.RequiredMode.REQUIRED, example = "DIRECT_RECHARGE")
     private String categoryCode;
 
+    /** 类目名称 */
     @Schema(description = "类目名称", requiredMode = Schema.RequiredMode.REQUIRED, example = "话费直充")
     private String categoryName;
 
-    @Schema(description = "履约类型", requiredMode = Schema.RequiredMode.REQUIRED, example = "DIRECT_RECHARGE")
+    /** 履约类型：DIRECT_RECHARGE直充，VOUCHER_CODE券码，CARD_CODE_SECRET卡号卡密，VOUCHER_URL券链接，ACCOUNT_BOUND_BENEFIT账户绑定权益 */
+    @Schema(description = "履约类型：DIRECT_RECHARGE直充，VOUCHER_CODE券码，CARD_CODE_SECRET卡号卡密，VOUCHER_URL券链接，ACCOUNT_BOUND_BENEFIT账户绑定权益", requiredMode = Schema.RequiredMode.REQUIRED, example = "DIRECT_RECHARGE")
     private String fulfillmentType;
 
-    @Schema(description = "采购商结算单价，单位为 CNY 分", requiredMode = Schema.RequiredMode.REQUIRED,
+    /** 模板L2结算单价，单位为分 */
+    @Schema(description = "模板L2结算单价，单位为分", requiredMode = Schema.RequiredMode.REQUIRED,
             example = "9800")
     private Long buyerSettlementUnitPrice;
 
-    @Schema(description = "币种，一期固定 CNY", requiredMode = Schema.RequiredMode.REQUIRED, example = "CNY")
+    /** 面值币种，一期固定CNY */
+    @Schema(description = "面值币种，一期固定CNY", requiredMode = Schema.RequiredMode.REQUIRED, example = "CNY")
     private String currency;
 
-    @Schema(description = "采购商商品生命周期", requiredMode = Schema.RequiredMode.REQUIRED,
+    /** 采购商商品生命周期：0草稿，10已发布，20暂停，90已退役 */
+    @Schema(description = "采购商商品生命周期：0草稿，10已发布，20暂停，90已退役", requiredMode = Schema.RequiredMode.REQUIRED,
             example = "PUBLISHED")
     private String listingStatus;
 
-    @Schema(description = "供给可用性", requiredMode = Schema.RequiredMode.REQUIRED, example = "AVAILABLE")
+    /** 供给可用性：10可用，20不可用，30未知 */
+    @Schema(description = "供给可用性：10可用，20不可用，30未知", requiredMode = Schema.RequiredMode.REQUIRED, example = "AVAILABLE")
     private String availabilityStatus;
 
-    @Schema(description = "可用性投影版本", requiredMode = Schema.RequiredMode.REQUIRED, example = "7")
+    /** 相关可用性投影版本号 */
+    @Schema(description = "相关可用性投影版本号", requiredMode = Schema.RequiredMode.REQUIRED, example = "7")
     private Long availabilityVersion;
 
-    @Schema(description = "快照最后更新时间", requiredMode = Schema.RequiredMode.REQUIRED,
+    /** 投影最后更新时间，Asia/Shanghai */
+    @Schema(description = "投影最后更新时间，Asia/Shanghai", requiredMode = Schema.RequiredMode.REQUIRED,
             example = "2026-08-11T02:30:00Z")
     private OffsetDateTime updatedAt;
 }

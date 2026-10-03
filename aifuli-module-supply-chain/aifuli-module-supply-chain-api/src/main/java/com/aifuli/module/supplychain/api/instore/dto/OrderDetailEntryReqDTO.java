@@ -16,7 +16,8 @@ import java.io.Serializable;
 @Data
 public class OrderDetailEntryReqDTO implements Serializable {
 
-    @Schema(description = "订单号", requiredMode = Schema.RequiredMode.REQUIRED, example = "ORDER-001")
+    /** 供应链总订单稳定业务编号 */
+    @Schema(description = "供应链总订单稳定业务编号", requiredMode = Schema.RequiredMode.REQUIRED, example = "ORDER-001")
     @NotBlank(message = "订单号不能为空")
     @Size(max = 32, message = "订单号不能超过 32 个字符")
     private String orderNo;

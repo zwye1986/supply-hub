@@ -14,26 +14,31 @@ import java.time.OffsetDateTime;
 @Data
 public class ReportRefundResultReqDTO implements Serializable {
 
-    @Schema(description = "中台退款稳定业务编号；按此加载已固化的归属",
+    /** 中台退款稳定业务编号 */
+    @Schema(description = "中台退款稳定业务编号",
             requiredMode = Schema.RequiredMode.REQUIRED, example = "RF_01HZ...")
     @NotBlank(message = "中台退款号不能为空")
     @Size(max = 32, message = "中台退款号不能超过 32 个字符")
     private String middleRefundNo;
 
+    /** 退款结果状态：PROCESSING/SUCCEEDED/REJECTED/UNKNOWN */
     @Schema(description = "退款结果状态：PROCESSING/SUCCEEDED/REJECTED/UNKNOWN",
             requiredMode = Schema.RequiredMode.REQUIRED, example = "SUCCEEDED")
     @NotBlank(message = "退款结果状态不能为空")
     @Size(max = 32, message = "退款结果状态不能超过 32 个字符")
     private String refundStatus;
 
-    @Schema(description = "采购商实际退给 C 端用户的金额，单位为分", example = "10000")
+    /** 采购商实际退给C端用户的金额，单位为分 */
+    @Schema(description = "采购商实际退给C端用户的金额，单位为分", example = "10000")
     @PositiveOrZero(message = "采购商实际退款金额不能为负数")
     private Long buyerActualRefundAmount;
 
+    /** 采购商收银台退款单引用 */
     @Schema(description = "采购商收银台退款单引用", example = "CASHRF-202608130001")
     @Size(max = 128, message = "收银台退款单引用不能超过 128 个字符")
     private String cashierRefundReference;
 
+    /** 收银台观测到退款结果的时间 */
     @Schema(description = "收银台观测到退款结果的时间", requiredMode = Schema.RequiredMode.REQUIRED,
             example = "2026-08-13T11:00:00+08:00")
     @NotNull(message = "退款观测时间不能为空")

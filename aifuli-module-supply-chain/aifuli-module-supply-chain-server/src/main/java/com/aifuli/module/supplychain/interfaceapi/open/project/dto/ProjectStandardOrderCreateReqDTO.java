@@ -13,18 +13,18 @@ import java.util.Map;
 @Data
 public class ProjectStandardOrderCreateReqDTO {
 
-    /** 采购商订单号，最大长度 128 */
+    /** 采购商侧C端订单号，与buyer_id组成永久受理键 */
     private String buyerOrderNo;
 
-    /** 采购商侧 SKU 编码，最大长度 128 */
+    /** 首次请求固化的采购商商品编码 */
     private String buyerSkuCode;
 
-    /** 履约数量，必须为严格整数 1 */
+    /** 请求数量，一期固定为1 */
     private Integer quantity;
 
     /** 履约目标参数，平铺 String 映射 */
     private Map<String, String> target;
 
-    /** 可选前次回执 CAS 版本号，正整数 */
+    /** 回执状态及条件重试CAS版本号 */
     private Long previousReceiptVersion;
 }
