@@ -11,9 +11,12 @@ import javax.crypto.Cipher;
 import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 import java.io.ByteArrayOutputStream;
+import java.io.PrintWriter;
+import java.io.StringWriter;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
+import java.security.PrivateKey;
 import java.security.Signature;
 import java.security.interfaces.RSAPublicKey;
 import java.util.Base64;
@@ -22,9 +25,10 @@ import java.util.Locale;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
 /**
- * 华胜通信密码协议测试，以独立 JCA 操作核对算法、字节编码和密钥格式。
+ * HUA_SHENG 通信密码协议测试，以独立 JCA 操作核对算法、字节编码和密钥格式。
  * 设计见 docs/superpowers/specs/2026-10-02-huasheng-fulfillment-adapter-design.md#121-第一切片通信密码协议。
  */
 class HuashengCryptoTest {
@@ -33,6 +37,12 @@ class HuashengCryptoTest {
     private static final String APP_ID = "abcdef0123456789";
     private static final String PLAIN = "{\"商品\":\"电影兑换券🎬\",\"数量\":1}";
     private static final HexFormat HEX = HexFormat.of();
+    private static final String SECRET_SECURITY_MARKER = "SYNTHETIC_SECRET_SECURITY_MARKER_INVALID_LENGTH";
+    private static final String BODY_SECURITY_MARKER = "SYNTHETIC_BODY_SECURITY_MARKER_47";
+    private static final String CIPHER_SECURITY_MARKER = "SYNTHETIC_CIPHER_SECURITY_MARKER_58";
+    private static final String PRIVATE_SECURITY_MARKER = "SYNTHETIC_PRIVATE_SECURITY_MARKER_69";
+    private static final String PUBLIC_SECURITY_MARKER = "SYNTHETIC_PUBLIC_SECURITY_MARKER_70";
+    private static final String SIGNATURE_SECURITY_MARKER = "SYNTHETIC_SIGNATURE_SECURITY_MARKER_81";
     private static KeyPair keyPair;
     private static KeyPair wrongKeyPair;
 
@@ -71,9 +81,9 @@ class HuashengCryptoTest {
     @DisplayName("非法 AES 密钥长度在加解密入口拒绝且错误不暴露密钥")
     void shouldRejectInvalidAesSecret(String secret) {
         assertThatThrownBy(() -> HuashengCrypto.encryptBodyHex(PLAIN, secret, APP_ID))
-                .isInstanceOf(IllegalArgumentException.class).hasMessage("华胜正文加密失败").hasCauseInstanceOf(IllegalArgumentException.class);
+                .isInstanceOf(IllegalArgumentException.class).hasMessage("HUA_SHENG 正文加密失败").hasCauseInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> HuashengCrypto.decryptBodyHex("0011", secret, APP_ID))
-                .isInstanceOf(IllegalArgumentException.class).hasMessage("华胜正文解密失败").hasCauseInstanceOf(IllegalArgumentException.class);
+                .isInstanceOf(IllegalArgumentException.class).hasMessage("HUA_SHENG 正文解密失败").hasCauseInstanceOf(IllegalArgumentException.class);
     }
 
     @ParameterizedTest
@@ -82,9 +92,9 @@ class HuashengCryptoTest {
     @DisplayName("非法 appId 字节长度在加解密入口拒绝")
     void shouldRejectInvalidIv(String appId) {
         assertThatThrownBy(() -> HuashengCrypto.encryptBodyHex(PLAIN, SECRET, appId))
-                .isInstanceOf(IllegalArgumentException.class).hasMessage("华胜正文加密失败").hasCauseInstanceOf(IllegalArgumentException.class);
+                .isInstanceOf(IllegalArgumentException.class).hasMessage("HUA_SHENG 正文加密失败").hasCauseInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> HuashengCrypto.decryptBodyHex("0011", SECRET, appId))
-                .isInstanceOf(IllegalArgumentException.class).hasMessage("华胜正文解密失败").hasCauseInstanceOf(IllegalArgumentException.class);
+                .isInstanceOf(IllegalArgumentException.class).hasMessage("HUA_SHENG 正文解密失败").hasCauseInstanceOf(IllegalArgumentException.class);
     }
 
     @ParameterizedTest
@@ -93,9 +103,9 @@ class HuashengCryptoTest {
     @DisplayName("空加解密正文拒绝且固定错误保留因果")
     void shouldRejectEmptyBodies(String body) {
         assertThatThrownBy(() -> HuashengCrypto.encryptBodyHex(body, SECRET, APP_ID))
-                .isInstanceOf(IllegalArgumentException.class).hasMessage("华胜正文加密失败").hasCauseInstanceOf(IllegalArgumentException.class);
+                .isInstanceOf(IllegalArgumentException.class).hasMessage("HUA_SHENG 正文加密失败").hasCauseInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> HuashengCrypto.decryptBodyHex(body, SECRET, APP_ID))
-                .isInstanceOf(IllegalArgumentException.class).hasMessage("华胜正文解密失败").hasCauseInstanceOf(IllegalArgumentException.class);
+                .isInstanceOf(IllegalArgumentException.class).hasMessage("HUA_SHENG 正文解密失败").hasCauseInstanceOf(IllegalArgumentException.class);
     }
 
     @ParameterizedTest
@@ -103,14 +113,14 @@ class HuashengCryptoTest {
     @DisplayName("奇数、非 ASCII hex 及包含空白的密文均拒绝")
     void shouldRejectMalformedCiphertext(String body) {
         assertThatThrownBy(() -> HuashengCrypto.decryptBodyHex(body, SECRET, APP_ID))
-                .isInstanceOf(IllegalArgumentException.class).hasMessage("华胜正文解密失败").hasCauseInstanceOf(IllegalArgumentException.class);
+                .isInstanceOf(IllegalArgumentException.class).hasMessage("HUA_SHENG 正文解密失败").hasCauseInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
     @DisplayName("非法 AES 块长度保留 JCA 错误因果")
     void shouldPreserveCipherFailureCause() {
         assertThatThrownBy(() -> HuashengCrypto.decryptBodyHex("0011", SECRET, APP_ID))
-                .isInstanceOf(IllegalArgumentException.class).hasMessage("华胜正文解密失败")
+                .isInstanceOf(IllegalArgumentException.class).hasMessage("HUA_SHENG 正文解密失败")
                 .hasCauseInstanceOf(javax.crypto.IllegalBlockSizeException.class);
     }
 
@@ -177,17 +187,17 @@ class HuashengCryptoTest {
     void shouldRejectMissingSigningBody(String body) throws Exception {
         assertThat(HuashengCrypto.verifyBodyHex(body, independentSign("aabb"), keyPair.getPublic())).isFalse();
         assertThatThrownBy(() -> HuashengCrypto.signBodyHex(body, keyPair.getPrivate()))
-                .isInstanceOf(IllegalArgumentException.class).hasMessage("华胜正文签名失败").hasCauseInstanceOf(IllegalArgumentException.class);
+                .isInstanceOf(IllegalArgumentException.class).hasMessage("HUA_SHENG 正文签名失败").hasCauseInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
     @DisplayName("缺失或非 RSA 私钥拒绝签名，缺失公钥验签失败")
     void shouldRejectInvalidSigningKeys() throws Exception {
         assertThatThrownBy(() -> HuashengCrypto.signBodyHex("aabb", null))
-                .isInstanceOf(IllegalArgumentException.class).hasMessage("华胜正文签名失败").hasCauseInstanceOf(IllegalArgumentException.class);
+                .isInstanceOf(IllegalArgumentException.class).hasMessage("HUA_SHENG 正文签名失败").hasCauseInstanceOf(IllegalArgumentException.class);
         KeyPairGenerator ec = KeyPairGenerator.getInstance("EC");
         assertThatThrownBy(() -> HuashengCrypto.signBodyHex("aabb", ec.generateKeyPair().getPrivate()))
-                .isInstanceOf(IllegalArgumentException.class).hasMessage("华胜正文签名失败")
+                .isInstanceOf(IllegalArgumentException.class).hasMessage("HUA_SHENG 正文签名失败")
                 .hasCauseInstanceOf(java.security.InvalidKeyException.class);
         assertThat(HuashengCrypto.verifyBodyHex("aabb", independentSign("aabb"), null)).isFalse();
     }
@@ -224,7 +234,7 @@ class HuashengCryptoTest {
     @DisplayName("非法私钥编码统一安全异常并保留因果，PKCS1 私钥不得伪装成 PKCS8")
     void shouldRejectInvalidPrivateKeyEncoding(String key) {
         assertThatThrownBy(() -> HuashengCrypto.loadPkcs8PrivateKey(key))
-                .isInstanceOf(IllegalArgumentException.class).hasMessage("华胜私钥加载失败").hasCauseInstanceOf(Exception.class);
+                .isInstanceOf(IllegalArgumentException.class).hasMessage("HUA_SHENG 私钥加载失败").hasCauseInstanceOf(Exception.class);
     }
 
     @ParameterizedTest
@@ -233,24 +243,107 @@ class HuashengCryptoTest {
     @DisplayName("非法公钥编码统一安全异常并保留因果")
     void shouldRejectInvalidPublicKeyEncoding(String key) {
         assertThatThrownBy(() -> HuashengCrypto.loadPublicKey(key))
-                .isInstanceOf(IllegalArgumentException.class).hasMessage("华胜公钥加载失败").hasCauseInstanceOf(Exception.class);
+                .isInstanceOf(IllegalArgumentException.class).hasMessage("HUA_SHENG 公钥加载失败").hasCauseInstanceOf(Exception.class);
     }
 
     @Test
     @DisplayName("错误 PEM 类型、附加内容及非 RSA 编码拒绝加载")
     void shouldRejectWrongPemTypeAndNonRsaKey() throws Exception {
         assertThatThrownBy(() -> HuashengCrypto.loadPkcs8PrivateKey(pem("RSA PRIVATE KEY", keyPair.getPrivate().getEncoded())))
-                .hasMessage("华胜私钥加载失败");
+                .hasMessage("HUA_SHENG 私钥加载失败");
         assertThatThrownBy(() -> HuashengCrypto.loadPublicKey(pem("PRIVATE KEY", keyPair.getPrivate().getEncoded())))
-                .hasMessage("华胜公钥加载失败");
+                .hasMessage("HUA_SHENG 公钥加载失败");
         assertThatThrownBy(() -> HuashengCrypto.loadPublicKey(pem("PUBLIC KEY", keyPair.getPublic().getEncoded()) + "extra"))
-                .hasMessage("华胜公钥加载失败");
+                .hasMessage("HUA_SHENG 公钥加载失败");
         KeyPairGenerator ec = KeyPairGenerator.getInstance("EC");
         KeyPair ecKeys = ec.generateKeyPair();
         assertThatThrownBy(() -> HuashengCrypto.loadPkcs8PrivateKey(pem("PRIVATE KEY", ecKeys.getPrivate().getEncoded())))
-                .hasMessage("华胜私钥加载失败");
+                .hasMessage("HUA_SHENG 私钥加载失败");
         assertThatThrownBy(() -> HuashengCrypto.loadPublicKey(pem("PUBLIC KEY", ecKeys.getPublic().getEncoded())))
-                .hasMessage("华胜公钥加载失败");
+                .hasMessage("HUA_SHENG 公钥加载失败");
+    }
+
+    @Test
+    @DisplayName("非法 AES 参数的真实完整异常堆栈不含密钥、正文或密文且保留 cause")
+    void shouldKeepAesFailureStackTraceFreeOfSensitiveInputs() {
+        assertSafeFailure(catchThrowable(() -> HuashengCrypto.encryptBodyHex(
+                BODY_SECURITY_MARKER, SECRET_SECURITY_MARKER, APP_ID)),
+                "HUA_SHENG 正文加密失败", IllegalArgumentException.class);
+        assertSafeFailure(catchThrowable(() -> HuashengCrypto.decryptBodyHex(
+                CIPHER_SECURITY_MARKER, SECRET_SECURITY_MARKER, APP_ID)),
+                "HUA_SHENG 正文解密失败", IllegalArgumentException.class);
+    }
+
+    @Test
+    @DisplayName("非法 hex 与非法 AES 块的真实完整异常堆栈不回显密文")
+    void shouldKeepCipherFailureStackTraceFreeOfSensitiveInputs() {
+        assertSafeFailure(catchThrowable(() -> HuashengCrypto.decryptBodyHex(
+                CIPHER_SECURITY_MARKER, SECRET, APP_ID)),
+                "HUA_SHENG 正文解密失败", IllegalArgumentException.class);
+        String malformedBlockHex = HEX.formatHex(CIPHER_SECURITY_MARKER.getBytes(StandardCharsets.UTF_8));
+        assertSafeFailure(catchThrowable(() -> HuashengCrypto.decryptBodyHex(
+                malformedBlockHex, SECRET, APP_ID)),
+                "HUA_SHENG 正文解密失败", javax.crypto.IllegalBlockSizeException.class, malformedBlockHex, SECRET);
+    }
+
+    @Test
+    @DisplayName("非法 Base64 与 DER 密钥的真实完整异常堆栈不含合成 PEM 或编码材料")
+    void shouldKeepKeyLoadingFailureStackTraceFreeOfSensitiveInputs() {
+        String invalidPrivateBase64Pem = "-----BEGIN PRIVATE KEY-----\n" + PRIVATE_SECURITY_MARKER + "\n-----END PRIVATE KEY-----";
+        String invalidPublicBase64Pem = "-----BEGIN PUBLIC KEY-----\n" + PUBLIC_SECURITY_MARKER + "\n-----END PUBLIC KEY-----";
+        assertSafeFailure(catchThrowable(() -> HuashengCrypto.loadPkcs8PrivateKey(invalidPrivateBase64Pem)),
+                "HUA_SHENG 私钥加载失败", IllegalArgumentException.class, invalidPrivateBase64Pem);
+        assertSafeFailure(catchThrowable(() -> HuashengCrypto.loadPublicKey(invalidPublicBase64Pem)),
+                "HUA_SHENG 公钥加载失败", IllegalArgumentException.class, invalidPublicBase64Pem);
+        String invalidPrivateDerPem = pem("PRIVATE KEY", PRIVATE_SECURITY_MARKER.getBytes(StandardCharsets.UTF_8));
+        String invalidPublicDerPem = pem("PUBLIC KEY", PUBLIC_SECURITY_MARKER.getBytes(StandardCharsets.UTF_8));
+        assertSafeFailure(catchThrowable(() -> HuashengCrypto.loadPkcs8PrivateKey(invalidPrivateDerPem)),
+                "HUA_SHENG 私钥加载失败", java.security.spec.InvalidKeySpecException.class,
+                invalidPrivateDerPem, Base64.getEncoder().encodeToString(PRIVATE_SECURITY_MARKER.getBytes(StandardCharsets.UTF_8)));
+        assertSafeFailure(catchThrowable(() -> HuashengCrypto.loadPublicKey(invalidPublicDerPem)),
+                "HUA_SHENG 公钥加载失败", java.security.spec.InvalidKeySpecException.class,
+                invalidPublicDerPem, Base64.getEncoder().encodeToString(PUBLIC_SECURITY_MARKER.getBytes(StandardCharsets.UTF_8)));
+    }
+
+    @Test
+    @DisplayName("签名无效私钥的真实完整异常堆栈保留原因且不含正文或私钥材料")
+    void shouldKeepSigningFailureStackTraceFreeOfSensitiveInputs() {
+        PrivateKey invalidKey = new PrivateKey() {
+            @Override
+            public String getAlgorithm() {
+                return "RSA";
+            }
+
+            @Override
+            public String getFormat() {
+                return "PKCS#8";
+            }
+
+            @Override
+            public byte[] getEncoded() {
+                return PRIVATE_SECURITY_MARKER.getBytes(StandardCharsets.UTF_8);
+            }
+        };
+        assertSafeFailure(catchThrowable(() -> HuashengCrypto.signBodyHex(BODY_SECURITY_MARKER, invalidKey)),
+                "HUA_SHENG 正文签名失败", java.security.InvalidKeyException.class);
+        assertThat(HuashengCrypto.verifyBodyHex(BODY_SECURITY_MARKER, SIGNATURE_SECURITY_MARKER, keyPair.getPublic())).isFalse();
+    }
+
+    /**
+     * 对真实 Throwable 调用 printStackTrace，包含所有 cause 与 suppressed，不仅检查包装异常消息。
+     * 原始异常链必须保留；所有合成敏感标记、PEM 与调用方补充的编码材料不得出现在日志文本中。
+     */
+    private static void assertSafeFailure(Throwable failure, String expectedMessage, Class<? extends Throwable> expectedCause,
+                                          String... extraSensitiveValues) {
+        assertThat(failure).isInstanceOf(IllegalArgumentException.class).hasMessage(expectedMessage).hasCauseInstanceOf(expectedCause);
+        StringWriter stackTrace = new StringWriter();
+        failure.printStackTrace(new PrintWriter(stackTrace));
+        assertThat(stackTrace.toString()).contains("Caused by:")
+                .doesNotContain(SECRET_SECURITY_MARKER, BODY_SECURITY_MARKER, CIPHER_SECURITY_MARKER,
+                        PRIVATE_SECURITY_MARKER, PUBLIC_SECURITY_MARKER, SIGNATURE_SECURITY_MARKER);
+        if (extraSensitiveValues.length > 0) {
+            assertThat(stackTrace.toString()).doesNotContain(extraSensitiveValues);
+        }
     }
 
     private static String independentEncrypt(String plain, String secret, String appId) throws Exception {

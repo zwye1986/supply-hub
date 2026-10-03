@@ -16,7 +16,7 @@ import java.util.Base64;
 import java.util.HexFormat;
 
 /**
- * 华胜通信密码协议的无状态 JCA 工具，不持有凭据、不访问业务状态，也不记录敏感数据。
+ * HUA_SHENG 通信密码协议的无状态 JCA 工具，不持有凭据、不访问业务状态，也不记录敏感数据。
  * AES 正文以 appSecret 的 UTF-8 字节为密钥、appId 的 UTF-8 字节为 IV；签名原文始终是传入的
  * 密文字符串原始 UTF-8 字节。每次调用创建独立 Cipher/Signature，避免跨请求复用可变密码对象。
  * 加解密、签名和密钥加载错误使用固定说明并保留原因；验签无效输入按协议返回 false。
@@ -55,7 +55,7 @@ public final class HuashengCrypto {
             Cipher cipher = createAesCipher(Cipher.ENCRYPT_MODE, secret, appId);
             return HEX.formatHex(cipher.doFinal(plain.getBytes(StandardCharsets.UTF_8)));
         } catch (GeneralSecurityException | IllegalArgumentException exception) {
-            throw new IllegalArgumentException("华胜正文加密失败", exception);
+            throw new IllegalArgumentException("HUA_SHENG 正文加密失败", exception);
         }
     }
 
@@ -69,7 +69,7 @@ public final class HuashengCrypto {
             Cipher cipher = createAesCipher(Cipher.DECRYPT_MODE, secret, appId);
             return new String(cipher.doFinal(decodeHex(hex)), StandardCharsets.UTF_8);
         } catch (GeneralSecurityException | IllegalArgumentException exception) {
-            throw new IllegalArgumentException("华胜正文解密失败", exception);
+            throw new IllegalArgumentException("HUA_SHENG 正文解密失败", exception);
         }
     }
 
@@ -89,7 +89,7 @@ public final class HuashengCrypto {
             signer.update(hex.getBytes(StandardCharsets.UTF_8));
             return HEX.formatHex(signer.sign());
         } catch (GeneralSecurityException | IllegalArgumentException exception) {
-            throw new IllegalArgumentException("华胜正文签名失败", exception);
+            throw new IllegalArgumentException("HUA_SHENG 正文签名失败", exception);
         }
     }
 
@@ -124,7 +124,7 @@ public final class HuashengCrypto {
             byte[] encoded = decodeKey(key, PRIVATE_KEY_PEM_TYPE);
             return KeyFactory.getInstance(RSA_ALGORITHM).generatePrivate(new PKCS8EncodedKeySpec(encoded));
         } catch (GeneralSecurityException | IllegalArgumentException exception) {
-            throw new IllegalArgumentException("华胜私钥加载失败", exception);
+            throw new IllegalArgumentException("HUA_SHENG 私钥加载失败", exception);
         }
     }
 
@@ -144,7 +144,7 @@ public final class HuashengCrypto {
             }
             return KeyFactory.getInstance(RSA_ALGORITHM).generatePublic(new X509EncodedKeySpec(encoded));
         } catch (GeneralSecurityException | IllegalArgumentException exception) {
-            throw new IllegalArgumentException("华胜公钥加载失败", exception);
+            throw new IllegalArgumentException("HUA_SHENG 公钥加载失败", exception);
         }
     }
 
