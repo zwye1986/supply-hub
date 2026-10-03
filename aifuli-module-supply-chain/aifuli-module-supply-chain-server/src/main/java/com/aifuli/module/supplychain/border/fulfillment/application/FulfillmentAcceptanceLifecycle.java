@@ -55,6 +55,7 @@ import com.aifuli.module.supplychain.tradecore.catalog.domain.BuyerListingStatus
 import com.aifuli.module.supplychain.tradecore.catalog.domain.ListingAvailability;
 import com.aifuli.module.supplychain.tradecore.catalog.application.ProductSellabilityService;
 import com.aifuli.module.supplychain.tradecore.catalog.pricing.ProjectQuoteKeyContext;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.ProductNotSaleableException;
 import com.aifuli.module.supplychain.tradecore.catalog.pricing.StandardPricingQuoteService;
 import com.aifuli.module.supplychain.tradecore.catalog.pricing.StandardPricingQuoteService.FrozenQuote;
 import com.aifuli.framework.common.exception.ServiceException;
@@ -279,6 +280,20 @@ public class FulfillmentAcceptanceLifecycle {
      */
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public AcceptanceSnapshot accept(long receiptId, PreparedAcceptance command) {
+        return acceptPrepared(receiptId, command, false);
+    }
+
+    /**
+     * HTTP直接下单最终事务入口，经真实代理开启受理事务；报价锁后当前准入锁一直持到提交。
+     * 原RPC入口保留预签报价契约，两入口共用受理实现。
+     * 设计见 docs/superpowers/specs/2026-10-03-standard-project-direct-order-price-freeze-design.md#3-定价身份与当前准入。
+     */
+    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
+    public AcceptanceSnapshot acceptDirectProjectOrder(long receiptId, PreparedAcceptance command) {
+        return acceptPrepared(receiptId, command, true);
+    }
+
+    private AcceptanceSnapshot acceptPrepared(long receiptId, PreparedAcceptance command, boolean directProjectOrder) {
         log.info("[履约][lifecycle] accept 入口 receiptId={}, buyerOrderNo={}, traceId={}",
                 receiptId, command.buyerOrderNo(), command.traceId());
         FulfillmentAcceptanceReceiptDO receipt = receiptMapper.selectByIdForUpdate(receiptId);
@@ -308,6 +323,16 @@ public class FulfillmentAcceptanceLifecycle {
         FrozenQuote frozenQuote = pricingQuoteService.requireForProject(new ProjectQuoteKeyContext(
                 command.buyerId(), command.projectId(), listing.sku().getId(),
                 command.buyerOrderNo(), command.quantity()));
+        if (directProjectOrder) {
+            try {
+                pricingQuoteService.requireCurrentProjectAdmission(new ProjectQuoteKeyContext(
+                        command.buyerId(), command.projectId(), listing.sku().getId(),
+                        command.buyerOrderNo(), command.quantity()), frozenQuote);
+            } catch (ProductNotSaleableException unavailable) {
+                throw new BusinessRejection(receiptId, listing.version().getId(),
+                        AcceptanceReceiptStatus.REJECTED_RETRYABLE, AcceptanceRejectionCode.SKU_NOT_SALEABLE, unavailable);
+            }
+        }
         // 「每人」限购以实际履约目标为输入（已验证的targetAccountType+规范化MOBILE手机号），
         // 不再接收购买人身份；卡券/非手机号跳过该维度，由订单内部备注经独立判定记录一次。
         // 设计见 docs/superpowers/specs/2026-10-02-standard-acceptance-project-key-design.md#4-手机号限购与内部备注。
@@ -919,7 +944,12 @@ public class FulfillmentAcceptanceLifecycle {
 
         BusinessRejection(long receiptId, Long listingVersionId,
                           AcceptanceReceiptStatus receiptStatus, AcceptanceRejectionCode rejectionCode) {
-            super(rejectionCode.name(), null, false, false);
+            this(receiptId, listingVersionId, receiptStatus, rejectionCode, null);
+        }
+
+        BusinessRejection(long receiptId, Long listingVersionId,
+                          AcceptanceReceiptStatus receiptStatus, AcceptanceRejectionCode rejectionCode, Throwable cause) {
+            super(rejectionCode.name(), cause, false, false);
             this.receiptId = receiptId;
             this.listingVersionId = listingVersionId;
             this.receiptStatus = receiptStatus;

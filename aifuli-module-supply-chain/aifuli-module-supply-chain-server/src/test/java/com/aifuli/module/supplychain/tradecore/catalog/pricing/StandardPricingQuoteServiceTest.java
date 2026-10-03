@@ -51,6 +51,7 @@ class StandardPricingQuoteServiceTest {
     private final BuyerResolver buyerResolver = mock(BuyerResolver.class);
     private final BuyerProjectMapper projectMapper = mock(BuyerProjectMapper.class);
     private final GenericBatchPricingService pricingService = mock(GenericBatchPricingService.class);
+    private final ProjectPricingAdmissionService admissionService = mock(ProjectPricingAdmissionService.class);
     private final StandardPricingQuoteMapper quoteMapper = mock(StandardPricingQuoteMapper.class);
     private final SupplyChainDatabaseClock clock = mock(SupplyChainDatabaseClock.class);
     private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
@@ -65,14 +66,115 @@ class StandardPricingQuoteServiceTest {
                 .thenReturn(new BuyerResolver.BuyerSnapshot(1L, "BYR_A", "分销商A", "A", 1));
         when(projectMapper.selectByProjectCodeForUpdate("PRJ_A")).thenReturn(BuyerProjectDO.builder()
                 .id(2L).projectCode("PRJ_A").buyerId(1L).status(BuyerProjectStatus.ACTIVE.getCode()).build());
-        service = new StandardPricingQuoteService(buyerResolver, projectMapper, pricingService, quoteMapper,
+        service = new StandardPricingQuoteService(buyerResolver, projectMapper, pricingService, admissionService, quoteMapper,
                 clock, objectMapper);
+        when(projectMapper.selectByIdForUpdate(2L)).thenReturn(BuyerProjectDO.builder()
+                .id(2L).projectCode("PRJ_A").buyerId(1L).status(BuyerProjectStatus.ACTIVE.getCode()).build());
+        when(admissionService.requireForFirstFreeze(any())).thenReturn(new ProjectPricingAdmissionService.Admission(3L, "MOVIE_100"));
+        when(quoteMapper.insert(any(StandardPricingQuoteDO.class))).thenAnswer(invocation -> {
+            ((StandardPricingQuoteDO) invocation.getArgument(0)).setId(7L);
+            return 1;
+        });
         stubReadyVersion();
     }
 
     @Test
+    void trustedFreezeIsIndependentTransactionBoundary() {
+        assertThat(java.util.Arrays.stream(StandardPricingQuoteService.class.getMethods())
+                .filter(method -> method.getName().equals("freezeForProject"))
+                .map(method -> method.getAnnotation(org.springframework.transaction.annotation.Transactional.class))
+                .anyMatch(tx -> tx != null && tx.propagation() == org.springframework.transaction.annotation.Propagation.REQUIRES_NEW
+                        && tx.transactionManager().equals("supplyChainTransactionManager"))).isTrue();
+    }
+
+    @Test
+    void trustedFreezeUsesConfiguredAmountsAndNullRpcSources() {
+        FrozenQuote frozen = service.freezeForProject(key());
+        assertThat(frozen.distributionUnitPriceCents()).isEqualTo(9800L);
+        assertThat(frozen.productSubtotalCents()).isEqualTo(10000L);
+        assertThat(frozen.serviceFeeCents()).isEqualTo(100L);
+        assertThat(frozen.userPayableAmountCents()).isEqualTo(10100L);
+        ArgumentCaptor<StandardPricingQuoteDO> inserted = ArgumentCaptor.forClass(StandardPricingQuoteDO.class);
+        verify(quoteMapper).insert(inserted.capture());
+        assertThat(inserted.getValue().getSourceSystem()).isNull();
+        assertThat(inserted.getValue().getExternalTenantId()).isNull();
+        verify(buyerResolver, never()).resolve(anyString(), anyString(), any());
+        var sequence = org.mockito.Mockito.inOrder(projectMapper, quoteMapper, admissionService, pricingService);
+        sequence.verify(projectMapper).selectByIdForUpdate(2L);
+        sequence.verify(quoteMapper).selectByProjectOrderForUpdate(2L, "ORD-1");
+        sequence.verify(admissionService).requireForFirstFreeze(key());
+        sequence.verify(pricingService).ensureCurrentProjectVersion("PRJ_A", "MOVIE_100");
+    }
+
+    @Test
+    void trustedFreezeReusesOriginalQuoteButChecksCurrentAdmission() {
+        when(quoteMapper.selectByProjectOrderForUpdate(2L, "ORD-1")).thenReturn(issuedQuote(NOW.minusHours(1)));
+        var frozen = service.freezeForProject(key());
+        assertThat(frozen.quoteId()).isEqualTo(7L);
+        verify(admissionService).requireCurrentProjectAdmission(key(), frozen);
+        verify(pricingService, never()).ensureCurrentProjectVersion(anyString(), anyString());
+        verify(quoteMapper, never()).insert(any(StandardPricingQuoteDO.class));
+    }
+
+    @Test
+    void trustedFreezeRejectsBindingAndProjectIdentityWithStableErrors() {
+        var quote = issuedQuote(null); quote.setPlatformSkuId(55L);
+        when(quoteMapper.selectByProjectOrderForUpdate(2L, "ORD-1")).thenReturn(quote);
+        assertThatThrownBy(() -> service.freezeForProject(key())).isInstanceOf(ServiceException.class)
+                .satisfies(ex -> assertThat(((ServiceException) ex).getCode()).isEqualTo(SupplyChainErrorCodeConstants.IDEMPOTENCY_CONFLICT.getCode()));
+        when(projectMapper.selectByIdForUpdate(2L)).thenReturn(null);
+        assertThatThrownBy(() -> service.freezeForProject(key())).isInstanceOf(ServiceException.class)
+                .satisfies(ex -> assertThat(((ServiceException) ex).getCode()).isEqualTo(SupplyChainErrorCodeConstants.BUYER_AUTH_INVALID.getCode()));
+    }
+
+    @Test
+    void trustedFreezeRejectsNonReadyAndDoesNotMisclassifySystemErrors() {
+        when(pricingService.ensureCurrentProjectVersion(anyString(), anyString()))
+                .thenReturn(new CurrentProjectPricing(null, 3L, 4L, "MOVIE_100"));
+        assertThatThrownBy(() -> service.freezeForProject(key())).isInstanceOf(ServiceException.class)
+                .satisfies(ex -> assertThat(((ServiceException) ex).getCode()).isEqualTo(SupplyChainErrorCodeConstants.STANDARD_PRICING_QUOTE_MISSING.getCode()));
+        var systemError = new IllegalStateException("JSON/DB failure", new IllegalArgumentException("cause"));
+        when(pricingService.ensureCurrentProjectVersion(anyString(), anyString())).thenThrow(systemError);
+        assertThatThrownBy(() -> service.freezeForProject(key())).isSameAs(systemError);
+        verify(quoteMapper, never()).insert(any(StandardPricingQuoteDO.class));
+    }
+
+    @Test
+    void trustedFreezeConvertsOnlyKnownUnavailableCause() {
+        var unavailable = new ProductNotSaleableException("SKU stopped");
+        when(pricingService.ensureCurrentProjectVersion(anyString(), anyString())).thenThrow(unavailable);
+        assertThatThrownBy(() -> service.freezeForProject(key())).isInstanceOf(ServiceException.class)
+                .hasCause(unavailable).satisfies(ex -> assertThat(((ServiceException) ex).getCode()).isEqualTo(SupplyChainErrorCodeConstants.SKU_NOT_SALEABLE.getCode()));
+        verify(quoteMapper, never()).insert(any(StandardPricingQuoteDO.class));
+    }
+
+    @Test
+    void trustedFreezePreservesMalformedJsonCauseWithoutCreatingQuote() {
+        when(pricingService.ensureCurrentProjectVersion(anyString(), anyString()))
+                .thenReturn(new CurrentProjectPricing(ProjectSkuPricingVersionDO.builder()
+                        .id(9L).pricingStatus(PricingStatus.READY.name())
+                        .distributionPriceCents(9800L).salesPriceCents(10000L).effectiveConfigJson("{invalid").build(),
+                        3L, 4L, "MOVIE_100"));
+        assertThatThrownBy(() -> service.freezeForProject(key())).isExactlyInstanceOf(IllegalStateException.class)
+                .hasCauseInstanceOf(com.fasterxml.jackson.core.JsonProcessingException.class)
+                .hasMessageContaining("JSON deserialization failed");
+        verify(quoteMapper, never()).insert(any(StandardPricingQuoteDO.class));
+    }
+
+    @Test
+    void trustedFreezeConvertsOnlyExplicitUnconfiguredPricingToQuoteMissingWithCause() {
+        var unconfigured = new ProjectPricingNotReadyException("buyer SKU is unpriced");
+        when(pricingService.ensureCurrentProjectVersion(anyString(), anyString())).thenThrow(unconfigured);
+        assertThatThrownBy(() -> service.freezeForProject(key())).isInstanceOf(ServiceException.class).hasCause(unconfigured)
+                .satisfies(error -> assertThat(((ServiceException) error).getCode()).isEqualTo(SupplyChainErrorCodeConstants.STANDARD_PRICING_QUOTE_MISSING.getCode()));
+        verify(quoteMapper, never()).insert(any(StandardPricingQuoteDO.class));
+    }
+
+    private static ProjectQuoteKeyContext key() { return new ProjectQuoteKeyContext(1L, 2L, 4L, "ORD-1", 1L); }
+
+    @Test
     void replaysQuoteWhoseLegacyExpiryHasPassedInsteadOfReissuing() {
-        when(quoteMapper.selectByProjectOrder(2L, "ORD-1"))
+        when(quoteMapper.selectByProjectOrderForUpdate(2L, "ORD-1"))
                 .thenReturn(issuedQuote(NOW.minusHours(1)));
 
         var response = service.quote(request());
@@ -88,7 +190,7 @@ class StandardPricingQuoteServiceTest {
         StandardPricingQuoteDO consumed = issuedQuote(NOW.minusHours(1));
         consumed.setStatus(PricingQuoteStatus.CONSUMED.name());
         consumed.setConsumedOrderId(99L);
-        when(quoteMapper.selectByProjectOrder(2L, "ORD-1")).thenReturn(consumed);
+        when(quoteMapper.selectByProjectOrderForUpdate(2L, "ORD-1")).thenReturn(consumed);
 
         var response = service.quote(request());
 
@@ -100,7 +202,7 @@ class StandardPricingQuoteServiceTest {
 
     @Test
     void issuesQuoteWithoutUserBindingAndNullExpiry() {
-        when(quoteMapper.selectByProjectOrder(2L, "ORD-1")).thenReturn(null);
+        when(quoteMapper.selectByProjectOrderForUpdate(2L, "ORD-1")).thenReturn(null);
         when(quoteMapper.insert(any(StandardPricingQuoteDO.class))).thenReturn(1);
 
         var response = service.quote(request());
@@ -118,9 +220,9 @@ class StandardPricingQuoteServiceTest {
     void issuesSeparateQuoteForAnotherProjectWithSameOrderNumber() {
         when(projectMapper.selectByProjectCodeForUpdate("PRJ_B")).thenReturn(BuyerProjectDO.builder()
                 .id(5L).projectCode("PRJ_B").buyerId(1L).status(BuyerProjectStatus.ACTIVE.getCode()).build());
-        when(quoteMapper.selectByProjectOrder(2L, "ORD-1"))
+        when(quoteMapper.selectByProjectOrderForUpdate(2L, "ORD-1"))
                 .thenReturn(issuedQuote(NOW.plusMinutes(10)));
-        when(quoteMapper.selectByProjectOrder(5L, "ORD-1")).thenReturn(null);
+        when(quoteMapper.selectByProjectOrderForUpdate(5L, "ORD-1")).thenReturn(null);
         when(quoteMapper.insert(any(StandardPricingQuoteDO.class))).thenReturn(1);
         StandardPricingQuoteReqDTO projectB = request();
         projectB.setProjectCode("PRJ_B");
@@ -137,7 +239,7 @@ class StandardPricingQuoteServiceTest {
     void rejectsQuantityOtherThanOne() {
         StandardPricingQuoteReqDTO quantityTwo = request();
         quantityTwo.setQuantity(2L);
-        when(quoteMapper.selectByProjectOrder(2L, "ORD-1")).thenReturn(null);
+        when(quoteMapper.selectByProjectOrderForUpdate(2L, "ORD-1")).thenReturn(null);
         when(quoteMapper.insert(any(StandardPricingQuoteDO.class))).thenReturn(1);
 
         assertThatThrownBy(() -> service.quote(quantityTwo))
@@ -150,7 +252,7 @@ class StandardPricingQuoteServiceTest {
     void rejectsQuoteWhenBindingDiffers() {
         StandardPricingQuoteDO existing = issuedQuote(NOW.plusMinutes(10));
         existing.setPlatformSkuCode("OTHER_SKU");
-        when(quoteMapper.selectByProjectOrder(2L, "ORD-1")).thenReturn(existing);
+        when(quoteMapper.selectByProjectOrderForUpdate(2L, "ORD-1")).thenReturn(existing);
 
         assertThatThrownBy(() -> service.quote(request()))
                 .isInstanceOf(IllegalStateException.class)
@@ -261,7 +363,7 @@ class StandardPricingQuoteServiceTest {
     private void stubReadyVersion() throws Exception {
         FormulaRule direct = new FormulaRule(PriceMode.DIRECT_MARKET_PRICE, null, null, null, null);
         PricingConfig config = new PricingConfig(direct, direct,
-                new ServiceFeeRule(new BigDecimal("1"), FixedOperator.MULTIPLY, BigDecimal.ZERO, true, null),
+                new ServiceFeeRule(new BigDecimal("1"), FixedOperator.MULTIPLY, BigDecimal.ONE, true, null),
                 new HideRule(null, null),
                 new TaxMetadata(false, PricingTaxRateCodes.NON_TAXABLE, "不征税"));
         ProjectSkuPricingVersionDO version = ProjectSkuPricingVersionDO.builder()

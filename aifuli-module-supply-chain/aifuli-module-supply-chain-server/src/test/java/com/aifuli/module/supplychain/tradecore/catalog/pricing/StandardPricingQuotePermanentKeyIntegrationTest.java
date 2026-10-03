@@ -307,7 +307,7 @@ class StandardPricingQuotePermanentKeyIntegrationTest {
                                                                 ObjectMapper objectMapper,
                                                                 BuyerResolver resolver,
                                                                 GenericBatchPricingService pricing) {
-            return new StandardPricingQuoteService(resolver, projectMapper, pricing, mapper,
+            return new StandardPricingQuoteService(resolver, projectMapper, pricing, mock(ProjectPricingAdmissionService.class), mapper,
                     databaseClock, objectMapper);
         }
 

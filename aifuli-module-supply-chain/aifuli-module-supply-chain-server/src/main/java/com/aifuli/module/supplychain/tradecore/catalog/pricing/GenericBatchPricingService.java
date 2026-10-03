@@ -281,20 +281,26 @@ public class GenericBatchPricingService {
         PlatformSpuDO spu = sku == null ? null : spuMapper.selectById(sku.getSpuId());
         if (sku == null || sku.getStatus() != CatalogEntityStatus.ACTIVE.getCode()
                 || spu == null || spu.getStatus() != CatalogEntityStatus.ACTIVE.getCode()) {
-            throw new IllegalStateException("platform SKU is not currently saleable");
+            throw new ProductNotSaleableException("platform SKU is not currently saleable");
         }
         BuyerProductDO product = buyerProductMapper.selectByBuyerAndSku(project.getBuyerId(), sku.getId());
         if (product == null || product.getStatus() != BuyerProductStatus.ACTIVE.getCode()) {
-            throw new IllegalStateException("buyer SKU is not in catalog");
+            throw new ProductNotSaleableException("buyer SKU is not in catalog");
         }
         ProjectListingDO listing = listingMapper.selectByProjectAndBuyerProduct(project.getId(), product.getId());
         if (listing == null || listing.getStatus() != ProjectListingStatus.AVAILABLE.getCode()) {
-            throw new IllegalStateException("project SKU is not in catalog");
+            throw new ProductNotSaleableException("project SKU is not in catalog");
         }
-        BuyerConfigSnapshot buyer = requireBuyerConfig(product.getId());
+        BuyerConfigSnapshot buyer = requireBuyerConfig(product.getId(), true);
         ProjectSkuPricingDO identity = projectPricingMapper.selectByListingIdForUpdate(listing.getId());
         ProjectSkuPricingVersionDO current = identity == null || identity.getCurrentVersionId() == null ? null
                 : projectVersionMapper.selectById(identity.getCurrentVersionId());
+        // 已发布的覆盖版本引用损坏必须停止，不能按“尚未配置”重建并覆盖原规则；HTTP/RPC共享该不变量。
+        // 设计见 docs/superpowers/specs/2026-10-03-standard-project-direct-order-price-freeze-design.md#3-定价身份与当前准入。
+        if (identity != null && identity.getCurrentVersionId() != null
+                && (current == null || !Objects.equals(identity.getId(), current.getPricingId()))) {
+            throw new IllegalStateException("project pricing current version is missing or mismatched");
+        }
         ProjectOverrides overrides = current == null ? ProjectOverrides.allInherited()
                 : fromJson(current.getOverrideJson(), ProjectOverrides.class);
         PricingConfig effective = ProjectPricingConfigMerger.merge(buyer.config(), overrides);
@@ -538,11 +544,25 @@ public class GenericBatchPricingService {
     }
 
     private BuyerConfigSnapshot requireBuyerConfig(Long buyerProductId) {
+        return requireBuyerConfig(buyerProductId, false);
+    }
+
+    /**
+     * 报价未配置属可恢复业务条件，已指向不存在的版本则属引用损坏；发布入口保持原异常契约。
+     * 设计见 docs/superpowers/specs/2026-10-03-standard-project-direct-order-price-freeze-design.md#3-定价身份与当前准入。
+     */
+    private BuyerConfigSnapshot requireBuyerConfig(Long buyerProductId, boolean quoteEntry) {
         BuyerSkuPricingDO identity = buyerPricingMapper.selectByBuyerProductId(buyerProductId);
+        if (quoteEntry && (identity == null || identity.getCurrentVersionId() == null)) {
+            throw new ProjectPricingNotReadyException("buyer SKU is unpriced");
+        }
         BuyerSkuPricingVersionDO version = identity == null || identity.getCurrentVersionId() == null ? null
                 : buyerVersionMapper.selectById(identity.getCurrentVersionId());
         if (version == null) {
-            throw new IllegalStateException("buyer SKU is unpriced");
+            throw new IllegalStateException(quoteEntry ? "buyer pricing current version is missing or mismatched" : "buyer SKU is unpriced");
+        }
+        if (quoteEntry && !Objects.equals(identity.getId(), version.getPricingId())) {
+            throw new IllegalStateException("buyer pricing current version is missing or mismatched");
         }
         PricingConfig config = configFrom(version);
         return new BuyerConfigSnapshot(version, config);

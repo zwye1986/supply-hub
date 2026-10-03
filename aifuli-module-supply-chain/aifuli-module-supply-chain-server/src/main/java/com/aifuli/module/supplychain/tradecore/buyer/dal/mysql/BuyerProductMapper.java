@@ -12,6 +12,11 @@ import java.util.List;
 
 @Mapper
 public interface BuyerProductMapper extends BaseMapperX<BuyerProductDO> {
+    /** 按不可变主键当前读锁定准入记录；设计见 docs/superpowers/specs/2026-10-03-standard-project-direct-order-price-freeze-design.md#3-定价身份与当前准入。 */
+    default BuyerProductDO selectByIdForUpdate(Long id) {
+        return selectOneForUpdate(BuyerProductDO::getId, id);
+    }
+
     /**
      * 项目选品的名称/编号及主类目筛选涉及 SKU、SPU 与项目目录，LambdaQueryWrapper 无法表达多表关联。
      * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#63-分销商品}。

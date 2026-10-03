@@ -702,7 +702,7 @@ class ProjectStandardAcceptanceIntegrationTest {
             RechargeFrequencyQueryService.class,
             DatabasePersistentTimer.class,
             PersistentTimerHandlerRegistry.class,
-            StandardPricingQuoteService.class})
+            StandardPricingQuoteService.class, com.aifuli.module.supplychain.tradecore.catalog.pricing.ProjectPricingAdmissionService.class})
     static class TestConfiguration {
         @Bean
         RechargeFrequencyIdentityKeyProvider frequencyKey() {

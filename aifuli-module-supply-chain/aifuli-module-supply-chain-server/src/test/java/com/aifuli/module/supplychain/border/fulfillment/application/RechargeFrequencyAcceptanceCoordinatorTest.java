@@ -13,6 +13,15 @@ class RechargeFrequencyAcceptanceCoordinatorTest {
     private final RechargeFrequencyAcceptanceCoordinator coordinator = new RechargeFrequencyAcceptanceCoordinator(lifecycle);
 
     @Test
+    void directProjectOrderRetriesThroughDedicatedLifecycleProxyEntry() {
+        var conflict = new RechargeFrequencyLifecycle.QueueIdentityCreationConflictException(new DuplicateKeyException("identity competition"));
+        var result = mock(FulfillmentAcceptanceLifecycle.AcceptanceSnapshot.class);
+        when(lifecycle.acceptDirectProjectOrder(42L, command)).thenThrow(conflict).thenReturn(result);
+        assertThat(coordinator.acceptDirectProjectOrder(42L, command)).isSameAs(result);
+        verify(lifecycle, times(2)).acceptDirectProjectOrder(42L, command);
+        verify(lifecycle, never()).accept(anyLong(), any());
+    }
+    @Test
     void retriesOnlyIdentityCreationConflictWithSameReceiptAndStopsAtThree() {
         var conflict = new RechargeFrequencyLifecycle.QueueIdentityCreationConflictException(new DuplicateKeyException("identity competition"));
         when(lifecycle.accept(42L, command)).thenThrow(conflict);

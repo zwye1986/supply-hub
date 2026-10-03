@@ -18,12 +18,22 @@ public class RechargeFrequencyAcceptanceCoordinator {
     private final FulfillmentAcceptanceLifecycle lifecycle;
 
     public FulfillmentAcceptanceLifecycle.AcceptanceSnapshot accept(long receiptId, FulfillmentAcceptanceLifecycle.PreparedAcceptance command) {
+        return acceptPrepared(receiptId, command, false);
+    }
+
+    /** 直接下单仍在事务外重试队列身份竞争，每次进入Lifecycle真实代理的HTTP专用受理事务。 */
+    public FulfillmentAcceptanceLifecycle.AcceptanceSnapshot acceptDirectProjectOrder(long receiptId, FulfillmentAcceptanceLifecycle.PreparedAcceptance command) {
+        return acceptPrepared(receiptId, command, true);
+    }
+
+    private FulfillmentAcceptanceLifecycle.AcceptanceSnapshot acceptPrepared(long receiptId,
+            FulfillmentAcceptanceLifecycle.PreparedAcceptance command, boolean directProjectOrder) {
         if (TransactionSynchronizationManager.isActualTransactionActive()) {
             throw new IllegalStateException("直充限频受理协调入口必须在事务外调用");
         }
         log.debug("[直充限频] 受理协调入口 receiptId={}, buyerOrderNo={}", receiptId, command.buyerOrderNo());
         for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-            try { return lifecycle.accept(receiptId, command); }
+            try { return directProjectOrder ? lifecycle.acceptDirectProjectOrder(receiptId, command) : lifecycle.accept(receiptId, command); }
             catch (RechargeFrequencyLifecycle.QueueIdentityCreationConflictException conflict) {
                 if (attempt == MAX_ATTEMPTS) { throw conflict; }
                 log.debug("[直充限频] 队列身份竞争回滚后重试 receiptId={}, attempt={}", receiptId, attempt);

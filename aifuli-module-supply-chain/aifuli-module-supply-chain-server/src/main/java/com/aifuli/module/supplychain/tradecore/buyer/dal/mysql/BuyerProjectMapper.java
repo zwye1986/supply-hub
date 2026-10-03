@@ -13,6 +13,11 @@ import org.apache.ibatis.annotations.Mapper;
 @Mapper
 public interface BuyerProjectMapper extends BaseMapperX<BuyerProjectDO> {
 
+    /** 按不可变主键当前读锁定准入记录；设计见 docs/superpowers/specs/2026-10-03-standard-project-direct-order-price-freeze-design.md#3-定价身份与当前准入。 */
+    default BuyerProjectDO selectByIdForUpdate(Long id) {
+        return selectOneForUpdate(BuyerProjectDO::getId, id);
+    }
+
     default BuyerProjectDO selectByProjectCode(String projectCode) {
         return selectOne(BuyerProjectDO::getProjectCode, projectCode);
     }

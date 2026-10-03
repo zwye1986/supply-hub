@@ -31,6 +31,9 @@ import java.util.UUID;
 
 import static com.aifuli.framework.common.exception.util.ServiceExceptionUtil.exception;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.STANDARD_PRICING_QUOTE_MISSING;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BUYER_AUTH_INVALID;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.IDEMPOTENCY_CONFLICT;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.SKU_NOT_SALEABLE;
 
 /**
  * 标准商品项目订单首次报价永久冻结与履约消费。
@@ -38,10 +41,11 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
  * <p>永久键为「项目 + 采购商订单号」：首次成功报价冻结价格、商品身份与文案，此后无论价格或
  * Listing 版本如何变化，同键重复询价一律重放首次冻结结果；不校验报价有效期，也不绑定用户、
  * 支付时间或调用方商品版本。HTTP 下单不提交报价 token，受理在供应链事务内按项目永久键查取
- * 唯一报价并一次性消费；缺报价抛稳定业务错误 {@code STANDARD_PRICING_QUOTE_MISSING}，
+ * 首先在独立事务内冻结配置价格，再于最终事务查取唯一报价并一次性消费；纯消费缺报价抛稳定业务错误 {@code STANDARD_PRICING_QUOTE_MISSING}，
  * 供共享受理保存为可条件重试的拒绝回执。</p>
  *
- * <p>设计见 {@code docs/superpowers/specs/2026-10-02-standard-internal-quote-freeze-design.md}；
+ * <p>直接下单设计见 {@code docs/superpowers/specs/2026-10-03-standard-project-direct-order-price-freeze-design.md#2-http-编排与两段事务}；
+ * 永久报价契约见 {@code docs/superpowers/specs/2026-10-02-standard-internal-quote-freeze-design.md}；
  * 该实现取代 {@code docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md} §7 的
  * 15 分钟重签语义，不改变其通用定价计算、费用/税务快照与资金职责。</p>
  */
@@ -51,10 +55,11 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
 public class StandardPricingQuoteService {
     private static final String TX = "supplyChainTransactionManager";
     /** 报价商品数量当前仅支持一件，与受理层"一期履约数量必须为一"的约束一致。 */
-    private static final long SUPPORTED_QUANTITY = 1L;
+    public static final long SUPPORTED_QUANTITY = 1L;
     private final BuyerResolver buyerResolver;
     private final BuyerProjectMapper projectMapper;
     private final GenericBatchPricingService pricingService;
+    private final ProjectPricingAdmissionService admissionService;
     private final StandardPricingQuoteMapper quoteMapper;
     private final SupplyChainDatabaseClock clock;
     private final ObjectMapper objectMapper;
@@ -65,6 +70,7 @@ public class StandardPricingQuoteService {
      *
      * <p>先经真实 {@link BuyerResolver} 解析来源分销商，再按 projectCode 行锁项目并校验归属与
      * ACTIVE 状态，保证同项目首次签发串行；SOURCE/TENANT 只记录调用来源，永久键不含它们。
+     * 报价使用FOR UPDATE当前读，避免BuyerResolver预读产生的旧RR一致性快照漏看等待期间已提交报价。
      * 已有同键报价（无论 ISSUED 或 CONSUMED、无论历史 expiresAt 是否过期）在不变量一致时
      * 直接重放首次冻结结果，不重新定价、不更换 token。</p>
      */
@@ -81,7 +87,7 @@ public class StandardPricingQuoteService {
         if (request.getQuantity() == null || request.getQuantity() != SUPPORTED_QUANTITY) {
             throw new IllegalArgumentException("quote quantity must be 1 in the current phase");
         }
-        StandardPricingQuoteDO existing = quoteMapper.selectByProjectOrder(project.getId(), request.getBuyerOrderNo());
+        StandardPricingQuoteDO existing = quoteMapper.selectByProjectOrderForUpdate(project.getId(), request.getBuyerOrderNo());
         if (existing != null) {
             requireSameBinding(existing, request, project.getId(), buyer.id());
             log.info("重放项目订单首次永久冻结报价 projectCode={} buyerOrderNo={} skuCode={} quantity={} quoteId={} consumed={}",
@@ -119,6 +125,81 @@ public class StandardPricingQuoteService {
                 request.getBuyerOrderNo(), request.getPlatformSkuCode(), request.getQuantity(),
                 version.getId(), quote.getId());
         return response(quote);
+    }
+
+    /**
+     * 可信项目直接下单独立首冻：调用者必须通过Spring代理进入REQUIRES_NEW，不能加入accept持锁事务。
+     * 已有报价只复用首次金额/token，但每个新尝试仍核验当前项目选品；来源两列为空，不解析外部租户。
+     * 设计见 docs/superpowers/specs/2026-10-03-standard-project-direct-order-price-freeze-design.md#2-http-编排与两段事务、#3-定价身份与当前准入。
+     */
+    @Transactional(transactionManager = TX, rollbackFor = Exception.class, propagation = Propagation.REQUIRES_NEW)
+    public FrozenQuote freezeForProject(ProjectQuoteKeyContext context) {
+        Objects.requireNonNull(context, "project quote key context is required");
+        log.info("项目直接下单首次价格冻结 projectId={} buyerId={} platformSkuId={} buyerOrderNo={} quantity={}",
+                context.projectId(), context.buyerId(), context.platformSkuId(), context.buyerOrderNo(), context.quantity());
+        BuyerProjectDO project = projectMapper.selectByIdForUpdate(context.projectId());
+        if (project == null || !Objects.equals(project.getBuyerId(), context.buyerId())
+                || project.getStatus() != BuyerProjectStatus.ACTIVE.getCode()) {
+            throw exception(BUYER_AUTH_INVALID);
+        }
+        if (context.quantity() != SUPPORTED_QUANTITY) {
+            throw exception(IDEMPOTENCY_CONFLICT);
+        }
+        StandardPricingQuoteDO existing = quoteMapper.selectByProjectOrderForUpdate(context.projectId(), context.buyerOrderNo());
+        if (existing != null && (!Objects.equals(context.buyerId(), existing.getBuyerId())
+                || !Objects.equals(context.projectId(), existing.getProjectId())
+                || !Objects.equals(context.platformSkuId(), existing.getPlatformSkuId())
+                || context.quantity() != existing.getQuantity())) {
+            throw exception(IDEMPOTENCY_CONFLICT);
+        }
+        try {
+            if (existing != null) {
+                FrozenQuote frozen = frozen(existing);
+                admissionService.requireCurrentProjectAdmission(context, frozen);
+                return frozen;
+            }
+            ProjectPricingAdmissionService.Admission admission = admissionService.requireForFirstFreeze(context);
+            CurrentProjectPricing current = pricingService.ensureCurrentProjectVersion(project.getProjectCode(), admission.platformSkuCode());
+            if (!Objects.equals(admission.listingId(), current.listingId())
+                    || !Objects.equals(context.platformSkuId(), current.platformSkuId())
+                    || !Objects.equals(admission.platformSkuCode(), current.platformSkuCode())) {
+                throw new IllegalStateException("current project pricing identity does not match trusted admission");
+            }
+            ProjectSkuPricingVersionDO version = current.version();
+            if (version == null || !PricingStatus.READY.name().equals(version.getPricingStatus())) {
+                throw exception(STANDARD_PRICING_QUOTE_MISSING);
+            }
+            PricingConfig config = fromJson(version.getEffectiveConfigJson(), PricingConfig.class);
+            long subtotal = Math.multiplyExact(version.getSalesPriceCents(), context.quantity());
+            long fee = calculator.calculateServiceFee(config.serviceFeeRule(), subtotal);
+            StandardPricingQuoteDO quote = StandardPricingQuoteDO.builder()
+                    .quoteToken(UUID.randomUUID().toString().replace("-", ""))
+                    .sourceSystem(null).externalTenantId(null)
+                    .buyerId(context.buyerId()).projectId(context.projectId()).listingId(admission.listingId())
+                    .platformSkuId(context.platformSkuId()).platformSkuCode(admission.platformSkuCode())
+                    .projectPricingVersionId(version.getId()).buyerOrderNo(context.buyerOrderNo()).quantity(context.quantity())
+                    .distributionUnitPriceCents(version.getDistributionPriceCents()).salesUnitPriceCents(version.getSalesPriceCents())
+                    .productSubtotalCents(subtotal).serviceFeeCents(fee).userPayableAmountCents(Math.addExact(subtotal, fee))
+                    .taxMetadataJson(json(config.taxMetadata()))
+                    .serviceFeeCopy(config.serviceFeeRule().hideCopy() ? null : config.serviceFeeRule().copy())
+                    .status(PricingQuoteStatus.ISSUED.name()).expiresAt(null).createdAt(clock.now()).build();
+            if (quoteMapper.insert(quote) != 1) { throw new IllegalStateException("project pricing quote insert failed"); }
+            return frozen(quote);
+        } catch (ProjectPricingNotReadyException unconfigured) {
+            var error = exception(STANDARD_PRICING_QUOTE_MISSING);
+            error.initCause(unconfigured);
+            throw error;
+        } catch (ProductNotSaleableException unavailable) {
+            var error = exception(SKU_NOT_SALEABLE);
+            error.initCause(unavailable);
+            throw error;
+        }
+    }
+
+    /** 最终HTTP受理在锁报价后重新取得准入锁，锁持到订单提交，封闭首冻提交后的停用窗口。 */
+    @Transactional(transactionManager = TX, rollbackFor = Exception.class, propagation = Propagation.MANDATORY)
+    public void requireCurrentProjectAdmission(ProjectQuoteKeyContext context, FrozenQuote frozen) {
+        admissionService.requireCurrentProjectAdmission(context, frozen);
     }
 
     /**

@@ -29,6 +29,8 @@ import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerProjectAcc
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerProjectAccessResolver.ProjectSnapshot;
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerResolver;
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerResolver.BuyerSnapshot;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.ProjectQuoteKeyContext;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.StandardPricingQuoteService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -69,6 +71,7 @@ public class ProjectStandardOrderCommandFacade {
     private final HmacFingerprintPort hmacFingerprint;
     private final FulfillmentAcceptanceLifecycle lifecycle;
     private final RechargeFrequencyAcceptanceCoordinator acceptanceCoordinator;
+    private final StandardPricingQuoteService pricingQuoteService;
     private final BusinessNoGenerator businessNoGenerator;
     private final ObjectMapper objectMapper;
 
@@ -109,8 +112,14 @@ public class ProjectStandardOrderCommandFacade {
             return toResponse(lifecycle.replay(claim.receiptId()));
         }
 
+        // claim已提交且仅本次需要执行受理时首冻；无效目标/数量仍沿原受理顺序保存拒绝回执。
+        // 设计见 docs/superpowers/specs/2026-10-03-standard-project-direct-order-price-freeze-design.md#2-http-编排与两段事务。
+        if (prepared.quantity() == StandardPricingQuoteService.SUPPORTED_QUANTITY && prepared.targetValid() && targetSchema.available()) {
+            pricingQuoteService.freezeForProject(new ProjectQuoteKeyContext(
+                    buyer.id(), project.projectId(), targetSchema.platformSkuId(), prepared.buyerOrderNo(), prepared.quantity()));
+        }
         try {
-            AcceptanceSnapshot snapshot = acceptanceCoordinator.accept(claim.receiptId(), prepared);
+            AcceptanceSnapshot snapshot = acceptanceCoordinator.acceptDirectProjectOrder(claim.receiptId(), prepared);
             log.info("[标准下单][facade] accept 完成 receiptNo={}, businessNo={}, receiptStatus={}, orderNo={}",
                     snapshot.receiptNo(), snapshot.buyerOrderNo(), snapshot.status(), snapshot.orderNo());
             return toResponse(snapshot);

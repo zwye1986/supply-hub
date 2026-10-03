@@ -22,9 +22,9 @@ public class StandardPricingQuoteDO {
     @TableId(type = IdType.AUTO) private Long id;
     /** 随机内部追踪标识；不作为HTTP请求字段，报价永久键为项目+采购商订单号 */
     private String quoteToken;
-    /** 调用来源系统编码 */
+    /** 内部RPC调用来源系统编码；项目直接下单首次冻结为空 */
     private String sourceSystem;
-    /** 来源系统外部租户标识 */
+    /** 内部RPC来源系统外部租户标识；项目直接下单首次冻结为空 */
     private String externalTenantId;
     /** 采购商内部主键 */
     private Long buyerId;

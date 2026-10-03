@@ -208,6 +208,542 @@ class StandardProjectHttpClosureIntegrationTest {
         }
     }
 
+    private enum PauseStage { BEFORE_ACCEPT, AFTER_ADMISSION }
+    private static volatile AcceptancePause acceptancePause;
+    private record AcceptancePause(String buyerOrderNo, PauseStage stage,
+                                   java.util.concurrent.CountDownLatch reached,
+                                   java.util.concurrent.CountDownLatch release) { }
+    /** 首冻独立事务已提交、最终受理事务尚未开启时的一次性中断标记，用于复现进程中断后的同参续跑。 */
+    private static volatile String interruptBeforeAcceptance;
+
+    @Test
+    void projectRetireCommittedBeforeFinalAcceptRejectsWithoutSideEffects() throws Exception {
+        verifyRetirementLinearization(true, PauseStage.BEFORE_ACCEPT);
+    }
+
+    @Test
+    void buyerProductRetireCommittedBeforeFinalAcceptRejectsWithoutSideEffects() throws Exception {
+        verifyRetirementLinearization(false, PauseStage.BEFORE_ACCEPT);
+    }
+
+    @Test
+    void projectRetireWaitsForAcceptanceAdmissionLocks() throws Exception {
+        verifyRetirementLinearization(true, PauseStage.AFTER_ADMISSION);
+    }
+
+    @Test
+    void buyerProductRetireWaitsForAcceptanceAdmissionLocks() throws Exception {
+        verifyRetirementLinearization(false, PauseStage.AFTER_ADMISSION);
+    }
+
+    /**
+     * 用事务外协调器和事务内准入出口两处latch验证真实retire与真实HTTP接受的线性化顺序。
+     * AFTER_ADMISSION通过MySQL实际data_lock_waits证明阻塞，不以sleep或Future尚未结束当作锁证据。
+     * 设计见 docs/superpowers/specs/2026-10-03-standard-project-direct-order-price-freeze-design.md#5-验证与影响。
+     */
+    private void verifyRetirementLinearization(boolean projectListing, PauseStage stage) throws Exception {
+        String buyerOrderNo = "LOCK-" + projectListing + "-" + stage + "-" + UNIQUE_SEQ.incrementAndGet();
+        var sku = server.getBean(PlatformSkuMapper.class).selectByCode(SKU_VOUCHER_CODE);
+        var product = server.getBean(com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerProductMapper.class)
+                .selectByBuyerAndSku(BUYER_ID, sku.getId());
+        var listing = server.getBean(com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.ProjectListingMapper.class)
+                .selectByProjectAndBuyerProduct(PROJECT_A_ID, product.getId());
+        AcceptancePause pause = new AcceptancePause(buyerOrderNo, stage,
+                new java.util.concurrent.CountDownLatch(1), new java.util.concurrent.CountDownLatch(1));
+        acceptancePause = pause;
+        var executor = java.util.concurrent.Executors.newFixedThreadPool(2);
+        long reservationsBefore = jdbc.queryForObject("SELECT COUNT(*) FROM sc_fund_reservation", Long.class);
+        long outboxBefore = jdbc.queryForObject("SELECT COUNT(*) FROM sc_outbox_event", Long.class);
+        try {
+            var accepted = executor.submit(() -> postVoucherCreate(buyerOrderNo, null));
+            assertThat(pause.reached().await(15, java.util.concurrent.TimeUnit.SECONDS)).as("到达真实受理暂停点").isTrue();
+            assertThat(jdbc.queryForObject("SELECT status FROM sc_standard_pricing_quote WHERE project_id=? AND buyer_order_no=?",
+                    String.class, PROJECT_A_ID, buyerOrderNo)).isEqualTo("ISSUED");
+            Runnable retire = () -> {
+                if (projectListing) {
+                    server.getBean(com.aifuli.module.supplychain.tradecore.catalog.application.ProjectListingCommandService.class)
+                            .retire(PROJECT_A_CODE, listing.getListingCode(), 1L);
+                } else {
+                    server.getBean(com.aifuli.module.supplychain.tradecore.catalog.application.BuyerProductCommandService.class)
+                            .retire(BUYER_CODE, product.getBuyerProductCode(), 1L);
+                }
+            };
+            if (stage == PauseStage.BEFORE_ACCEPT) {
+                retire.run();
+                pause.release().countDown();
+                var result = accepted.get(15, java.util.concurrent.TimeUnit.SECONDS);
+                assertThat(result.getCode()).isZero();
+                assertThat(result.getData().get("receiptStatus")).isEqualTo("REJECTED_RETRYABLE");
+                assertThat(result.getData().get("rejectionCode")).isEqualTo("SKU_NOT_SALEABLE");
+                assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_supply_chain_order WHERE project_id=? AND buyer_order_no=?",
+                        Long.class, PROJECT_A_ID, buyerOrderNo)).isZero();
+                assertThat(jdbc.queryForObject("SELECT status FROM sc_standard_pricing_quote WHERE project_id=? AND buyer_order_no=?",
+                        String.class, PROJECT_A_ID, buyerOrderNo)).isEqualTo("ISSUED");
+                assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_fund_reservation", Long.class)).isEqualTo(reservationsBefore);
+                assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_outbox_event", Long.class)).isEqualTo(outboxBefore);
+            } else {
+                var retired = executor.submit(retire);
+                String table = projectListing ? "sc_project_listing" : "sc_buyer_product";
+                long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(10);
+                boolean blocked = false;
+                while (System.nanoTime() < deadline && !blocked) {
+                    blocked = hasAdmissionLockWait(table);
+                    if (!blocked) { Thread.sleep(25); }
+                }
+                assertThat(blocked).as("真实retire必须等待订单事务的准入行锁 table=%s", table).isTrue();
+                assertThat(retired.isDone()).isFalse();
+                pause.release().countDown();
+                assertThat(accepted.get(15, java.util.concurrent.TimeUnit.SECONDS).getData().get("receiptStatus")).isEqualTo("ACCEPTED");
+                retired.get(15, java.util.concurrent.TimeUnit.SECONDS);
+                assertThat(jdbc.queryForObject("SELECT status FROM sc_standard_pricing_quote WHERE project_id=? AND buyer_order_no=?",
+                        String.class, PROJECT_A_ID, buyerOrderNo)).isEqualTo("CONSUMED");
+            }
+        } finally {
+            acceptancePause = null;
+            pause.release().countDown();
+            executor.shutdownNow();
+            assertThat(executor.awaitTermination(15, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+            // 通过真实管理命令复活目录，防止状态污染其它生产HTTP闭环用例。
+            if (!projectListing) {
+                server.getBean(com.aifuli.module.supplychain.tradecore.catalog.application.BuyerProductCommandService.class).addProducts(
+                        BUYER_CODE, List.of(new com.aifuli.module.supplychain.tradecore.catalog.application.BuyerProductCommandService.ProductLine(
+                                SKU_VOUCHER_CODE, com.aifuli.module.supplychain.tradecore.profile.domain.L2AdjustMode.FOLLOW_TEMPLATE,
+                                null, null, null, null)), 1L);
+            }
+            server.getBean(com.aifuli.module.supplychain.tradecore.catalog.application.ProjectListingCommandService.class).addProducts(
+                    PROJECT_A_CODE, List.of(new com.aifuli.module.supplychain.tradecore.catalog.application.ProjectListingCommandService.ListingLine(
+                            SKU_VOUCHER_CODE, com.aifuli.module.supplychain.tradecore.profile.domain.L3AdjustMode.FOLLOW_L2, null, null)), 1L);
+        }
+    }
+
+    private static boolean hasAdmissionLockWait(String table) throws java.sql.SQLException {
+        // performance_schema读取需要PROCESS；仅使用测试容器root连接，不修改或授予生产应用权限。
+        try (var connection = java.sql.DriverManager.getConnection(jdbcUrl(),
+                EXTERNAL_JDBC_URL == null ? "root" : jdbcUsername(), jdbcPassword());
+             var statement = connection.prepareStatement("""
+                     SELECT COUNT(*) FROM performance_schema.data_lock_waits w
+                     JOIN performance_schema.data_locks l ON l.ENGINE_LOCK_ID=w.REQUESTING_ENGINE_LOCK_ID
+                     WHERE l.OBJECT_SCHEMA=DATABASE() AND l.OBJECT_NAME=?
+                     """)) {
+            statement.setString(1, table);
+            try (var result = statement.executeQuery()) { result.next(); return result.getLong(1) > 0; }
+        }
+    }
+
+    private static volatile RrPause rrPause;
+    private record RrPause(java.util.concurrent.CountDownLatch resolved,
+                           java.util.concurrent.CountDownLatch release) { }
+
+    @Test
+    void rpcBuyerResolverOldRepeatableReadSnapshotReusesCommittedPermanentQuote() throws Exception {
+        String orderNo = "RR-OLD-" + UNIQUE_SEQ.incrementAndGet();
+        StandardPricingQuoteReqDTO request = rpcQuoteRequest(PROJECT_A_CODE, orderNo, SKU_VOUCHER_CODE);
+        var manager = server.getBean("supplyChainTransactionManager", org.springframework.transaction.PlatformTransactionManager.class);
+        var transaction = new org.springframework.transaction.support.TransactionTemplate(manager);
+        transaction.setIsolationLevel(org.springframework.transaction.TransactionDefinition.ISOLATION_REPEATABLE_READ);
+        assertThat(jdbc.queryForObject("SELECT @@transaction_isolation", String.class)).isEqualTo("REPEATABLE-READ");
+        RrPause pause = new RrPause(new java.util.concurrent.CountDownLatch(1), new java.util.concurrent.CountDownLatch(1));
+        rrPause = pause;
+        var executor = java.util.concurrent.Executors.newSingleThreadExecutor(task -> new Thread(task, "rr-old-snapshot"));
+        var rpcError = new java.util.concurrent.atomic.AtomicReference<Throwable>();
+        var second = new java.util.concurrent.atomic.AtomicReference<com.aifuli.module.supplychain.api.pricing.dto.StandardPricingQuoteRespDTO>();
+        var future = new java.util.concurrent.atomic.AtomicReference<java.util.concurrent.Future<?>>();
+        try {
+            var first = transaction.execute(status -> {
+                server.getBean(BuyerProjectMapper.class).selectByIdForUpdate(PROJECT_A_ID);
+                var issued = quoteService.quote(request);
+                future.set(executor.submit(() -> {
+                    try { second.set(quoteService.quote(request)); }
+                    catch (Throwable failure) { rpcError.set(failure); }
+                }));
+                try { assertThat(pause.resolved().await(15, java.util.concurrent.TimeUnit.SECONDS)).isTrue(); }
+                catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); throw new IllegalStateException(interrupted); }
+                return issued;
+            }); // first提交之后，RPC仍保留真实BuyerResolver建立的旧RR一致性快照。
+            pause.release().countDown();
+            future.get().get(15, java.util.concurrent.TimeUnit.SECONDS);
+            assertThat(rpcError.get()).as("RPC当前读不能漏掉已提交永久报价").isNull();
+            assertThat(second.get().getQuoteToken()).isEqualTo(first.getQuoteToken());
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_standard_pricing_quote WHERE project_id=? AND buyer_order_no=?",
+                    Long.class, PROJECT_A_ID, orderNo)).isEqualTo(1L);
+        } finally {
+            rrPause = null;
+            pause.release().countDown();
+            executor.shutdownNow();
+            assertThat(executor.awaitTermination(15, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+        }
+    }
+
+    @Test
+    void trustedFreezeCommitsThroughRealProxyEvenWhenCallerRollsBack() {
+        String orderNo = "FREEZE-INDEPENDENT-" + UNIQUE_SEQ.incrementAndGet();
+        Long skuId = server.getBean(PlatformSkuMapper.class).selectByCode(SKU_VOUCHER_CODE).getId();
+        var transaction = new org.springframework.transaction.support.TransactionTemplate(server.getBean(
+                "supplyChainTransactionManager", org.springframework.transaction.PlatformTransactionManager.class));
+        var frozen = transaction.execute(status -> {
+            var quote = quoteService.freezeForProject(new com.aifuli.module.supplychain.tradecore.catalog.pricing.ProjectQuoteKeyContext(
+                    BUYER_ID, PROJECT_A_ID, skuId, orderNo, 1L));
+            status.setRollbackOnly();
+            return quote;
+        });
+        assertThat(org.springframework.aop.support.AopUtils.isAopProxy(quoteService)).isTrue();
+        assertThat(jdbc.queryForObject("SELECT status FROM sc_standard_pricing_quote WHERE id=?", String.class, frozen.quoteId())).isEqualTo("ISSUED");
+        assertThat(jdbc.queryForObject("SELECT source_system FROM sc_standard_pricing_quote WHERE id=?", String.class, frozen.quoteId())).isNull();
+        assertThat(jdbc.queryForObject("SELECT external_tenant_id FROM sc_standard_pricing_quote WHERE id=?", String.class, frozen.quoteId())).isNull();
+    }
+
+    @Test
+    void failedAcceptanceRetainsIssuedQuoteAndCasRetryUsesOriginalPriceWhileNewOrderUsesNewPrice() {
+        String orderNo = "CAS-PRICE-" + UNIQUE_SEQ.incrementAndGet();
+        setAvailability(BUYER_SKU_VOUCHER, ListingAvailability.UNAVAILABLE, "SUPPLY_NOT_READY");
+        try {
+            var rejected = postVoucherCreate(orderNo, null);
+            assertThat(rejected.getCode()).isZero();
+            assertThat(rejected.getData().get("receiptStatus")).isEqualTo("REJECTED_RETRYABLE");
+            assertThat(jdbc.queryForObject("SELECT status FROM sc_standard_pricing_quote WHERE project_id=? AND buyer_order_no=?",
+                    String.class, PROJECT_A_ID, orderNo)).isEqualTo("ISSUED");
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_supply_chain_order WHERE project_id=? AND buyer_order_no=?",
+                    Long.class, PROJECT_A_ID, orderNo)).isZero();
+            String token = jdbc.queryForObject("SELECT quote_token FROM sc_standard_pricing_quote WHERE project_id=? AND buyer_order_no=?",
+                    String.class, PROJECT_A_ID, orderNo);
+            setAvailability(BUYER_SKU_VOUCHER, ListingAvailability.AVAILABLE, "SUPPLY_READY");
+            saveVoucherPricing(new BigDecimal("90"));
+            var replay = postVoucherCreate(orderNo, null);
+            assertThat(replay.getData().get("receiptStatus")).isEqualTo("REJECTED_RETRYABLE");
+            assertThat(replay.getData().get("idempotentReplay")).isEqualTo(true);
+            var accepted = postVoucherCreate(orderNo, ((Number) rejected.getData().get("receiptVersion")).longValue());
+            assertThat(accepted.getCode()).isZero();
+            assertThat(accepted.getData().get("receiptStatus")).isEqualTo("ACCEPTED");
+            assertThat(jdbc.queryForObject("SELECT buyer_settlement_amount FROM sc_supply_chain_order WHERE project_id=? AND buyer_order_no=?",
+                    Long.class, PROJECT_A_ID, orderNo)).isEqualTo(9_800L);
+            assertThat(jdbc.queryForObject("SELECT quote_token FROM sc_standard_pricing_quote WHERE project_id=? AND buyer_order_no=?",
+                    String.class, PROJECT_A_ID, orderNo)).isEqualTo(token);
+            String newOrderNo = orderNo + "-NEW";
+            assertThat(postVoucherCreate(newOrderNo, null).getData().get("receiptStatus")).isEqualTo("ACCEPTED");
+            assertThat(jdbc.queryForObject("SELECT buyer_settlement_amount FROM sc_supply_chain_order WHERE project_id=? AND buyer_order_no=?",
+                    Long.class, PROJECT_A_ID, newOrderNo)).isEqualTo(9_000L);
+        } finally {
+            setAvailability(BUYER_SKU_VOUCHER, ListingAvailability.AVAILABLE, "SUPPLY_READY");
+            saveVoucherPricing(new BigDecimal("98"));
+        }
+    }
+
+    @Test
+    void danglingProjectPricingVersionDoesNotRepairOrCreateQuote() {
+        verifyProjectPricingIntegrity(true);
+    }
+
+    @Test
+    void projectPricingVersionOwnedByAnotherProjectDoesNotReuseOrCreateQuote() {
+        verifyProjectPricingIntegrity(false);
+    }
+
+    private void verifyProjectPricingIntegrity(boolean dangling) {
+        String orderNo = "PROJECT-PRICING-INTEGRITY-" + dangling + "-" + UNIQUE_SEQ.incrementAndGet();
+        Long identityId = jdbc.queryForObject("""
+                SELECT p.id FROM sc_project_sku_pricing p JOIN sc_project_listing l ON l.id=p.listing_id
+                JOIN sc_buyer_product b ON b.id=l.buyer_product_id JOIN sc_platform_sku s ON s.id=b.platform_sku_id
+                WHERE l.project_id=? AND s.sku_code=?
+                """, Long.class, PROJECT_A_ID, SKU_VOUCHER_CODE);
+        Long originalVersion = jdbc.queryForObject("SELECT current_version_id FROM sc_project_sku_pricing WHERE id=?", Long.class, identityId);
+        Long invalidVersion = dangling ? Long.MAX_VALUE : jdbc.queryForObject("""
+                SELECT p.current_version_id FROM sc_project_sku_pricing p JOIN sc_project_listing l ON l.id=p.listing_id
+                JOIN sc_buyer_product b ON b.id=l.buyer_product_id JOIN sc_platform_sku s ON s.id=b.platform_sku_id
+                WHERE l.project_id=? AND s.sku_code=?
+                """, Long.class, PROJECT_B_ID, SKU_VOUCHER_CODE);
+        Long versionCount = jdbc.queryForObject("SELECT COUNT(*) FROM sc_project_sku_pricing_version", Long.class);
+        try {
+            jdbc.update("UPDATE sc_project_sku_pricing SET current_version_id=? WHERE id=?", invalidVersion, identityId);
+            assertThat(postVoucherCreate(orderNo, null).getCode()).isEqualTo(500);
+            assertThat(jdbc.queryForObject("SELECT current_version_id FROM sc_project_sku_pricing WHERE id=?", Long.class, identityId)).isEqualTo(invalidVersion);
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_project_sku_pricing_version", Long.class)).isEqualTo(versionCount);
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_standard_pricing_quote WHERE project_id=? AND buyer_order_no=?",
+                    Long.class, PROJECT_A_ID, orderNo)).isZero();
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_supply_chain_order WHERE project_id=? AND buyer_order_no=?",
+                    Long.class, PROJECT_A_ID, orderNo)).isZero();
+        } finally {
+            jdbc.update("UPDATE sc_project_sku_pricing SET current_version_id=? WHERE id=?", originalVersion, identityId);
+        }
+    }
+
+    @Test
+    void unconfiguredPricingKeepsProcessingReceiptAndSameRequestResumesAfterConfigurationRestored() {
+        String orderNo = "NO-CONFIG-" + UNIQUE_SEQ.incrementAndGet();
+        Long pricingId = jdbc.queryForObject("""
+                SELECT p.id FROM sc_buyer_sku_pricing p JOIN sc_buyer_product b ON b.id=p.buyer_product_id
+                JOIN sc_platform_sku s ON s.id=b.platform_sku_id WHERE b.buyer_id=? AND s.sku_code=?
+                """, Long.class, BUYER_ID, SKU_VOUCHER_CODE);
+        Long versionId = jdbc.queryForObject("SELECT current_version_id FROM sc_buyer_sku_pricing WHERE id=?", Long.class, pricingId);
+        try {
+            // 模拟未配置当前规则与悬空引用分别覆盖161业务条件和500系统异常，不能混为不可售。
+            jdbc.update("UPDATE sc_buyer_sku_pricing SET current_version_id=NULL WHERE id=?", pricingId);
+            var missing = postVoucherCreate(orderNo, null);
+            assertThat(missing.getCode()).isEqualTo(com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.STANDARD_PRICING_QUOTE_MISSING.getCode());
+            assertThat(jdbc.queryForObject("SELECT status FROM sc_fulfillment_acceptance_receipt WHERE project_id=? AND buyer_order_no=?",
+                    Integer.class, PROJECT_A_ID, orderNo)).isEqualTo((int) com.aifuli.module.supplychain.border.fulfillment.domain.AcceptanceReceiptStatus.PROCESSING.getCode());
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_standard_pricing_quote WHERE project_id=? AND buyer_order_no=?",
+                    Long.class, PROJECT_A_ID, orderNo)).isZero();
+            jdbc.update("UPDATE sc_buyer_sku_pricing SET current_version_id=? WHERE id=?", Long.MAX_VALUE, pricingId);
+            var corrupted = postVoucherCreate(orderNo, null);
+            assertThat(corrupted.getCode()).isEqualTo(500);
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_standard_pricing_quote WHERE project_id=? AND buyer_order_no=?",
+                    Long.class, PROJECT_A_ID, orderNo)).isZero();
+        } finally {
+            jdbc.update("UPDATE sc_buyer_sku_pricing SET current_version_id=? WHERE id=?", versionId, pricingId);
+        }
+        assertThat(postVoucherCreate(orderNo, null).getData().get("receiptStatus")).isEqualTo("ACCEPTED");
+    }
+
+    @Test
+    void concurrentDirectHttpAttemptsCreateOnePermanentQuoteOrderAndReservation() throws Exception {
+        String orderNo = "DIRECT-CONCURRENT-" + UNIQUE_SEQ.incrementAndGet();
+        var start = new java.util.concurrent.CountDownLatch(1);
+        var executor = java.util.concurrent.Executors.newFixedThreadPool(2);
+        try {
+            java.util.concurrent.Callable<CommonResult<Map<String, Object>>> attempt = () -> {
+                assertThat(start.await(10, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+                return postVoucherCreate(orderNo, null);
+            };
+            var first = executor.submit(attempt); var second = executor.submit(attempt);
+            start.countDown();
+            var a = first.get(20, java.util.concurrent.TimeUnit.SECONDS);
+            var b = second.get(20, java.util.concurrent.TimeUnit.SECONDS);
+            assertThat(a.getCode()).isZero(); assertThat(b.getCode()).isZero();
+            assertThat(a.getData().get("orderNo")).isEqualTo(b.getData().get("orderNo")).isNotNull();
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_standard_pricing_quote WHERE project_id=? AND buyer_order_no=?",
+                    Long.class, PROJECT_A_ID, orderNo)).isEqualTo(1L);
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_supply_chain_order WHERE project_id=? AND buyer_order_no=?",
+                    Long.class, PROJECT_A_ID, orderNo)).isEqualTo(1L);
+            assertThat(jdbc.queryForObject("""
+                    SELECT COUNT(*) FROM sc_fund_reservation r JOIN sc_fulfillment_request q ON q.request_no=r.reference_no
+                    JOIN sc_supply_chain_order o ON o.id=q.order_id WHERE o.order_no=?
+                    """, Long.class, a.getData().get("orderNo"))).isEqualTo(1L);
+        } finally {
+            executor.shutdownNow();
+            assertThat(executor.awaitTermination(15, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+        }
+    }
+
+    private static void saveVoucherPricing(BigDecimal distributionPercent) {
+        FormulaRule distribution = new FormulaRule(PriceMode.CUSTOM,
+                com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericPricingCalculator.PriceBase.MARKET_PRICE,
+                distributionPercent, FixedOperator.MULTIPLY, BigDecimal.ONE);
+        FormulaRule sales = new FormulaRule(PriceMode.DIRECT_MARKET_PRICE, null, null, null, null);
+        server.getBean(GenericBatchPricingService.class).savePlatform(List.of(SKU_VOUCHER_CODE),
+                new PricingConfig(distribution, sales,
+                        new ServiceFeeRule(BigDecimal.ONE, FixedOperator.MULTIPLY, BigDecimal.ZERO, true, null),
+                        new HideRule(null, null), new TaxMetadata(false, PricingTaxRateCodes.NON_TAXABLE, "不征税")), 1L);
+    }
+
+    private static volatile String contendedHttpOrder;
+    private static volatile java.util.concurrent.CountDownLatch contendedHttpFreezeEntered;
+
+    @Test
+    void rpcAndHttpRaceShareOnePermanentQuoteAndPreserveRealRpcSource() throws Exception {
+        String orderNo = "RPC-HTTP-RACE-" + UNIQUE_SEQ.incrementAndGet();
+        contendedHttpOrder = orderNo;
+        contendedHttpFreezeEntered = new java.util.concurrent.CountDownLatch(1);
+        var executor = java.util.concurrent.Executors.newSingleThreadExecutor();
+        var future = new java.util.concurrent.atomic.AtomicReference<java.util.concurrent.Future<CommonResult<Map<String, Object>>>>();
+        var transaction = new org.springframework.transaction.support.TransactionTemplate(server.getBean(
+                "supplyChainTransactionManager", org.springframework.transaction.PlatformTransactionManager.class));
+        try {
+            var rpc = transaction.execute(status -> {
+                server.getBean(BuyerProjectMapper.class).selectByIdForUpdate(PROJECT_A_ID);
+                var quote = quoteService.quote(rpcQuoteRequest(PROJECT_A_CODE, orderNo, SKU_VOUCHER_CODE));
+                future.set(executor.submit(() -> postVoucherCreate(orderNo, null)));
+                try { assertThat(contendedHttpFreezeEntered.await(15, java.util.concurrent.TimeUnit.SECONDS)).isTrue(); }
+                catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); throw new IllegalStateException(interrupted); }
+                return quote;
+            });
+            var http = future.get().get(20, java.util.concurrent.TimeUnit.SECONDS);
+            assertThat(http.getCode()).isZero();
+            assertThat(http.getData().get("receiptStatus")).isEqualTo("ACCEPTED");
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_standard_pricing_quote WHERE project_id=? AND buyer_order_no=?",
+                    Long.class, PROJECT_A_ID, orderNo)).isEqualTo(1L);
+            assertThat(jdbc.queryForObject("SELECT quote_token FROM sc_standard_pricing_quote WHERE project_id=? AND buyer_order_no=?",
+                    String.class, PROJECT_A_ID, orderNo)).isEqualTo(rpc.getQuoteToken());
+            assertThat(jdbc.queryForObject("SELECT source_system FROM sc_standard_pricing_quote WHERE project_id=? AND buyer_order_no=?",
+                    String.class, PROJECT_A_ID, orderNo)).isEqualTo(SOURCE_SYSTEM);
+            assertThat(jdbc.queryForObject("SELECT external_tenant_id FROM sc_standard_pricing_quote WHERE project_id=? AND buyer_order_no=?",
+                    String.class, PROJECT_A_ID, orderNo)).isEqualTo(EXTERNAL_TENANT_ID);
+        } finally {
+            contendedHttpOrder = null; contendedHttpFreezeEntered = null;
+            executor.shutdownNow();
+            assertThat(executor.awaitTermination(15, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+        }
+    }
+
+    @Test
+    void invalidTargetAndSavedRejectionReplayDoNotFreeze() {
+        String orderNo = "INVALID-FREEZE-" + UNIQUE_SEQ.incrementAndGet();
+        String request = "{\"buyerOrderNo\":\"" + orderNo + "\",\"buyerSkuCode\":\"" + BUYER_SKU_VOUCHER
+                + "\",\"quantity\":1,\"target\":{\"deliveryMode\":\"INVALID\"}}";
+        for (int attempt = 0; attempt < 2; attempt++) {
+            var result = postSigned(ORDERS_PATH, request.getBytes(StandardCharsets.UTF_8), credentialsA(),
+                    System.currentTimeMillis(), "invalid-nonce-" + UNIQUE_SEQ.incrementAndGet()).getBody();
+            assertThat(result.getCode()).isZero();
+            assertThat(result.getData().get("receiptStatus")).isEqualTo("REJECTED_FINAL");
+            assertThat(result.getData().get("idempotentReplay")).isEqualTo(attempt > 0);
+        }
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_standard_pricing_quote WHERE project_id=? AND buyer_order_no=?",
+                Long.class, PROJECT_A_ID, orderNo)).isZero();
+    }
+
+    @Test
+    void acceptedReplayBypassesFreezeAndCurrentAdmissionAfterProjectListingRetired() {
+        String orderNo = "ACCEPTED-REPLAY-" + UNIQUE_SEQ.incrementAndGet();
+        var accepted = postVoucherCreate(orderNo, null);
+        assertThat(accepted.getData().get("receiptStatus")).isEqualTo("ACCEPTED");
+        var product = server.getBean(com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerProductMapper.class)
+                .selectByBuyerAndSku(BUYER_ID, server.getBean(PlatformSkuMapper.class).selectByCode(SKU_VOUCHER_CODE).getId());
+        var listing = server.getBean(com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.ProjectListingMapper.class)
+                .selectByProjectAndBuyerProduct(PROJECT_A_ID, product.getId());
+        var projects = server.getBean(com.aifuli.module.supplychain.tradecore.catalog.application.ProjectListingCommandService.class);
+        try {
+            projects.retire(PROJECT_A_CODE, listing.getListingCode(), 1L);
+            var replay = postVoucherCreate(orderNo, null);
+            assertThat(replay.getCode()).isZero();
+            assertThat(replay.getData().get("orderNo")).isEqualTo(accepted.getData().get("orderNo"));
+            assertThat(replay.getData().get("idempotentReplay")).isEqualTo(true);
+        } finally {
+            projects.addProducts(PROJECT_A_CODE, List.of(
+                    new com.aifuli.module.supplychain.tradecore.catalog.application.ProjectListingCommandService.ListingLine(
+                            SKU_VOUCHER_CODE, com.aifuli.module.supplychain.tradecore.profile.domain.L3AdjustMode.FOLLOW_L2, null, null)), 1L);
+        }
+    }
+
+    /**
+     * 首冻阶段发现已有报价但当前项目选品已停用时，必须返回稳定 CommonResult SKU_NOT_SALEABLE，
+     * 报价保持 ISSUED、回执保持 PROCESSING 且不写 rejection_code，不得伪造已保存的拒绝回执；
+     * 因此选品恢复后同一 buyerOrderNo 无需 previousReceiptVersion 即可按原冻结价续跑受理。
+     * 与「最终受理阶段停用 → 保存 REJECTED_RETRYABLE、后续必须 CAS」形成对照。
+     * 设计见 docs/superpowers/specs/2026-10-03-standard-project-direct-order-price-freeze-design.md#3-定价身份与当前准入。
+     */
+    @Test
+    void retiredListingOnResumedFreezeKeepsReceiptProcessingInsteadOfSavingRejection() {
+        String orderNo = "FREEZE-ADMISSION-" + UNIQUE_SEQ.incrementAndGet();
+        Long skuId = server.getBean(PlatformSkuMapper.class).selectByCode(SKU_VOUCHER_CODE).getId();
+        var product = server.getBean(com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerProductMapper.class)
+                .selectByBuyerAndSku(BUYER_ID, skuId);
+        var listing = server.getBean(com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.ProjectListingMapper.class)
+                .selectByProjectAndBuyerProduct(PROJECT_A_ID, product.getId());
+        var projects = server.getBean(com.aifuli.module.supplychain.tradecore.catalog.application.ProjectListingCommandService.class);
+        long reservationsBefore = jdbc.queryForObject("SELECT COUNT(*) FROM sc_fund_reservation", Long.class);
+        long outboxBefore = jdbc.queryForObject("SELECT COUNT(*) FROM sc_outbox_event", Long.class);
+        // 首冻 REQUIRES_NEW 已提交、最终受理事务尚未开启时中断，复现设计 §2 的进程中断：报价留下、回执仍可续跑。
+        interruptBeforeAcceptance = orderNo;
+        try {
+            assertThat(postVoucherCreate(orderNo, null).getCode()).isEqualTo(500);
+        } finally {
+            interruptBeforeAcceptance = null;
+        }
+        assertFrozenButUnaccepted(orderNo, reservationsBefore, outboxBefore);
+        boolean revived = false;
+        try {
+            projects.retire(PROJECT_A_CODE, listing.getListingCode(), 1L);
+            var resumed = postVoucherCreate(orderNo, null);
+            assertThat(resumed.getCode()).isEqualTo(
+                    com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.SKU_NOT_SALEABLE.getCode());
+            assertFrozenButUnaccepted(orderNo, reservationsBefore, outboxBefore);
+            projects.addProducts(PROJECT_A_CODE, List.of(
+                    new com.aifuli.module.supplychain.tradecore.catalog.application.ProjectListingCommandService.ListingLine(
+                            SKU_VOUCHER_CODE, com.aifuli.module.supplychain.tradecore.profile.domain.L3AdjustMode.FOLLOW_L2, null, null)), 1L);
+            revived = true;
+            var accepted = postVoucherCreate(orderNo, null);
+            assertThat(accepted.getCode()).isZero();
+            assertThat(accepted.getData().get("receiptStatus")).isEqualTo("ACCEPTED");
+            assertThat(jdbc.queryForObject("SELECT status FROM sc_standard_pricing_quote WHERE project_id=? AND buyer_order_no=?",
+                    String.class, PROJECT_A_ID, orderNo)).isEqualTo("CONSUMED");
+        } finally {
+            if (!revived) {
+                projects.addProducts(PROJECT_A_CODE, List.of(
+                        new com.aifuli.module.supplychain.tradecore.catalog.application.ProjectListingCommandService.ListingLine(
+                                SKU_VOUCHER_CODE, com.aifuli.module.supplychain.tradecore.profile.domain.L3AdjustMode.FOLLOW_L2, null, null)), 1L);
+            }
+        }
+    }
+
+    /** 报价已冻结但受理未发生：ISSUED 报价、PROCESSING 回执、无拒绝码、无订单、无资金与 Outbox 增量。 */
+    private void assertFrozenButUnaccepted(String orderNo, long reservationsBefore, long outboxBefore) {
+        assertThat(jdbc.queryForObject("SELECT status FROM sc_standard_pricing_quote WHERE project_id=? AND buyer_order_no=?",
+                String.class, PROJECT_A_ID, orderNo)).isEqualTo("ISSUED");
+        assertThat(jdbc.queryForObject("SELECT status FROM sc_fulfillment_acceptance_receipt WHERE project_id=? AND buyer_order_no=?",
+                Integer.class, PROJECT_A_ID, orderNo)).isEqualTo(
+                (int) com.aifuli.module.supplychain.border.fulfillment.domain.AcceptanceReceiptStatus.PROCESSING.getCode());
+        assertThat(jdbc.queryForObject("SELECT rejection_code FROM sc_fulfillment_acceptance_receipt WHERE project_id=? AND buyer_order_no=?",
+                String.class, PROJECT_A_ID, orderNo)).isNull();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_supply_chain_order WHERE project_id=? AND buyer_order_no=?",
+                Long.class, PROJECT_A_ID, orderNo)).isZero();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_fund_reservation", Long.class)).isEqualTo(reservationsBefore);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_outbox_event", Long.class)).isEqualTo(outboxBefore);
+    }
+
+    private static StandardPricingQuoteReqDTO rpcQuoteRequest(String projectCode, String orderNo, String skuCode) {
+        var request = new StandardPricingQuoteReqDTO();
+        request.setSourceSystem(SOURCE_SYSTEM); request.setExternalTenantId(EXTERNAL_TENANT_ID);
+        request.setProjectCode(projectCode); request.setPlatformSkuCode(skuCode);
+        request.setBuyerOrderNo(orderNo); request.setQuantity(1L);
+        return request;
+    }
+
+    private static CommonResult<Map<String, Object>> postVoucherCreate(String buyerOrderNo, Long previousVersion) {
+        String request = "{\"buyerOrderNo\":\"" + buyerOrderNo + "\",\"buyerSkuCode\":\"" + BUYER_SKU_VOUCHER
+                + "\",\"quantity\":1,\"target\":{\"deliveryMode\":\"BUYER_ASSET_QUERY\"}"
+                + (previousVersion == null ? "" : ",\"previousReceiptVersion\":" + previousVersion) + "}";
+        return postSigned(ORDERS_PATH, request.getBytes(StandardCharsets.UTF_8), credentialsA(),
+                System.currentTimeMillis(), "freeze-nonce-" + UNIQUE_SEQ.incrementAndGet()).getBody();
+    }
+
+    /** 仅测试latch，所有业务实现、Mapper和Spring事务代理仍为生产对象。 */
+    @org.aspectj.lang.annotation.Aspect
+    public static class AcceptanceLockProbe {
+        @org.aspectj.lang.annotation.Around("execution(* com.aifuli.module.supplychain.tradecore.catalog.pricing.StandardPricingQuoteService.freezeForProject(..))")
+        public Object beforeContendedFreeze(org.aspectj.lang.ProceedingJoinPoint joinPoint) throws Throwable {
+            var key = (com.aifuli.module.supplychain.tradecore.catalog.pricing.ProjectQuoteKeyContext) joinPoint.getArgs()[0];
+            var entered = contendedHttpFreezeEntered;
+            if (entered != null && key.buyerOrderNo().equals(contendedHttpOrder)) { entered.countDown(); }
+            return joinPoint.proceed();
+        }
+        @org.aspectj.lang.annotation.Around("execution(* com.aifuli.module.supplychain.tradecore.buyer.application.BuyerResolver.resolve(..))")
+        public Object afterRealBuyerResolver(org.aspectj.lang.ProceedingJoinPoint joinPoint) throws Throwable {
+            Object resolved = joinPoint.proceed();
+            RrPause pause = rrPause;
+            if (pause != null && Thread.currentThread().getName().equals("rr-old-snapshot")) {
+                pause.resolved().countDown();
+                if (!pause.release().await(20, java.util.concurrent.TimeUnit.SECONDS)) {
+                    throw new IllegalStateException("RR snapshot test latch timeout");
+                }
+            }
+            return resolved;
+        }
+        @org.aspectj.lang.annotation.Around("execution(* com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyAcceptanceCoordinator.accept*(..))")
+        public Object beforeAcceptance(org.aspectj.lang.ProceedingJoinPoint joinPoint) throws Throwable {
+            var command = (com.aifuli.module.supplychain.border.fulfillment.application.FulfillmentAcceptanceLifecycle.PreparedAcceptance) joinPoint.getArgs()[1];
+            if (command.buyerOrderNo().equals(interruptBeforeAcceptance)) {
+                throw new IllegalStateException("simulated process interruption after price freeze commit");
+            }
+            awaitPause(command.buyerOrderNo(), PauseStage.BEFORE_ACCEPT);
+            return joinPoint.proceed();
+        }
+        @org.aspectj.lang.annotation.Around("execution(* com.aifuli.module.supplychain.tradecore.catalog.pricing.StandardPricingQuoteService.requireCurrentProjectAdmission(..))")
+        public Object afterAdmission(org.aspectj.lang.ProceedingJoinPoint joinPoint) throws Throwable {
+            Object result = joinPoint.proceed();
+            var context = (com.aifuli.module.supplychain.tradecore.catalog.pricing.ProjectQuoteKeyContext) joinPoint.getArgs()[0];
+            awaitPause(context.buyerOrderNo(), PauseStage.AFTER_ADMISSION);
+            return result;
+        }
+        private static void awaitPause(String orderNo, PauseStage stage) throws InterruptedException {
+            AcceptancePause pause = acceptancePause;
+            if (pause != null && pause.stage() == stage && pause.buyerOrderNo().equals(orderNo)) {
+                pause.reached().countDown();
+                if (!pause.release().await(20, java.util.concurrent.TimeUnit.SECONDS)) {
+                    throw new IllegalStateException("acceptance lock test latch timeout");
+                }
+            }
+        }
+    }
+
     /**
      * 场景一：虚拟卡券标准订单全流程闭环：
      * 内部报价 -> 签名下单成功 -> 同参新nonce重放返回相同orderNo且不重扣 -> 签名查单返回PROCESSING+未就绪 ->
@@ -218,10 +754,8 @@ class StandardProjectHttpClosureIntegrationTest {
     void testVoucherOrderFullClosure() throws Exception {
         String buyerOrderNo = "VOUCHER-ORDER-" + UNIQUE_SEQ.incrementAndGet();
 
-        // 1. 签发卡券报价
-        issueQuote(PROJECT_A_CODE, buyerOrderNo, SKU_VOUCHER_CODE);
-
-        // 2. 签名下单
+        // 项目首次有效下单直接冻结配置报价，无预签RPC。
+        // 1. 签名下单
         String createJson = """
                 {
                     "buyerOrderNo": "%s",
@@ -340,8 +874,8 @@ class StandardProjectHttpClosureIntegrationTest {
     void testDirectRechargeOrderClosure() throws Exception {
         String buyerOrderNo = "DIRECT-ORDER-" + UNIQUE_SEQ.incrementAndGet();
 
-        // 1. 签发直充报价
-        issueQuote(PROJECT_A_CODE, buyerOrderNo, SKU_DIRECT_CODE);
+        // 首次直充项目下单由HTTP门面自动冻结，不预签RPC报价。
+
 
         // 2. 签名下单
         String createJson = """
@@ -1132,8 +1666,35 @@ class StandardProjectHttpClosureIntegrationTest {
         // 6. 供应商与主路由
         PlatformSkuDO voucherSku = server.getBean(PlatformSkuMapper.class).selectByCode(SKU_VOUCHER_CODE);
         PlatformSkuDO directSku = server.getBean(PlatformSkuMapper.class).selectByCode(SKU_DIRECT_CODE);
+        // createSku旧精简入口只设置面值，显式设置真实Generic规则依赖的市场价测试输入。
+        voucherSku.setMarketPrice(10_000L);
+        directSku.setMarketPrice(10_000L);
+        server.getBean(PlatformSkuMapper.class).updateById(voucherSku);
+        server.getBean(PlatformSkuMapper.class).updateById(directSku);
         createSupplierOffer(voucherSku, now);
         createSupplierOffer(directSku, now);
+        // 真实通用定价与两种目录身份：项目选品不能借用sc_buyer_listing主键。
+        FormulaRule distribution = new FormulaRule(PriceMode.CUSTOM,
+                com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericPricingCalculator.PriceBase.MARKET_PRICE, new BigDecimal("98"), FixedOperator.MULTIPLY, BigDecimal.ONE);
+        FormulaRule sales = new FormulaRule(PriceMode.DIRECT_MARKET_PRICE, null, null, null, null);
+        PricingConfig config = new PricingConfig(distribution, sales,
+                new ServiceFeeRule(BigDecimal.ONE, FixedOperator.MULTIPLY, BigDecimal.ZERO, true, null),
+                new HideRule(null, null), new TaxMetadata(false, PricingTaxRateCodes.NON_TAXABLE, "不征税"));
+        server.getBean(GenericBatchPricingService.class).savePlatform(List.of(SKU_VOUCHER_CODE, SKU_DIRECT_CODE), config, 1L);
+        var products = server.getBean(com.aifuli.module.supplychain.tradecore.catalog.application.BuyerProductCommandService.class);
+        products.addProducts(BUYER_CODE, List.of(
+                new com.aifuli.module.supplychain.tradecore.catalog.application.BuyerProductCommandService.ProductLine(
+                        SKU_VOUCHER_CODE, com.aifuli.module.supplychain.tradecore.profile.domain.L2AdjustMode.FOLLOW_TEMPLATE, null, null, null, null),
+                new com.aifuli.module.supplychain.tradecore.catalog.application.BuyerProductCommandService.ProductLine(
+                        SKU_DIRECT_CODE, com.aifuli.module.supplychain.tradecore.profile.domain.L2AdjustMode.FOLLOW_TEMPLATE, null, null, null, null)), 1L);
+        var projects = server.getBean(com.aifuli.module.supplychain.tradecore.catalog.application.ProjectListingCommandService.class);
+        for (String projectCode : List.of(PROJECT_A_CODE, PROJECT_B_CODE)) {
+            projects.addProducts(projectCode, List.of(
+                    new com.aifuli.module.supplychain.tradecore.catalog.application.ProjectListingCommandService.ListingLine(
+                            SKU_VOUCHER_CODE, com.aifuli.module.supplychain.tradecore.profile.domain.L3AdjustMode.FOLLOW_L2, null, null),
+                    new com.aifuli.module.supplychain.tradecore.catalog.application.ProjectListingCommandService.ListingLine(
+                            SKU_DIRECT_CODE, com.aifuli.module.supplychain.tradecore.profile.domain.L3AdjustMode.FOLLOW_L2, null, null)), 1L);
+        }
 
         RoutingPolicyPresetFixture.deactivatePresetPolicy(jdbc);
         RoutingPolicyPublicationService routing = server.getBean(RoutingPolicyPublicationService.class);
@@ -1342,31 +1903,14 @@ class StandardProjectHttpClosureIntegrationTest {
     @Configuration(proxyBeanMethods = false)
     static class TestOverrides {
         @Bean
+        AcceptanceLockProbe acceptanceLockProbe() { return new AcceptanceLockProbe(); }
+        @Bean
         @Primary
-        GenericBatchPricingService genericBatchPricingService(PlatformSkuMapper skuMapper,
-                                                              BuyerListingMapper listingMapper,
-                                                              BuyerMapper buyerMapper,
-                                                              ObjectMapper mapper) throws JsonProcessingException {
-            GenericBatchPricingService service = mock(GenericBatchPricingService.class);
-            FormulaRule direct = new FormulaRule(PriceMode.DIRECT_MARKET_PRICE, null, null, null, null);
-            PricingConfig config = new PricingConfig(direct, direct,
-                    new ServiceFeeRule(new BigDecimal("1"), FixedOperator.MULTIPLY, BigDecimal.ZERO, true, null),
-                    new HideRule(null, null),
-                    new TaxMetadata(false, PricingTaxRateCodes.NON_TAXABLE, "不征税"));
-            String configJson = mapper.writeValueAsString(config);
-            when(service.ensureCurrentProjectVersion(anyString(), anyString())).thenAnswer(invocation -> {
-                String platformSkuCode = invocation.getArgument(1);
-                PlatformSkuDO sku = skuMapper.selectByCode(platformSkuCode);
-                Long buyerId = buyerMapper.selectByBuyerCode(BUYER_CODE).getId();
-                String buyerSku = SKU_VOUCHER_CODE.equals(platformSkuCode) ? BUYER_SKU_VOUCHER : BUYER_SKU_DIRECT;
-                BuyerListingDO listing = listingMapper.selectByBuyerAndSkuCode(buyerId, buyerSku);
-                ProjectSkuPricingVersionDO version = ProjectSkuPricingVersionDO.builder()
-                        .id(9L).pricingStatus(PricingStatus.READY.name())
-                        .distributionPriceCents(9_800L).salesPriceCents(10_000L)
-                        .effectiveConfigJson(configJson).build();
-                return new CurrentProjectPricing(version, listing.getId(), sku.getId(), sku.getSkuCode());
-            });
-            return service;
+        com.aifuli.module.supplychain.integration.system.TaxRateDictionaryAdapter taxRateDictionaryAdapter() {
+            var adapter = mock(com.aifuli.module.supplychain.integration.system.TaxRateDictionaryAdapter.class);
+            when(adapter.requireEnabled(false, PricingTaxRateCodes.NON_TAXABLE))
+                    .thenReturn(new TaxMetadata(false, PricingTaxRateCodes.NON_TAXABLE, "不征税"));
+            return adapter;
         }
 
         @Bean

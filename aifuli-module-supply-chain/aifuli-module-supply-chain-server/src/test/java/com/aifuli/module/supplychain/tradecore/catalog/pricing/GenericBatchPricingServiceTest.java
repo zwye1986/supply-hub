@@ -96,6 +96,77 @@ class GenericBatchPricingServiceTest {
     }
 
     @Test
+    void projectPricingDanglingCurrentVersionMustNotPublishReplacement() throws Exception {
+        stubConfiguredProjectIdentity();
+        assertThatThrownBy(() -> service.ensureCurrentProjectVersion("PRJ_A", "SKU_A"))
+                .isExactlyInstanceOf(IllegalStateException.class).hasMessageContaining("current version is missing or mismatched");
+        verify(projectVersionMapper, never()).insert(any(com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProjectSkuPricingVersionDO.class));
+        verify(projectPricingMapper, never()).updateById(any(com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProjectSkuPricingDO.class));
+    }
+
+    @Test
+    void projectPricingCurrentVersionOwnedByAnotherIdentityMustNotBeReusedOrOverwritten() throws Exception {
+        stubConfiguredProjectIdentity();
+        when(projectVersionMapper.selectById(22L)).thenReturn(
+                com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProjectSkuPricingVersionDO.builder()
+                        .id(22L).pricingId(999L).buyerPricingVersionId(12L).marketPriceCents(10000L)
+                        .suggestedSalePriceCents(10000L).pricingStatus(PricingStatus.READY.name())
+                        .overrideJson(new ObjectMapper().writeValueAsString(GenericBatchPricingService.ProjectOverrides.allInherited())).build());
+        assertThatThrownBy(() -> service.ensureCurrentProjectVersion("PRJ_A", "SKU_A"))
+                .isExactlyInstanceOf(IllegalStateException.class).hasMessageContaining("current version is missing or mismatched");
+        verify(projectVersionMapper, never()).insert(any(com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProjectSkuPricingVersionDO.class));
+        verify(projectPricingMapper, never()).updateById(any(com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProjectSkuPricingDO.class));
+    }
+
+    private void stubConfiguredProjectIdentity() throws Exception {
+        when(projectMapper.selectByProjectCodeForUpdate("PRJ_A")).thenReturn(
+                com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerProjectDO.builder()
+                        .id(2L).buyerId(1L).status(com.aifuli.module.supplychain.tradecore.buyer.domain.BuyerProjectStatus.ACTIVE.getCode()).build());
+        when(skuMapper.selectByCode("SKU_A")).thenReturn(PlatformSkuDO.builder()
+                .id(4L).spuId(5L).marketPrice(10000L).suggestedSalePrice(10000L).status(CatalogEntityStatus.ACTIVE.getCode()).build());
+        when(spuMapper.selectById(5L)).thenReturn(PlatformSpuDO.builder().id(5L).status(CatalogEntityStatus.ACTIVE.getCode()).build());
+        when(buyerProductMapper.selectByBuyerAndSku(1L, 4L)).thenReturn(BuyerProductDO.builder()
+                .id(6L).buyerId(1L).platformSkuId(4L).status(BuyerProductStatus.ACTIVE.getCode()).build());
+        when(listingMapper.selectByProjectAndBuyerProduct(2L, 6L)).thenReturn(
+                com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.ProjectListingDO.builder()
+                        .id(7L).projectId(2L).buyerProductId(6L)
+                        .status(com.aifuli.module.supplychain.tradecore.buyer.domain.ProjectListingStatus.AVAILABLE.getCode()).build());
+        when(buyerPricingMapper.selectByBuyerProductId(6L)).thenReturn(
+                com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerSkuPricingDO.builder()
+                        .id(11L).buyerProductId(6L).currentVersionId(12L).build());
+        when(buyerVersionMapper.selectById(12L)).thenReturn(
+                com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerSkuPricingVersionDO.builder()
+                        .id(12L).pricingId(11L).effectiveConfigJson(new ObjectMapper().writeValueAsString(config())).build());
+        when(projectPricingMapper.selectByListingIdForUpdate(7L)).thenReturn(
+                com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProjectSkuPricingDO.builder()
+                        .id(21L).listingId(7L).currentVersionId(22L).pricingStatus(PricingStatus.READY.name()).build());
+    }
+
+    @Test
+    void quoteDistinguishesUnconfiguredBuyerPricingFromDanglingVersion() {
+        when(projectMapper.selectByProjectCodeForUpdate("PRJ_A")).thenReturn(
+                com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerProjectDO.builder()
+                        .id(2L).buyerId(1L).status((short) 10).build());
+        when(skuMapper.selectByCode("SKU_A")).thenReturn(PlatformSkuDO.builder()
+                .id(4L).spuId(5L).status(CatalogEntityStatus.ACTIVE.getCode()).build());
+        when(spuMapper.selectById(5L)).thenReturn(PlatformSpuDO.builder()
+                .id(5L).status(CatalogEntityStatus.ACTIVE.getCode()).build());
+        when(buyerProductMapper.selectByBuyerAndSku(1L, 4L)).thenReturn(BuyerProductDO.builder()
+                .id(6L).buyerId(1L).platformSkuId(4L).status(BuyerProductStatus.ACTIVE.getCode()).build());
+        when(listingMapper.selectByProjectAndBuyerProduct(2L, 6L)).thenReturn(
+                com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.ProjectListingDO.builder()
+                        .id(7L).status((short) 10).build());
+        assertThatThrownBy(() -> service.ensureCurrentProjectVersion("PRJ_A", "SKU_A"))
+                .satisfies(error -> assertThat(error.getClass().getSimpleName()).isEqualTo("ProjectPricingNotReadyException"));
+        when(buyerPricingMapper.selectByBuyerProductId(6L)).thenReturn(
+                com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerSkuPricingDO.builder()
+                        .buyerProductId(6L).currentVersionId(999L).build());
+        assertThatThrownBy(() -> service.ensureCurrentProjectVersion("PRJ_A", "SKU_A"))
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("missing or mismatched")
+                .satisfies(error -> assertThat(error.getClass().getSimpleName()).isNotEqualTo("ProjectPricingNotReadyException"));
+    }
+
+    @Test
     void recalculatePropagatesDeserializationFailureInsteadOfMarkingCalculationFailed() {
         PlatformSkuDO sku = PlatformSkuDO.builder().id(8L).skuCode("MOVIE_100").marketPrice(10_000L)
                 .suggestedSalePrice(10_000L).build();

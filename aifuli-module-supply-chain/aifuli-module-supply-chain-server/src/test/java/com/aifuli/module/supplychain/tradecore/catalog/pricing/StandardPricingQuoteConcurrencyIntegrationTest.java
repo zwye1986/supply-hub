@@ -223,7 +223,7 @@ class StandardPricingQuoteConcurrencyIntegrationTest {
                                                                 SupplyChainDatabaseClock clock,
                                                                 ObjectMapper objectMapper) {
             return new StandardPricingQuoteService(mock(BuyerResolver.class), mock(BuyerProjectMapper.class),
-                    mock(GenericBatchPricingService.class), mapper, clock, objectMapper);
+                    mock(GenericBatchPricingService.class), mock(ProjectPricingAdmissionService.class), mapper, clock, objectMapper);
         }
 
         @Bean
