@@ -1,0 +1,55 @@
+# HUA_SHENG 卡券业务闭环实施计划
+
+> **For agentic workers:** REQUIRED SUB-SKILL: 使用 subagent-driven-development 逐任务实施；每项先规格审查再质量审查。只并行只读分析，实施者每次一个。用户明确要求在当前仓库分支开发。
+
+**目标：** 从商品、供应商、分销商、项目与路由配置出发，使 HUA_SHENG 一张卡券订单完成受理、履约、资产交付和资金收敛。
+
+**架构：** 保持供应链独立进程、独立 sc_* 数据所有权、显式 RPC 注册。协议适配器只产生类型化事实，多步骤推进、checkpoint、资产与资金由应用层事务收敛。原 QNM 实现和契约保留。
+
+**技术栈：** Java/JCA、Spring Boot、MyBatis Plus、Liquibase、JUnit 5、MockWebServer、Testcontainers MySQL 8.4、Vue 管理端。
+
+**设计来源：** `docs/superpowers/specs/2026-10-02-huasheng-fulfillment-adapter-design.md#12-闭环推进与实施前核验2026-10-03`。第一切片规格已明确；涉及业务下单方式的后续受理改动待用户回答，不能由实施者猜测。
+
+## Task 1：通信密码协议（可独立实施）
+
+**文件：**
+- 新增 `aifuli-module-supply-chain/aifuli-module-supply-chain-server/src/main/java/com/aifuli/module/supplychain/supplieradapter/huasheng/HuashengCrypto.java`。
+- 新增同模块 `src/test/java/com/aifuli/module/supplychain/supplieradapter/huasheng/HuashengCryptoTest.java`。
+
+- [ ] 先写协议测试：JCA 独立生成 AES 密文与 RSA 签名，验证 UTF-8、原密文签名、篡改/空白/非法 hex/非法 AES 长度、PKCS#8 私钥、X.509/PKCS#1 公钥与固定安全异常。
+- [ ] 测试调用的接口固定为 `encryptBodyHex(String,String,String)`、`decryptBodyHex(String,String,String)`、`signBodyHex(String,PrivateKey)`、`verifyBodyHex(String,String,PublicKey)`、`loadPkcs8PrivateKey(String)`、`loadPublicKey(String)`。测试密钥由本地 JCA 生成，禁止使用环境或真实秘密。
+- [ ] 记录 RED：允许先有只抛 UnsupportedOperationException 的编译壳，测试应因行为缺失失败，而不是把无法编译当作 RED。命令 `mvn -o -pl aifuli-module-supply-chain/aifuli-module-supply-chain-server -Dtest=HuashengCryptoTest test`，输出保存 `/tmp/huasheng-crypto-red.log`。
+- [ ] 按设计 §12.1 实现纯 JCA 工具类，写中文职责/不变量/文档链接；不加 Spring Bean、不改启动/RPC/事务/缓存/安全配置。
+- [ ] 记录 GREEN：同命令输出保存 `/tmp/huasheng-crypto-green.log`；再运行 `-Dtest=HuashengCryptoTest,SupplyChainModuleArchitectureTest` 验证边界。
+- [ ] 规格审查通过后质量审查；发现问题由原实施者修复并复审。只提交本项文件，中文提交标题。
+
+## Task 2：连接器显式凭据集与配置传递
+
+- [ ] 先更新适配器设计 AD-3/AD-5、共享地基文 §5 和管理端契约：新增 credential_set_id，不复用旧 slot ID；校验项键、供应商归属与凭据模式；运行时只读取冻结连接器版本。
+- [ ] 以真实 MySQL 测试锁定 QNM slot 兼容、HUA_SHENG 凭据集完整性、错供应商/缺项拒绝、ENV/ENVELOPE 解密与发布回滚。
+- [ ] 增量 Liquibase、DO/DTO/发布配置/运行时 Ticket、连接器前端表单同步实现；秘密只写不回显且不入日志。运行受影响的 *Test、*ContractTest、*IntegrationTest 和 ArchitectureTest。
+
+## Task 3：协议解析、受控多步骤与查单恢复
+
+- [ ] 先修订设计 AD-1/AD-2/AD-4：明确 PLACE_ORDER→CONFIRM_ORDER→TAKE_CARD 的推进及恢复事实，ACCEPTED 不伪造成 REJECTED；checkpoint AAD 绑定操作身份，传递下一步时解密后重新绑定加密。
+- [ ] 先测试原外部订单号、num=1、金额精确转分、7014/61、超时/未知结果、步骤重复和资产数量错误，随后实现 HTTP、token、parser、adapter 与 metadata。
+- [ ] 真实 MySQL/Timer 验证步骤并发恰一次、节点重启恢复、资金仅预占一次且最终仅扣一次/释放一次；未知结果禁止重下与切供应商。QNM/手机号频控全回归。
+
+## Task 4：可信供应商回调
+
+- [ ] 先对齐回调凭据冻结版本定位、Appid/X-Sign/raw body、时间戳/nonce、防重和响应契约设计。
+- [ ] 通过 HTTP/真实 MySQL 测试验签前无副作用、跨连接器/双号拒绝、重复回调、迟到冲突、取券并发；再实现入口、解析器、收敛服务与安全路径。
+- [ ] 评估 Gateway 与独立供应链进程的路由、安全、敏感日志影响，架构约束不放宽。
+
+## Task 5：业务入口与自动化全配置闭环
+
+- [ ] 根据用户确认的下单方式先更新对应详细设计，再接报价生成/消费；不能让调用方提交分销金额覆盖服务端定价。
+- [ ] 测试配置接口建立真实商品、供应商、连接器、合作商品上架、分销定价、项目选品/凭证和路由，再经真实 Controller 下单，Timer 走本地供应商 HTTP 挡板完成资产交付。
+- [ ] 验证成功、明确失败、结果未知、同号幂等、跨项目隔离、改价后原单冻结金额与资产审计；自动化不直接改订单状态制造成功。
+- [ ] 当前源码运行供应链全量单测/契约/架构及 supply-chain-integration，前端改动文件检查与构建；记录准确执行范围。
+
+## Task 6：真实环境验收与后续运营
+
+- [ ] 核实测试环境、迁移窗口、供应商测试凭据与对外回调域名，再恢复先前暂缓的实际环境事项。
+- [ ] 管理端完整配置后，用真实测试供应商核对订单/路由/B 单/资产/资金，结果写入 `docs/集成测试.md`。未经实际执行保持未验收。
+- [ ] 第一条真实链路通过后，再按既有通知设计实施项目签名事件/重投；异常处置、流水对账、直充和售后各自细化设计，不混入通信协议切片。

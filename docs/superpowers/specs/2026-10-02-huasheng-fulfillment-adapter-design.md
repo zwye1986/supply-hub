@@ -606,3 +606,28 @@ ALTER TABLE sc_supplier_connector_capability
 | `CANCEL` | CREATE | REJECTED | 1 |
 
 > 2026-10-03 评审修复编号补充：057 已用于未退役 Offer 外部编码唯一约束修正，本文尚未实施的种子和 CHECK 顺延至 058/059；语义见 `docs/superpowers/specs/2026-10-03-supplier-offer-publication-admin-design.md#154-退役商品释放外部编码`。
+
+## 12. 闭环推进与实施前核验（2026-10-03）
+
+用户已要求按「HUA_SHENG 卡券履约适配、首次报价调用接线、全配置链路验收」推进。开发在当前仓库分支进行；测试环境迁移和实际供应商联调仍需真实环境条件，自动化挡板不得标记为真实供应商验收。
+
+### 12.1 第一切片：通信密码协议
+
+先实现独立且无外部副作用的 `supplieradapter.huasheng.HuashengCrypto`。协议依据为旧仓库 `cardshop/cardShop-admin/src/main/java/com/ruoyi/web/mc/api/service/huasheng/HuashengClient.java` 与 `HuashengCrypto.java` 的实际请求格式；只复用协议事实，不引入旧订单、账户或 Spring 配置。
+
+- AES 使用 `AES/CBC/PKCS5Padding`，密钥为 appSecret 的 UTF-8 字节（16、24、32 字节），IV 为 appId 的 UTF-8 字节（严格 16 字节）。正文密文编码为小写 hex。
+- RSA 使用 `SHA512withRSA`；签名原文是收到/发送的密文 hex 字符串的 UTF-8 字节，不是 JSON 明文，也不对 hex 的大小写或空白进行归一化。签名编码为小写 hex。
+- 出站私钥只接受 PKCS#8（`PRIVATE KEY` PEM 或裸 Base64）；回调公钥接受 X.509（`PUBLIC KEY`）和 PKCS#1（`RSA PUBLIC KEY`）。不把 PKCS#1 私钥伪装成 PKCS#8。
+- 非法 AES 长度、空加解密正文、奇数长度/非 hex 密文、非法密钥编码均拒绝；校验失败的异常只含固定说明，不含密钥、正文或签名值，保留异常因果。验签对缺字段、非法签名、篡改、错误公钥返回 false。
+- 测试以 JCA 独立构造的 AES/RSA 已知输入核对协议，而不只验证本实现的加解密互逆；覆盖中文正文、密文签名、明文误签、篡改、空签名、非法编码、PKCS#8/X.509/PKCS#1 公钥。
+
+### 12.2 后续切片的修正约束
+
+以下为代码核验后发现的旧草案缺口。对应切片开始前须先改正文相关章节及共享地基文档，使新规格成为唯一契约，不能照搬上文示意代码直接实施。
+
+1. **凭据身份分离**：现有 `credential_slot_id` 是 `sc_credential_slot` 的逻辑引用，已有 QNM 发布与运行时都按此查询。不得重新解释为 `sc_credential_set.id`；HUA_SHENG 必须使用新增显式 `credential_set_id`，由元数据声明凭据模式，在连接器创建、校验、发布和运行时统一校验供应商归属及完整项键。054/055/056/057 已交付 SQL 不修改。
+2. **步骤推进不伪造拒绝**：现有 `confirmTrustedRejectedAndContinue` 必须携带手机号频控资格且只对可信拒绝有效。卡券 PLACE_ORDER/CONFIRM_ORDER 的 ACCEPTED 不得冒充 REJECTED；新增明确的多步骤推进事务，复用订单/请求/B 单锁、原外呼资格和资产资金收敛边界。前一步完成、下一步创建、checkpoint 冻结和 Timer 注册同事务提交，并发/重放不产生第二步；预下单或确认成功尚不代表券已交付，不扣最终资金。
+3. **结果未知保持原订单**：网络错误、非法响应和外部单号不一致不得释放预占或切换供应商；先用原 outOrderSn/orderSn 查单，取得可信状态后决定恢复步骤。只有最终取得完整的一张券或可信失败才收敛资金。
+4. **报价入口待业务确认**：当前实现要求先经内部 `StandardPricingQuoteApi` 冻结后再 HTTP 下单。用户正在确认期望「直接下单时冻结」还是「业务系统先确认价格」，本项未确认前不修改受理、定价或对外契约。
+
+实施顺序及每个切片的测试证据维护在 `docs/superpowers/plans/2026-10-03-huasheng-card-closure.md`；人工联调入口及实际结果维护在 `docs/集成测试.md`。
