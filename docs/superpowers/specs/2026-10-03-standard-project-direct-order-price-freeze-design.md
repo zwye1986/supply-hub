@@ -49,3 +49,7 @@ TDD 验证可信首签、原报价复用、不调用重定价、项目/SKU/数�
 现有 HTTP 契约仍拒绝价格/token/身份覆盖，保持真实生产 Controller、HMAC、Mapper、事务、供应商 HTTP 挡板及执行器，不用测试 Controller 或直接改订单状态制造成功。受影响 API Contract、供应链全量 Test/ArchitectureTest 与相关 Failsafe 均执行，计数按实际执行记录 `docs/集成测试.md`。
 
 变更涉及独立供应链进程的 Facade/定价服务/Mapper 与数据库，不改启动、安全过滤器、Feign 注册、事务管理器、缓存或 Gateway。管理端配置页面无需新增字段；核验实际 supplychainhubweb 项目定价和订单请求实现，不用模拟接口替代后端验证。真实部署和供应商验收不由自动化替代。
+
+## 6. 已有受理身份偏差的后续门禁
+
+只读审计发现，当前HTTP Facade每次先从现SKU取得Schema构造指纹，再claim；既有主设计要求先用已冻结身份准备重放。当前Schema或分销商品→平台SKU映射变更后，同一外部payload可能发生指纹冲突。该既有问题不通过本次价格首冻重构顺带修复；本切片只验证商品价格/项目选品状态变动后的回放。全配置闭环Task5验收前须单独落实既有 `2026-10-02-standard-acceptance-project-key-design.md#2-首次身份与重放优先` 并补真实Schema/身份变化测试，不将本切片通过宣称为所有配置变动重放已覆盖。
