@@ -505,6 +505,14 @@ Ticket 同时携带冻结 `connectTimeoutMs/readTimeoutMs`，供后续 HUA_SHENG
 **验证**：纯测试/管理端契约覆盖模式分派、XOR、归属/状态/项键、Schema、摘要、读取超时、Ticket 不可变及字符串脱敏。真实 MySQL/Liquibase 验证升级/重放、原 slot 保留、XOR CHECK、长 PEM 密文、发布期间停用凭据后拒绝及回滚。定向回归 QNM 发布、上架、运行时装配和标准 HTTP 挡板闭环；供应链架构全运行。前端执行真实 SFC 组件测试、改动文件 ESLint 与 build:local。
 
 
+**质量审查安全修正（实现前定案）**：extraConfig 是请求中的 JSON 字符串，调用者即使提交非法 token/密钥字段而被 Schema 拒绝，通用日志也不能记录该字符串。将 `/supply-chain/supplier-config/connectors/drafts` 及其 `/admin-api` 等价路径的精确根/子路径加入 common 的共享敏感规则，兼容 Servlet context path，排除 drafts-other；复用现有 Servlet Filter、非生产Interceptor、全局异常与Gateway保护，省略请求/查询/响应正文和原始异常因果，保留业务身份/traceId/错误类型及固定摘要。原始请求字节继续透传，禁止仅依赖Controller注解或尝试递归解析所有字符串。普通相邻路径行为保持。中文注释链接本文及共享文§15.1；不改应用启动、认证、RPC、数据源或事务配置。
+
+影响评估：common规则由网关与使用web starter的独立进程共同消费，新增规则只匹配供应链草稿写路径，不改变其它模块路径。验证须在供应链测试使用实际Servlet Filter/Interceptor/GlobalExceptionHandler覆盖合法/Schema拒绝/畸形extra JSON，检查日志、响应与透传字节；Gateway真实Reactive Filter覆盖拒绝/异常与畸形正文，common匹配测试覆盖前缀/context/相邻路径。先独立RED再GREEN，运行common相关测试、gateway相关测试和供应链全量/架构；发布需携带新common依赖的供应链与网关构建，真实部署仍暂缓。
+
+**最终回归的测试夹具修正（实现前核验）**：RechargeFrequencyAcceptanceIntegrationTest 的通用 cloneRow 将057新增的 live_external_sku_code 生成列也纳入显式 INSERT，真实MySQL按3105拒绝。夹具读取information_schema.COLUMNS时按EXTRA排除VIRTUAL GENERATED/STORED GENERATED列，保留所有可写业务列与原覆盖字段；不修改生产表、历史迁移或领域执行行为。058的XOR拒绝在当前MySQL/Spring组合映射为UncategorizedSQLException，测试应验证根SQLException的3819及实际约束标识，并检查无行插入，不绑定可变的顶层Spring异常类别，也不能放宽为任意异常。两项修正均先保存真实RED再回归相关频控/Schema IT和本切片最终定向门禁。
+
+**第二切片交付记录（2026-10-03）**：后端 `23400fa` 与管理端前端 `69f6903` 已实现上述契约，独立规格及质量复审通过。供应链全量 Surefire 1658、相关 Failsafe 51+3、common18、Gateway6及前端29项均通过；供应链计数已包含日志专项15与架构28，不重复相加。实际执行范围、失败排障及人工验收前置见 `docs/集成测试.md#779-连接器显式凭据集验收入口2026-10-03自动化已通过`。该记录不代表第三切片协议、完整履约或真实供应商验收已完成。
+
 ### 12.4 第三切片实施前的协议证据缺口
 
 本节是只读核验结果，尚不是 Task3 可直接实施的完整规格。核验来源：cardshop 的 `HuashengSupplierTradeServiceImpl`、`HuashengConstants`、`HuashengClient`、`HuashengCardMapper` 及对应测试；本仓 `OperationAssetFact`、`SupplierOrderLifecycle.persistAssets`、`ProjectStandardAssetPayloadDecoder` 与项目资产响应 DTO。真实供应商沙箱未执行。

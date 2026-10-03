@@ -340,6 +340,8 @@ default List<String> fulfillmentSteps() { return List.of(); }
 
 `/supply-chain/supplier-config/credential-items` 与 legacy `credential-slots`（含 `/admin-api` 前缀及部署 context path）统一作为敏感写入路径。Servlet 访问日志 Filter 不读取/保存请求正文与查询参数、不保存响应正文；非生产 Interceptor 只记路径与耗时；异常处理使用既有安全异常路径，不记录原始参数、异常消息与拒绝值。网关按相同 common 路径规则省略请求/响应正文与查询参数，转发正文保持原样。网关 JSON 脱敏集合补充 `secretValue`/`secretRef` 作为防御补充。审计保留非秘密业务字段；不关闭整站日志，不改变其它模块安全或 RPC 配置。
 
+后续显式凭据绑定切片的质量审查发现：connectors/drafts 的新增 extraConfig 是 JSON字符串，普通结构化日志脱敏不能处理字符串内 token/密钥。草稿写入精确根及子路径（含/admin-api前缀/context，排除drafts-other）同样纳入上述共享保护；合法、拒绝和畸形请求均省略正文/参数/响应/敏感异常，原字节透传。实现与跨进程验证契约见 HUA_SHENG文§12.3，不扩大到整个supplier-config目录，不修改权限或认证。
+
 ### 15.2 技术子页刷新
 
 连接器创建、校验、发布、退役成功后，连接器面板发出 `changed`，父页提升配置修订号；能力与映射子页监听修订号并重新加载连接器列表及当前选中详情。切换技术标签同样提升修订号，以便加载其他会话产生的新配置。保留有效选择，若连接器已不存在则清空选择与详情。供应商切换仍通过已有 key 隔离。此方案不依赖首次懒挂载，已访问的标签也会刷新。
