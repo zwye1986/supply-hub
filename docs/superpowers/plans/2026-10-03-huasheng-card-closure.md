@@ -37,8 +37,8 @@ RED/GREEN 重点用实际连接器服务及本地 Fake SET metadata 验证；HS 
 
 ## Task 3：协议解析、受控多步骤与查单恢复
 
-- [ ] 先修订设计 AD-1/AD-2/AD-4：明确 PLACE_ORDER→CONFIRM_ORDER→TAKE_CARD 的推进及恢复事实，ACCEPTED 不伪造成 REJECTED；checkpoint AAD 绑定操作身份，传递下一步时解密后重新绑定加密。
-- [ ] 先测试原外部订单号、num=1、金额精确转分、7014/61、超时/未知结果、步骤重复和资产数量错误，随后实现 HTTP、token、parser、adapter 与 metadata。
+- [ ] 先修订设计 AD-1/AD-2/AD-4：明确 PLACE 返回 WAIT 后确认、SUCCESS 跳过确认并取券的推进及恢复事实，ACCEPTED 不伪造成 REJECTED；checkpoint AAD 绑定操作身份，传递下一步时解密后重新绑定加密。
+- [ ] 先核实金额单位、重发幂等与资产额外字段契约，再测试原外部订单号、num=1、金额合法性、7014/61、超时/未知结果、步骤重复和资产数量错误，随后实现 HTTP、token、parser、adapter 与 metadata。
 - [ ] 真实 MySQL/Timer 验证步骤并发恰一次、节点重启恢复、资金仅预占一次且最终仅扣一次/释放一次；未知结果禁止重下与切供应商。QNM/手机号频控全回归。
 
 ## Task 4：可信供应商回调

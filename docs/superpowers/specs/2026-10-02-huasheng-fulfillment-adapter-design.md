@@ -1,11 +1,11 @@
 # 供应商履约参照实现切换：从 QNM 到 HUA_SHENG — 修改方案（修订版 v2）
 
-> 状态：草案（待评审）· 修订日期：2026-10-03（v2.1：对齐供给发布文 v4 的共享地基与变更集编号，统一命名）
-> 版本说明：本文为 v2，取代同日初版 v1。v1 存在三处 P0 缺陷（误判 checkpoint 机制可用、误判 DDL 无 CHECK 约束、误判 extraParameters 可用），修订依据见 §3。v2.1 不改动协议与架构决策，仅按供给发布文 v4 定案同步地基出处、变更集编号与命名。
-> 命名约定：供应商/适配器一律用 `HUA_SHENG`、`QNM` 表示（对应 `adapterType` `HUA_SHENG_ORDER_V1`/`QNM_GAME_ORDER_V1`、`supplier_code` `HUASHENG`/`QNM`），prose 与代码标识符不用中文名；DB 种子 `supplier_name` 展示值（`'华昇卡券'`）保留中文，不在约定覆盖内。
+> 状态：分切片实施中；§12.1 通信协议已验收，§12.3 凭据绑定实施中，多步骤与回调须先完成各自规格审查。修订日期：2026-10-03（v2.2：按实际运行代码修正续履约、外部状态、checkpoint 与迁移契约）。
+> 版本说明：本文为 v2，取代同日初版 v1。v1 存在三处 P0 缺陷（误判 checkpoint 机制可用、误判 DDL 无 CHECK 约束、误判 extraParameters 可用），修订依据见 §3。v2.1 不改动协议与架构决策，仅按供给发布文 v4 定案同步地基出处、变更集编号与命名。v2.2 按当前实际代码与旧系统协议消费行为修正后续实施约束，不能将旧系统消费行为当作供应商协议保证。
+> 命名约定：供应商/适配器一律用 `HUA_SHENG`、`QNM` 表示（对应 `adapterType` `HUA_SHENG_ORDER_V1`/`QNM_GAME_ORDER_V1`），prose 与代码标识符不用中文名；面向运营的供应商展示名称可保留中文。供应商业务编号由现有管理端服务生成，不强制改为预设代码。
 > 关联设计：`2026-08-07-supply-chain-phase1-detailed-design.md` §7.3 §7.4 §10.1 §10.2
-> 关联设计（管理端供给发布，共建地基）：`2026-10-03-supplier-offer-publication-admin-design.md`（**v4 已定案**）。**该文 §5 是 `AdapterMetadata` 扩展（`defaultExecutionProfile()`/`credentialKeys()`/`mappingTemplates()`/`fulfillmentSteps()`）+ AD-3 凭据集 + AD-5 `extra_config` 共享地基规格的唯一出处**；本文引用其规格、不重复描述，只落地 HUA_SHENG 专属部分（协议适配器、多步骤编排、回调入口、token、种子）。两文协调点见该文 §14 与本文 §7.0。
-> ⚠ 变更集编号（已对齐 v4 §0.4 ①，作废本文原 `050`/`051` 计划）：现有链至 `052-standard-order-project-key.sql`；供给发布文占 `053`（f1 `external_sku_code`）/`054`（AD-3 凭据集/项建表）/`055`（AD-5 `extra_config` 列）/`056`（D1 `published_flag`）。**AD-3 建表与 AD-5 加列属共享地基，由 `054`/`055` 交付（规格出处 v4 §5.2/§5.3）；本文 HUA_SHENG 主数据种子让位到 `058+`**（原 `050`/`051` 与 `050-project-standard-asset-audit`/`051-standard-quote-permanent-key` 冲突，作废）。落地前对齐 `db.changelog-1.0.0.yaml` 登记顺序。
+> 关联设计（管理端供给发布，共建地基）：`2026-10-03-supplier-offer-publication-admin-design.md`（**v4 已定案**）。**该文 §5 是 `AdapterMetadata` 扩展（`defaultExecutionProfile()`/`credentialKeys()`/`mappingTemplates()`/`fulfillmentSteps()`）+ AD-3 凭据集 + AD-5 `extra_config` 共享地基规格的唯一出处**；本文引用其规格、不重复描述，只落地 HUA_SHENG 专属部分（协议适配器、多步骤编排、回调入口、token、配置录入）。两文协调点见该文 §14 与本文 §7.0。
+> 变更集编号：054–057 已落地，不能修改历史 SQL。当前第二切片新增 058 连接器凭据集绑定与长密文存储；后续 checkpoint 等迁移必须读取实际 changelog 后顺延编号。不得执行旧版本中复用 slot 主键或虚构摘要的 HUA_SHENG 种子 SQL。
 > 旧系统参照：`/Users/mac/Documents/codeSpace/cardshop` `huasheng` 包
 
 ---
@@ -16,11 +16,11 @@
 
 **目标**：
 
-1. 新增 `HUA_SHENG_ORDER_V1` 适配器，实现两段式下单（`placeOrder` → `confirmOrder`）、主动取券（`takeCard`）、查单、取消、token 鉴权、加密通信。
+1. 新增 `HUA_SHENG_ORDER_V1` 适配器，实现两段式下单（`placeOrder` → `confirmOrder`）、主动取券（`takeCard`）、查单、token 鉴权、加密通信；取消未交付订单另行细化，不属于第一条交付链路。
 2. 落地供应商回调 HTTP 入口（补 M1 计划 Task 12），抽象为按 `adapter_type` 路由的通用骨架。
 3. 落地**多步骤履约编排**（新建，非复用）。
 4. 落地 HUA_SHENG 的多密钥材料注入（三密钥）。
-5. 数据库新增 HUA_SHENG 主数据、连接器、凭据集、错误码映射、状态映射；扩展 CHECK 约束。
+5. 经真实配置服务创建供应商、凭据集、连接器与供给；需要的增量结构迁移单独交付，不绕过发布校验。
 6. 设计文档、集成测试文档同步。
 
 **不在范围**：删除 QNM 代码；改造路由层；改造资金冻结/账本；接入品牌/卡券列表查询（非履约范畴）；HUA_SHENG 多数量（`num>1`）支持（见 §6 AD-6）。
@@ -35,15 +35,15 @@
 | 加密 | 无 | AES-CBC + PKCS5Padding，key=appSecret、IV=appId | 需新增 |
 | 请求介质 | 表单 | AES 密文 hex 字符串（`text/plain`） | 需新增 HttpExecutor |
 | 响应介质 | JSON | **明文 JSON**（仅请求与回调体加密） | 已有 ObjectMapper 能力 |
-| 鉴权 | 每次带 userkey | `access_token`（7200s，提前 300s 刷新，61 失效自动重试一次） | 需新增 TokenManager |
+| 鉴权 | 每次带 userkey | `access_token`（读取 expires_in；旧实现兜底7200s，提前300s刷新，61有界重试） | 需新增 TokenManager |
 | 下单 | 一段式 `Send`/`SendKm` | **两段式** `placeOrder`→`confirmOrder` | **需新建编排** |
 | 取券 | 同步返回 | 主动 `POST /api/order/takeCard` | 需新增 step |
 | 双号 | `billno` | `outOrderSn`（本地）+ `orderSn`（HUA_SHENG） | ✅ `billno` / `external_order_no` |
 | 回调 | 明文表单 | AES-CBC hex body + `Appid`/`X-Sign`，RSA 公钥验签 | 需新增 Controller |
 | 错误码 | 散落常量 | 30+ 码三级分类（明确失败/待查单/补单） | ✅ `sc_supplier_error_code_map` 已支持 |
-| 状态映射 | 3 状态 | 5 状态 | ✅ `sc_status_mapping_definition` 已支持 |
+| 状态映射 | 3 状态 | 外部 WAIT/SUCCESS/FAILED/CANCEL；SUCCESS 还须取券 | 状态映射表已具备，最终交付须额外校验资产 |
 | 金额 | `sumPrice` | `totalPrice` | ✅ `reportedSettlementAmount` |
-| 补单 | 无 | 7014 + 无 orderSn → 复用快照重发，指数退避 | 需新增 |
+| 不确定响应 | 无 | 7014 等先保留原订单身份，查单后决定恢复 | 禁止仅凭错误码重新下单 |
 | 三密钥 | 1 个 secretKey | appSecret + privateKey + callbackPublicKey | **需扩展 ticket 契约** |
 
 ---
@@ -63,25 +63,11 @@
 
 **结论**：多步骤编排需从零落库与恢复，不能"复用"。
 
-### 3.2 已存在可复用的续履约骨架（v1 严重低估）
+### 3.2 充值拒绝续履约不能直接用于卡券步骤成功
 
-`SupplierOrderLifecycle` 已有**受控续履约**机制，v1 完全没利用：
+当前方法名是 `SupplierOrderLifecycle.confirmTrustedRejectedAndContinue`，其前置条件包含非空手机号频控资格和可信 REJECTED 事实。其 `validateContinuation` 只允许尚未发送的 `SEND`/`SEND_KM` 操作，并核对活动 B 单和队列身份。该机制服务于充值失败后的受控续履约，不能通过扩大步骤枚举就成为卡券成功的下一步。
 
-| 能力 | 位置 | 对 HUA_SHENG 的价值 |
-| --- | --- | --- |
-| `continueAfterTrustedRejection(operationNo, outcome, traceId, permit, nextOperationNo)` | `:133-137` | **正是两段式入口**：显式指定下一 Operation |
-| `validateContinuation` 严格校验下一 Operation | `:458-478` | 保证同 BOrder 递进 `sequenceNo`、未发送、未激活 |
-| `sameBOrder` 分支 | `:462-464` | **支持同一 BOrder 内 sequenceNo+1 递进**（两段式必需） |
-| `relatedOperations` / `relatedBOrders` | `LockedExecution` | 已有同请求内多 Operation 聚合查询 |
-
-`validateContinuation` 的关键约束（两段式必须遵守）：
-
-- `isUnsentRecharge(next)`：下一 Operation 必须是 `FULFILL` + `SEND`/`SEND_KM` step + `PENDING`/`CLAIMED` + `attemptCount==0` + `resultClass==null` + `externalOperationNo==null` + `completedAt==null`。
-- `sameBOrder` 时 `next.sequenceNo == old.sequenceNo + 1`。
-- 下一 BOrder 必须 `activeFlag != TRUE`、`completedAt == null`、状态为 `WAITING`/`PENDING`、`externalOrderNo == null`。
-- 其余同请求 Operation 必须是"更早且已 REJECTED"或"非未发送充值"。
-
-**这是 v1 遗漏的最大机会**：两段式不必自建编排，而应接入既有续履约机制。但 `isRechargeOperation`（`:487-490`）只认 `SEND`/`SEND_KM`，需扩展以识别新 step。
+可复用的是 `RechargeFrequencyLifecycle.lockForResult` 的聚合锁定能力：非 MOBILE 卡券也锁 Request→Order→同 Order 的全部 BOrder（id排序）→Operation（id排序），不创建虚假手机号队列。卡券必须新增明确的步骤推进事务，核对原认领版本、冻结连接器/B 单身份、当前步骤和已发送状态。推进与最终交付资金收敛分开；不得把 ACCEPTED 改成 REJECTED。
 
 ### 3.3 DDL 的实际 CHECK 约束（v1 误判两处）
 
@@ -108,20 +94,13 @@ ck_sc_supplier_connector_capability_code CHECK (capability_code IN (...,10 项))
 
 ## 4. 架构决策
 
-### AD-1：两段式接入既有续履约机制
+### AD-1：新增事实驱动的卡券步骤推进
 
-**决策**：HUA_SHENG 的 `placeOrder` / `confirmOrder` / `takeCard` 编排为同一 BOrder 下的多个 `FULFILL` Operation，用既有 `continueAfterTrustedRejection` 串联，`sequenceNo` 递增。
+**决策**：同一 BOrder 下以 `FULFILL` 操作表示 PLACE_ORDER、CONFIRM_ORDER、TAKE_CARD。正常 PLACE 返回 WAIT 才需要 CONFIRM；PLACE 返回 SUCCESS 可跳过 CONFIRM，直接待取券。供应商 SUCCESS 表示供应商订单成功，尚不能推断本地资产已交付。
 
-**理由**：复用 `validateContinuation` 的原子校验、乐观锁与事件契约（`CONTINUATION_EVENT` / `CONTINUATION_REASON`），避免自建状态机带来的资金与频控一致性风险。
+新增应用层步骤推进事务，按现有聚合锁序锁定请求与订单，核对外呼时冻结的操作版本和身份。同一事务完成旧步骤、写入加密 checkpoint、创建唯一下一步及其持久化 Timer；资金沿用本笔订单的预占，步骤接受不提交或释放。重复事实只留审计或返回已推进，不创建第二个下一步骤。原手机号充值续履约入口及 SEND/SEND_KM 判定保持独立。
 
-**必要改造**：
-
-1. `isRechargeOperation`（`:487-490`）扩展为识别 `PLACE_ORDER`/`CONFIRM_ORDER`/`TAKE_CARD` step。
-2. `AdapterStepCode` 扩展：保留 `SEND`/`SEND_KM`，新增 `PLACE_ORDER`、`CONFIRM_ORDER`、`TAKE_CARD`。
-3. `handleAccepted` 增加 checkpoint 落库（AD-2）。
-4. `FulfillmentOperationExecuteHandler` 在 `ACCEPTED` 且 step 为 `PLACE_ORDER` 时创建下一 Operation（`CONFIRM_ORDER`，`sequenceNo+1`），以 `continueAfterTrustedRejection` 串联。
-
-**风险**：`validateContinuation` 当前仅在 `REJECTED` 路径被调用（`:210-211`），`ACCEPTED` 路径（`:214`）走 `handleAccepted` 且不传 `nextOperationNo`。需扩展 `handleAccepted` 支持指定下一 Operation。这是**对既有受控机制的扩展而非绕过**，不降低其严格性。
+网络超时、响应非法或单号不一致进入结果未知，禁止原外呼 Timer 再次发送。需要专用卡券查单与恢复任务，通过原 outOrderSn/orderSn 查询可信状态后恢复本条步骤链。具体恢复代次、超时与幂等键须在 Task3 详细规格中定案后实施。
 
 ### AD-2：checkpoint 落库与恢复（新建）
 
@@ -134,7 +113,7 @@ ck_sc_supplier_connector_capability_code CHECK (capability_code IN (...,10 项))
    "expireTime":300,"outOrderSn":"<本地单号>","placePayloadHash":"<sha256>"}
   ```
 
-**恢复**：`FulfillmentOperationTicketFactory:61` 已在传**密文**。由持有 `EnvelopeCryptoPort` 的 `FulfillmentOperationExecuteHandler`（`:59` 已注入）解密，经 `OperationTicket` 新字段 `checkpointPlaintext` 传给适配器。**保持适配器无加解密依赖**。
+**恢复**：`FulfillmentOperationTicketFactory:61` 已在传**密文**。由应用层解密后，经 Ticket 的 checkpoint 输入传给适配器，不把密文误当明文。下一步使用新操作的 AAD 重新加密，不能复制旧 ciphertext。**适配器不依赖信封存储加解密端口**。具体字段扩展与解密入口在 Task3 规格定案。
 
 ### AD-3：三密钥材料注入
 
@@ -186,9 +165,9 @@ public interface TokenAuthenticatedExecutor {
 
 > **地基出处**：`sc_supplier_connector_version.extra_config` 列的规格与变更集编号（`055`）**以供给发布文 v4 §5.3 为唯一出处**（非秘密可调参数、密钥类禁入、UI 可编辑见 v4 E1）。本 AD-5 只定义 HUA_SHENG 专属的**运行时传递链**（把该列的值经 `extraParameters` 注入 ticket）。
 
-1. `FulfillmentOperationTicketFactory.create` 增加 `Map<String,String> extraParameters` 入参。
-2. 参数来源为 `sc_supplier_connector_version.extra_config`（**地基变更集 `055` 新增的 JSON 列**，存 `expireTime`/`outMobile`/`num` 等非秘密可调参数；**密钥类禁止入此列**）。
-3. 应用层注入的 token 合并进同一 Map。
+1. `PublishedConnectorConfiguration` 从冻结版本读取并校验 extraConfig，投影为不可变非秘密参数，工厂传入 Ticket，完整契约见 §12.3。
+2. HUA_SHENG 注册时声明专属 Schema；num 固定 1。expireTime 等参数只有 Schema 明确允许时可写入。
+3. token 由应用层临时注入，禁止持久化进 extraConfig、配置摘要或审计正文。
 
 ### AD-6：HUA_SHENG 一期固定 `num=1`，协议层拒绝越界
 
@@ -212,9 +191,8 @@ supplieradapter/huasheng/
   HuashengSupplierAdapter.java      # OperationExecutorPort 实现
   HuashengHttpExecutor.java         # OkHttp3，密文 hex body，明文 JSON 响应
   HuashengCrypto.java               # AES-CBC + RSA-SHA512（迁移自 cardshop）
-  HuashengSignUtils.java            # 签名/验签门面
   HuashengProtocolParser.java       # 明文 JSON 解析、金额转分
-  HuashengCardMapper.java           # 卡券 8 种 type 字段映射（独立类）
+  HuashengCardMapper.java           # 卡券 7 种已知 type 字段映射（独立类）
   HuashengMaskingUtils.java         # 脱敏
   HuashengCallbackParser.java       # 回调验签+解密+事实提取
   HuashengEndpointConstants.java    # 端点与字段常量
@@ -232,12 +210,11 @@ border/fulfillment/application/
 改动：
 border/fulfillment/domain/OperationTicket.java        # +credentialMaterial（AD-3）
 border/fulfillment/domain/AdapterStepCode.java         # +PLACE_ORDER/CONFIRM_ORDER/TAKE_CARD
-border/fulfillment/domain/Capability.java              # +CANCEL_ASSET（若采纳）
 border/fulfillment/domain/FulfillmentExceptionReasonCodes.java  # +HS_* 原因码
-border/fulfillment/application/SupplierOrderLifecycle.java     # handleAccepted 落库+串联；isRechargeOperation 扩展
+border/fulfillment/application/SupplierOrderLifecycle.java     # 复用最终资产/资金收敛，充值拒绝入口保持独立
 border/fulfillment/application/FulfillmentOperationExecuteHandler.java  # 解密 checkpoint、串联下一步骤
 border/fulfillment/application/FulfillmentOperationTicketFactory.java   # extraParameters + credentialMaterial
-infrastructure/security/CredentialProvider.java        # +resolveSet（凭据集解析；provider 模型见 v4 §5.2）
+infrastructure/security/DefaultCredentialSetResolver.java # 独立集解析；不在单槽端口混入集身份
 supplieradapter/metadata/AdapterMetadata.java          # 共享地基（v4 §5.1 唯一出处）：+defaultExecutionProfile()/credentialKeys()/mappingTemplates()；本文共建 +fulfillmentSteps() 默认方法
 ```
 
@@ -275,51 +252,19 @@ private OperationOutcome handlePlaceResponse(OperationTicket ticket, var http) {
     // 5xx/408/429/超时 → RESULT_UNKNOWN（严禁 REJECTED）
     // 4xx → MANUAL_REQUIRED
     // code != 0 且 requiresPlaceReconciliation → RESULT_UNKNOWN（待查单）
-    // 7018/7022/4002/4003/66 等明确失败 → REJECTED
-    // 7014 + 无本地 orderSn → 触发补单（复用 checkpoint 参数快照）
+    // 7018/7022/4002/4003/66 是旧实现候选失败码；端点/身份及无后续发券保证核实后才可终拒
+    // 7014 + 无本地 orderSn → 保持结果未知，先用原单号查单；不凭错误码重下
     // 成功 → ACCEPTED + nextCheckpoint(orderSn, ...)（落库由 lifecycle 完成，AD-2）
 }
 ```
 
-#### 5.2.2 步骤串联（`FulfillmentOperationExecuteHandler`）
+#### 5.2.2 步骤推进与恢复
 
-```java
-OperationOutcome outcome = operationExecutorPort.execute(ticket);
+以 AD-1 和后续 Task3 的审查通过规格为准。旧示例中的 `continueAfterTrustedRejection` 不存在，且现有充值拒绝入口不能消费 ACCEPTED；已删除该示例，防止误实现。同步响应、可信查单与回调应使用同一受控步骤事实入口，按当前步骤与供应商状态决定继续确认、等待、取券或最终收敛。
 
-if (outcome.outcomeClass() == OperationOutcomeClass.ACCEPTED
-        && AdapterStepCode.PLACE_ORDER.name().equals(operation.getAdapterStepCode())) {
-    // AD-1：按 AdapterMetadata.fulfillmentSteps() 声明推进
-    String nextOperationNo = stepSequencer.advance(operation, bOrder);
-    supplierOrderLifecycle.continueAfterTrustedRejection(
-            operation.getOperationNo(), outcome, traceId, permit, nextOperationNo);
-} else {
-    supplierOrderLifecycle.confirmTrustedOutcome(
-            operation.getOperationNo(), outcome, traceId, permit);
-}
-```
+#### 5.2.3 checkpoint 持久化
 
-`FulfillmentStepSequencer.advance` 读 `AdapterMetadata.fulfillmentSteps()`（HUA_SHENG = `[PLACE_ORDER, CONFIRM_ORDER, TAKE_CARD]`，QNM = `[SEND]` / `[SEND_KM]` 保持既有行为），在同一 BOrder 内以 `sequenceNo+1` 创建下一 Operation 并追加 Outbox 事件。
-
-#### 5.2.3 `handleAccepted` checkpoint 落库（AD-2）
-
-```java
-private void handleAccepted(FulfillmentOperationDO operation, BOrderDO bOrder,
-                            OperationOutcome outcome, LocalDateTime now) {
-    operation.setStatus(SupplierOrderOperationStatus.EXECUTING.getCode());
-    operation.setResultClass(outcome.outcomeClass().name());
-    if (outcome.externalOrderNo() != null && !outcome.externalOrderNo().isBlank()) {
-        operation.setExternalOperationNo(outcome.externalOrderNo());
-    }
-    if (outcome.nextCheckpoint() != null && outcome.nextCheckpoint().length > 0) {
-        byte[] aad = (operation.getOperationNo() + "|" + bOrder.getBOrderNo() + "|"
-                + operation.getAdapterStepCode()).getBytes(StandardCharsets.UTF_8);
-        operation.setCheckpointCiphertext(envelopeCrypto.encrypt(
-                outcome.nextCheckpoint(), checkpointKeyVersion, aad));
-        operation.setCheckpointSchemaVersion(1);
-    }
-    // 其余 CAS 更新与 bOrder 联动保持原样
-}
-```
+使用 `EnvelopeCryptoPort.encrypt(byte[], aad)` 返回的 ciphertext/keyVersion，同时持久化 schemaVersion。解密需传回相同 keyVersion 和绑定操作身份的 AAD。新增 checkpointKeyVersion 迁移在 Task3 开始前确认实际编号。跨步骤传递先解密再以新 AAD 加密；写旧步骤、新步骤与 Timer 任一失败全部回滚，不在适配器写库。
 
 #### 5.2.4 回调 Controller 与 Parser
 
@@ -327,24 +272,13 @@ private void handleAccepted(FulfillmentOperationDO operation, BOrderDO bOrder,
 
 `SupplierCallbackController`（`/callbacks/suppliers/huasheng/callback`，`consumes = text/plain`）：
 
-- 验签/解密/字段非法 → **400**（不重试）
+- 验签/解密/字段非法 → 候选 **400**（供应商是否重试未核实）
 - 业务冲突（券码数量不符、终态不一致） → **409**
-- 内部异常 → **500**（让 HUA_SHENG 重试）
-- 成功/幂等 → **200 `success`**
+- 内部异常 → 候选 **500**（只有正式供应商协议可确认其重试行为）
+- 成功/幂等 → 候选 **200 `success`**（响应正文与重试契约在 Task4 核实）
 - 分布式锁 `HUASHENG_CALLBACK:{orderSn}`，审计写 `sc_fulfillment_call_log.direction='INBOUND'`
 
-**新增 ArchUnit 规则**（不放宽既有规则）：
-
-```java
-/** 回调入口只允许依赖 *CallbackParser，禁止依赖 Adapter 主体、HttpExecutor 与 DO。 */
-static final ArchRule callback_entry_points_only_depend_on_callback_parsers =
-        noClasses().that().resideInAPackage("..interfaceapi.callback..")
-            .should().dependOnClassesThat()
-            .resideInAPackage("..supplieradapter..")
-            .andShould().dependOnClassesThat(
-                Predicates.or(Predicates.nameEndsWith("CallbackParser"),
-                              Predicates.nameEndsWith("CallbackRouter")));
-```
+**架构规则目标**：回调入口只通过明确的 CallbackParser/Router 或应用层门面处理供应商协议，不直接访问 Adapter 外呼主体、HttpExecutor 或订单 DAL。Task4 以实际分层和 ArchUnit 正向/反向样例验证规则，不能照搬旧稿逻辑相反的 `noClasses` 示例，不放宽已有架构约束。
 
 ---
 
@@ -352,36 +286,26 @@ static final ArchRule callback_entry_points_only_depend_on_callback_parsers =
 
 | 决策点 | 方案选择 | 备选 | 建议 |
 | --- | --- | --- | --- |
-| 两段式编排 | 接入既有 `continueAfterTrustedRejection` | 自建编排子链路 | 采纳前者 |
+| 卡券步骤编排 | 新增受控成功推进，复用聚合锁 | 将 ACCEPTED 伪造为充值 REJECTED | 前者，后者禁止 |
 | num 数量 | 固定 1，协议层拒绝越界 | 放开 DDL 支持多张 | 采纳前者，多数量另行立项 |
 | 取券 step 归属 | **复用 `FULFILL` + `TAKE_CARD` step** | 新增 `TAKE_ASSET` kind | **复用 FULFILL**：`operation_kind` CHECK 约束无需改动，状态机分支更少 |
-| 取消能力 | 新增 `CANCEL_ASSET` capability | 复用 `VOID_ASSET` | 新增（取消未交付 ≠ 作废已交付），仅需 ALTER capability CHECK |
+| 取消能力 | 后续独立设计 | 混入第一条取券闭环 | 后续处理，本次不扩 capability CHECK |
 | checkpoint 加密方 | 应用层 `EnvelopeCryptoPort` | 适配器内自行加解密 | 采纳应用层 |
 | 三密钥承载 | `CredentialMaterial` 记录 | 三次扩 ticket 字段 | 采纳记录类型 |
 
-**关键提示**：若采纳"取券复用 `FULFILL`"，则 `ck_sc_fulfillment_operation_kind` **完全无需修改**，DDL 改动仅剩 `capability_code` 一处，显著降低风险。
+**迁移边界**：取券使用 `FULFILL` 无需修改 operation_kind CHECK；本次不扩取消能力，但显式凭据绑定、长密文存储与 checkpoint keyVersion 仍须独立追加迁移。
 
 ---
 
 ## 7. 数据库修改方案
 
-### 7.0 变更集分配（对齐供给发布文 v4 §0.4 ①）
+### 7.0 变更集分配
 
-| 变更集 | 归属 | 内容 | 规格出处 |
-| --- | --- | --- | --- |
-| `053` | 共享地基（供给发布文） | `sc_supplier_offer.external_sku_code`（f1） | v4 §5.4 |
-| `054` | 共享地基 | `sc_credential_set`/`sc_credential_item` 建表（AD-3） | v4 §5.2（DDL 全文见本文 §7.1） |
-| `055` | 共享地基 | `sc_supplier_connector_version.extra_config` 加列（AD-5） | v4 §5.3（DDL 全文见本文 §7.1） |
-| `056` | 共享地基（供给发布文） | `sc_supplier_connector.published_flag` + 唯一键（D1） | v4 §5.5 |
-| `058` | **本文（HUA_SHENG）** | HUA_SHENG 供应商/凭据集数据/连接器/版本/能力/映射种子 | 本文 §7.2 |
-| `059` | **本文（HUA_SHENG）** | `capability_code` CHECK 扩 `CANCEL_ASSET`（若 §6 采纳） | 本文 §7.3 |
-
-> `054`/`055` 是**共享地基**，Phase 1 凭据/连接器 UI 即依赖，先于 HUA_SHENG 适配器交付；本文给出其可执行 DDL 全文（v4 只定编号与用途、不重复 DDL）。`058`/`059` 是 HUA_SHENG 专属种子，随适配器落地。落地前统一对齐 `db.changelog-1.0.0.yaml` 登记顺序。
-> 下文 `@hs_*` 为示意变量，实现时以子查询按业务键（`supplier_code`/`connector_code`/`set_code`）绑定真实主键，不硬编码 ID。
+054 凭据集、055 extra_config、056 published_flag、057 未退役 Offer 外部编码唯一约束均已落地；058 为 §12.3 连接器凭据集绑定，含引用互斥 CHECK 和长密文存储。后续 checkpoint 等追加迁移在实施前以实际 YAML 登记顺序定编号，不预占种子或取消能力编号。
 
 ### 7.1 地基变更集 DDL 全文（`054` 凭据集 + `055` extra_config）
 
-> 规格出处：v4 §5.2（凭据集）/§5.3（extra_config）。以下为**已落地（as-built）** DDL，与 `db/changelog/releases/1.0.0/054-credential-set.sql`、`055-connector-version-extra-config.sql` 一致；changelog 文件为权威来源。新表建于 022 本地时区迁移之后，datetime 列注释统一 `Asia/Shanghai`；`secret_ref` 对齐 `sc_credential_slot` 用 `VARCHAR(512)`（容纳 ENVELOPE 信封密文）；`published_flag`（056）DDL 见 v4 §5.5。
+> 规格出处：v4 §5.2（凭据集）/§5.3（extra_config）。以下为**已落地（as-built）** DDL，与 `db/changelog/releases/1.0.0/054-credential-set.sql`、`055-connector-version-extra-config.sql` 一致；changelog 文件为权威来源。新表建于 022 本地时区迁移之后，datetime 列注释统一 `Asia/Shanghai`；054 原始 `secret_ref` 为 `VARCHAR(512)`，不能容纳常见 RSA 私钥信封密文，058 增量改为 TEXT（见 §12.3）；`published_flag`（056）DDL 见 v4 §5.5。
 
 ```sql
 -- 变更集 055：连接器版本扩展可调参数（AD-5；规格出处 v4 §5.3）
@@ -419,94 +343,21 @@ CREATE TABLE sc_credential_item (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='凭据集内的单个密钥项引用';
 ```
 
-### 7.2 HUA_SHENG 种子变更集 `058-huasheng-supplier-seed.sql`
+### 7.2 HUA_SHENG 配置录入
 
-> 供应商、凭据集/项无服务层计算列，可直接 SQL 种子；连接器/版本/能力/映射含服务层计算列（`config_digest` 等），推荐经技术菜单 UI 或服务层落地（见本节末实现提示）。
+供应商、凭据集、连接器、能力、映射和供给通过当前管理端及生产配置服务创建，完整地经过 createDraft→validate→publish。供应商业务编号由现有服务分配；测试同样通过服务建立数据，不用虚构主键、预设摘要或手写已发布版本绕过校验。
 
-```sql
--- 1) 供应商主数据（默认 SUSPENDED=20，联调后启用；supplier_name 为面向运营的中文展示值）
-INSERT INTO sc_supplier (supplier_code, supplier_name, supplier_type, status, created_at, updated_at)
-VALUES ('HUASHENG', '华昇卡券', 'STANDARD_SUPPLIER', 20, NOW(3), NOW(3));
+HUA_SHENG 三项凭据为 appSecret/privateKey/callbackPublicKey，使用显式 credential_set_id，credential_slot_id 必须为空。元数据与映射模板只有 Task3 协议完整后才注册。PLACE/CONFIRM/QUERY 的供应商外部 SUCCESS 不能直接终结；最终 SUCCEEDED 需要完整 TAKE 响应或可信成功回调携带的一张有效卡券事实。未知外部状态保持不确定性并停止自动推进。
 
--- 2) 凭据集与凭据项数据（表由 054 建；provider_type=ENV，密钥不入库）
-INSERT INTO sc_credential_set (supplier_id, set_code, status, created_at, updated_at)
-VALUES (@hs_supplier_id, 'HS_MAIN', 10, NOW(3), NOW(3));
+旧稿 §7.2 的 raw SQL 把凭据集 ID 写入单槽列并跳过发布校验，已经删除，不可作为部署或集成测试入口。
 
-INSERT INTO sc_credential_item (credential_set_id, item_key, provider_type, secret_ref, masked_hint, active_secret_version, status, created_at, updated_at) VALUES
-    (@hs_set_id, 'appSecret',         'ENV', 'env:HUASHENG_APP_SECRET',          '****',       1, 10, NOW(3), NOW(3)),
-    (@hs_set_id, 'privateKey',        'ENV', 'env:HUASHENG_PRIVATE_KEY',         '**** PKCS8', 1, 10, NOW(3), NOW(3)),
-    (@hs_set_id, 'callbackPublicKey', 'ENV', 'env:HUASHENG_CALLBACK_PUBLIC_KEY', '**** RSA',   1, 10, NOW(3), NOW(3));
+### 7.3 取消能力
 
--- 3) 连接器与版本（credential_slot_id 语义扩展为指向凭据集，AD-3；列名对齐 001-identity-and-master.sql）
-INSERT INTO sc_supplier_connector (supplier_id, connector_code, adapter_type, current_version_id, status, created_at, updated_at)
-VALUES (@hs_supplier_id, 'HS_DEFAULT', 'HUA_SHENG_ORDER_V1', NULL, 10, NOW(3), NOW(3));
-
-INSERT INTO sc_supplier_connector_version (
-    connector_id, version_no, base_url, merchant_account, credential_slot_id,
-    protocol_version, callback_path, connect_timeout_ms, read_timeout_ms,
-    rate_limit, concurrency_limit, adapter_config_schema_version, adapter_config_json,
-    validation_status, validated_at, config_digest, status, published_at, created_at, updated_at, extra_config)
-VALUES (
-    @hs_connector_id, 1, 'https://coupon-api.jshstkj.cn', @hs_app_id, @hs_set_id,
-    'HUA_SHENG_ORDER_V1', '/callbacks/suppliers/huasheng/callback', 10000, 20000,
-    5, 10, 1, '{}',
-    10, NOW(3), @hs_config_digest, 10, NOW(3), NOW(3), NOW(3), JSON_OBJECT('expireTime', 300, 'num', 1));
-
--- 4) 能力（不含 CANCEL_ASSET；如 §6 采纳，先执行 059 扩 CHECK，再在此追加 CANCEL_ASSET 行）
-INSERT INTO sc_supplier_connector_capability (connector_version_id, capability_code, enabled, metadata_version, created_at) VALUES
-    (@hs_version_id, 'ISSUE_ASSET',      1, 1, NOW(3)),
-    (@hs_version_id, 'QUERY_ORDER',      1, 1, NOW(3)),
-    (@hs_version_id, 'RECEIVE_CALLBACK', 1, 1, NOW(3)),
-    (@hs_version_id, 'QUERY_BALANCE',    1, 1, NOW(3));
-
--- 5) 状态映射（5 状态；与附录 B 一致）
-INSERT INTO sc_status_mapping_definition (connector_version_id, mapping_version, external_status, external_sub_status, business_phase, fact_type, terminal_flag, priority, status, published_at, created_at) VALUES
-    (@hs_version_id, 1, 'WAIT',       '', 'CREATE',     'ACCEPTED',  0, 10, 10, NOW(3), NOW(3)),
-    (@hs_version_id, 1, 'SUCCESS_HD', '', 'PROCESSING', 'ACCEPTED',  0,  5, 10, NOW(3), NOW(3)),
-    (@hs_version_id, 1, 'SUCCESS',    '', 'DELIVERY',   'SUCCEEDED', 1, 20, 10, NOW(3), NOW(3)),
-    (@hs_version_id, 1, 'FAILED',     '', 'CREATE',     'REJECTED',  1, 20, 10, NOW(3), NOW(3)),
-    (@hs_version_id, 1, 'CANCEL',     '', 'CREATE',     'REJECTED',  1, 20, 10, NOW(3), NOW(3));
-
--- 6) 错误码映射（0 为成功码，不属错误映射，禁止写入）
-INSERT INTO sc_supplier_error_code_map (connector_version_id, mapping_version, external_error_code, external_sub_code, error_class, action_type, retryable_flag, status, published_at, created_at) VALUES
-    (@hs_version_id, 1, '7018', '', 'BUSINESS_REJECTED', 'REJECT',      0, 10, NOW(3), NOW(3)),
-    (@hs_version_id, 1, '7022', '', 'BUSINESS_REJECTED', 'REJECT',      0, 10, NOW(3), NOW(3)),
-    (@hs_version_id, 1, '4002', '', 'BUSINESS_REJECTED', 'REJECT',      0, 10, NOW(3), NOW(3)),
-    (@hs_version_id, 1, '4003', '', 'BUSINESS_REJECTED', 'REJECT',      0, 10, NOW(3), NOW(3)),
-    (@hs_version_id, 1, '66',   '', 'BUSINESS_REJECTED', 'REJECT',      0, 10, NOW(3), NOW(3)),
-    (@hs_version_id, 1, '7202', '', 'BUSINESS_REJECTED', 'REJECT',      0, 10, NOW(3), NOW(3)),
-    (@hs_version_id, 1, '7017', '', 'RESULT_UNKNOWN',    'QUERY_FIRST', 0, 10, NOW(3), NOW(3)),
-    (@hs_version_id, 1, '7019', '', 'RESULT_UNKNOWN',    'QUERY_FIRST', 0, 10, NOW(3), NOW(3)),
-    (@hs_version_id, 1, '7020', '', 'RESULT_UNKNOWN',    'QUERY_FIRST', 0, 10, NOW(3), NOW(3)),
-    (@hs_version_id, 1, '7021', '', 'RESULT_UNKNOWN',    'QUERY_FIRST', 0, 10, NOW(3), NOW(3)),
-    (@hs_version_id, 1, '7023', '', 'RESULT_UNKNOWN',    'QUERY_FIRST', 0, 10, NOW(3), NOW(3)),
-    (@hs_version_id, 1, '7204', '', 'RESULT_UNKNOWN',    'QUERY_FIRST', 0, 10, NOW(3), NOW(3)),
-    (@hs_version_id, 1, '7014', '', 'RETRYABLE',         'RETRY_SAFE',  1, 10, NOW(3), NOW(3)),
-    (@hs_version_id, 1, '61',   '', 'RETRYABLE',         'RETRY_SAFE',  1, 10, NOW(3), NOW(3));
-```
-
-> **UI 等价路径**：本节种子也可由技术菜单（供给发布文 v4 A1/E1/F1/G2）自助录入——连接器草稿、凭据集/项、能力勾选、映射「从模板初始化」（`mappingTemplates()` 即本节 5)/6) 内容）+ 追加。SQL 种子用于一键初始化与集成测试基线，UI 路径用于线上自助与灰度翻牌；两者写同一批表，`mappingTemplates()` 是映射的代码单一来源。
-> **实现提示**：`sc_supplier_connector_version.config_digest`（规范化配置 SHA-256）、`adapter_config_schema_version`、`validation_status` 由服务层（`createConnectorDraft`/`validate`/`publish`）计算与流转，raw SQL 难以正确生成 `config_digest` 且会绕过「先校验后发布」。故连接器/版本/能力/映射种子**推荐经技术菜单 UI 或服务层落地**（v4 §6.2/§6.5）；§7.2 SQL 仅作集成测试基线示意，直接执行须补齐 `config_digest` 等 NOT NULL 列（上文以 `@hs_config_digest` 占位）或改走服务层。
-
-### 7.3 HUA_SHENG 能力 CHECK 变更集 `059-huasheng-capability-check.sql`
-
-**仅在 §6 采纳新增 `CANCEL_ASSET` 时执行**（须先于 §7.2 能力种子追加 `CANCEL_ASSET` 行）：
-
-```sql
-ALTER TABLE sc_supplier_connector_capability
-    DROP CONSTRAINT ck_sc_supplier_connector_capability_code;
-ALTER TABLE sc_supplier_connector_capability
-    ADD CONSTRAINT ck_sc_supplier_connector_capability_code
-    CHECK (capability_code IN ('CREATE_RECHARGE','ISSUE_ASSET','BIND_BENEFIT','QUERY_ORDER',
-        'QUERY_ASSET','VOID_ASSET','UNBIND_ASSET','QUERY_BALANCE','QUERY_INVENTORY',
-        'RECEIVE_CALLBACK','CANCEL_ASSET'));
-```
-
-`adapter_step_code`、`result_class` 无 CHECK 约束，扩展无需 ALTER（§3.3）。若采纳"取券复用 `FULFILL`"，`operation_kind` 亦无需变更。
+第一条卡券交付链路不实施取消订单或已交付券作废，不扩展 capability CHECK。两者业务含义及供应商协议不同，须后续单独设计和验收。
 
 ### 7.4 部署 SQL
 
-`script/deploy` 下新增 HUA_SHENG 供应商菜单（按 `supplier_code` 过滤），菜单与字典写入 system 库（供应链不得写 system 表，须走部署脚本）。技术菜单「供应商履约技术配置」的部署 SQL 由供给发布文 v4 §8.1 交付，本文不重复。
+复用技术菜单「供应商履约技术配置」与现有权限，不新增按供应商预设代码过滤的专用菜单。若后续确需菜单或字典改动，只能由 script/deploy 写 system 库；供应链服务不得访问 system 表。
 
 ---
 
@@ -515,18 +366,17 @@ ALTER TABLE sc_supplier_connector_capability
 | 类别 | 类 | 重点 |
 | --- | --- | --- |
 | 单元 | `HuashengCryptoTest` | AES 加解密、RSA 签名验签、PKCS#1→X.509 包装、密钥长度校验 |
-| 单元 | `HuashengSignUtilsTest` | 空载荷防绕过、常量时间比较 |
-| 单元 | `HuashengProtocolParserTest` | 金额转分、双号提取、错误码解析 |
-| 单元 | `HuashengCardMapperTest` | 8 种 type 字段映射与资产分类 |
+| 单元 | `HuashengProtocolParserTest` | 金额原文保留、双号提取、错误码解析；未核实单位前不生成结算分值 |
+| 单元 | `HuashengCardMapperTest` | 7 种已知 type 字段映射与资产分类 |
 | 单元 | `HuashengErrorCodeTest` | 三级分类、未知码兜底 |
 | 单元 | `HuashengMaskingUtilsTest` | 脱敏、响应体屏蔽 |
 | 单元 | `FulfillmentStepSequencerTest` | 步骤序列推进、`sequenceNo` 递进、末步不再推进 |
-| 适配器 | `HuashengSupplierAdapterTest` | MockWebServer：两段式全流程、**num 越界拒绝**、5xx/4xx/超时、61 刷新重试、7014 补单 |
+| 适配器 | `HuashengSupplierAdapterTest` | MockWebServer：两段式全流程、**num 越界拒绝**、5xx/4xx/超时、61 有界刷新、7014 查单保持原身份 |
 | 契约 | `HuashengSupplierAdapterContractTest` | ticket 不可变性、Composite 路由、能力集与 DB 一致、封闭 Schema |
-| 集成 | `HuashengFulfillmentAcceptanceIntegrationTest` | seed → placeOrder → confirmOrder → takeCard 全闭环 + **checkpoint 落库与恢复** |
-| 集成 | `HuashengContinuationIntegrationTest` | **ACCEPTED 后自动创建下一 Operation，`validateContinuation` 通过，资金不变量成立** |
+| 集成 | `HuashengFulfillmentAcceptanceIntegrationTest` | 真实配置服务 → placeOrder → 按状态confirmOrder/跳过 → takeCard 全闭环 + **checkpoint 落库与恢复** |
+| 集成 | `HuashengContinuationIntegrationTest` | **可信步骤事实按锁序恰一次推进；最终取券前不提交资金** |
 | 集成 | `HuashengCallbackIntegrationTest` | 回调验签、解密、状态机推进、幂等、nonce 防重 |
-| 架构 | `SupplyChainModuleArchitectureTest` | 新增回调入口规则；既有 24 条对 HUA_SHENG 生效 |
+| 架构 | `SupplyChainModuleArchitectureTest` | 新增回调入口规则；既有架构规则对 HUA_SHENG 生效，以实际执行计数为准 |
 
 **关键门禁**：`num>1` 必须在协议层被拒绝并有单测锁定，**不得依赖 DB CHECK 崩溃**。
 
@@ -547,12 +397,12 @@ ALTER TABLE sc_supplier_connector_capability
 
 | 风险 | 等级 | 说明 | 缓解 |
 | --- | --- | --- | --- |
-| 多步骤编排触及资金一致性 | **高** | `handleAccepted` 与 `validateContinuation` 是资金与频控边界 | 复用既有 `continueAfterTrustedRejection`，不新写状态机；补资金不变量集成测试 |
-| `ACCEPTED` 路径缺 `nextOperationNo` 校验 | **高** | 需扩展 `handleAccepted` 支持下一 Operation | 沿用 `validateContinuation` 全部校验，不开旁路 |
+| 多步骤编排触及资金一致性 | **高** | `handleAccepted` 与 `validateContinuation` 是资金与频控边界 | 复用聚合锁与最终资产/资金边界，新增受控步骤推进；补并发与资金不变量集成测试 |
+| `ACCEPTED` 路径缺 `nextOperationNo` 校验 | **高** | 新增受控卡券推进，不复用充值拒绝入口 | 锁定原认领身份、当前步骤与唯一下一步，全部写入同事务 |
 | 三密钥泄露 | 中 | ticket 承载多密钥 | 内存态传递、禁日志、异常脱敏沿用 `safeFailureSummary` |
 | `num>1` 崩溃 | 中 | 违反 DB CHECK | 协议层拒绝（AD-6）+ 单测锁定 |
 | token 刷新与频控冲突 | 中 | 61 重试会二次外呼 | 重试不重置 `attemptCount` 上限；纳入既有限频判定 |
-| token 重复获取 | 低 | 多实例并发 | Redis 分布式锁，按 appId 隔离 |
+| token 重复获取 | 低 | 多实例并发 | 缓存与锁按冻结连接器版本、appId、凭据版本身份隔离；具体实现由 Task3 细化 |
 | 协议证据完整性 | 中 | 沙箱未验分支 | 标记 `EVIDENCE_INCOMPLETE` 分支禁止发布 |
 
 ---
@@ -562,19 +412,19 @@ ALTER TABLE sc_supplier_connector_capability
 | 任务 | 内容 | 依赖 | 备注 |
 | --- | --- | --- | --- |
 | T1 | 设计文档更新（§10.1/§10.2/§7.4/新增 §10.3 回调骨架） | — | — |
-| T2 | `HuashengCrypto` + `HuashengSignUtils` + 单测 | T1 | — |
+| T2 | `HuashengCrypto` + 单测 | T1 | — |
 | T3 | `EndpointConstants` + `ErrorCode` + `ProtocolParser` + `CardMapper` + 单测 | T1 | — |
 | T4 | `HuashengProperties` + `HuashengTokenManager`（应用层）+ 单测 | T2 | — |
 | T5 | `HuashengHttpExecutor` + `HuashengMaskingUtils` + 单测 | T2,T4 | — |
 | T6 | `HuashengSupplierAdapter` + `HuashengOrderV1Metadata` + 适配器/契约测试 | T2-T5 | — |
 | T7 | 领域扩展：`AdapterStepCode` + `Capability` + 原因码 | T1 | — |
-| **T8** | **三密钥：`CredentialMaterial` + `OperationTicket` + `CredentialProvider.resolveSet`** | T1 | **新增** |
+| **T8** | **三密钥：`CredentialMaterial` + `OperationTicket` + `DefaultCredentialSetResolver.resolveSet`** | T1 | **新增** |
 | **T9** | **`extra_config` 列 + `extraParameters` 传递链打通** | T1 | **新增** |
 | **T10** | **checkpoint 落库与恢复（`handleAccepted` 加密写库 + 工厂解密）** | T1 | **新增** |
-| **T11** | **多步骤编排：`FulfillmentStepSequencer` + `isRechargeOperation` 扩展 + `ACCEPTED` 串联** | T10 | **新增，风险最高** |
-| T12 | DDL 变更集 `058`（HUA_SHENG 种子）/`059`（能力 CHECK）+ 部署 SQL；地基 `054`/`055` 随供给发布文 §5 交付 | T7,T8 | 编号对齐 §7.0 |
+| **T11** | **多步骤编排：`FulfillmentStepSequencer` + 卡券推进入口新增，充值判断保持独立 + `ACCEPTED` 串联** | T10 | **新增，风险最高** |
+| T12 | 058 显式凭据绑定；后续 checkpoint 迁移按实际编号；配置经管理端服务创建 | T7,T8 | 编号对齐 §7.0 |
 | T13 | `SupplierCallbackController` + `Router` + `CallbackParser` + 架构规则 | T6 | — |
-| T14 | 集成测试（闭环/续履约/回调/补单/num 拒绝） | T11,T13 | — |
+| T14 | 集成测试（闭环/步骤推进/回调/未知结果查单/num 拒绝） | T11,T13 | — |
 | T15 | 文档同步与门禁验证 | T14 | — |
 
 **关键路径**：T8-T11 为 v2 新增四项前置，其中 T11 风险最高（触及资金与频控边界）。**建议 T8-T11 先做技术预研与单测验证可行性，再进入完整实现。**
@@ -594,17 +444,16 @@ ALTER TABLE sc_supplier_connector_capability
 | `HS_BALANCE` | `POST /api/balance` | 余额查询 | — |
 | `HS_CALLBACK` | `POST /callbacks/suppliers/huasheng/callback` | 回调入站 | — |
 
-## 附录 B：HUA_SHENG 状态映射
+## 附录 B：HUA_SHENG 状态事实
 
-| 外部状态 | business_phase | fact_type | terminal |
-| --- | --- | --- | --- |
-| `WAIT` | CREATE | ACCEPTED | 0 |
-| `SUCCESS_HD` | PROCESSING | ACCEPTED | 0 |
-| `SUCCESS` | DELIVERY | SUCCEEDED | 1 |
-| `FAILED` | CREATE | REJECTED | 1 |
-| `CANCEL` | CREATE | REJECTED | 1 |
+旧系统的供应商状态常量为 WAIT、SUCCESS、FAILED、CANCEL。SUCCESS_HD 来自本地订单待交付状态，不能注册为供应商外部状态。
 
-> 2026-10-03 评审修复编号补充：057 已用于未退役 Offer 外部编码唯一约束修正，本文尚未实施的种子和 CHECK 顺延至 058/059；语义见 `docs/superpowers/specs/2026-10-03-supplier-offer-publication-admin-design.md#154-退役商品释放外部编码`。
+- WAIT：预下单待确认或供应商处理中；结合当前步骤判断确认/等待，不能最终收敛。
+- SUCCESS：供应商订单成功，须继续 takeCard 并核实 orderSn、num=1、卡券 list 数量与形态；不直接映射最终 SUCCEEDED。
+- FAILED/CANCEL：候选可信失败事实；仍需双号、当前步骤与迟到冲突检查，不能仅凭状态字符串释放资金。
+- 未知状态或字段矛盾：结果未知或人工处置，不重下、不换供应商。
+
+这些事实来自 cardshop 旧实现，尚无真实供应商沙箱验收。Task3 的协议规格须列明实际响应证据与无法证实的保证，保持未验证分支不可上线。
 
 ## 12. 闭环推进与实施前核验（2026-10-03）
 
@@ -635,7 +484,7 @@ ALTER TABLE sc_supplier_connector_capability
 
 本节覆盖并修正 AD-3 的旧混合 ID 示意，以本节为第二切片完整契约。暂不注册未完成的 HUA_SHENG 可执行适配器；多凭据模式先以隔离测试元数据验证，随后在协议适配器切片启用。
 
-**数据迁移**：新增 `058-connector-credential-set-binding.sql`，`sc_supplier_connector_version` 增 `credential_set_id BIGINT NULL COMMENT '凭据集主键，逻辑引用sc_credential_set.id'`；旧 `credential_slot_id` 改可空，COMMENT 仍为 `凭证槽主键，逻辑引用sc_credential_slot.id`；CHECK 强制二者恰一非空。旧 QNM 版本均保留 slot，不批量改数据。`sc_credential_item.secret_ref` 改 TEXT，COMMENT 仍为 `密钥系统中的秘密引用或信封密文，不是秘密明文；ENV存env:NAME`，容纳 RSA 私钥的信封密文。054–057 不改。旧 §7.2/§7.3 未执行的种子/CHECK 示例顺延至 059+；供应商与连接器优先由 UI 和服务层创建，不执行包含虚构主键/摘要的示例 SQL。
+**数据迁移**：新增 `058-connector-credential-set-binding.sql`，`sc_supplier_connector_version` 增 `credential_set_id BIGINT NULL COMMENT '凭据集主键，逻辑引用sc_credential_set.id'`；旧 `credential_slot_id` 改可空，COMMENT 仍为 `凭证槽主键，逻辑引用sc_credential_slot.id`；CHECK 强制二者恰一非空。旧 QNM 版本均保留 slot，不批量改数据。`sc_credential_item.secret_ref` 改 TEXT，COMMENT 仍为 `密钥系统中的秘密引用或信封密文，不是秘密明文；ENV存env:NAME`，容纳 RSA 私钥的信封密文。054–057 不改。旧 §7.2/§7.3 的错误种子/CHECK 示例已删除，不保留编号；供应商与连接器由 UI 和服务层创建，不执行包含虚构主键/摘要的 SQL。
 
 **元数据与请求**：新增封闭 `CredentialBindingMode`（`SINGLE_SLOT`/`CREDENTIAL_SET`），`AdapterMetadata.credentialBindingMode()` 默认 `SINGLE_SLOT` 保持 QNM。连接器草稿请求新增可选 `credentialSetCode`（供应商内凭据集编号）和 `extraConfig`（非秘密 JSON），旧 `credentialSlotNo` 改为条件必填；服务端按元数据模式校验恰一输入。集按 `supplier_id+set_code` 定位，必须 ACTIVE 且 ACTIVE 项键恰等于元数据 required keys；创建、校验、发布及运行时均核实引用模式和供应商归属，缺项、额外项或跨供应商引用拒绝。校验阶段实际解析秘密后即擦除，解析失败保留安全因果且不记录正文。新注册多凭据元数据不改 QNM 既有能力声明。
 
@@ -654,3 +503,17 @@ Ticket 同时携带冻结 `connectTimeoutMs/readTimeoutMs`，供后续 HUA_SHENG
 **管理端配套**：适配器目录返回 credentialBindingMode。连接器表单按模式显示平台槽或当前供应商凭据集，下拉仅可用且完整的集；切换适配器或供应商清空旧引用。extraConfig JSON 可填写且服务端 Schema 校验为权威。版本详情返回脱敏凭据编号/模式，不返回 secretRef 或材料。新增所有 HTTP 映射继续使用现有权限，不新增隐式 Feign 或其它库访问。
 
 **验证**：纯测试/管理端契约覆盖模式分派、XOR、归属/状态/项键、Schema、摘要、读取超时、Ticket 不可变及字符串脱敏。真实 MySQL/Liquibase 验证升级/重放、原 slot 保留、XOR CHECK、长 PEM 密文、发布期间停用凭据后拒绝及回滚。定向回归 QNM 发布、上架、运行时装配和标准 HTTP 挡板闭环；供应链架构全运行。前端执行真实 SFC 组件测试、改动文件 ESLint 与 build:local。
+
+
+### 12.4 第三切片实施前的协议证据缺口
+
+本节是只读核验结果，尚不是 Task3 可直接实施的完整规格。核验来源：cardshop 的 `HuashengSupplierTradeServiceImpl`、`HuashengConstants`、`HuashengClient`、`HuashengCardMapper` 及对应测试；本仓 `OperationAssetFact`、`SupplierOrderLifecycle.persistAssets`、`ProjectStandardAssetPayloadDecoder` 与项目资产响应 DTO。真实供应商沙箱未执行。
+
+1. **状态不能直接代表交付**：旧供应商常量只含 WAIT/SUCCESS/FAILED/CANCEL；SUCCESS_HD 是旧系统本地待交付状态。PLACE 返回 SUCCESS 时旧流程跳过 CONFIRM；QUERY 返回 SUCCESS 时仍尝试 TAKE。完整 TAKE 响应或可信成功回调均须核验 orderSn 一致、num 与预期一致、list 完整且形态可识别，才能产生最终资产事实。
+2. **金额单位尚无协议证据**：旧 PLACE/CONFIRM 将 totalPrice 原文（测试样例含四位小数）用于日志/remark；旧 TAKE 解析只读取 orderSn/num/list，夹具未提供 totalPrice，无法证明远端响应永不包含该字段。不能据此断言 totalPrice 单位或四位小数的舍入规则。未取得正式协议证据时 reportedSettlementAmount 不填写，原文只可经脱敏摘要观察，不能当成本核对通过或用于最终账本扣减。
+3. **资产字段无法无损落入现模型**：旧实现识别 201(code/pass)、202(code 或 pass)、203(code/pass/crc)、301(url)、302(url/urlPass)、303(code/url/urlPass)、304(code/url)。本仓 OperationAssetFact 仅 cardNo/cardSecret；203 和 303 的第三字段及 URL 的显式含义会丢失。不得拼接进密码或把 URL 密码伪装成核验码；需先定案类型化资产载荷、指纹、加密持久化、项目响应与管理端展示的统一契约。未支持的类型必须失败关闭，不能丢字段仍宣称交付成功。
+4. **恢复机制尚不存在**：当前 ExecuteHandler 遇 EXECUTING/RESULT_UNKNOWN 直接跳过，现有手机号恢复须真实 queueId。卡券必须新增持久化查单与代次围栏，网络异常后不得由原下单任务盲重发。
+
+5. **重发、时间与金额不能靠模拟证明**：旧代码只在按 outOrderSn 查单返回7014且本地尚无 orderSn时考虑补单，但没有供应商幂等期限/一致性证据，幂等/一致性证据及恢复规格补齐前不得自动开启补单；confirm/take 的重复调用能否回放同资产、FAILED/CANCEL后是否仍可能发券亦待供应商证据。61只允许刷新token后同业务payload至多重试一次，不设全局无界 RETRY_SAFE。token读取data.expires_in。validTime仅有日期夹具，不能猜测时区和当日截止时刻。
+
+Task3 开始写实现前必须完成：协议解析与端点的完整契约、资产载荷契约、受控步骤事务及查单恢复的详细规格、对应文件与测试计划，并完成规格审查。问题可凭真实协议材料解决的优先核实；关键业务语义仍不清时向用户确认，不按旧系统的错误实现推断。
