@@ -647,6 +647,8 @@ ALTER TABLE sc_supplier_connector_capability
 
 **Ticket**：`OperationTicket` 新增 `CredentialMaterial(appSecret,privateKeyPem)`，不包含回调公钥；原 `secretKey` 保留 QNM。单槽与集的装配路径独立，材料为空或缺 required key 失败关闭，临时 char[] 总是擦除。出站 Ticket 使用冻结读取超时（毫秒向上取整为秒，至少 1 秒），extraParameters 从已校验非秘密版本配置投影，使用防御复制。材料与 Ticket 字符串表示省略全部秘密、充值账号、checkpoint 和可携带 token 的 extraParameters；不改变订单/资金/频控状态机。
 
+Ticket 同时携带冻结 `connectTimeoutMs/readTimeoutMs`，供后续 HUA_SHENG HTTP 客户端分别控制连接与读取；既有 timeoutSeconds 保留作 QNM 兼容入口，旧 builder/构造调用缺毫秒值时由秒值补默认。不得只传秒值而丢失独立连接超时。
+
 **凭据输入上限**：后端 `secretValue` 最大 8192 个字符，同时 UTF-8 明文最大 16384 字节，超限在加密/落库前按固定说明拒绝；ENV `secretRef` 仍为至多 512 字符引用。前端 ENVELOPE 改多行文本框，maxlength 8192，不回显已有值。真实 MySQL 测试使用本地生成 RSA PEM（超过 512 字符），验证加密存储/解密原文一致，跨身份搬移失败；日志和 GET 仍不含明文或密文。
 
 **管理端配套**：适配器目录返回 credentialBindingMode。连接器表单按模式显示平台槽或当前供应商凭据集，下拉仅可用且完整的集；切换适配器或供应商清空旧引用。extraConfig JSON 可填写且服务端 Schema 校验为权威。版本详情返回脱敏凭据编号/模式，不返回 secretRef 或材料。新增所有 HTTP 映射继续使用现有权限，不新增隐式 Feign 或其它库访问。

@@ -16,12 +16,14 @@
 - 新增 `aifuli-module-supply-chain/aifuli-module-supply-chain-server/src/main/java/com/aifuli/module/supplychain/supplieradapter/huasheng/HuashengCrypto.java`。
 - 新增同模块 `src/test/java/com/aifuli/module/supplychain/supplieradapter/huasheng/HuashengCryptoTest.java`。
 
-- [ ] 先写协议测试：JCA 独立生成 AES 密文与 RSA 签名，验证 UTF-8、原密文签名、篡改/空白/非法 hex/非法 AES 长度、PKCS#8 私钥、X.509/PKCS#1 公钥与固定安全异常。
-- [ ] 测试调用的接口固定为 `encryptBodyHex(String,String,String)`、`decryptBodyHex(String,String,String)`、`signBodyHex(String,PrivateKey)`、`verifyBodyHex(String,String,PublicKey)`、`loadPkcs8PrivateKey(String)`、`loadPublicKey(String)`。测试密钥由本地 JCA 生成，禁止使用环境或真实秘密。
-- [ ] 记录 RED：允许先有只抛 UnsupportedOperationException 的编译壳，测试应因行为缺失失败，而不是把无法编译当作 RED。命令 `mvn -o -pl aifuli-module-supply-chain/aifuli-module-supply-chain-server -Dtest=HuashengCryptoTest test`，输出保存 `/tmp/huasheng-crypto-red.log`。
-- [ ] 按设计 §12.1 实现纯 JCA 工具类，写中文职责/不变量/文档链接；不加 Spring Bean、不改启动/RPC/事务/缓存/安全配置。
-- [ ] 记录 GREEN：同命令输出保存 `/tmp/huasheng-crypto-green.log`；再运行 `-Dtest=HuashengCryptoTest,SupplyChainModuleArchitectureTest` 验证边界。
-- [ ] 规格审查通过后质量审查；发现问题由原实施者修复并复审。只提交本项文件，中文提交标题。
+- [x] 先写协议测试：JCA 独立生成 AES 密文与 RSA 签名，验证 UTF-8、原密文签名、篡改/空白/非法 hex/非法 AES 长度、PKCS#8 私钥、X.509/PKCS#1 公钥与固定安全异常。
+- [x] 测试调用的接口固定为 `encryptBodyHex(String,String,String)`、`decryptBodyHex(String,String,String)`、`signBodyHex(String,PrivateKey)`、`verifyBodyHex(String,String,PublicKey)`、`loadPkcs8PrivateKey(String)`、`loadPublicKey(String)`。测试密钥由本地 JCA 生成，禁止使用环境或真实秘密。
+- [x] 记录 RED：允许先有只抛 UnsupportedOperationException 的编译壳，测试应因行为缺失失败，而不是把无法编译当作 RED。命令 `mvn -o -pl aifuli-module-supply-chain/aifuli-module-supply-chain-server -Dtest=HuashengCryptoTest test`，输出保存 `/tmp/huasheng-crypto-red.log`。
+- [x] 按设计 §12.1 实现纯 JCA 工具类，写中文职责/不变量/文档链接；不加 Spring Bean、不改启动/RPC/事务/缓存/安全配置。
+- [x] 记录 GREEN：同命令输出保存 `/tmp/huasheng-crypto-green.log`；再运行 `-Dtest=HuashengCryptoTest,SupplyChainModuleArchitectureTest` 验证边界。
+- [x] 规格审查通过后质量审查；发现问题由原实施者修复并复审。只提交本项文件，中文提交标题。
+
+实施记录：`aecef14` 首次实现、`b8ae128` 规格修复。首轮 RED 69 项实际执行失败，首轮 GREEN 69 项通过；JDK21 协议 69 + 架构 28 项通过。复审增加完整异常输出敏感标记检查并统一 HUA_SHENG 名称，RED 73 项/50 断言失败，最终 GREEN 73 项全部通过，规格及质量独立复审均通过。日志 `/tmp/huasheng-crypto-review-{red,green}.log` 和 `/tmp/huasheng-crypto-architecture-jdk21.log`。本切片为纯 JCA，不声称已经完成适配器外呼或真实供应商联调。
 
 ## Task 2：连接器显式凭据集与配置传递
 
