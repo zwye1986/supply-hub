@@ -17,12 +17,14 @@ import java.io.Serializable;
 @Data
 public class QueryRefundStatusReqDTO implements Serializable {
 
+    /** 旅通退款单号refund_bn，与channel_code构成退款永久幂等键 */
     @Schema(description = "旅通退款单号refund_bn，与channel_code构成退款永久幂等键",
             requiredMode = Schema.RequiredMode.REQUIRED, example = "RT-REFUND-001")
     @NotBlank(message = "旅通退款单号不能为空")
     @Size(max = 128, message = "旅通退款单号不能超过 128 个字符")
     private String channelRefundNo;
 
+    /** 链路追踪标识，缺省由服务端生成 */
     @Schema(description = "链路追踪标识，缺省由服务端生成", example = "trace-qr-001")
     @Size(max = 128, message = "链路追踪标识不能超过 128 个字符")
     private String traceId;

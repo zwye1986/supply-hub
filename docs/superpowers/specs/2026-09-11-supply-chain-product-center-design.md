@@ -704,7 +704,14 @@ system-server 通过追加变更集 `006-product-list-filter-dictionaries` 写�
     * **无死锁风险（已核实）**：每项事务只锁一行（`requireSpuForUpdate`/`requireSkuForUpdate` 后 `updateById`），不级联子 SKU、不发布领域事件，且各项顺序执行、前一项提交后才开启下一项，不存在嵌套持锁。
     * **连接占用**：`REQUIRES_NEW` 会挂起外层事务并额外占用一个连接。单请求顺序执行下峰值仅 1~2 个连接；200 条上限即为并发请求叠加时的连接池保护措施。
   * **失败明细回执**：响应不再是 `Boolean`，而是 `BatchStatusResultVO`，包含 `succeeded`（成功项编码列表）与 `failed`（失败项明细列表）。前端据此渲染「成功 N 项、失败 M 项」并向用户展示失败明细，便于针对失败项重试。
-  * **失败原因分类**：失败项 `errorCode` 复用现有稳定错误码，常见包括 `PLATFORM_SPU_NOT_FOUND`（`1_050_001_079`）、`PLATFORM_SKU_NOT_FOUND`（`1_050_001_080`）、`PRODUCT_STATUS_INVALID`（`1_050_001_096`，状态机非法迁移）、`PRODUCT_CONCURRENT_UPDATE`（`1_050_001_097`，乐观锁冲突）、`PRODUCT_TYPE_INACTIVE`（`1_050_001_082`，商品类型未启用后不允许上架）。
+  * **状态机幂等放行与失败原因分类（2026-10-04 方案 A 修订）**：
+    * **同状态幂等放行**：当商品当前状态与目标状态一致时（`current == target`，例如已下架商品再次批量下架、或已上架商品再次批量上架），系统判定为**幂等成功**并计入 `succeeded`，避免运营批量勾选包含已达目标状态的商品时大面积报错；SPU/SKU 刷新操作人与操作时间戳，并同步更新下架模式等元数据。
+    * **失败项精准分类与友好文案**：失败项 `errorCode` 复用现有或新增专用稳定错误码，杜绝晦涩底层技术词汇：
+      * `PRODUCT_STATUS_TRANSITION_NOT_ALLOWED`（`1_050_001_170`，`DO_NOT_RETRY`）：非法状态迁移专用错误码，文案为 `商品【{}】（{}）当前状态【{}】不支持变更为【{}】`，动态携带商品/规格名称、商品/规格编码（SPU/SKU）、当前状态中文名与目标状态说明。针对草稿直接下架补充 `草稿请先上架或归档`，针对归档商品补充 `已归档商品不可变更状态`，运营人员可清晰获知出问题的具体商品、当前状态与操作约束。
+      * `PRODUCT_STATUS_INVALID`（`1_050_001_096`，`RETRY_SAME_KEY_AFTER_CONDITION_CHANGE`）：用于入参目标状态不合法（如非 10/20）等通用场景，文案优化为 `商品状态不合法或不支持当前流转`（消除「实体状态迁移不合法」技术生词）。
+      * `PLATFORM_SPU_NOT_FOUND`（`1_050_001_079`）、`PLATFORM_SKU_NOT_FOUND`（`1_050_001_080`）：商品不存在。
+      * `PRODUCT_CONCURRENT_UPDATE`（`1_050_001_097`）：乐观锁并发冲突。
+      * `PRODUCT_TYPE_INACTIVE`（`1_050_001_082`）：商品类型未启用后不允许上架。
   * **系统异常处置（D2）**：逐项循环只捕获 `ServiceException` 并计入 `failed`；**非 `ServiceException` 的系统异常（存储故障、连接池耗尽等）向外传播**，由 `GlobalExceptionHandler` 兜底，不伪装为业务拒绝——与本模块 `RechargeFrequencyAdminCommandService` 类注释所载「未确定的存储异常向外传播，不伪装为业务拒绝」的既有原则一致。
     * 传播前在循环外层记一条 `ERROR` 日志，携带已累积的 `succeeded` 与 `failed` 摘要后**原样 rethrow**（不吞异常、不丢因果，符合 AGENTS.md 规则 6）。
     * 此路径下用户会看到整体报错、拿不到 `succeeded`/`failed` 回执，但库中已提交项确实生效。**这一缺口由幂等性兜住**：批量上下架是把状态置为固定目标值的幂等操作（同一编码重复设为 20 结果相同），不产生资金事实、无需业务键去重，故用户或前端整体重试不会产生副作用。

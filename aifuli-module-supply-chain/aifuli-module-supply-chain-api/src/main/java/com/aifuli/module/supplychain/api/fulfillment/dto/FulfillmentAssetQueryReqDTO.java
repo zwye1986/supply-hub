@@ -11,30 +11,35 @@ import java.io.Serializable;
 @Data
 public class FulfillmentAssetQueryReqDTO implements Serializable {
 
+    /** 调用来源系统编码 */
     @Schema(description = "调用来源系统编码", requiredMode = Schema.RequiredMode.REQUIRED, example = "AIFULI_MALL")
     @NotBlank(message = "调用来源系统不能为空")
     @Size(max = 64)
     private String sourceSystem;
 
+    /** 来源系统中的外部租户标识 */
     @Schema(description = "来源系统中的外部租户标识", requiredMode = Schema.RequiredMode.REQUIRED,
             example = "tenant-wusheng")
     @NotBlank(message = "外部租户标识不能为空")
     @Size(max = 128)
     private String externalTenantId;
 
-    @Schema(description = "履约请求号", requiredMode = Schema.RequiredMode.REQUIRED,
+    /** 履约请求稳定业务编号 */
+    @Schema(description = "履约请求稳定业务编号", requiredMode = Schema.RequiredMode.REQUIRED,
             example = "FR_01K1XXXXXXXXXXXXXXXXXXXXXX")
     @NotBlank(message = "履约请求号不能为空")
     @Size(max = 32)
     private String fulfillmentRequestNo;
 
-    @Schema(description = "采购项目业务编码；RPC服务端按真实来源与项目归属校验，不再接收购买人用户标识",
+    /** 采购项目全局永久编码 */
+    @Schema(description = "采购项目全局永久编码",
             requiredMode = Schema.RequiredMode.REQUIRED, example = "PRJ_KEY_A")
     @NotBlank(message = "采购项目业务编码不能为空")
     @Size(max = 64)
     private String projectCode;
 
-    @Schema(description = "调用方声明的权限 Scope，必须为 FULFILLMENT_ASSET_READ",
+    /** 授权访问所使用的权限Scope或操作编码 */
+    @Schema(description = "授权访问所使用的权限Scope或操作编码",
             requiredMode = Schema.RequiredMode.REQUIRED, example = "FULFILLMENT_ASSET_READ")
     @NotBlank(message = "资产查询 Scope 不能为空")
     @Size(max = 64)

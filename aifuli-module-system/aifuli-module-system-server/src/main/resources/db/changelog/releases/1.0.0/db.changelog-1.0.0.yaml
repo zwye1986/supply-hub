@@ -131,3 +131,15 @@ databaseChangeLog:
             encoding: UTF-8
             splitStatements: true
             stripComments: false
+  - changeSet:
+      id: 013-supplier-fulfillment-config-menu
+      author: supply-chain
+      runInTransaction: true
+      changes:
+        - sqlFile:
+            path: 013-supplier-fulfillment-config-menu.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+

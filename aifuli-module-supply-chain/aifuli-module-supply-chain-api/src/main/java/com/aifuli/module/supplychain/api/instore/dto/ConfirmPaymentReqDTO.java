@@ -19,26 +19,31 @@ import java.io.Serializable;
 @Data
 public class ConfirmPaymentReqDTO implements Serializable {
 
+    /** 拉起采购商收银台的稳定外部交易号 */
     @Schema(description = "拉起采购商收银台的稳定外部交易号",
             requiredMode = Schema.RequiredMode.REQUIRED, example = "IPF_OTN")
     @NotBlank(message = "外部交易号不能为空")
     @Size(max = 128, message = "外部交易号不能超过 128 个字符")
     private String outTradeNo;
 
+    /** 采购商实际支付金额，单位为分 */
     @Schema(description = "采购商实际支付金额，单位为分",
             requiredMode = Schema.RequiredMode.REQUIRED, example = "10000")
     @NotNull(message = "实际支付金额不能为空")
     @Positive(message = "实际支付金额必须大于 0")
     private Long actualAmountCny;
 
+    /** 采购商收银台支付单引用 */
     @Schema(description = "采购商收银台支付单引用", example = "CASHIER_1")
     @Size(max = 128, message = "收银台支付单引用不能超过 128 个字符")
     private String cashierOrderNo;
 
+    /** 收银台交易号 */
     @Schema(description = "收银台交易号", example = "TXN_1")
     @Size(max = 128, message = "收银台交易号不能超过 128 个字符")
     private String cashierTransactionNo;
 
+    /** 链路追踪标识，缺省由服务端生成 */
     @Schema(description = "链路追踪标识，缺省由服务端生成", example = "trace-cb-001")
     @Size(max = 128, message = "链路追踪标识不能超过 128 个字符")
     private String traceId;

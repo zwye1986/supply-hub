@@ -16,34 +16,30 @@ import java.time.OffsetDateTime;
 @Data
 public class ProjectStandardOrderCreateRespDTO {
 
-    /**
-     * 稳定受理回执号。对外契约字段名固定为 requestId（内部对应回执单 receiptNo），
-     * 首次受理、幂等重放与拒绝收敛路径返回同一值。
-     * 设计见 {@code docs/superpowers/specs/2026-09-30-project-signed-standard-order-http-design.md#4-永久幂等条件重试与受理结果}。
-     */
+    /** 稳定受理回执号，对应受理回执稳定业务编号 */
     private String requestId;
 
-    /** 采购商订单号 */
+    /** 采购商侧C端订单号，与buyer_id组成永久受理键 */
     private String buyerOrderNo;
 
-    /** 受理回执状态 */
+    /** 回执状态：0 PROCESSING处理中，10 ACCEPTED已受理，20 REJECTED_RETRYABLE条件修复后可重试，30 REJECTED_FINAL最终拒绝 */
     private FulfillmentReceiptStatus receiptStatus;
 
-    /** 受理回执乐观锁版本号 */
+    /** 回执状态及条件重试CAS版本号 */
     private Long receiptVersion;
 
     /** 供应链总订单稳定业务编号，未建单时为 null */
     private String orderNo;
 
-    /** 总订单公共状态，未建单时为 null */
+    /** 公共主状态：0已创建，10处理中，20部分成功，30成功，40失败，50已取消，90人工处理，未建单时为 null */
     private SupplyChainOrderStatus orderStatus;
 
-    /** 稳定拒绝原因码 */
+    /** 拒绝原因稳定错误码，处理中或已受理时为空 */
     private String rejectionCode;
 
-    /** 是否幂等重放 */
+    /** 是否为永久业务键的幂等重放 */
     private Boolean idempotentReplay;
 
-    /** 受理成功时间，未受理成功时为 null */
+    /** 受理成功时间，Asia/Shanghai，未受理成功时为 null */
     private OffsetDateTime acceptedAt;
 }

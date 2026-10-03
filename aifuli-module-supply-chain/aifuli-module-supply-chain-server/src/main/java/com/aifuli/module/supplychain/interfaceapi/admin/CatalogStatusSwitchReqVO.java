@@ -23,6 +23,9 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
 @Schema(description = "商品中心实体启用/停用请求")
 public class CatalogStatusSwitchReqVO {
 
+    /**
+     * 目标状态：10启用，20停用；字典值以字符串传递
+     */
     @NotNull
     @JsonFormat(shape = JsonFormat.Shape.STRING)
     @Schema(description = "目标状态：10启用，20停用；字典值以字符串传递", type = "string",

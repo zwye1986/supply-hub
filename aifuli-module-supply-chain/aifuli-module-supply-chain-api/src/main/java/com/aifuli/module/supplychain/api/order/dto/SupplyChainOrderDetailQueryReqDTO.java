@@ -11,18 +11,21 @@ import java.io.Serializable;
 @Data
 public class SupplyChainOrderDetailQueryReqDTO implements Serializable {
 
+    /** 调用来源系统编码 */
     @Schema(description = "调用来源系统编码", requiredMode = Schema.RequiredMode.REQUIRED, example = "AIFULI_MALL")
     @NotBlank(message = "调用来源系统不能为空")
     @Size(max = 64)
     private String sourceSystem;
 
+    /** 来源系统中的外部租户标识 */
     @Schema(description = "来源系统中的外部租户标识", requiredMode = Schema.RequiredMode.REQUIRED,
             example = "tenant-wusheng")
     @NotBlank(message = "外部租户标识不能为空")
     @Size(max = 128)
     private String externalTenantId;
 
-    @Schema(description = "供应链中台订单号", requiredMode = Schema.RequiredMode.REQUIRED,
+    /** 供应链总订单稳定业务编号 */
+    @Schema(description = "供应链总订单稳定业务编号", requiredMode = Schema.RequiredMode.REQUIRED,
             example = "SC_01K1XXXXXXXXXXXXXXXXXXXXXX")
     @NotBlank(message = "供应链中台订单号不能为空")
     @Size(max = 32)

@@ -14,35 +14,64 @@ import java.time.OffsetDateTime;
 @Data
 @Schema(description = "项目订单首次永久冻结的标准商品报价")
 public class StandardPricingQuoteRespDTO implements Serializable {
+    /** 随机内部追踪标识；不作为HTTP请求字段，报价永久键为项目+采购商订单号 */
     @Schema(description = "随机内部追踪标识；不作为HTTP请求字段，报价永久键为项目+采购商订单号",
             requiredMode = Schema.RequiredMode.REQUIRED)
     private String quoteToken;
+
+    /** 冻结的项目SKU综合定价版本主键 */
     @Schema(description = "冻结的项目SKU综合定价版本主键", requiredMode = Schema.RequiredMode.REQUIRED)
     private Long pricingVersionId;
+
+    /** 平台SKU永久业务编码 */
     @Schema(description = "平台SKU永久业务编码", requiredMode = Schema.RequiredMode.REQUIRED)
     private String platformSkuCode;
+
+    /** 报价商品数量 */
     @Schema(description = "报价商品数量", requiredMode = Schema.RequiredMode.REQUIRED)
     private Long quantity;
+
+    /** 冻结的商品分销单价，单位CNY分 */
     @Schema(description = "冻结的商品分销单价，单位CNY分", requiredMode = Schema.RequiredMode.REQUIRED)
     private Long distributionUnitPriceCents;
+
+    /** 冻结的商品销售单价，单位CNY分 */
     @Schema(description = "冻结的商品销售单价，单位CNY分", requiredMode = Schema.RequiredMode.REQUIRED)
     private Long salesUnitPriceCents;
+
+    /** 冻结的商品小计，单位CNY分 */
     @Schema(description = "冻结的商品小计，单位CNY分", requiredMode = Schema.RequiredMode.REQUIRED)
     private Long productSubtotalCents;
+
+    /** 冻结的平台服务费，单位CNY分 */
     @Schema(description = "冻结的平台服务费，单位CNY分", requiredMode = Schema.RequiredMode.REQUIRED)
     private Long serviceFeeCents;
+
+    /** 冻结的用户应付总额，单位CNY分 */
     @Schema(description = "冻结的用户应付总额，单位CNY分", requiredMode = Schema.RequiredMode.REQUIRED)
     private Long userPayableAmountCents;
+
+    /** 是否含税；仅用于结算展示 */
     @Schema(description = "是否含税；仅用于结算展示", requiredMode = Schema.RequiredMode.REQUIRED)
     private Boolean taxIncluded;
+
+    /** system动态字典supply_chain_tax_rate的启用值 */
     @Schema(description = "system动态字典supply_chain_tax_rate的启用值", requiredMode = Schema.RequiredMode.REQUIRED)
     private String taxRateCode;
+
+    /** 冻结的税率展示标签 */
     @Schema(description = "冻结的税率展示标签", requiredMode = Schema.RequiredMode.REQUIRED)
     private String taxRateLabel;
+
+    /** 冻结的服务费展示文案；隐藏文案时为空 */
     @Schema(description = "冻结的服务费展示文案；配置隐藏时为空")
     private String serviceFeeCopy;
+
+    /** 币种CNY */
     @Schema(description = "币种，一期固定CNY", requiredMode = Schema.RequiredMode.REQUIRED)
     private String currency;
+
+    /** 历史报价失效时间，Asia/Shanghai；永久冻结报价为空且不作为本流程下单条件 */
     @Schema(description = "历史报价失效时间，Asia/Shanghai；永久冻结报价为空且不作为本流程下单条件")
     private OffsetDateTime expiresAt;
 }

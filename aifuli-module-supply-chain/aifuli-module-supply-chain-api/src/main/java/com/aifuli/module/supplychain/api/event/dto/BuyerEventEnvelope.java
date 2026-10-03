@@ -17,45 +17,53 @@ import java.time.OffsetDateTime;
 @Data
 public class BuyerEventEnvelope implements Serializable {
 
+    /** 事件稳定业务号；重投必须保持不变 */
     @Schema(description = "事件稳定业务号；重投必须保持不变", requiredMode = Schema.RequiredMode.REQUIRED,
             example = "EVT_01K1XXXXXXXXXXXXXXXXXXXXX")
     @NotBlank(message = "事件编号不能为空")
     @Size(max = 32)
     private String eventId;
 
+    /** 事件类型，同时作为 data 的外部类型判别字段 */
     @Schema(description = "事件类型，同时作为 data 的外部类型判别字段",
             requiredMode = Schema.RequiredMode.REQUIRED, example = "ORDER_SUMMARY_CHANGED")
     @NotNull(message = "事件类型不能为空")
     private BuyerEventType eventType;
 
+    /** 事件 Schema 版本 */
     @Schema(description = "事件 Schema 版本", requiredMode = Schema.RequiredMode.REQUIRED, example = "1")
     @NotNull(message = "事件 Schema 版本不能为空")
     @Positive(message = "事件 Schema 版本必须为正数")
     private Integer schemaVersion;
 
+    /** 事件发生时间，Asia/Shanghai */
     @Schema(description = "事件发生时间", requiredMode = Schema.RequiredMode.REQUIRED,
             example = "2026-08-11T02:31:00Z")
     @NotNull(message = "事件发生时间不能为空")
     private OffsetDateTime occurredAt;
 
+    /** 本次投递链路追踪标识 */
     @Schema(description = "本次投递链路追踪标识", requiredMode = Schema.RequiredMode.REQUIRED,
             example = "trace-01K1XXXXXXXXXXXXXXXX")
     @NotBlank(message = "链路追踪标识不能为空")
     @Size(max = 64)
     private String traceId;
 
+    /** 跨异步步骤关联标识 */
     @Schema(description = "跨异步步骤关联标识", requiredMode = Schema.RequiredMode.REQUIRED,
             example = "corr-01K1XXXXXXXXXXXXXXXXX")
     @NotBlank(message = "关联标识不能为空")
     @Size(max = 64)
     private String correlationId;
 
+    /** 直接因果事件或命令标识 */
     @Schema(description = "直接因果事件或命令标识", requiredMode = Schema.RequiredMode.REQUIRED,
             example = "cause-01K1XXXXXXXXXXXXXXXX")
     @NotBlank(message = "因果标识不能为空")
     @Size(max = 64)
     private String causationId;
 
+    /** 由 eventType 判别的封闭事件载荷 */
     @Schema(description = "由 eventType 判别的封闭事件载荷", requiredMode = Schema.RequiredMode.REQUIRED,
             oneOf = {OrderSummaryChangedEventData.class, FulfillmentResultEventData.class,
                     CatalogChangedEventData.class})
