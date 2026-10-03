@@ -643,6 +643,8 @@ ALTER TABLE sc_supplier_connector_capability
 
 **凭据项身份冻结**：058 同时新增连接器版本 `credential_item_snapshot JSON NULL COMMENT '连接器冻结的凭据项身份与版本快照，不含秘密'`。CREDENTIAL_SET 草稿按 itemKey 排序冻结各项 `itemId/itemKey/providerType/activeSecretVersion`，纳入配置摘要；校验、发布与运行时逐项核对，拒绝身份/版本漂移，SINGLE_SLOT 历史版本保持 NULL。集一经绑定任何连接器版本，其项内容不可追加/覆盖；创建草稿和添加凭据项都先用 LambdaQueryWrapper 固定 `FOR UPDATE` 锁同一集行，添加前核对无版本引用，以避免「绑定与补项」竞争。轮换凭据创建新集及新连接器版本，不覆盖旧项；ENV 值来自部署环境，实际密钥切换仍须在途订单兼容与部署协调，不能把引用冻结宣称为环境秘密值冻结。
 
+**并发锁与当前读**：MySQL RR 事务可能在锁集行前已有旧快照。取得集行锁后，创建草稿读取凭据项集合、添加项检查现有项及版本引用都必须使用当前读（固定 FOR UPDATE），不能复用锁前对象或普通快照查询；版本集引用加索引。SET 模式发布先只读定位集 ID，再按「集→连接器→版本→凭据项」锁定并重新校验关联，避免与添加项的「集→版本引用」相反顺序死锁；旧 SLOT 发布不增加集锁。若锁后版本引用与定位结果不同，拒绝而不使用旧引用。并发 IT 要主动建立旧 RR 快照后等待集锁，证明绑定提交后追加仍被拒绝；不修改进程默认事务隔离级别。
+
 **Ticket**：`OperationTicket` 新增 `CredentialMaterial(appSecret,privateKeyPem)`，不包含回调公钥；原 `secretKey` 保留 QNM。单槽与集的装配路径独立，材料为空或缺 required key 失败关闭，临时 char[] 总是擦除。出站 Ticket 使用冻结读取超时（毫秒向上取整为秒，至少 1 秒），extraParameters 从已校验非秘密版本配置投影，使用防御复制。材料与 Ticket 字符串表示省略全部秘密、充值账号、checkpoint 和可携带 token 的 extraParameters；不改变订单/资金/频控状态机。
 
 **凭据输入上限**：后端 `secretValue` 最大 8192 个字符，同时 UTF-8 明文最大 16384 字节，超限在加密/落库前按固定说明拒绝；ENV `secretRef` 仍为至多 512 字符引用。前端 ENVELOPE 改多行文本框，maxlength 8192，不回显已有值。真实 MySQL 测试使用本地生成 RSA PEM（超过 512 字符），验证加密存储/解密原文一致，跨身份搬移失败；日志和 GET 仍不含明文或密文。
