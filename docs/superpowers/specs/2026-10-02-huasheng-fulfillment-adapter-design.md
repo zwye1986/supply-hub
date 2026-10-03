@@ -125,7 +125,7 @@ ck_sc_supplier_connector_capability_code CHECK (capability_code IN (...,10 项))
 
 ### AD-2：checkpoint 落库与恢复（新建）
 
-**落库**：`handleAccepted` 收到 `outcome.nextCheckpoint()` 时，用 `EnvelopeCryptoPort.encrypt(checkpoint, keyVersion, aad)` 加密后写入 `checkpointCiphertext` + `checkpointSchemaVersion=1`。
+**落库**：步骤推进服务收到 `outcome.nextCheckpoint()` 时，用现有 `EnvelopeCryptoPort.encrypt(checkpoint, aad)` 加密，把返回的 ciphertext/keyVersion 分别写入 checkpointCiphertext/新增 checkpointKeyVersion，并写 checkpointSchemaVersion=1。旧 API 不存在的三参 encrypt 不得沿用。
 
 - `aad` = `operationNo|bOrderNo|adapterStepCode`，绑定操作身份，防密文跨操作重放。
 - 明文结构（不含任何密钥）：
@@ -153,17 +153,16 @@ public record OperationTicket(
     /** 供应商出站凭据材料集合。回调验签公钥仅入站使用，不进入出站材料以缩小暴露面。 */
     public record CredentialMaterial(
         String appSecret,          // AES-CBC key
-        String privateKeyPem,      // RSA 出站签名私钥
-        String callbackPublicKeyPem // RSA 回调验签公钥，仅回调路径
+        String privateKeyPem       // RSA 出站签名私钥；回调公钥不进入出站 ticket
     ) {}
 }
 ```
 
 **注入路径**：
 
-1. 凭据集表由**共享地基变更集 `054`** 建（规格出处 v4 §5.2；本文 §7.1 给出建表 DDL 全文，HUA_SHENG 凭据集/项种子见 §7.2）；`sc_supplier_connector_version.credential_slot_id` 语义扩展为指向凭据集。
-2. `CredentialProvider` 增加 `resolveSet(Long credentialSetId)` 返回 `Map<String, char[]>`（键 `appSecret`/`privateKey`/`callbackPublicKey`）；`ENVELOPE` 项由 v4 §5.2 的 `EnvelopeCredentialProvider` 解密（AAD 绑定 `credential_set_id|item_key`）。
-3. `FulfillmentOperationTicketFactory` 组装 `CredentialMaterial`，**明文仅存在于 ticket 内存**，调用后丢弃，禁日志（沿用 `safeFailureSummary` 脱敏惯例）。
+1. 凭据集表由共享地基变更集 `054` 建；旧 `credential_slot_id` 继续仅引用 `sc_credential_slot.id`。新增独立 `credential_set_id` 引用 `sc_credential_set.id`，两种引用恰有一种非空，完整实施契约见 §12.3。
+2. 复用已落地 `CredentialSetResolver.resolveSet(Long)` 返回 `Map<String,char[]>`；ENV/ENVELOPE 项由现有 `CredentialItemResolver` 分派，ENVELOPE AAD 仍为 `credential_set_id|item_key`。不在单槽 `CredentialProvider` 上混入集身份。
+3. `FulfillmentOperationTicketFactory` 组装只包含出站 appSecret/privateKey 的 `CredentialMaterial`，callbackPublicKey 留入站路径；所有临时 char[] 在成功和失败路径擦除。Ticket/材料的 toString 不回显秘密、履约目标或 token，沿用安全失败摘要。
 
 ### AD-4：token 由应用层注入，适配器不访问 Redis
 
@@ -631,3 +630,23 @@ ALTER TABLE sc_supplier_connector_capability
 4. **报价入口待业务确认**：当前实现要求先经内部 `StandardPricingQuoteApi` 冻结后再 HTTP 下单。用户正在确认期望「直接下单时冻结」还是「业务系统先确认价格」，本项未确认前不修改受理、定价或对外契约。
 
 实施顺序及每个切片的测试证据维护在 `docs/superpowers/plans/2026-10-03-huasheng-card-closure.md`；人工联调入口及实际结果维护在 `docs/集成测试.md`。
+
+### 12.3 第二切片：显式凭据集绑定与运行时配置
+
+本节覆盖并修正 AD-3 的旧混合 ID 示意，以本节为第二切片完整契约。暂不注册未完成的 HUA_SHENG 可执行适配器；多凭据模式先以隔离测试元数据验证，随后在协议适配器切片启用。
+
+**数据迁移**：新增 `058-connector-credential-set-binding.sql`，`sc_supplier_connector_version` 增 `credential_set_id BIGINT NULL COMMENT '凭据集主键，逻辑引用sc_credential_set.id'`；旧 `credential_slot_id` 改可空，COMMENT 仍为 `凭证槽主键，逻辑引用sc_credential_slot.id`；CHECK 强制二者恰一非空。旧 QNM 版本均保留 slot，不批量改数据。`sc_credential_item.secret_ref` 改 TEXT，COMMENT 仍为 `密钥系统中的秘密引用或信封密文，不是秘密明文；ENV存env:NAME`，容纳 RSA 私钥的信封密文。054–057 不改。旧 §7.2/§7.3 未执行的种子/CHECK 示例顺延至 059+；供应商与连接器优先由 UI 和服务层创建，不执行包含虚构主键/摘要的示例 SQL。
+
+**元数据与请求**：新增封闭 `CredentialBindingMode`（`SINGLE_SLOT`/`CREDENTIAL_SET`），`AdapterMetadata.credentialBindingMode()` 默认 `SINGLE_SLOT` 保持 QNM。连接器草稿请求新增可选 `credentialSetCode`（供应商内凭据集编号）和 `extraConfig`（非秘密 JSON），旧 `credentialSlotNo` 改为条件必填；服务端按元数据模式校验恰一输入。集按 `supplier_id+set_code` 定位，必须 ACTIVE 且 ACTIVE 项键恰等于元数据 required keys；创建、校验、发布及运行时均核实引用模式和供应商归属，缺项、额外项或跨供应商引用拒绝。校验阶段实际解析秘密后即擦除，解析失败保留安全因果且不记录正文。新注册多凭据元数据不改 QNM 既有能力声明。
+
+**版本与配置**：配置摘要纳入引用模式、slot/set ID、规范化 extraConfig，既有已发布版本及摘要不回写。新增 `AdapterMetadata.extraConfigSchemaResource()` 默认使用原封闭连接器 Schema；HS 注册时覆盖为其非秘密可调参数 Schema。创建/校验/运行时解析均按 Schema 检查，未经 Schema 声明的字段拒绝，不接受 token、密钥或回调公钥等秘密字段。运行时 `PublishedConnectorConfiguration` 扩展 set ID、连接/读取超时和不可变 extraParameters，读取冻结的版本行；旧构造签名保留兼容委派，默认仅用于既有单槽配置，不隐式推断集 ID。
+
+**凭据项身份冻结**：058 同时新增连接器版本 `credential_item_snapshot JSON NULL COMMENT '连接器冻结的凭据项身份与版本快照，不含秘密'`。CREDENTIAL_SET 草稿按 itemKey 排序冻结各项 `itemId/itemKey/providerType/activeSecretVersion`，纳入配置摘要；校验、发布与运行时逐项核对，拒绝身份/版本漂移，SINGLE_SLOT 历史版本保持 NULL。集一经绑定任何连接器版本，其项内容不可追加/覆盖；创建草稿和添加凭据项都先用 LambdaQueryWrapper 固定 `FOR UPDATE` 锁同一集行，添加前核对无版本引用，以避免「绑定与补项」竞争。轮换凭据创建新集及新连接器版本，不覆盖旧项；ENV 值来自部署环境，实际密钥切换仍须在途订单兼容与部署协调，不能把引用冻结宣称为环境秘密值冻结。
+
+**Ticket**：`OperationTicket` 新增 `CredentialMaterial(appSecret,privateKeyPem)`，不包含回调公钥；原 `secretKey` 保留 QNM。单槽与集的装配路径独立，材料为空或缺 required key 失败关闭，临时 char[] 总是擦除。出站 Ticket 使用冻结读取超时（毫秒向上取整为秒，至少 1 秒），extraParameters 从已校验非秘密版本配置投影，使用防御复制。材料与 Ticket 字符串表示省略全部秘密、充值账号、checkpoint 和可携带 token 的 extraParameters；不改变订单/资金/频控状态机。
+
+**凭据输入上限**：后端 `secretValue` 最大 8192 个字符，同时 UTF-8 明文最大 16384 字节，超限在加密/落库前按固定说明拒绝；ENV `secretRef` 仍为至多 512 字符引用。前端 ENVELOPE 改多行文本框，maxlength 8192，不回显已有值。真实 MySQL 测试使用本地生成 RSA PEM（超过 512 字符），验证加密存储/解密原文一致，跨身份搬移失败；日志和 GET 仍不含明文或密文。
+
+**管理端配套**：适配器目录返回 credentialBindingMode。连接器表单按模式显示平台槽或当前供应商凭据集，下拉仅可用且完整的集；切换适配器或供应商清空旧引用。extraConfig JSON 可填写且服务端 Schema 校验为权威。版本详情返回脱敏凭据编号/模式，不返回 secretRef 或材料。新增所有 HTTP 映射继续使用现有权限，不新增隐式 Feign 或其它库访问。
+
+**验证**：纯测试/管理端契约覆盖模式分派、XOR、归属/状态/项键、Schema、摘要、读取超时、Ticket 不可变及字符串脱敏。真实 MySQL/Liquibase 验证升级/重放、原 slot 保留、XOR CHECK、长 PEM 密文、发布期间停用凭据后拒绝及回滚。定向回归 QNM 发布、上架、运行时装配和标准 HTTP 挡板闭环；供应链架构全运行。前端执行真实 SFC 组件测试、改动文件 ESLint 与 build:local。

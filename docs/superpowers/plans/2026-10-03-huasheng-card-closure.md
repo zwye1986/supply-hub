@@ -25,6 +25,10 @@
 
 ## Task 2：连接器显式凭据集与配置传递
 
+完整契约为 HUA_SHENG 设计 §12.3。实际文件范围：后端 `supplieradapter/metadata/{AdapterMetadata,CredentialBindingMode,PublishedConnectorConfigurationResolver}`，`tradecore/supply/application/{SupplierConfigurationCommandService,ConnectorValidationService,ConnectorPublicationService,SupplierConfigurationQueryService,ConnectorCredentialBindingValidator,SupplierCredentialCommandService}`，连接器版本 DO，`interfaceapi/admin/SupplierConfigurationAdminController`，`infrastructure/security/DefaultCredentialSetResolver`，`border/fulfillment/{domain/OperationTicket,application/FulfillmentOperationTicketFactory}`，changelog 058 与登记 YAML；前端 `src/api/supplier/config/types.ts`、`src/views/supplier/config/components/{ConnectorPanel,ConnectorFormDialog,ConnectorDetailDrawer,CredentialItemDialog}.vue` 及对应真实组件测试。修改旧构造参数时保持单槽兼容委派，新增 Spring 依赖显式补齐集成测试 @Import，不绕开被测生产装配。
+
+RED/GREEN 重点用实际连接器服务及本地 Fake SET metadata 验证；HS 可执行元数据此时不注册。新 `ConnectorCredentialSetIntegrationTest` 通过真实 MySQL 8.4 + Liquibase 覆盖长 PEM 加密、集引用发布和停用回滚。运行命令 `mvn -o -pl aifuli-module-supply-chain/aifuli-module-supply-chain-server test-compile failsafe:integration-test failsafe:verify -Psupply-chain-integration -DskipTests=false -DskipITs=false '-Dit.test=ConnectorCredentialSetIntegrationTest,ConnectorPublicationIntegrationTest,SupplierConfigurationSchemaIntegrationTest,SupplyChainLiquibaseIntegrationTest,SupplierConfigurationAdminRestContractTest'`；计数基线跟随本次新增 058（总变更集 60、业务表 123、DATETIME 列 295）。前端 `node --test tests/*.test.mjs`、改动文件 ESLint、`pnpm build:local`，不把既有全仓类型错误归为本次修复。
+
 - [ ] 先更新适配器设计 AD-3/AD-5、共享地基文 §5 和管理端契约：新增 credential_set_id，不复用旧 slot ID；校验项键、供应商归属与凭据模式；运行时只读取冻结连接器版本。
 - [ ] 以真实 MySQL 测试锁定 QNM slot 兼容、HUA_SHENG 凭据集完整性、错供应商/缺项拒绝、ENV/ENVELOPE 解密与发布回滚。
 - [ ] 增量 Liquibase、DO/DTO/发布配置/运行时 Ticket、连接器前端表单同步实现；秘密只写不回显且不入日志。运行受影响的 *Test、*ContractTest、*IntegrationTest 和 ArchitectureTest。
