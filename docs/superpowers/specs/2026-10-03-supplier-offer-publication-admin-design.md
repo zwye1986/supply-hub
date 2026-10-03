@@ -52,7 +52,7 @@
 
 ### 0.4 收尾确认
 
-- **①变更集编号**（现有链至 `052`）：`053`＝f1 `external_sku_code`；`054`＝AD-3 凭据集/项；`055`＝AD-5 `extra_config`；`056`＝D1 `published_flag`+唯一键；`057`＝退役 Offer 释放外部编码唯一槽（§15.4）；`HUA_SHENG` 主数据种子 `058+`（HUA_SHENG 文原计划 `050`/`051` 与现有文件冲突，让位到 `058+`）。
+- **①变更集编号**（现有链至 `052`）：`053`＝f1 `external_sku_code`；`054`＝AD-3 凭据集/项；`055`＝AD-5 `extra_config`；`056`＝D1 `published_flag`+唯一键；`057`＝退役 Offer 释放外部编码唯一槽（§15.4）；058 为后续显式凭据绑定；HUA_SHENG 配置经管理端服务创建，不预占 raw SQL 种子编号。
 - **②地基规格出处**：`AdapterMetadata` 扩展 + AD-3 + AD-5 以**本文 §5 为唯一出处**，HUA_SHENG 文引用。
 - **③展示名**：DB 种子 `supplier_name='华昇卡券'` 保留中文（面向运营列表显示）；命名约定只约束 prose/代码标识符。
 
@@ -86,7 +86,7 @@
 9. 乐观锁：`publish` 要求 `expectedOfferVersion==offer.version`（`:133`）；前端从列表行 `offerVersion` 自动带入，每次上架 `version+1`（`:193-201`）。
 10. 金额 `supplierSettlementUnitPrice` 单位 CNY 分、`>=0`、`currency` 固定 `CNY`（`ck_sc_offer_price`/`ck_sc_offer_currency`）；g3 之下只读继承 `draft_unit_price`。
 11. **凭据永不存明文、永不回显、永不入日志**（F1-hybrid 护栏）：`ENV` 只存 `env:` 引用；`ENVELOPE` 只存 `EnvelopeCryptoPort` 密文（AAD 绑定凭据项身份）；任何读取只返回 `masked_hint`；`CredentialProvider.resolve→char[]` 调用方不得记录返回值（端口契约 + AGENTS.md §6）。
-12. `adapter_config_json`/`extra_config` 按适配器 `connectorSchemaResource`/`offerSchemaResource` 封闭 Schema 校验（`:167-170`）；**密钥类禁止入 `extra_config`**（AD-5）。DTO `@Schema`/前端注释与 DDL `COMMENT` 同表述（AGENTS.md §5）。
+12. `adapter_config_json`/`extra_config` 分别按适配器 `connectorSchemaResource`/`extraConfigSchemaResource` 封闭 Schema 校验（`:167-170`）；**密钥类禁止入 `extra_config`**（AD-5）。DTO `@Schema`/前端注释与 DDL `COMMENT` 同表述（AGENTS.md §5）。
 
 ## 3. 术语与三层编码
 
@@ -155,12 +155,15 @@ default List<String> fulfillmentSteps() { return List.of(); }
 - **`provider_type` 支持 `ENV` 与 `ENVELOPE`**（F1-hybrid）：
   - `ENV`：`secret_ref` 存 `env:NAME`，密钥不入库（今日 `EnvironmentCredentialProvider` 模型）。
   - `ENVELOPE`：`secret_ref` 存 `EnvelopeCryptoPort` 加密后的密文；新增**集/项解析端口** `CredentialSetResolver`（`resolveSet(credentialSetId) → Map<itemKey, char[]>`，调用方不得记录返回值）+ `EnvelopeCredentialItemResolver`（`supports("ENVELOPE")`），用 KMS DEK 解密、**AAD 绑定 `credential_set_id|item_key`** 防密文搬移（仿 HUA_SHENG 文 AD-2 checkpoint AAD）。**决策（本轮确认，选项甲）**：旧「槽位制」`CredentialProvider`（`resolve(CredentialSlotDO)`，3 个在跑消费方：`ConnectorValidationService`/`MovieSupplierConfigService`/`FulfillmentOperationTicketFactory`）**保持不动**——`CredentialSlotDO` 无 `credential_set_id|item_key`，无法承载 ENVELOPE 的 AAD 绑定；ENVELOPE 走新集/项端口，与旧槽位端口并存。
-- `sc_supplier_connector_version.credential_slot_id` 语义扩展为指向凭据集（HUA_SHENG 文 AD-3）、旧单 `sc_credential_slot` 收敛为「1 项凭据集」、运行时 ticket 工厂由槽位改走集解析——此**槽位→集运行时收敛推迟到 HUA_SHENG 适配器阶段**（§13 Phase 1 地基层只列「表 + ENVELOPE provider」，不含运行时收敛）。Phase 1 QNM dogfood 继续走既有 ENV 槽位路径（`env:QNM_TEST_USERKEY`），技术菜单凭据写（§6.3）落 AD-3 集/项表；QNM 与 HUA_SHENG 共用同一凭据 UI 与后端。
+- **2026-10-03 修正**：`credential_slot_id` 永远只引用 `sc_credential_slot.id`，禁止扩展成集 ID。后续058新增独立 `credential_set_id`，两者恰一非空；元数据 `credentialBindingMode` 默认 SINGLE_SLOT 保持已交付 QNM，CREDENTIAL_SET 才使用当前供应商的凭据集。完整绑定、冻结和并发契约见 §5.6，不将 legacy slot 批量改为单项集。
+
 - 护栏（不变量 11）：录入只写不回显、读取只返回 `masked_hint`、永不入日志、KMS 版本化+轮换、写入脱敏审计。
 
 ### 5.3 AD-5 `extra_config`（变更集 `055`）
 
 - `sc_supplier_connector_version` 加 `extra_config JSON NULL`（非秘密可调参数，如 HUA_SHENG `expireTime`/`num`/`outMobile`；**密钥类禁入**）。运行时经 `extraParameters` 传递链注入 ticket（打通属 HUA_SHENG 文 AD-5，本文只负责 UI 可编辑该列，E1）。
+
+- **2026-10-03 运行时扩展**：新 `extraConfigSchemaResource()` 默认沿用 connector Schema 保持 QNM `{}`；多密钥适配器注册时声明专属非秘密 Schema。创建、校验、运行时均执行封闭校验，并投影为不可变标量字符串 Map。token/秘密不得入列或配置摘要。
 
 ### 5.4 f1 `external_sku_code`（变更集 `053`）
 
@@ -174,6 +177,12 @@ default List<String> fulfillmentSteps() { return List.of(); }
 - `sc_supplier_connector` 加生成列 `published_flag TINYINT GENERATED ALWAYS AS (CASE WHEN current_version_id IS NOT NULL THEN 1 END) STORED` + `UNIQUE KEY uk_sc_connector_supplier_published (supplier_id, published_flag)`。
 - **为何用 `current_version_id` 而非 `status`**：`status=10`（启用）在 `createConnectorDraft`（`SupplierConfigurationCommandService.java:115`）建草稿时即置位，同供应商可有多个 `status=10` 草稿；真正区分「已发布」的是 `publish`（`ConnectorPublicationService.java:75`）写入的 `current_version_id`，`retire`（`:122-124`）退役当前版本时清空它。故生成列以 `current_version_id IS NOT NULL` 为条件，草稿/退役行 `published_flag` 为 NULL（MySQL 唯一键允许多行 NULL），每供应商至多一行 `published_flag=1`。
 - `ConnectorPublicationService.publish`（`:44`，现无供应商级守卫）加预检：同供应商已有其它已发布连接器（`current_version_id` 非空的其它行）→ 抛清晰业务异常（不依赖 DB 唯一键报错兜底）。
+
+### 5.6 后续显式绑定切片（058）
+
+本次在已交付 QNM 单槽实现上增量扩展，不修改054–057。完整实施契约以 HUA_SHENG 文 §12.3 为唯一来源：新增 credential_set_id 与 credential_item_snapshot、slot/set XOR、长密文 TEXT、按元数据条件引用、ACTIVE/供应商归属/精确项键、项身份和版本冻结、绑定后不可变、集→连接器→版本→项锁序及 RR 当前读。
+
+元数据目录新增 credentialBindingMode。连接器表单 SINGLE_SLOT 使用 T6 平台槽，CREDENTIAL_SET 使用 T4 当前供应商 ACTIVE 且完整的集；切换供应商/适配器清空旧引用。草稿请求额外允许 credentialSetCode 与 extraConfig，后者JSON语法由前端提示、Schema由服务端裁定；详情只显示脱敏引用编号与模式。ENVELOPE 明文输入为多行，字符上限8192、UTF-8字节上限16384；不回显已保存秘密。运行时通过冻结版本和凭据集解析材料，临时数组成功/失败均擦除，保持 legacy slot API 兼容。暂不注册未完成的 HUA_SHENG 执行元数据，先以隔离测试 SET 元数据验证本切片。
 
 ## 6. 后端改动
 
@@ -194,15 +203,15 @@ default List<String> fulfillmentSteps() { return List.of(); }
 
 ### 6.2 连接器生命周期写（复用现有端点 + D1 守卫）
 
-现有 `createConnectorDraft`（`:68`，`CreateConnectorDraftReqVO:194-212`）、`validateConnector`（`:101`）、`publishConnector`（`:111`）、`retireConnector`（`:120`）保留；`publish` 加 D1 供应商级预检（§5.5）。`adapterConfigJson` 与新增 `extraConfigJson`（AD-5）均按 Schema 校验。
+现有 `createConnectorDraft`（`:68`，`CreateConnectorDraftReqVO:194-212`）、`validateConnector`（`:101`）、`publishConnector`（`:111`）、`retireConnector`（`:120`）保留；`publish` 加 D1 供应商级预检（§5.5）。`adapterConfigJson` 与新增 `extraConfig`（AD-5）分别按相应 Schema 校验。
 
-**`credentialSlotNo` 语义（A1 定案，修正原拟「改指凭据集编号」）**：Phase 1 连接器版本仍绑定 **legacy 平台级凭据槽 `sc_credential_slot`**（`createConnectorDraft` 经 `requireActiveSlot` 校验、运行时 `FulfillmentOperationTicketFactory.resolveSecretKey(credentialSlotId)` 从槽解密），**不改指 AD-3 凭据集编号**。原因：AD-3 凭据集/项 + `ENVELOPE` + `CredentialSetResolver.resolveSet` 已作为地基建成并单测通过，但**尚未接入连接器/履约取密链路**（`resolveSet` 当前仅测试调用）；把连接器改绑凭据集会重开已完成且 GREEN 的后端写/运行时链路，超出 MVP。故 §8.2 连接器「凭据引用下拉」数据源为 **T6 `GET /credential-slots`**（列可用槽，脱敏），凭据集子页（§8.3）作为**前瞻 F1-hybrid 路径**先行建成、暂不被连接器消费。连接器↔凭据集收敛（含 `resolveSet` 接入履约取密、`createCredentialSlot` 去留）推迟到后续阶段（§12 TODO）。
+**`credentialSlotNo` 语义**：已交付 QNM 仍绑定 legacy 平台级槽，不改为集编号。后续058切片按 §5.6 增加 credentialSetCode；两种模式条件必填且只能提交一种。创建、校验、发布及运行时同一 guard 核对模式、归属、状态、项身份/版本和精确键集合，不再将集路径列为暂不消费的前瞻 UI。
 
 ### 6.3 凭据写（F1-hybrid）
 
 - 新增 `POST /supply-chain/supplier-config/credential-sets`（建集）+ `POST /supply-chain/supplier-config/credential-items`（建项）。项请求体：`setCode`、`itemKey`（须在 `credentialKeys()` 内）、`providerType`（`ENV`/`ENVELOPE`）、`secretRef`（`ENV` 时 `env:` 前缀）或 `secretValue`（`ENVELOPE` 时明文，**仅入参、服务端立即信封加密、不回显不落日志**）、`maskedHint`、`activeSecretVersion`。
-- **`itemKey` 封闭集校验范围（定案）**：因凭据集/项模型（变更集 054）无 `adapter_type` 列、建项请求体亦不含 `adapterType`，`itemKey` 须落在**所有已注册适配器 `credentialKeys()` 的并集**内（经 `AdapterMetadataRegistry.all()` 聚合，封闭集，杜绝魔法值 AGENTS.md §7）。并集当前为 `{secretKey, appSecret, privateKey, callbackPublicKey}`（QNM ∪ HUA_SHENG）；跨适配器的键互相被接受是此方案的已知取舍，精确到适配器的校验推迟到连接器发布/上架时按 §6.4 能力与适配器核对。
-- `createCredentialSlot`（`:59`）保留兼容或收敛为凭据集的特例（实现时定，§12 TODO）。
+- **`itemKey` 封闭集校验范围（定案）**：因凭据集/项模型（变更集 054）无 `adapter_type` 列、建项请求体亦不含 `adapterType`，`itemKey` 须落在**所有已注册适配器 `credentialKeys()` 的并集**内（经 `AdapterMetadataRegistry.all()` 聚合，封闭集，杜绝魔法值 AGENTS.md §7）。生产目录当前只注册 QNM，并集为 `{secretKey}`；完整 HUA_SHENG 注册后才扩展其三键，不能提前注册未可执行的元数据。跨适配器的键互相被接受是此方案的已知取舍，精确键集合在连接器创建、校验、发布与运行时均按 §5.6 校验。
+- `createCredentialSlot` 保留 legacy 单槽兼容；058 不将其收敛为集特例。
 
 ### 6.4 能力声明
 
@@ -235,7 +244,7 @@ default List<String> fulfillmentSteps() { return List.of(); }
 
 ### 6.8 adapterType 白名单灰度（j3 沿用）
 
-上架步骤 2 的连接器候选叠加 adapterType 白名单（配置来源，非硬编码字面量，AGENTS.md §7）：Phase 1 含 `QNM_GAME_ORDER_V1`（dogfood/集成测试）；`HUA_SHENG_ORDER_V1` 待其适配器 + 种子（`058+`）落地后加入白名单翻牌。QNM 无部署种子（仅测试态），故生产可履约供给实际随 HUA_SHENG 上线；白名单确保 UI 可先对 QNM 开发验证而不误导生产。
+上架步骤 2 的连接器候选叠加 adapterType 白名单（配置来源，非硬编码字面量，AGENTS.md §7）：Phase 1 含 `QNM_GAME_ORDER_V1`（dogfood/集成测试）；`HUA_SHENG_ORDER_V1` 待完整适配器、恢复与回调、真实配置及验收就绪后加入白名单翻牌。QNM 无部署种子（仅测试态），故生产可履约供给实际随 HUA_SHENG 上线；白名单确保 UI 可先对 QNM 开发验证而不误导生产。
 
 ## 7. REST 契约汇总（Phase 1 前端使用）
 
@@ -253,11 +262,11 @@ default List<String> fulfillmentSteps() { return List.of(); }
 
 ### 8.2 连接器子页（E1）
 
-列表（T2）+ **新建草稿表单**（连接器版本一经创建即不可变，无「编辑草稿」端点；改配置＝新建连接器）：公共字段结构化控件（`baseUrl`/`merchantAccount`/`protocolVersion`/`callbackPath`/`connectTimeoutMs`/`readTimeoutMs`/`rateLimit`/`concurrencyLimit`）；`adapterType` 下拉（T1，封闭集）；凭据引用下拉（**T6 `GET /credential-slots`**，列平台级可用凭据槽、脱敏只回 `slotNo`/`maskedHint`；**非 T4 凭据集**，因连接器仍绑定 legacy 槽，见 §6.2 A1）；`adapter_config_json` 用 **JSON 文本域**（设计允许「textarea/轻量 code editor」）+ 前端 `isValidJson` 语法即时校验，**保存时后端 `ClosedJsonSchemaValidator` 按 `connectorSchemaResource` 校验并回显逐字段错误**（T1 `AdapterTypeView` 不含 Schema 文本，故前端不旁展 Schema、保持适配器无关；`extra_config` 一期只读展示于 T3 详情，无写端点）。**能力勾选不在草稿表单**（`CreateConnectorDraftReqVO` 无 capabilities 字段），而在**校验步骤**声明（`ValidateConnectorReqVO.capabilities`，§6.4/§8.4）。生命周期按钮按 T2 `latestVersionStatus` 显隐：草稿(0)→**校验**、已验证(5)→**发布**、已发布(10)→**退役**、已退役(90)→仅**详情**；非法跃迁由后端守卫拒绝、错误经 axios 拦截器透传。版本详情（T3）只读。
+列表（T2）+ **新建草稿表单**（连接器版本一经创建即不可变，无「编辑草稿」端点；改配置＝新建连接器）：公共字段结构化控件（`baseUrl`/`merchantAccount`/`protocolVersion`/`callbackPath`/`connectTimeoutMs`/`readTimeoutMs`/`rateLimit`/`concurrencyLimit`）；`adapterType` 下拉（T1，封闭集）；凭据引用下拉按 §5.6 模式显示（SINGLE_SLOT 用 T6；CREDENTIAL_SET 用 T4 当前供应商完整可用集）；`adapter_config_json`/`extra_config` 使用 JSON 文本域 + 前端语法提示，保存时服务端执行各自封闭 Schema 校验。T1 不必返回完整 Schema 文本，保持适配器无关。**能力勾选不在草稿表单**（`CreateConnectorDraftReqVO` 无 capabilities 字段），而在**校验步骤**声明（`ValidateConnectorReqVO.capabilities`，§6.4/§8.4）。生命周期按钮按 T2 `latestVersionStatus` 显隐：草稿(0)→**校验**、已验证(5)→**发布**、已发布(10)→**退役**、已退役(90)→仅**详情**；非法跃迁由后端守卫拒绝、错误经 axios 拦截器透传。版本详情（T3）只读。
 
 ### 8.3 凭据子页（F1-hybrid）
 
-凭据集列表（T4）+ 新建凭据项：`item_key`（按所选连接器 adapterType 的 `credentialKeys()` 渲染行数）、`provider_type` 单选 `ENV`/`ENVELOPE`；`ENV`→填 `secret_ref`（`env:` 前缀校验）；`ENVELOPE`→填密钥值（`type=password`、**只写不回显**、提交后仅显示 `masked_hint`）。列表/详情**永不展示** `secret_ref` 值或密文。
+凭据集列表（T4）+ 新建凭据项：`item_key`（按所选连接器 adapterType 的 `credentialKeys()` 渲染行数）、`provider_type` 单选 `ENV`/`ENVELOPE`；`ENV`→填 `secret_ref`（`env:` 前缀校验）；`ENVELOPE`→填密钥值（多行文本域，maxlength8192、**只写不回显**、提交后仅显示 `masked_hint`）。列表/详情**永不展示** `secret_ref` 值或密文。
 
 ### 8.4 能力子页
 
@@ -304,7 +313,7 @@ default List<String> fulfillmentSteps() { return List.of(); }
 - 更新 `docs/集成测试.md`：技术菜单配置链路（连接器/凭据/能力/映射）+ 合作商品上架即发布 + 能力缺口拒绝 + 路由命中 + 下单 `productId==externalSkuCode`；QNM dogfood 与 HUA_SHENG 翻牌（白名单）。
 - TODO（附本文锚点，禁止裸 TODO）：
   - H1 细粒度技术权限 + 凭据双人复核（MVP 用 H2）——见 `#0-已确认决策`。
-  - `createCredentialSlot` 与凭据集端点的收敛/去留——见 `#63-凭据写f1-hybrid`。
+  - legacy slot 保留兼容；后续轮换与在途部署协调见 HUA_SHENG 文 §12.3，058不覆盖原集项。
   - 原 `POST /offers/publish` 端点在 B1 下的去留（内部/测试保留 or 下线）——见 `#66-上架即发布服务b1核心`。
   - T2/T3/T5 数据量增长后的分页化——见 `#61-技术菜单只读-get-面`。
   - `validTo` 到期自动下架扫描任务（k1 默认长期）——见 `#0-已确认决策`。
@@ -322,8 +331,8 @@ default List<String> fulfillmentSteps() { return List.of(); }
 ## 14. 与 HUA_SHENG 文协调（I1/②）
 
 - **地基单一出处**：`AdapterMetadata` 扩展 + AD-3 凭据集 + AD-5 `extra_config` 规格以**本文 §5 为准**，HUA_SHENG 文引用本文、不重复描述；两文对 `defaultExecutionProfile()`/`credentialKeys()`/`mappingTemplates()`/`fulfillmentSteps()` 签名与语义达成一致。
-- **变更集编号**：本文占 `053`–`057`（含评审修复）；HUA_SHENG 主数据种子让位到 `058+`（其原 `050`/`051` 与现有 `050-project-standard-asset-audit`/`051-standard-quote-permanent-key` 冲突）；落地前对齐 `db.changelog-1.0.0.yaml` 登记顺序。
-- **上线排序**：QNM 仅测试态，本文 UI 对 QNM dogfood；生产可履约供给随 HUA_SHENG（适配器 + `058+` 种子 + 凭据集 + `extra_config`）落地后由白名单翻牌。技术菜单 UI 与 HUA_SHENG 适配器可并行推进，仅在 §5 地基与变更集编号上协调。
+- **变更集编号**：本文占 `053`–`057`（含评审修复）；058新增显式凭据绑定，后续迁移按实际编号；配置由服务创建，不提供绕过校验的种子；落地前对齐 `db.changelog-1.0.0.yaml` 登记顺序。
+- **上线排序**：QNM 仅测试态，本文 UI 对 QNM dogfood；生产可履约供给随 HUA_SHENG（完整适配器与恢复/回调 + 显式凭据绑定 + 真实配置与验收）落地后由白名单翻牌。技术菜单 UI 与 HUA_SHENG 适配器可并行推进，仅在 §5 地基与变更集编号上协调。
 
 ## 15. 评审修复（2026-10-03）
 
@@ -341,7 +350,7 @@ default List<String> fulfillmentSteps() { return List.of(); }
 
 ### 15.4 退役商品释放外部编码
 
-不修改已交付 053 的内容或校验和。新增 `057-offer-live-external-sku-code.sql`：生成列 `live_external_sku_code` 对 `status != RETIRED(90)` 返回原 `external_sku_code`，退役行返回 NULL；同一 ALTER 中替换原唯一键为 `(supplier_id, live_external_sku_code)`。草稿、发布、暂停状态均占用编码；退役行保留原编码和不可变历史版本，但允许新身份重用。053 的全行唯一约束已经保证存量数据满足新约束，无需删除或重写历史数据。HUA_SHENG 尚未实施的种子/能力 CHECK 顺延为 058/059。
+不修改已交付 053 的内容或校验和。新增 `057-offer-live-external-sku-code.sql`：生成列 `live_external_sku_code` 对 `status != RETIRED(90)` 返回原 `external_sku_code`，退役行返回 NULL；同一 ALTER 中替换原唯一键为 `(supplier_id, live_external_sku_code)`。草稿、发布、暂停状态均占用编码；退役行保留原编码和不可变历史版本，但允许新身份重用。053 的全行唯一约束已经保证存量数据满足新约束，无需删除或重写历史数据。后续058用于显式凭据绑定，不预占 HUA_SHENG 种子/取消能力 CHECK 编号。
 
 已上架商品退役后仍可能保留 `sc_supplier_external_sku_binding`。新商品发布时，在同一发布事务中核对冲突绑定所指身份：仅原身份存在且为 RETIRED 时移除旧绑定并写入新绑定；非退役或身份缺失仍拒绝。绑定为当前可用供给索引，历史履约依据原 Offer 版本，不修改历史版本或订单冻结字段。唯一键仍裁决并发；发布后续失败时旧绑定删除与新版本一并回滚。
 
