@@ -5,39 +5,24 @@ import com.aifuli.framework.tracer.core.filter.TraceFilter;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 
 /**
- * Tracer 配置类
+ * Tracer 自动配置类：注册 TraceFilter，绑定链路与 ELK 日志配置属性
+ *
+ * 设计见 {@code docs/superpowers/specs/2026-10-04-elk-logging-integration-design.md#32-配置属性定义-loggingelkproperties}
  *
  * @author mashu
  */
 @AutoConfiguration
-@ConditionalOnClass(name = {
-        "org.apache.skywalking.apm.toolkit.opentracing.SkywalkingTracer", // 来自 apm-toolkit-opentracing.jar
-//        "io.opentracing.Tracer", // 来自 opentracing-api.jar
-        "jakarta.servlet.Filter"
-})
-@EnableConfigurationProperties(TracerProperties.class)
+@ConditionalOnClass(name = "jakarta.servlet.Filter")
+@ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
+@EnableConfigurationProperties({TracerProperties.class, LoggingElkProperties.class})
 @ConditionalOnProperty(prefix = "aifuli.tracer", value = "enable", matchIfMissing = true)
 public class AifuliTracerAutoConfiguration {
-
-    // TODO @芋艿：skywalking 不兼容最新的 opentracing 版本。同时，opentracing 也停止了维护，尬住了！后续换 opentelemetry 即可！
-//    @Bean
-//    public BizTraceAspect bizTracingAop() {
-//        return new BizTraceAspect(tracer());
-//    }
-//
-//    @Bean
-//    public Tracer tracer() {
-//        // 创建 SkywalkingTracer 对象
-//        SkywalkingTracer tracer = new SkywalkingTracer();
-//        // 设置为 GlobalTracer 的追踪器
-//        GlobalTracer.registerIfAbsent(tracer);
-//        return tracer;
-//    }
 
     /**
      * 创建 TraceFilter 过滤器，响应 header 设置 traceId

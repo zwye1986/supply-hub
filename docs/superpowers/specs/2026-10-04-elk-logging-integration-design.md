@@ -1,7 +1,7 @@
 # 微服务日志与 ELK 集成详细设计
 
 > 日期：2026-10-04  
-> 状态：设计完成 / 待实施  
+> 状态：阶段一至阶段三已实施完成 / 验证通过  
 > 依赖前置：`docs/superpowers/specs/2026-10-01-pro143-elk-docker-compose-deployment-design.md`  
 > 目标环境：`pro143` 测试集群（`8.133.164.143` / `172.19.64.105`）及后续生产环境
 
@@ -353,9 +353,20 @@ filter {
 
   # 兜底默认 app_name，防止字段缺失导致索引语法错误
   if ![app_name] {
-    mutate {
-      add_field => { "app_name" => "default" }
+    if [@metadata][beat] {
+      mutate {
+        add_field => { "app_name" => "%{[@metadata][beat]}" }
+      }
+    } else {
+      mutate {
+        add_field => { "app_name" => "default" }
+      }
     }
+  }
+
+  # 强制转换为小写，确保符合 Elasticsearch 索引命名规范
+  mutate {
+    lowercase => [ "app_name" ]
   }
 }
 

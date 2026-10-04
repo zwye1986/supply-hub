@@ -34,6 +34,9 @@
         <appender-ref ref="FILE"/>
     </appender>
 
+    <!-- 引入共享 ELK Logstash TCP Appender 配置 -->
+    <include resource="logback-elk-appender.xml"/>
+
     <!-- SkyWalking Appender：GRPC 日志收集，实现日志中心 -->
     <!--
     <appender name="SKYWALKING" class="org.apache.skywalking.apm.toolkit.log.logback.v1.x.log.GRPCLogClientAppender">
@@ -49,6 +52,14 @@
         <appender-ref ref="STDOUT"/>
         <!-- 本地环境下，如果不想【FILE】打印日志，可以注释掉本行 -->
         <appender-ref ref="ASYNC"/>
+        <!-- 仅在非本地环境且显式开启时加载 TCP Appender -->
+        <springProfile name="dev,test,prod">
+            <if condition='property("ELK_ENABLED").equalsIgnoreCase("true")'>
+                <then>
+                    <appender-ref ref="LOGSTASH_TCP"/>
+                </then>
+            </if>
+        </springProfile>
         <!-- 如果想接入【SkyWalking 日志服务】，可以取消注释掉本行 -->
         <!-- <appender-ref ref="SKYWALKING"/> -->
     </root>

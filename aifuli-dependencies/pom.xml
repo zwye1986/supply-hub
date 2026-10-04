@@ -45,6 +45,7 @@
         <lock4j.version>2.2.7</lock4j.version>
         <!-- 监控相关 -->
         <skywalking.version>9.6.0</skywalking.version>
+        <logstash-logback-encoder.version>8.0</logstash-logback-encoder.version>
         <spring-boot-admin.version>3.5.8</spring-boot-admin.version>
         <opentracing.version>0.33.0</opentracing.version>
         <!-- Test 测试相关 -->
@@ -377,6 +378,11 @@
                 <groupId>org.apache.skywalking</groupId>
                 <artifactId>apm-toolkit-trace</artifactId>
                 <version>${skywalking.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>net.logstash.logback</groupId>
+                <artifactId>logstash-logback-encoder</artifactId>
+                <version>${logstash-logback-encoder.version}</version>
             </dependency>
             <dependency>
                 <groupId>org.apache.skywalking</groupId>

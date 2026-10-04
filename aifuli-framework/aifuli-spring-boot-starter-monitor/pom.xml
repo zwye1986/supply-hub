@@ -74,6 +74,25 @@
             <artifactId>spring-boot-admin-starter-client</artifactId> <!-- 实现 Spring Boot Admin Client 客户端 -->
             <optional>true</optional>
         </dependency>
+
+        <!-- ELK Logstash TCP / JSON 结构化日志编码器 -->
+        <dependency>
+            <groupId>net.logstash.logback</groupId>
+            <artifactId>logstash-logback-encoder</artifactId>
+        </dependency>
+
+        <!-- Logback 条件评估库 (支持 logback-spring.xml 中 <if condition="..."> 条件判断) -->
+        <dependency>
+            <groupId>org.codehaus.janino</groupId>
+            <artifactId>janino</artifactId>
+        </dependency>
+
+        <!-- 测试依赖 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
 </project>
