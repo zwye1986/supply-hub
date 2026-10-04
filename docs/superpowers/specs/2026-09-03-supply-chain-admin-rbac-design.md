@@ -214,14 +214,30 @@ C 的详细设计至少必须拆成两类能力：
 
 不预置业务角色。旧 `supply-chain:admin` 菜单及其 `system_role_menu` 关系必须原样保留；供应链根目录复用同一 permission。权限信息接口按 §8.1 的超集规则展开整棵供应链菜单，因此不依赖一次性的角色子树复制，也不要求角色 UI 恰好勾中所有子节点。yudao 超管无需勾细项，按应用返回全部启用菜单。
 
-实现时落地两个 system 库脚本，禁止写入中台 changelog：
+实现时落地两个 system 库脚本，禁止写入中台 changelog。该禁令只针对 `supply-chain-server` 的中台 changelog：中台是独立数据源，不得写 `system_*` 表；**system-server 自己的 Liquibase 可以写 system 库**，§8.4 的供应链菜单增量即按此落地。
 
 1. `script/deploy/aifuli-test/sql/system-menu-application-schema.sql`：只做可向后兼容的 schema 扩展，为 `system_menu` 增加非空且默认 `mall-admin` 的 `application_code`，可重复执行；旧版 system 代码必须能在该列存在时继续工作。测试环境 MySQL 不支持 `ADD COLUMN IF NOT EXISTS`，脚本必须通过 `information_schema.COLUMNS` 判定后使用 `PREPARE` 执行 DDL，已存在时执行无副作用语句。
 2. `script/deploy/aifuli-test/sql/system-supply-chain-admin-menus.sql`：在新版 system 已支持菜单字段后执行，可重复创建供应链菜单树并保留旧 `admin` 节点及角色关联；不得按 permission 全局更新其它应用的同名记录。脚本中的用户变量、派生表字面量与 `system_menu` 字段可能使用不同的 `utf8mb4` 排序规则；所有 `application_code` 与 `@sc_app` 的判重/定位，以及按钮插入和同步中的 permission 比较，都必须使用 `BINARY` 精确比较，不能依赖连接默认排序规则，否则测试库会报 `Illegal mix of collations`。
 
+该脚本依赖人工执行，实践中已出现漏执行：直充限频菜单块于 `b72eaf2`（2026-10-01）加入脚本，但测试库始终未重跑，导致 `system_menu` 缺行、前端侧栏看不到该页（`docs/待办列表.md` 曾长期挂未勾选的「菜单部署」待办）。因此 §8.4 起，**新增**供应链菜单改为由 system-server Liquibase 随部署自动执行；本脚本保留为存量菜单树的一次性迁移与人工修复手段，不再承载新增菜单。
+
 两个脚本的执行目标都是 `aifuli-supplyhub-test` 命名空间对应的测试环境 **system 数据源**（当前库名 `aifuli-mall-test_hub`），不是旧 `aifuli-mall-test`，也不是 `supply-chain-test`。本任务发布顺序固定为：先执行 schema 扩展脚本 → 发布新版 `system-server` → 执行供应链菜单与角色迁移脚本 → 通过 system 服务或明确运维步骤清理 `permission_menu_ids`、`menu_role_ids` 等相关缓存 → 等待或重启供应链进程使一分钟权限判断缓存失效 → 发布 `supply-chain-server`。独立前端任务只能在这些后端步骤验收通过后发布；禁止在 system 尚未过滤应用时提前插入供应链 PAGE 菜单，也禁止前端先删静态路由再提供动态菜单。
 
 发布 `supply-chain-server` 时不得把工作区未提交的 `022-database-local-time` 打进本任务镜像。`c49324f5` 已用变更集 id `021-supplier-admin-plaintext-echo` 执行过 `021-supplier-admin-plaintext-echo.sql`；合并后的 `f432e497` 把同一 SQL 编号为 `022-supplier-admin-plaintext-echo`。该变更集无论 id 是 `021` 还是 `022`，都必须带 `preConditions: onFail: MARK_RAN`，在 `sc_supplier.legal_person_id_no` 已存在时标记已执行，禁止重复 `ADD COLUMN`。本任务镜像只含 RBAC Java 与该兼容 precondition，不执行本地时间迁移。
+
+### 8.4 新增供应链菜单的 Liquibase 部署
+
+新增供应链菜单不再依赖人工执行 `script/deploy` 脚本，改由 **system-server 自己的 Liquibase** 随进程启动写入 system 库，位置 `aifuli-module-system/aifuli-module-system-server/src/main/resources/db/changelog/releases/1.0.0/`，注册进 `db.changelog-1.0.0.yaml`，`author: supply-chain`。该目录已有 `001`–`012` 供应链数据字典变更集与 `013-supplier-fulfillment-config-menu`（供应商履约技术配置菜单）作为先例，后者证明菜单类变更集同样适用于本机制；`liquibase-core` 在 `aifuli-module-system-server/pom.xml` 中已声明，changelog 位于 Spring Boot 默认路径，无需额外开关。
+
+约束：
+
+- 变更集必须**幂等**：以 `WHERE NOT EXISTS` 按 permission 判重插入，再用 `UPDATE` 把既有行收敛到设计值。人工执行过旧 `script/deploy` 脚本的环境重跑不得产生重复菜单或漂移。
+- 所有 `application_code` 与 permission 的判重、定位与同步比较必须使用 `CAST(... AS BINARY)` 精确比较，沿用 §8.3 第 2 条对 `Illegal mix of collations` 的要求。
+- 变更集必须显式写入 `application_code='supply-chain-admin'`，不能依赖列默认值 `mall-admin`；并带 `preConditions`（`onFail: HALT`）校验 `system_menu.application_code` 列已存在，缺失时失败关闭并提示先执行 §8.3 第 1 条的 schema 扩展脚本，禁止 `MARK_RAN` 静默跳过而重现「菜单缺行」故障。
+- 页面菜单的 `parent_id` 必须解析为既有供应链根目录（`parent_id=0` 且 `permission='supply-chain:admin'`）的 id，不得硬编码数字 id；根目录缺失时失败关闭。
+- **不写 `system_role_menu`**，沿用 §8.3「不预置业务角色」。可见性由 §8.1 的超集展开保证：yudao 超管走 `PermissionServiceImpl` 全量菜单分支、`AdminMenuProjectionService` 全部启用菜单分支，均不读 `system_role_menu`；持有 `supply-chain:admin` 的角色按 `parent_id` 展开整棵子树。仅当将来建立非超管的细粒度运营角色时，才另行增加授权变更集，并同步修订本节。
+- 变更集只写 system 库的 `system_*` 表。中台 changelog 仍禁止写 `system_*`，由 `SupplyChainModuleArchitectureTest` 的数据所有权门禁保障。
+- **编号必须顺延、禁止复用或覆盖既有变更集**：该目录被多个并行任务共同追加，新增前先列出目录实际文件与 `db.changelog-1.0.0.yaml` 已注册 id，取最大编号 +1，并在 yaml 中**追加**而非替换末尾块。改动或覆盖已提交的变更集会同时造成两个后果：其它任务的菜单永久丢失部署，以及已执行过该变更集的库校验和不一致。同理，`script/deploy` 脚本内移除已迁出的菜单块时，只能删除该块自身，其后其它任务追加的块必须原样保留。
 
 ## 9. 测试门禁
 

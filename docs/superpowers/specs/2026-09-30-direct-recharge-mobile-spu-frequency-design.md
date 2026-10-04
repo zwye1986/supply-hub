@@ -33,7 +33,7 @@
 
 内部 PreparedAcceptance 同时保存已校验目标的 accountType 与实际手机号值。仅手机号值为空不能区分非MOBILE与非法MOBILE，因此由 Facade 传递内部 targetAccountType，供受理事务判定适用范围与失败关闭；该字段不新增到外部下单契约。
 
-队列编排放在 `border.fulfillment.application`，领域规则与枚举放在对应 domain，存储放在对应 dal。Facade 委派应用服务，不访问 DAL；Timer Handler 调用 Lifecycle/恢复入口，不直接写领域表。资金动作只经既有应用服务，border 不访问账户/账本 DAL。所有数据位于供应链独立库，无物理外键；菜单与权限部署 SQL 位于 script/deploy 并由部署过程写入 system 库。
+队列编排放在 `border.fulfillment.application`，领域规则与枚举放在对应 domain，存储放在对应 dal。Facade 委派应用服务，不访问 DAL；Timer Handler 调用 Lifecycle/恢复入口，不直接写领域表。资金动作只经既有应用服务，border 不访问账户/账本 DAL。所有数据位于供应链独立库，无物理外键；菜单与权限由 system-server 自身的 Liquibase 变更集写入 system 库，见 [RBAC 设计 §8.4](2026-09-03-supply-chain-admin-rbac-design.md#84-新增供应链菜单的-liquibase-部署)。
 
 ## 3. 持久化模型与不变量
 
@@ -235,7 +235,7 @@ GlobalExceptionHandler的限频路径错误日志API故障采用同样首次及�
 
 未知命令意图的弹窗生命周期不能依赖query权限条件容器：查询权限撤销只停止新增读取并隐藏查询区域，已有未知意图继续保留，操作权限变化禁止新增发送，不以卸载弹窗清空原actionNo。现有AppView按route.fullPath作为组件key，同一匹配路由的query/hash/params变化也可能重新挂载；页面同时通过route leave和route update守卫保护未知意图，不能仅保护离开到另一个路由。实际组件脚本与真实路由行为验证权限变化及同路由切换后的意图/守卫仍存在，不以源码字符串断言替代行为验证。
 
-菜单、三个权限按钮由 script/deploy 的 system 库部署 SQL 配套，供应链程序不写 system_menu。
+菜单由 system-server 自身的 Liquibase 变更集 `014-supply-chain-recharge-frequency-menus` 随部署幂等写入 system 库：一个承载 `query` 权限的页面菜单，加 `retry`、`release` 两个按钮。供应链程序仍不写 `system_menu`。变更集只建菜单、不写 `system_role_menu`，可见性依赖 RBAC 设计 §8.1 的超集展开——超管与持有 `supply-chain:admin` 的角色自动获得整棵子树；`retry`/`release` 的独立授权只在将来建立非超管运营角色时才需要授权变更集，见 [RBAC 设计 §8.4](2026-09-03-supply-chain-admin-rbac-design.md#84-新增供应链菜单的-liquibase-部署)。
 
 ## 9. 告警与观测
 

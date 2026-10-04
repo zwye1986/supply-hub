@@ -142,4 +142,37 @@ databaseChangeLog:
             encoding: UTF-8
             splitStatements: true
             stripComments: false
+  # 直充限频监控菜单。前置条件失败关闭：缺 application_code 列说明未执行
+  # script/deploy/aifuli-test/sql/system-menu-application-schema.sql；缺供应链根目录说明未执行
+  # system-supply-chain-admin-menus.sql。两者都必须先于本变更集完成，禁止 MARK_RAN 静默跳过，
+  # 否则会重现「system_menu 缺行、前端侧栏看不到菜单」的故障。
+  # 设计：docs/superpowers/specs/2026-09-03-supply-chain-admin-rbac-design.md#84-新增供应链菜单的-liquibase-部署
+  - changeSet:
+      id: 014-supply-chain-recharge-frequency-menus
+      author: supply-chain
+      runInTransaction: true
+      preConditions:
+        - onFail: HALT
+          onError: HALT
+          and:
+            - sqlCheck:
+                expectedResult: 1
+                sql: >-
+                  SELECT COUNT(*) FROM information_schema.COLUMNS
+                  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'system_menu'
+                  AND COLUMN_NAME = 'application_code'
+            - sqlCheck:
+                expectedResult: 1
+                sql: >-
+                  SELECT CASE WHEN COUNT(*) > 0 THEN 1 ELSE 0 END FROM system_menu
+                  WHERE parent_id = 0 AND deleted = b'0'
+                  AND CAST(application_code AS BINARY) = CAST('supply-chain-admin' AS BINARY)
+                  AND CAST(permission AS BINARY) = CAST('supply-chain:admin' AS BINARY)
+      changes:
+        - sqlFile:
+            path: 014-supply-chain-recharge-frequency-menus.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
 
