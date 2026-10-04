@@ -1,2 +1,3 @@
 com.aifuli.framework.tracer.config.AifuliTracerAutoConfiguration
 com.aifuli.framework.tracer.config.AifuliMetricsAutoConfiguration
+com.aifuli.framework.tracer.config.AifuliAsyncTraceAutoConfiguration
