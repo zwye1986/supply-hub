@@ -546,6 +546,18 @@ availability_version, occurred_at, payload_digest
 
 索引为 `(buyer_id,id)`。`change_type` 只允许 `UPSERT/TOMBSTONE/AVAILABILITY_CHANGED`。商城按 `buyerId + cursor` 拉取；游标低于 `minAvailableCursor` 时执行全量重建。
 
+#### 5.6.1 目录读取字段与注释契约
+
+目录 DTO 的中文字段注释与 `@Schema.description` 必须描述真实查询投影，不能把数据库内部主键、数字状态或其它定价层的含义套到对外字段上。本节为既有读取行为的注释勘误，不修改字段名、类型、校验、查询、金额计算、生命周期或已发布 DDL。
+
+- `BuyerCatalogItemRespDTO.listingVersion` 来自 `sc_buyer_listing_version.version_no`，含义为「采购商商品业务版本号，从1递增」，不是版本内部主键；内部主键仍由 `current_version_id` 引用。
+- `displayName` 来自同一商业版本的 `display_name`，含义为「向采购商商城展示的商品名称」，不是实时读取的 SKU 标准名称。
+- `buyerSettlementUnitPrice` 来自该版本的 `buyer_settlement_unit_price`，含义为「采购商向中台结算的单位价格，单位为分」，不把它描述为模板 L2，也不在本次勘误中切换到通用定价。`currency` 为「结算币种，一期固定CNY」。上述四个字段表述与 `002-product-and-offer.sql` 的对应 `COMMENT` 一致。
+- `listingStatus` 对外返回 `DRAFT/PUBLISHED/SUSPENDED/RETIRED` 枚举名；`availabilityStatus` 对外返回 `AVAILABLE/UNAVAILABLE/UNKNOWN` 枚举名。数字编码只用于持久化，已有定价非 READY 覆盖为 UNAVAILABLE 的规则保持不变。
+- `updatedAt` 来自 `sc_buyer_listing.updated_at`，是采购商商品最后修改时间，不是供给可用性投影更新时间。该时间及 `BuyerCatalogChangeRespDTO.occurredAt` 的数据库值按 `Asia/Shanghai` 解释，经 `SupplyChainDatabaseClock.toInstant` 转为绝对时刻后以 UTC 偏移输出；对外注释注明 UTC，不改变数据库会话时区。
+
+实现证据为 `BuyerCatalogReadMapper.READ_COLUMNS` 与 `BuyerCatalogQueryService.toItem/getCatalogChanges`。`BuyerCatalogContractTest` 固定上述描述、字段类型及原字段集合；其余 DTO 保留现有完整中文注释，不做整组历史版本回退。人工核验及自动化执行记录维护在 `docs/集成测试.md` 的对应章节。
+
 ### 5.7 供应商 Supplier
 
 `sc_supplier` 只保存业务主体：
@@ -1555,6 +1567,12 @@ mvn -pl aifuli-module-supply-chain-server -am verify -Psupply-chain-integration
 25. INSTORE 并发部分退款不得超额，重复成功回调只返还账户一次，实际退款金额不一致不入账并转人工；部分/全额退款只推进售后状态，不回退成功主状态。
 
 一期不以全仓统一覆盖率代替业务验收；`trade-core`、订单状态机、幂等和资金并发的每条决策分支必须有测试。
+
+### 17.1 部署脚本配置输出安全门禁
+
+`aifuli-module-supply-chain/scripts/deploy-pro143.sh` 的远程配置摘要仅允许输出四个明确的非敏感键：`SUPPLY_CHAIN_IMAGE`、`AIFULI_SUPPLY_CHAIN_INSTORE_RTMART_INBOUND_TIMESTAMP_TOLERANCE_SECONDS`、`SPRING_CLOUD_NACOS_CONFIG_NAMESPACE`、`SPRING_CLOUD_NACOS_DISCOVERY_NAMESPACE`。必须按完整键名及行首匹配，不能用 `RECHARGE_FREQUENCY`、`NACOS_.*` 等宽泛片段匹配整行，否则会将身份密钥或后续新增敏感配置打印到部署日志。密钥生成、写入、轮换行为保持原流程，本次只收窄打印边界。
+
+`scripts/tests/test_deploy_pro143.py` 使用临时目录中的合成配置执行脚本实际摘要片段，断言白名单四项仍完整显示、所有非白名单项均不显示。测试不读取真实 `.env`，不调用 SSH、Docker 或供应商。联调与运行证据同步记录在 `docs/集成测试.md#786-未提交改动安全整理与目录契约勘误2026-10-04`，该局部门禁不代替真实部署验收。
 
 ## 18. 淘宝闪购 O2O 优先受控联调实现方案
 
