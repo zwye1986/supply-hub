@@ -105,8 +105,11 @@ echo ""
 
 # ─── Step 4: 远程加载镜像并更新 .env ────────────────────────────────────────
 log "Step 4/6: 远程加载镜像并更新 .env"
-ssh "${SSH_OPTS[@]}" "${REMOTE_HOST}" bash -s <<REMOTE_SCRIPT
+ssh "${SSH_OPTS[@]}" "${REMOTE_HOST}" bash -s -- "${REMOTE_DIR}" "${REMOTE_TARBALL}" "${IMAGE_TAG}" <<'REMOTE_SCRIPT'
 set -euo pipefail
+REMOTE_DIR="$1"
+REMOTE_TARBALL="$2"
+IMAGE_TAG="$3"
 cd "${REMOTE_DIR}"
 
 echo "[remote] 加载 Docker 镜像..."
@@ -129,7 +132,9 @@ if ! grep -q '^AIFULI_SUPPLY_CHAIN_RECHARGE_FREQUENCY_IDENTITY_KEY=' .env; then
 fi
 
 echo "[remote] 当前配置:"
-grep -E 'SUPPLY_CHAIN_IMAGE|TIMESTAMP_TOLERANCE|NACOS_.*NAMESPACE|RECHARGE_FREQUENCY' .env
+# 仅显示完整键名白名单，禁止将身份密钥或同前缀新增敏感项写入部署日志。
+# 设计：docs/superpowers/specs/2026-08-07-supply-chain-phase1-detailed-design.md#171-部署脚本配置输出安全门禁
+grep -E '^(SUPPLY_CHAIN_IMAGE|AIFULI_SUPPLY_CHAIN_INSTORE_RTMART_INBOUND_TIMESTAMP_TOLERANCE_SECONDS|SPRING_CLOUD_NACOS_CONFIG_NAMESPACE|SPRING_CLOUD_NACOS_DISCOVERY_NAMESPACE)=' .env
 
 echo "[remote] 清理远程镜像包"
 rm -f "${REMOTE_TARBALL}"
