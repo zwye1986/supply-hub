@@ -37,6 +37,7 @@ public class CorsFilter implements WebFilter {
         headers.add("Access-Control-Allow-Origin", ALL);
         headers.add("Access-Control-Allow-Methods", ALL);
         headers.add("Access-Control-Allow-Headers", ALL);
+        headers.add("Access-Control-Expose-Headers", ALL);
         headers.add("Access-Control-Max-Age", MAX_AGE);
         if (request.getMethod() == HttpMethod.OPTIONS) {
             response.setStatusCode(HttpStatus.OK);

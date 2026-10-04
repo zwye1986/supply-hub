@@ -116,6 +116,7 @@ public class AifuliWebAutoConfiguration {
         config.addAllowedOriginPattern("*"); // 设置访问源地址
         config.addAllowedHeader("*"); // 设置访问源请求头
         config.addAllowedMethod("*"); // 设置访问源请求方法
+        config.addExposedHeader("*"); // 允许客户端访问响应头（如 trace-id）
         // 创建 UrlBasedCorsConfigurationSource 对象
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", config); // 对接口配置跨域设置
