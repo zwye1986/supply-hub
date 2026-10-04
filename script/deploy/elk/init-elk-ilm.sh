@@ -8,7 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 POLICY_JSON=$(cat "${SCRIPT_DIR}/elasticsearch/ilm/app-logs-ilm-policy.json")
 TEMPLATE_JSON=$(cat "${SCRIPT_DIR}/elasticsearch/ilm/app-logs-template.json")
 
-echo "=== [1/4] 初始化/更新 Elasticsearch ILM 策略 (app-logs-ilm-policy: 7天自动删除) ==="
+echo "=== [1/4] 初始化/更新 Elasticsearch ILM 策略 (app-logs-ilm-policy: 30天自动删除) ==="
 ssh "${TARGET_HOST}" "curl -s -f -X PUT 'http://127.0.0.1:9201/_ilm/policy/app-logs-ilm-policy' \
   -H 'Content-Type: application/json' -d '${POLICY_JSON}'"
 echo ""

@@ -10,7 +10,7 @@
         }
       },
       "delete": {
-        "min_age": "7d",
+        "min_age": "30d",
         "actions": {
           "delete": {
             "delete_searchable_snapshot": true
@@ -19,7 +19,7 @@
       }
     },
     "_meta": {
-      "description": "微服务应用日志生命周期管理策略：保留 7 天，超期自动删除"
+      "description": "微服务应用日志生命周期管理策略：保留 30 天，超期自动删除"
     }
   }
 }

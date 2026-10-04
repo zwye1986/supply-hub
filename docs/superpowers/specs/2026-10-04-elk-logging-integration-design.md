@@ -386,7 +386,7 @@ output {
 
 1. **生命周期策略 (`app-logs-ilm-policy`)**：
    - **Hot 阶段**：`min_age: 0ms`，设置主分片调度优先级 `priority: 100`；
-   - **Delete 阶段**：`min_age: 7d`，超过 7 天的历史日志索引自动触发物理删除，释放磁盘；
+   - **Delete 阶段**：`min_age: 30d`，超过 30 天的历史日志索引自动触发物理删除，释放磁盘；
 2. **索引模版 (`app-logs-template`)**：
    - 匹配模式：`app-logs-*`，优先级：`200`；
    - 参数配置：
@@ -440,7 +440,7 @@ output {
 4. 检索特定 `traceId`，验证网关和供应链服务的日志能在同一时间线完整呈现。
 
 ### 阶段四：Elasticsearch 索引生命周期 (ILM) 策略上线与防爆盘保护
-1. 在 ES 创建 `app-logs-ilm-policy`（7 天自动删除）；
+1. 在 ES 创建 `app-logs-ilm-policy`（30 天自动删除）；
 2. 创建 `app-logs-template` 索引模版（单分片、零副本、自动挂载 ILM）；
 3. 存量索引追溯绑定并验证健康度恢复为 Green；
 4. 验证新建索引自动挂载 ILM 策略。
