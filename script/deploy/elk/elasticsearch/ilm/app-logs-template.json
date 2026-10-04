@@ -1,0 +1,16 @@
+{
+  "index_patterns": [
+    "app-logs-*"
+  ],
+  "priority": 200,
+  "template": {
+    "settings": {
+      "number_of_shards": 1,
+      "number_of_replicas": 0,
+      "index.lifecycle.name": "app-logs-ilm-policy"
+    }
+  },
+  "_meta": {
+    "description": "微服务日志索引模板：单分片、零副本(单节点优化)、绑定 7 天生命周期自动清理策略"
+  }
+}

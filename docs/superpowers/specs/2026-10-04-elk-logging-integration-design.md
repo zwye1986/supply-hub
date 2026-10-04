@@ -380,6 +380,25 @@ output {
 
 ---
 
+## 6.1 Elasticsearch 索引生命周期 (ILM) 与模板设计
+
+为防止测试机 `pro143` 磁盘被持续生成的按天索引写满，在 Elasticsearch 中配置专用 ILM 策略与全局 Composable 模板：
+
+1. **生命周期策略 (`app-logs-ilm-policy`)**：
+   - **Hot 阶段**：`min_age: 0ms`，设置主分片调度优先级 `priority: 100`；
+   - **Delete 阶段**：`min_age: 7d`，超过 7 天的历史日志索引自动触发物理删除，释放磁盘；
+2. **索引模版 (`app-logs-template`)**：
+   - 匹配模式：`app-logs-*`，优先级：`200`；
+   - 参数配置：
+     - `number_of_shards: 1`（单主分片）；
+     - `number_of_replicas: 0`（单节点测试环境禁用副本，索引健康度由 Yellow 优化为 Green）；
+     - `index.lifecycle.name: "app-logs-ilm-policy"`（新建索引自动挂载生命周期策略）。
+3. **运维脚本**：
+   - 配置文件沉淀于 `script/deploy/elk/elasticsearch/ilm/`；
+   - 一键初始化脚本：`script/deploy/elk/init-elk-ilm.sh`。
+
+---
+
 ## 7. 容灾、性能与防风暴规范
 
 1. **绝对零阻塞原则（Never Block）**：
@@ -420,5 +439,11 @@ output {
 3. 发起端到端跨服务请求，在 Kibana (`http://8.133.164.143:5601`) 建立 `app-logs-*` 索引模式；
 4. 检索特定 `traceId`，验证网关和供应链服务的日志能在同一时间线完整呈现。
 
-### 阶段四：文档归档
-1. 同步更新 `docs/集成测试.md` 第 8 章节，追加端到端联调测试用例与验证命令。
+### 阶段四：Elasticsearch 索引生命周期 (ILM) 策略上线与防爆盘保护
+1. 在 ES 创建 `app-logs-ilm-policy`（7 天自动删除）；
+2. 创建 `app-logs-template` 索引模版（单分片、零副本、自动挂载 ILM）；
+3. 存量索引追溯绑定并验证健康度恢复为 Green；
+4. 验证新建索引自动挂载 ILM 策略。
+
+### 阶段五：文档归档
+1. 同步更新 `docs/集成测试.md` 第 8 章节，追加端到端联调测试用例、ILM 运维命令与验证证据。
