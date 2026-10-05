@@ -39,4 +39,6 @@ public class LoggingElkProperties {
      */
     private int reconnectionDelay = 5000;
 
+    // TCP 入队超时由共享 XML 固定为 0ms，不提供可调属性，防止配置引入等待。
+
 }

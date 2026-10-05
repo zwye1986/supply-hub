@@ -71,10 +71,13 @@ log.info("[createOrder][创建订单成功] orderNo={}, buyerId={}, amount={}, s
 SLF4J MDC 基于底层 `ThreadLocal` 实现，在跨线程池调度及无 HTTP 请求头驱动的后台任务中极易丢失或产生线程复用污染。
 
 1. **Spring 线程池透传（`TaskDecorator` 自动透传）**：
-   - 所有声明的 `ThreadPoolTaskExecutor` 统一挂载 `MdcTaskDecorator`；
-   - 在任务入队前捕获父线程当前的 MDC 快照（含 `traceId`），在子线程运行前写入 MDC，并在 `finally` 块中严格执行 `MDC.clear()`，彻底杜绝线程复用污染。
+   - monitor starter 对 Spring 管理的 `ThreadPoolTaskExecutor` 和 `SimpleAsyncTaskExecutor` 挂载 `MdcTaskDecorator`，不得只注册装饰器 Bean 就宣称所有线程池已接入。
+   - 在任务入队前捕获父线程当前的 MDC 快照（含 `traceId`）；执行前保存执行线程原快照，再安装父线程快照；`finally` 恢复执行线程原快照，原快照为空时才清空。该语义同时适用于线程复用、嵌套包装、异常以及 `CallerRunsPolicy` 同线程回退，禁止无条件清掉调用线程上下文。
+   - job starter 的 TTL 装饰器与 monitor 的 MDC 装饰器必须组合，保留租户、安全上下文以及业务显式配置的装饰器，禁止互相覆盖；不新增 job → monitor 的生产依赖。
+   - 两种 Spring 执行器当前只有 `setTaskDecorator`、没有公开 getter。组合逻辑集中在 common 工具中，使用 Spring `ReflectionUtils` 读取受支持执行器的 `taskDecorator` 字段，在原装饰器外层追加并按实例去重；字段缺失/类型变化时明确失败，禁止静默覆盖。用真实 Spring 执行器回归测试锁定该兼容边界，升级 Spring 时必须运行这些测试。
+   - monitor 的装饰器自动配置受 `aifuli.tracer.enable` 控制；关闭追踪时 job 原有 TTL 透传保持有效。原生 `ExecutorService`、供应链 Timer/Outbox 的 `ScheduledThreadPoolExecutor` 不由该 Bean 后处理器接管，须显式包装；Job/MQ 独立入口生成 traceId 的全量推广不属于本次三项缺陷修复。
 2. **通用工具包装（`CompletableFuture` / 自建线程）**：
-   - 业务代码显式使用自建线程或 `CompletableFuture` 时，使用 `MdcTaskDecorator.wrap(runnable)` 包装任务：
+   - 业务代码显式使用自建线程或 `CompletableFuture` 时，使用 `MdcTaskDecorator.wrap(runnable)` 包装任务；Runnable 与 Callable 均遵循上述保存/恢复语义：
      ```java
      CompletableFuture.runAsync(MdcTaskDecorator.wrap(() -> {
          // 子线程内无缝继承父线程 traceId
@@ -113,4 +116,4 @@ SLF4J MDC 基于底层 `ThreadLocal` 实现，在跨线程池调度及无 HTTP �
 | `MdcTaskDecorator` | `aifuli-spring-boot-starter-monitor` | 异步线程池 `TaskDecorator`，实现跨线程父子上下文自动透传与 `finally` 隔离清理 |
 | `TraceRequestInterceptor`| `aifuli-spring-boot-starter-rpc` | Feign 请求拦截器，RPC 出站时自动将 MDC 中的 `traceId` 注入下游请求头 |
 | `AccessLogFilter` | `aifuli-gateway` | 网关全局过滤器，生成/透传 `traceId` 并写入结构化网关访问日志 |
-| `logback-elk-appender.xml`| `aifuli-spring-boot-starter-monitor` | 统一 ELK Logstash TCP 直连配置模版（支持有界 RingBuffer 与 neverBlock 保护） |
+| `logback-elk-appender.xml`| `aifuli-spring-boot-starter-monitor` | 统一 ELK Logstash TCP 直连配置模版（有界 RingBuffer、XML 固定 appendTimeout=0ms 不可调；仅保障队列满时非等待。保留 condition 弃用告警，消除嵌套/neverBlock 告警） |

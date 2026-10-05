@@ -12,7 +12,7 @@ import java.util.concurrent.Callable;
  * 职责与生命周期保证：
  * 1. 任务调度前（在父线程中）：捕获父线程当前的 MDC 上下文快照；
  * 2. 任务执行时（在子线程中）：将父线程快照写入子线程 MDC，无缝继承链路 traceId；
- * 3. 任务执行完毕（在 finally 块中）：彻底执行 {@link MDC#clear()}，杜绝线程池工作线程复用导致的上下文污染。
+ * 3. 任务执行完毕（在 finally 块中）：恢复执行线程原快照，原为空时清空，避免线程复用污染及同线程回退丢失调用者上下文。
  * <p>
  * 设计见 {@code docs/superpowers/specs/2026-10-04-logging-standardization-spec.md#24-异步多线程与后台任务jobmq的-traceid-规范}。
  *
@@ -22,22 +22,7 @@ public class MdcTaskDecorator implements TaskDecorator {
 
     @Override
     public Runnable decorate(Runnable runnable) {
-        if (runnable == null) {
-            return null;
-        }
-        Map<String, String> contextMap = MDC.getCopyOfContextMap();
-        return () -> {
-            try {
-                if (contextMap != null && !contextMap.isEmpty()) {
-                    MDC.setContextMap(contextMap);
-                } else {
-                    MDC.clear();
-                }
-                runnable.run();
-            } finally {
-                MDC.clear();
-            }
-        };
+        return wrap(runnable);
     }
 
     /**
@@ -52,15 +37,13 @@ public class MdcTaskDecorator implements TaskDecorator {
         }
         Map<String, String> contextMap = MDC.getCopyOfContextMap();
         return () -> {
+            // 必须在真正执行时保存原上下文，而非在提交时保存；CallerRuns/嵌套包装会复用调用线程。
+            Map<String, String> previous = MDC.getCopyOfContextMap();
             try {
-                if (contextMap != null && !contextMap.isEmpty()) {
-                    MDC.setContextMap(contextMap);
-                } else {
-                    MDC.clear();
-                }
+                restore(contextMap);
                 runnable.run();
             } finally {
-                MDC.clear();
+                restore(previous);
             }
         };
     }
@@ -78,17 +61,23 @@ public class MdcTaskDecorator implements TaskDecorator {
         }
         Map<String, String> contextMap = MDC.getCopyOfContextMap();
         return () -> {
+            Map<String, String> previous = MDC.getCopyOfContextMap();
             try {
-                if (contextMap != null && !contextMap.isEmpty()) {
-                    MDC.setContextMap(contextMap);
-                } else {
-                    MDC.clear();
-                }
+                restore(contextMap);
                 return callable.call();
             } finally {
-                MDC.clear();
+                restore(previous);
             }
         };
+    }
+
+    /** 安装独立快照；null/空快照必须移除本任务上下文，非空快照由 MDC 防御性复制。 */
+    private static void restore(Map<String, String> contextMap) {
+        if (contextMap == null || contextMap.isEmpty()) {
+            MDC.clear();
+        } else {
+            MDC.setContextMap(contextMap);
+        }
     }
 
 }

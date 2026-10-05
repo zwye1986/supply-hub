@@ -2,6 +2,7 @@ package com.aifuli.gateway.handler;
 
 import com.aifuli.framework.common.pojo.CommonResult;
 import com.aifuli.gateway.filter.logging.AccessLogSanitizeUtils;
+import com.aifuli.gateway.filter.tracing.TraceWebFilter;
 import com.aifuli.gateway.util.WebFrameworkUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.web.reactive.error.ErrorWebExceptionHandler;
@@ -30,6 +31,14 @@ public class GlobalExceptionHandler implements ErrorWebExceptionHandler {
 
     @Override
     public Mono<Void> handle(ServerWebExchange exchange, Throwable ex) {
+        // Spring 异常处理器位于 WebFilter 链之外，需从共享 exchange 编号重新进入 Context，不能借用旧线程 MDC。
+        // 设计见 docs/superpowers/specs/2026-10-04-elk-logging-integration-design.md#43-s3网关-webflux-traceid-所有权与-reactor-mdc-作用域。
+        String traceId = TraceWebFilter.getOrCreateTraceId(exchange);
+        return Mono.defer(() -> handleWithTrace(exchange, ex))
+                .contextWrite(context -> context.put(TraceWebFilter.CONTEXT_KEY_TRACE_ID, traceId));
+    }
+
+    private Mono<Void> handleWithTrace(ServerWebExchange exchange, Throwable ex) {
         // 已经 commit，则直接返回异常
         ServerHttpResponse response = exchange.getResponse();
         if (response.isCommitted()) {

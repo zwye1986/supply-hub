@@ -11,7 +11,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 验证规则：
  * 1. 默认关闭 ELK TCP 发送；
  * 2. 默认地址为 127.0.0.1:50000；
- * 3. 默认缓冲队列大小为 8192，重连延迟为 5000ms。
+ * 3. 默认缓冲队列大小为 8192，重连延迟为 5000ms（入队超时在 XML 中固定为 0ms 零阻塞，不暴露配置项）。
  *
  * 设计见 {@code docs/superpowers/specs/2026-10-04-elk-logging-integration-design.md#32-配置属性定义-loggingelkproperties}
  */
