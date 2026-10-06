@@ -11,6 +11,19 @@
 
 ## 补核重开状态与必要纠偏（2026-10-05）
 
+### R3-03／R3-04 二次补核重开（2026-10-06）
+
+用户批准按补核建议继续修正。本轮起点为 `cd552ba68feef43a5da7545710870a7819d0d477`，该提交由用户明确授权产生，保留不改写。当前授权是设计、实现与隔离本地验证，不包含新的暂存、提交、推送、部署或真实业务库操作。
+
+原 `parent-r3-03-final-acceptance.json` 与 `parent-r3-04-final-acceptance.json` 保留为历史报告，**完整协议验收结论失效（REOPENED_ACCEPTANCE_NOT_VALID）**。第48／54轮完整profile与第49／55轮API契约的既有通过结果仍是原受测快照的运行证据，不能证明未覆盖条款，也不能沿用为修正后候选的门禁。
+
+- **R3-03 未闭合项**：Java大小写比较器不能替代数据库Collation；原始字符串Map不执行Collation等价身份合并；最外层事务归属、嵌套提前flush、最终元数据、flush后领域锁与RESERVED守卫须逐项补核，不以7项测试总绿推断完成。
+- **R3-04 未闭合项**：回填硬编码载荷版本1；核验漏版本／比较协议、孤儿BOUND及身份逐字一致性；`SmartLifecycle.start()`早于`ApplicationRunner.run()`，Runner的`@Order`不能建立引擎启用屏障。原源字段快照不含计划、租约和审计时间，不能称全字段证明；合法MANUAL(90)状态亦须覆盖。
+- **推进顺序**：先冻结R3-04完整修正条款及实际启动调用链，独立设计预审后逐项RED→GREEN；再修R3-03。两项重新取得独立规格、质量及父验收前，暂停R3-05及依赖它们的后续切片。Task A与切片1／2不在本次重开范围。
+- **保护边界**：A39冻结文件与历史迁移保持不变；引擎启动屏障涉及进程整体影响，须先核保护清单与最小改动范围。未确认旧writer／引擎全部停止及在途排尽时，不宣称维护切换可启用；本轮不执行部署。
+
+本记录仅纠正状态和开启修正，不表示新测试、修复或再次验收已完成。
+
 父裁定及完整证据位于`/Users/mac/.hermes/cache/scratch/task-b0-ledger-evidence/slice3-reacceptance/parent-reacceptance-verdict.json`与`handoff.json`。独占完整verify的Maven/runner均exit1：270原XML、2321执行、6failure、21error、0skip；额外7类API契约45执行全0不能抵销完整门禁失败。4039源／受测文件无漂移；两类BeforeAll阻断25个源方法。规格与质量亦failed，旧07关闭依据失效，A及切片1/2不在本次重新验收。
 
 F01–F13精确修复片、完整条款索引、真实TDD正反例、运行失败归因队列及A39待确认边界见[切片3重开修复计划](../plans/2026-10-05-b0-slice3-reopened-repair.md)。父先复核文档与授权边界，再仅派一个有限垂直实施片；不能一次泛化委派全部预算协议。此记录不改变下文获审§7.2/§7.2.1/§9协议：真实源INSERT与绑定1行、完整BCS/LEGACY比较、真实最外层集合/collation排序/flush、旧Timer直接BOUND回填和维护切换、allowlist/TLS失败关闭、setup/SESSION/缓存、flush后与commit guard、公开API及严格清理、真实REQUIRED代理和完整重跑故障门禁均必需，不降成建议或TODO。
@@ -534,28 +547,74 @@ scheduleOnce采用§7.2独立Timer账本协议：同type/key首次账本与新�
 ### 8.2 强制旧 Timer 迁移与启动切换检查实现（R3-04）
 
 1. **架构定位与应用级服务**：
-   - 实现为应用级迁移与核验服务 `TimerLegacyMigrationService`，并在 Spring Boot 启动前置阶段通过 `TimerLegacyMigrationRunner`（实现 `ApplicationRunner`，`@Order(Ordered.HIGHEST_PRECEDENCE)`）统一调度执行；
+   - 实现为应用级迁移与核验服务 `TimerLegacyMigrationService`；现有 `TimerLegacyMigrationRunner` 的 `ApplicationRunner`／最高 `@Order` 仅决定Runner之间次序，不能作为引擎或对外写入口启动前置保证。二次修正须先沿生产生命周期与写入口冻结真实屏障方案并独立预审；核验前任何扫描／业务写入均不得放行，失败不得启用。维护回填与只读启动核验须明确区分，不能在未确认旧writer静止时自动写账本。
    - 零修改 Liquibase changelog 历史及当前文件（保持 63 个变更集、125 张表、300 个 datetime(3)），受保护的 A39 基线文件（`SupplyChainLiquibaseIntegrationTest` 和 `BuyerAcceptanceCatalogMigrationIntegrationTest`）逐字节不变。
 
 2. **存量数据回填与不可变绑定协议**：
    - 严格在最外层写事务中分批扫描 `sc_timer_task` 中尚未绑定账本的历史记录；
    - 字段映射：复制原源任务字段 `taskId = id`, `taskNo = task_no`, `taskType = task_type`, `idempotencyKey = idempotency_key`；
-   - 载荷协议：统一标记为 `payload_version = 1`, `comparison_protocol = 'LEGACY_JSON_V1'`；
+   - 载荷协议：复制源任务真实 `payload_version`（必须为合法正版本，不硬编码为1），旧任务比较协议为 `LEGACY_JSON_V1`。已有BOUND槽不得覆写；启动核验须验证其版本与源一致，并按已冻结协议注册范围验证比较协议，不把未知协议当LEGACY放行；新B协议支持范围必须沿现有设计及实际入口确认，不擅自定义新Schema。
    - 资源预算与规范化比对：严格复用 R3-01 冻结的 `LedgerJsonEncoding.canonicalBytes(payloadJson)` 进行完整资源预算校验（UTF-8 ≤ 1MB，嵌套深度 ≤ 64，token 总数 ≤ 65536，数值词法 ≤ 1000，展开 ≤ 4096，规范输出 ≤ 4MB，精确十进制）；
    - 超限与损坏阻断：若存量数据存在损坏 JSON、语法错误或超出 R3-01 资源预算，直接抛出 `SystemIntegrityException` 阻断启动并记录详细原因，绝不静默改写历史 JSON，绝不绕过安全政策；
    - 不可变迁移标识：生成基于固定域前缀及源 `taskId` 的 16 字节不可变 `reservation_nonce`；
    - 直接 BOUND 写入：直接向 `sc_timer_schedule_identity` 插入 `binding_status = 20`（`STATUS_BOUND`），设置 `task_id = id`, `task_no = task_no`, `bound_at = now`，不提交中间态占位 `RESERVED`；
    - 源字段保护不变量：回填全过程对 `sc_timer_task` 源表的任何字段（`status`, `attempt_count`, `fencing_token`, `next_fire_at`, `payload` 等）严格保持零修改、逐字/逐值不变；
-   - 覆盖多状态任务：必须覆盖全部可能存在的旧任务状态（`PENDING(0)`, `CLAIMED(10)`, `EXECUTING(20)`, `RETRY(30)`, `COMPLETED(40)`, `DEAD(50)`, `CANCELLED(60)`）；重复执行幂等跳过已 BOUND 记录。
+   - 覆盖多状态任务：以既有DDL／状态常量为准，覆盖 `PENDING(0)`、`CLAIMED(10)`、`EXECUTING(20)`、`RETRY(30)`、`COMPLETED(40)`、`CANCELLED(50)`、`DEAD(60)`、`MANUAL(90)`；重复执行不改已BOUND记录，但不得跳过其完整性及预算核验。原文将50／60反置及遗漏90在本轮勘误。
 
 3. **启动切换前置一致性核验守卫（Switch Guard）**：
    - 在回填完成后，立即执行全量源表与账本的双向映射校验：
      (1) 账本完整性：源表 `sc_timer_task` 中的每一行，必须在 `sc_timer_schedule_identity` 存在对应且已处于 `BOUND` 状态的账本行；若源表有行而账本缺失，抛出 `SystemIntegrityException` 阻断切换并拒绝启用；
-     (2) 映射一致性：账本行记录的 `(task_type, idempotency_key, task_no, task_id)` 必须与源表严格一致；
+     (2) 映射一致性：账本行记录的 `(task_type, idempotency_key, task_no, task_id)` 必须与源表严格一致，身份文本逐字比较，不能以数据库大小写／重音不敏感比较替代。反向检查每个BOUND槽必须有正确源行；孤儿BOUND、错归属及残留RESERVED均拒绝；核验载荷版本与比较协议，不仅比较JSON。
      (3) 载荷一致性：账本 `payload_json` 必须通过 `LedgerJsonEncoding.canonicalBytes` 校验且与源表等价；
      (4) 故障模式：任何映射破坏、源行丢失、载荷损坏均 fail-closed 阻断应用启动，严禁在运行时持锁路径尝试修补。
 
-巡检采用ONCE任务串联：
+### 8.2.1 R3-04 二次修正设计候选：早期屏障与维护隔离（待独立预审）
+
+**独立预审回执：failed／passed=false（deleg_d2321fcb）。** 父核报告JSON为34条、19 passed／5 failed／10 unknown，均NOT_RUN，输入HEAD及主设计／计划哈希匹配。现候选不得实施；研究报告与预审原文保留在仓外 `reopen-r3-03-r3-04-20261006/r3-04-pre-review/`。
+
+- PR04-B01：普通Import原DataSource配置仍执行全模块MapperScan与factory／BusinessCode装配；“精确Import”不能选择Bean方法。维护DS／manager精确复用、属性绑定与关闭所有权须定型，不能另造池或复制生产参数。
+- PR04-B02：SmartInitializingSingleton装配断言晚于补偿initMethod；数据核验成功后若ledger缺失，补偿仍可能先扫描或走fallback。必需依赖／graph检查须在factory／补偿可创建前失败，实例核验阶段必须具体证明无循环，不能只改最终启动结果。
+- PR04-B03：仅禁止服务raw log不足；Spring refresh与Boot失败报告／CLI未捕获异常可能输出完整cause链。安全呈现必须覆盖实际框架日志及stderr，同时保存原始因果；不能删除cause、静默关闭全进程日志或擅改共享日志配置。具体边界与新增路径须先冻结，不将无凭据的合成测试标记当真实秘密。
+- PR04-B04：逐字段blank／正值／长度／nullable映射和SQL三值逻辑、有界页限、严格游标推进、显式UTF-8与JSON在JDBC物化之前的限额策略尚未具体闭合。LIMIT行数不证明单行JSON分配有界；不得改六预算或trim改写身份。
+
+下一候选只解决以上四组技术阻断；新增维护装配专项矩阵不得漏项，unknown未闭合不得passed。实际维护控制者与集群静止证据交接继续待决，与上述技术failed分开。当前仍无新生产改动／新运行门禁，R3-03／R3-05依赖继续暂停。
+
+**状态：DESIGN_CANDIDATE_NOT_APPROVED，不是实施／运行／验收。** 只读研究报告和34条完整矩阵位于仓外证据根 `reopen-r3-03-r3-04-20261006/r3-04-design-research/` 的 `report.md`／`clause-matrix.json`；研究输入HEAD为 `cd552ba68feef43a5da7545710870a7819d0d477`。下述方案只冻结为预审候选，不将研究者结论当passed。
+
+1. **三个启动窗口统一封闭**：Timer／Outbox均为SmartLifecycle；直充补偿 `RechargeFrequencyRecoveryConfiguration` 的 `initMethod="start"` 更早在单例初始化时开线程。不得只改Runner、phase或readiness。候选通过main显式导入 `IdentityLedgerStartupConfiguration`，静态BeanFactoryPostProcessor保留原dependsOn并为唯一 `supplyChainSqlSessionFactory` 加入早期 `identityLedgerStartupBarrier` 依赖；屏障为非lazy InitializingBean且依赖 `supplyChainLiquibase`，只依赖DataSource／事务manager／无Mapper的核验服务，禁止依赖Mapper／registry／clock造成环。须核所有初始化JDBC写者和真实WebServer启动顺序，不能由依赖声明推断全部写面已封闭；独立预审若发现旁路或依赖环应failed。
+2. **正常启动只读，成功后开放**：屏障状态NEW→VERIFYING→VERIFIED或FAILED；无public markReady、可选provider或配置旁路。一个本供应链无外层只读RR事务内有限keyset页核验，成功提交后才VERIFIED；失败保cause中止refresh。双引擎mandatory依赖并在running CAS／建线程之前assertVerified，手工start也不得绕过。正常Runner不自动回填；生产装配须保证ledger service存在，不能因狭窄A39 fixture兼容fallback而允许生产回退旧writer。装配检查不能在屏障阶段提前取Mapper导致循环。真实Spring＋隔离MySQL＋本机loopback证明核验阻塞期间双引擎、补偿、HTTP/RPC认证nonce及业务写入均为0，失败不开放且无残留线程；依赖/guard删除结构负控制必须能失败。
+3. **维护独立且不假证明集群静止**：回填置于显式装配的窄非HTTP维护命令，不组件扫描、不启用Feign／供应商、双引擎／补偿，正常启动绝不自动修映射。可信运维控制者须先完成全部旧writer／引擎／补偿／入站停止、在途排尽、冻结库与版本、维护独占、同制品切换交接；本地boolean／maintenance配置／直充业务gate不能证明这些事实。控制者身份与证据交接格式仍待用户决定；本轮仅隔离本地模拟，不执行真实维护或部署。候选实现不得因运维未定而造可伪造permit或宣称已具备生产切换资格。
+4. **分页与原子性**：维护拒绝活动外层事务、同步及污染资源，自己拥有供应链最外层写事务。一个事务内按源id keyset分页，严格INSERT影响行数1，直接BOUND、固定域源id确定性nonce、复制真实正payloadVersion／完整JSON；不改源、不覆盖现有槽、不提交RESERVED，不局部retry或REQUIRES_NEW。末页SQL／预算失败整批回滚，afterCompletion和独立连接取证。不得擅改为按页commit；长维护事务的容量／锁占用如实报告。开始校验允许待回填缺槽但禁止已存在损坏槽，结束必须完整校验；无待回填也不得跳过已有槽核验。
+5. **双向全量核验**：Timer正向源→账本与反向账本→真实taskId均有限分页；ci定位不代替UTF-8字节身份匹配；覆盖孤儿BOUND、RESERVED、错归属、真实版本与注册协议、完整LEGACY载荷及双方六预算，元数据错误不短路预算。Outbox正向仅对冻结B保留聚合及数据库Collation等价变体要求完整账本；旧非B源不强加回填。反向检查所有已有Outbox账本的源、四键、eventId、target、版本、协议和完整载荷，不漏孤儿／RESERVED；BCS尚未注册Schema必须失败关闭，不新增商业字段或LEGACY生产B入口。核验快照只保证本次内部一致，不证明其它实例版本或静止。
+6. **完整验证与安全**：源全字段快照以metadata列集合核对，包含计划、租约、错误及创建更新时间；覆盖8状态和合法FIXED_DELAY。六预算原始非法文本纯边界测试与真实JSON列可存超限反例分别取证。诊断只记录阶段、数值id、字段类和安全原因，不打印payload／nonce／任意cause文本；异常内部cause完整保留。所有34条矩阵逐项安排独立反例，编译／fixture／同步失败不算行为RED；修正后新的完整profile、API、独立规格／质量和父验收不可省略。
+
+**候选运行字节白名单（20路径，待预审／范围确认，不是立即全部编辑）：** 路径均相对server模块；现有 `src/main/java/com/aifuli/module/supplychain/` 下的 `SupplyChainServerApplication.java`、`infrastructure/timer/TimerLegacyMigrationService.java`、`TimerLegacyMigrationRunner.java`、`TimerEngineLifecycle.java`、`infrastructure/outbox/OutboxDeliveryEngine.java`；拟新增同timer包 `IdentityLedgerStartupConfiguration.java`、`IdentityLedgerStartupBarrier.java`、`TimerLegacyMaintenanceApplication.java`。现有测试 `src/test/java/com/aifuli/module/supplychain/infrastructure/timer/TimerLegacyMigrationIntegrationTest.java`、`infrastructure/TimerOutboxInboxIntegrationTest.java`（仅必要装配，不改原行为断言）；拟新增同timer测试包 `IdentityLedgerProductionStartupIntegrationTest.java`、`TimerLegacyMigrationAtomicityIntegrationTest.java`、`TimerLegacyMigrationSourceProtectionIntegrationTest.java`、`TimerLegacyMigrationProtocolIntegrationTest.java`、`TimerLegacyMigrationBudgetTest.java`、`IdentityLedgerSwitchIntegrityIntegrationTest.java`、`IdentityLedgerMigrationUpgradeIntegrationTest.java`、`IdentityLedgerMaintenanceContractTest.java`、`TimerLegacyMigrationLoggingTest.java`；拟新增 `src/test/java/com/aifuli/module/supplychain/architecture/IdentityLedgerStartupArchitectureTest.java`。A39／060／061／changelog、编码器、池预算、原DataSource配置方法体、业务补偿类／商业写点均零修改；若实际需要超出则停报最小diff，不扩授权。
+
+该候选独立预审必须读完整§7.2／§7.2.1／§8／§9、计划F02与34条矩阵，重点尝试推翻初始化依赖屏障及维护隔离可行性；架构选择和真实维护证据交接未批准前不得启用。
+
+### 8.2.2 R3-04 rev2修订检查点（设计研究，未再次预审／未实施）
+
+两路只读报告保留在 `reopen-r3-03-r3-04-20261006/rev2-research/`：`assembly-report.md`／`assembly.json` 与 `safety-read-report.md`／`safety-read.json`。以下取代§8.2.1被否定的模糊装配／读取措辞，仅为新候选，**整体仍DESIGN_CANDIDATE_NOT_APPROVED**。B03尚有实际Druid后台建连日志分支未闭合，不进入生产编码，不发起“全候选通过”的预审。
+
+1. **B01精确维护装配**：无parent的GenericApplicationContext，不注册ConfigurationClassPostProcessor或annotation config processors，不解析原类@Configuration／MapperScan。用RootBeanDefinition将原DataSourceConfiguration当普通factory对象，仅选原 `supplyChainDataSource` 与 `supplyChainTransactionManager` 方法，explicit factoryBeanName／factoryMethodName／RuntimeBeanReference／targetType，允许框架公开装配API调用异包包私有方法，不应用层反射私有。原属性类由Binder在beforeInitialization绑定原前缀，保留Aware→绑定→InitializingBean顺序及1500校验，不加载正常app／远端配置，不复制参数。维护允许定义仅原factory对象、原properties、唯一wrapper DS、唯一观测manager及无Mapper JDBC内核；不含factory／mapper／clock／业务号／registry／引擎／补偿／HTTP／Feign／normal guard。默认既有061维护不注册Liquibase，缺schema失败；获单独授权才可选原Liquibase方法运行既有DDL，不把其技术写纳入回填事务。context没有自动关闭BudgetRoutingDataSource能力，CLI owner在DS初始化前经公开getRawDataSource捕获原raw，事务退出→context关闭→原Druid close一次，异常不吞；禁止失败时getBean再造池，不承诺公开pool.close等于物理强关闭。
+2. **B02三层顺序**：A为普通static BFPP，在所有Mapper注册结束后、任何业务singleton创建前只作元数据检查：唯一支持的ledger定义、唯一ledger mapper、原factory／DS／manager资源图、全部Mapper明确factory引用；缺失／重复／错类型／不透明未审工厂／别名偷换／未知初始化写图即失败，禁止eager getBean猜类型。B为无Mapper只读数据屏障，factory.dependsOn B，Liquibase在先，RR最外层成功提交才DATA_VERIFIED。C为实际装配准入：B→factory→唯一ledger Mapper→实际ledger实例→C；C核公开mapper/factory/manager的同wrapper身份及完整实例后才ADMITTED。唯一ledger Mapper不依赖C，所有其它Mapper及补偿init／Timer writer／双引擎／业务号Runner定义显式依赖C并保留原边，防止环。B及内核不得依赖Mapper／registry／C。支持图按当前明确constructor／property refs冻结，未知BPP／supplier／动态替换不能假称通用DFS已证明。双引擎start在enabled／CAS／建线程之前强制assertAdmitted，normal Runner只断言不回填。SmartInitializingSingleton不能承担任何首写门禁。真实30秒补偿窗口／actual ledger失败／移除依赖边／真实Servlet仍NOT_RUN。
+3. **B04四遍读取**：Timer源与账本各一遍，保留B Outbox源与全部Outbox账本各一遍。内部ID页固定128且上限128，不含JSON；首游标NULL而非0以捕获非法非正id，后续严格递增真实id不加1、不OFFSET。每id单对LEFT JOIN固定LIMIT 2，2行即错误；源／账本两侧分别投影 `OCTET_LENGTH(CAST(payload_json AS CHAR CHARACTER SET utf8mb4))` 与 `CASE WHEN 同表达式 <= 1048576 THEN CONVERT(同表达式 USING binary) ELSE NULL END`，不额外投影raw JSON。同SELECT同RR快照避免测长后无界重读。超限在客户端payload accessor／解码之前拒绝；显式binary UTF-8严解，长度等reported octets才调用原canonicalBytes；元数据差异不短路双方预算。默认驱动可能buffer两行，有限pair结果不是服务器串化／整堆硬上界；每row释放decoded／canonical，不持全页JSON。详细固定SQL及参数见safety-read报告§4；实施前将精确SQL纳入受审设计/代码快照，不自行增列或改变投影。
+4. **字段与NULL准入**：joined id的NULL是缺行，不COALESCE／primitive读取成0；getObject包装类型保留NULL，若primitive必须紧邻wasNull。内部id／BOUND taskId正Long，payloadVersion正Int，两边一致；aggregateVersion非负。身份字段非NULL非blank且码点长度不超过DDL（Timer type64/key128/no32，Outbox聚合type64/id64/event128/eventId32，targetType32/name128，protocol32），不trim／Unicode归一／强加新业务号前缀。targetType准确LOCAL/HTTP；协议按实际注册范围，B的LEGACY／未注册BCS拒。nonce非NULL16字节，不新加全零禁止／全局唯一；BOUND boundAt与createdAt非NULL，不加未经冻结的时间大小关系。可选租约／错误字段NULL保持，合法JSON值null与SQL NULL区分；所有20个源列／八状态／合法FIXED_DELAY保留。合法性不能仅依赖两边相等或WHERE !=三值过滤，双方预算先于身份／版本／协议比较。首错异常不伪称之后未执行侧已完成预算核验。
+5. **B03尚未闭合的安全呈现候选**：顶层toString／printStackTrace不阻止Logback ThrowableProxy展开cause；候选R3专属安全叶标记、refresh前安装限定TurboFilter、优先Boot ExceptionReporter及明确CLI非零终结，原cause内部保留。不能只FailureAnalyzer、只删服务log.error或全局关日志。该路线需新增 `src/main/resources/META-INF/spring.factories`，超原20路径且尚未授权／未实施；原共享日志配置不改。同步作用域不能覆盖Druid后台创建连接在调用方异常前的URL／cause日志，不能假设池已热，也不能静默把此分支排除出完整启动故障门禁。须先查清实际backend／最早安装／异步归属与最小安全边界；可行性或必要范围未定即保持blocked。
+
+**有限实证：** 父重新核probe源码／依赖哈希并离线执行javac及java均0（2026-10-06T19:27:34.563944+08:00）；仅证公共API微型样例的selected package-private factory、无配置解析、Binder时序及非eager类型发现，DB／network calls均0。不是原DS／Druid／MyBatis／双屏障／补偿／HTTP实测，更不作为任何实施GREEN。报告源码原字节不覆盖；本轮A39、历史DDL及生产运行字节不改，真实维护控制者及静止交接仍待决。
+
+### 8.2.3 B03异步日志范围决策（待用户裁决）
+
+**用户裁定：保持全部现约束，不接受A／B取舍；R3-04暂停实施。** 不豁免原池异步连接诊断风险，不授权影响其它池／非R3同调用点的class-logger呈现改变；当前无满足完整约束的已证方案，保持 `PAUSED_BY_USER_BOUNDARY_UNRESOLVED`。不继续后台研究、试改、实施或门禁，除非用户另行指示。R3-03仍重开待修，依赖后片不放行；本次暂停不是验收通过。
+
+用户单独允许精确新增server资源 `src/main/resources/META-INF/spring.factories`，**仅注册R3专属Boot启动异常报告器**，不改共享日志XML、池参数或其它模块。此为路径范围授权，不代表B03技术阻断已解决或恢复实施；当前不创建该资源，未来恢复时仍须独立设计预审。
+
+**B03异步日志边界待裁决：** 仓外 `rev2-research/b03-druid-boundary-report.md`／JSON查明Druid1.2.28建连错误采用类级private static logger，事件不含池对象／R3归属，未发现能完整区分原供应链池与本R3调用的公开API。仅同步作用域不能覆盖后台创建／重连；Liquibase可早于R3核验触发建连，不能假定热池。离线probe的特定classpath选择SLF4JImpl→Logback，缺provider／显式JUL负控制选JUL；这不是生产有效backend或真实连接故障验证。保持B03 blocked，不扩大现授权。
+
+待用户选择A或B：A明确将原池自主init／create／reconnect及Liquibase连接诊断列为独立安全风险，R3安全呈现承诺限定同步核验／维护数据、语句／事务与框架／CLI，风险仍记录且不代表部署批准；B若要求该连接日志也安全，需明确授权指定Druid类logger调用点的诊断呈现变化，承认影响其它池及非R3同调用点，不称池级隔离、不能全logger静默或自动扩至Abstract/JdbcUtils。严格同时要求仅本池／仅R3／其它池原日志完全不变时，目前无已证可实施路线。两项均须修订设计并独立预审，不能把选项当已实现安全机制；候选Boot reporter的 `src/main/resources/META-INF/spring.factories` 新资源亦需精确范围确认。
+
+### 8.3 巡检ONCE任务串联（既有协议，不属本轮新增实施）
 
 - ApplicationReady的明确应用入口在一个短供应链事务内取库时钟，幂等确保**当前bucket和下一合法未来bucket**，两份任务的身份/载荷都固定；不能只返回当前handle就宣告已播种未来链。多实例同轮由Timer账本唯一键收敛，两次调度任一步SQL失败全回滚。
 - 当前桶返回旧COMPLETED/DEAD/CANCELLED时不改旧行，但仍确保不同key的未来桶。未来桶已存在且为合法非终态则不重建；若已是终态，不把该handle视为未来执行已建立，按固定桶序向后有限探测/确保不同未来key，达到配置的正lookahead上限则稳定报播种阻塞，不能无限循环或重开旧槽。只读状态检查不锁源、不在持领域锁路径做播种；B0隔离夹具验证当前DEAD且无后继、未来已存在、终态未来/上限和并发实例。

@@ -144,6 +144,11 @@ RED先测真实源缺失／伪造映射；再源聚合unique、eventId unique／
 
 ### R3-03：完整技术worker意图收集／collation／flush
 
+**二次补核重开：REOPENED_ACCEPTANCE_NOT_VALID。** 下列已勾选条目仅保留历史实施／审查／运行记录，不再作为完整条款验收。Java比较器未实现数据库Collation排序与等价合并；嵌套／最外层归属、完整元数据冲突、flush后领域锁与RESERVED守卫待逐项补核。先完成R3-04修正，再以实际事务连接、无表参数化SQL及真实数据库负例修复本项；禁止因ASCII反序并发单次成功降低获审要求。
+
+- [ ] 冻结完整缺口矩阵、实际调用链与修正设计，并独立预审。
+- [ ] 分行为RED→GREEN修正并验证最终候选；独立规格／质量复审及父最终验收。
+
 - [x] 设计先行：主设计文档新增 §7.2.2 完整技术 worker 意图收集、数据库 Collation 确定性排序与单次 Flush 协议（R3-03）。
 - [x] 方案设计独立预审通过（`deleg_23a851ff` passed）。
 - [x] 编写真实 MySQL TDD 测试（`LocalLedgerIntentFlushIntegrationTest`）：
@@ -162,6 +167,18 @@ RED→GREEN分别验嵌套提前flush、最后行最终版本、大小写／组�
 
 ### R3-04：强制旧Timer迁移／启动切换检查
 
+**最新用户停止点：PAUSED_BY_USER_BOUNDARY_UNRESOLVED。** 用户不接受B03风险分离A或跨池诊断变更B，保持全部现约束并暂停实施；未另行指示前不续派研究／编码／测试。仅授权未来候选新增server `src/main/resources/META-INF/spring.factories` 注册R3 Boot报告器；资源尚未创建，此单项授权不解除暂停或预审failed。原研究／实验／报告保留，无新生产字节／提交／部署。
+
+**二次补核重开：REOPENED_ACCEPTANCE_NOT_VALID；本轮优先。** 下列已勾选条目为历史记录，原完整验收失效但原XML保留。修正须复制真实payloadVersion，核验比较协议、双向完整映射（含孤儿BOUND）、身份逐字一致性及全部合法状态；补全源字段快照。真实Spring启动必须证明核验完成前零扫描、失败不启用；ApplicationRunner排序不是生命周期屏障。维护切换前旧writer停止、在途排尽和同版本启用条件不可省略或以本机状态冒称集群确认。
+
+- [ ] 沿真实生命周期／写入口追踪，核A39保护清单，冻结最小修正白名单与设计。
+- 已完成只读追链候选：发现双SmartLifecycle之外直充补偿Bean initMethod提前启动；主设计§8.2.1冻结早期factory依赖屏障／正常只读核验／独立维护候选，完整34条矩阵与20路径白名单在仓外research报告。仍待独立预审及范围／运维交接决策，不计实施完成。
+- 独立预审deleg_d2321fcb已failed：维护精确装配、缺ledger前置检查、框架失败日志安全及完整有界读取4组阻断；34条判定19 passed／5 failed／10 unknown且全部NOT_RUN。主设计§8.2.1保存回执，当前不编码，下一候选逐组闭合且不得扩大A39／DDL／池／商业边界。
+- rev2研究交回：B01指定Generic非配置解析维护注册；B02指定元数据／数据屏障／实例准入三层顺序；B04指定128个ID页与单对有界UTF-8投影、nullable／blank合法性。公共API微probe父重跑javac/java均0，仅技术方向验证。B03仍有Druid后台建连日志UNKNOWN与新增spring.factories范围待确认；整体不批准、不编码、不复用旧门禁。
+- B03异步边界专项已交回：类级日志无可靠池／R3归属，当前约束下不能靠同步filter闭合。待用户裁决池诊断独立风险范围A，或精确class-logger呈现增量B；spring.factories新增范围另确认。结论是BOUNDARY_DECISION_REQUIRED，不是设计passed，不部署。
+- [ ] 独立设计预审通过后，逐项行为RED→GREEN（先启动屏障及映射完整性）。
+- [ ] 新候选定向／架构／完整profile与API门禁，独立双审，父重新验收。
+
 - [x] 设计先行：主设计文档新增 §8.2 强制旧 Timer 迁移与启动切换检查实现（R3-04）。
 - [x] 方案设计独立预审通过（`deleg_90cc8c9d` passed）。
 - [x] 编写真实 MySQL TDD 测试（`TimerLegacyMigrationIntegrationTest`）：
@@ -178,6 +195,8 @@ RED→GREEN分别验嵌套提前flush、最后行最终版本、大小写／组�
 在隔离MySQL分别新库重放、已有061库升级、含PENDING/RETRY/活动/全部终态旧任务、重放与损坏JSON/映射/协议负例；读回原status/attempt/token/plan/所有源字段逐字／逐值不变。启动全量校验映射完整协议一致，保留B命名空间源有行无账本即拒绝；停全部旧writer与引擎、排尽在途、维护迁移核验、同版本后开引擎的门禁仅本地模拟，不部署。混writer无法可靠确认则不宣称可启用，不在重复持锁路径补映射。
 
 ### R3-05A：公开API捕获／一次性严格隔离（预算片先做安全底座）
+
+**暂停推进：** R3-03／R3-04完整验收已重开，当前不进入本项；不得沿用历史passed跨片放行。
 
 不启用新预算路径，先限定`MySqlSocketExtractor`、预算wrapper清理支持与新故障fixture。保存原holder、直接ConnectionImpl、实际标准Socket身份，只用公开API不反射；缺失类型/socket失败关闭。cleanup独占一次：保存引用→disable阻止recycle/清缓存→对提前捕获实际Socket直接close捕获异常→同步abortInternal→一次discard(savedHolder)。各步失败继续尝试余下步骤，保原业务cause及全部suppressed，cleanupFailed永久否决本命令retry；不正常pooled.close回池、不重复扣active。
 
