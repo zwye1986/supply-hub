@@ -782,3 +782,23 @@ databaseChangeLog:
             encoding: UTF-8
             splitStatements: true
             stripComments: false
+  - changeSet:
+      id: 060-buyer-acceptance-catalog
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 060-buyer-acceptance-catalog.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 061-append-schedule-identity-ledger
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 061-append-schedule-identity-ledger.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false

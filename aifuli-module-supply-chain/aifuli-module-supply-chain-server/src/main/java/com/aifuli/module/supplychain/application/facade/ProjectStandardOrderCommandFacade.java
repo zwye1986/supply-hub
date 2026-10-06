@@ -210,7 +210,7 @@ public class ProjectStandardOrderCommandFacade {
                 targetSchema.schemaCode(), targetSchema.schemaVersion(),
                 encrypted == null ? null : encrypted.ciphertext(), targetDigest,
                 encrypted == null ? null : encrypted.keyVersion(), targetValid,
-                invariantFingerprint, requestFingerprint, buyerOrderDigest, request.getPreviousReceiptVersion(), traceId);
+                invariantFingerprint, requestFingerprint, buyerOrderDigest, request.getPreviousReceiptVersion(), traceId, targetSchema.catalogIdentity());
     }
 
     private byte[] canonicalTarget(Map<String, String> targetValues, TargetSchemaSnapshot targetSchema) {

@@ -15,6 +15,11 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerListingAva
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerListingMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerListingVersionMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.BuyerListingStatus;
+import com.aifuli.module.supplychain.tradecore.catalog.domain.BuyerListingManagementMode;
+import lombok.extern.slf4j.Slf4j;
+import static com.aifuli.framework.common.exception.util.ServiceExceptionUtil.exception;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BUYER_CATALOG_AUTO_MANAGED;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BUYER_CATALOG_NOT_READY;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -26,6 +31,7 @@ import java.security.NoSuchAlgorithmException;
 import java.time.LocalDateTime;
 
 @Service
+@Slf4j
 @RequiredArgsConstructor
 public class BuyerListingPublicationService {
 
@@ -44,8 +50,15 @@ public class BuyerListingPublicationService {
 
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public PublishResult publish(PublishListingCommand command) {
+        log.info("发布手工受理目录 listingNo={} expectedVersion={} operatorId={}",
+                command.listingNo(), command.expectedListingVersion(), command.operatorId());
         validateCommercialTerms(command);
         BuyerListingDO listing = requireListingForUpdate(command.listingNo());
+        // 自动目录不能从兼容入口接受外部价；来源资格发布仅在B切片交付。
+        // 见 docs/superpowers/specs/2026-10-04-buyer-selection-acceptance-catalog-bridge-design.md#44-手工入口治理。
+        if (!BuyerListingManagementMode.MANUAL.name().equals(listing.getManagementMode())) {
+            throw exception(BUYER_CATALOG_AUTO_MANAGED);
+        }
         requireExpectedVersion(listing, command.expectedListingVersion());
         BuyerListingStatus currentStatus = BuyerListingStatus.fromCode(listing.getStatus());
         if (currentStatus == BuyerListingStatus.RETIRED) {
@@ -100,8 +113,16 @@ public class BuyerListingPublicationService {
 
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public void changeStatus(ChangeListingStatusCommand command) {
+        log.info("变更受理目录状态 listingNo={} target={} expectedVersion={} operatorId={}",
+                command.listingNo(), command.target(), command.expectedListingVersion(), command.operatorId());
         BuyerListingDO listing = requireListingForUpdate(command.listingNo());
         requireExpectedVersion(listing, command.expectedListingVersion());
+        // B真实价格及供给资格尚未交付；currentVersion非空也不能授权AUTO恢复。
+        // 见 docs/superpowers/specs/2026-10-04-buyer-selection-acceptance-catalog-bridge-design.md#44-手工入口治理。
+        if (command.target() == BuyerListingStatus.PUBLISHED
+                && !BuyerListingManagementMode.MANUAL.name().equals(listing.getManagementMode())) {
+            throw exception(BUYER_CATALOG_NOT_READY);
+        }
         BuyerListingStatus current = BuyerListingStatus.fromCode(listing.getStatus());
         if (!current.canTransitionTo(command.target())) {
             throw new IllegalStateException("Listing status transition is not allowed: "

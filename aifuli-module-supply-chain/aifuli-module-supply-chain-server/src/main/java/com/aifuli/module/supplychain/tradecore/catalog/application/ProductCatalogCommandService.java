@@ -275,14 +275,29 @@ public class ProductCatalogCommandService {
 
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public String createBuyerListing(CreateBuyerListingCommand command) {
+        String normalizedCode = command.buyerSkuCode() == null ? null : command.buyerSkuCode().trim();
+        log.info("创建手工受理目录 buyerCode={} skuCode={} operatorId={}", command.buyerCode(), command.platformSkuCode(), command.operatorId());
+        if (normalizedCode == null || normalizedCode.isEmpty()
+                || normalizedCode.codePointCount(0, normalizedCode.length()) > 64) {
+            throw new IllegalArgumentException("采购商商品编码须为1至64字符");
+        }
+        // 新兼容编码保留BPD命名空间；存量编码及请求指纹不改写，见桥接设计§3.1。
+        if (listingMapper.isReservedBuyerProductCode(normalizedCode, BusinessNoPrefixes.BPD)) {
+            throw exception(com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BUYER_CATALOG_CODE_CONFLICT);
+        }
         BuyerDO buyer = requireActiveBuyer(command.buyerCode());
         PlatformSkuDO sku = sellabilityService.requireSellableByCode(command.platformSkuCode()).sku();
+        BuyerListingDO existing = listingMapper.selectByBuyerAndSku(buyer.getId(), sku.getId());
+        if (existing != null) {
+            throw exception(com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BUYER_CATALOG_CODE_CONFLICT);
+        }
         LocalDateTime now = now();
         BuyerListingDO listing = BuyerListingDO.builder()
-                .listingNo(businessNoGenerator.next("LST_"))
+                .listingNo(businessNoGenerator.next(BusinessNoPrefixes.LST))
                 .buyerId(buyer.getId())
                 .platformSkuId(sku.getId())
-                .buyerSkuCode(command.buyerSkuCode())
+                .buyerSkuCode(normalizedCode)
+                .managementMode(com.aifuli.module.supplychain.tradecore.catalog.domain.BuyerListingManagementMode.MANUAL.name())
                 .status(BuyerListingStatus.DRAFT.getCode())
                 .version(0L)
                 .createdBy(command.operatorId())
@@ -290,11 +305,18 @@ public class ProductCatalogCommandService {
                 .updatedBy(command.operatorId())
                 .updatedAt(now)
                 .build();
-        listingMapper.insert(listing);
+        try {
+            listingMapper.insert(listing);
+        } catch (org.springframework.dao.DuplicateKeyException duplicate) {
+            if (!BuyerAcceptanceCatalogIdentityWriter.isIdentityKeyViolation(duplicate)) { throw duplicate; }
+            var conflict = exception(com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BUYER_CATALOG_CODE_CONFLICT);
+            conflict.initCause(duplicate);
+            throw conflict;
+        }
         availabilityMapper.insert(BuyerListingAvailabilityDO.builder()
                 .listingId(listing.getId())
                 .availability(ListingAvailability.UNKNOWN.getCode())
-                .reasonCode("NOT_EVALUATED")
+                .reasonCode(BuyerAcceptanceCatalogIdentityWriter.NOT_EVALUATED)
                 .evaluatedAt(now)
                 .basisVersion(0L)
                 .version(0L)

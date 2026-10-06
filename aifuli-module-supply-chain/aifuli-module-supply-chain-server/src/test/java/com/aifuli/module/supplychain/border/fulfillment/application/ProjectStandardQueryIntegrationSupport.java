@@ -114,8 +114,8 @@ class ProjectStandardQueryIntegrationSupport implements AutoCloseable {
     void receipt(long id, Long project, long buyer, String buyerNo, String schema) {
         jdbc.update(
                 "INSERT INTO"
-                    + " sc_fulfillment_acceptance_receipt(id,receipt_no,project_id,buyer_id,buyer_order_no,buyer_user_id,buyer_sku_code,quantity,target_schema_code,target_digest,invariant_fingerprint,request_fingerprint,listing_version_no,status,created_at,updated_at,version)"
-                    + " VALUES(?,?,?,?,?,'old-user','sku',1,?,UNHEX(REPEAT('01',32)),UNHEX(REPEAT('02',32)),UNHEX(REPEAT('03',32)),1,0,CURRENT_TIMESTAMP(3),CURRENT_TIMESTAMP(3),1)",
+                    + " sc_fulfillment_acceptance_receipt(id,receipt_no,project_id,buyer_id,buyer_order_no,buyer_sku_code,quantity,target_schema_code,target_digest,invariant_fingerprint,request_fingerprint,listing_version_no,status,created_at,updated_at,version)"
+                    + " VALUES(?,?,?,?,?,'sku',1,?,UNHEX(REPEAT('01',32)),UNHEX(REPEAT('02',32)),UNHEX(REPEAT('03',32)),1,0,CURRENT_TIMESTAMP(3),CURRENT_TIMESTAMP(3),1)",
                 id,
                 "AR_" + id,
                 project,
@@ -133,7 +133,7 @@ class ProjectStandardQueryIntegrationSupport implements AutoCloseable {
         jdbc.update(
                 "INSERT INTO"
                     + " sc_supply_chain_order(id,order_no,order_type,project_id,buyer_id,buyer_code_snapshot,buyer_name_snapshot,buyer_user_id,buyer_order_no,acceptance_receipt_id,buyer_settlement_amount,currency,platform_sku_id,quantity,order_status,aftersale_status,business_stage,detail_type,detail_id,detail_version,request_fingerprint,created_at,updated_at)"
-                    + " VALUES(?,?,'CARD',?,?,'buyer','Buyer','different-old-user',?,?,100,'CNY',1,1,10,0,'CARD_AWAITING_RESULT','FULFILLMENT',?,1,UNHEX(REPEAT('03',32)),CURRENT_TIMESTAMP(3),CURRENT_TIMESTAMP(3))",
+                    + " VALUES(?,?,'CARD',?,?,'buyer','Buyer',NULL,?,?,100,'CNY',1,1,10,0,'CARD_AWAITING_RESULT','FULFILLMENT',?,1,UNHEX(REPEAT('03',32)),CURRENT_TIMESTAMP(3),CURRENT_TIMESTAMP(3))",
                 id,
                 "SC_" + id,
                 project,
@@ -185,8 +185,8 @@ class ProjectStandardQueryIntegrationSupport implements AutoCloseable {
                 "op_key_" + id);
         jdbc.update(
                 "INSERT INTO"
-                    + " sc_fulfillment_asset(id,asset_no,fulfillment_request_id,b_order_id,operation_id,supplier_id,buyer_id,buyer_user_id,sequence_no,unit_quantity,asset_type,encrypted_payload,masked_value,fingerprint,key_version,lifecycle_status,created_at,updated_at)"
-                    + " VALUES(?,?,?,?,?,9,?,'third-old-user',1,1,?,?,'****',?,'k1',?,CURRENT_TIMESTAMP(3),CURRENT_TIMESTAMP(3))",
+                    + " sc_fulfillment_asset(id,asset_no,fulfillment_request_id,b_order_id,operation_id,supplier_id,buyer_id,sequence_no,unit_quantity,asset_type,encrypted_payload,masked_value,fingerprint,key_version,lifecycle_status,created_at,updated_at)"
+                    + " VALUES(?,?,?,?,?,9,?,1,1,?,?,'****',?,'k1',?,CURRENT_TIMESTAMP(3),CURRENT_TIMESTAMP(3))",
                 id,
                 "FA_" + id,
                 request,

@@ -122,7 +122,7 @@ class ProjectAppAuthFlowIntegrationTest {
             if (EXTERNAL_JDBC_URL == null) {
                 MYSQL.start();
             }
-            server = new SpringApplicationBuilder(SupplyChainServerApplication.class)
+            server = new SpringApplicationBuilder(SupplyChainServerApplication.class, IdentityKeyTestConfiguration.class)
                     .run(commandLineArguments());
             assertThat(server).isInstanceOf(WebServerApplicationContext.class);
             WebServerApplicationContext webServer = (WebServerApplicationContext) server;
@@ -653,6 +653,21 @@ class ProjectAppAuthFlowIntegrationTest {
                 "--aifuli.supply-chain.datasource.password=" + password(),
                 "--aifuli.supply-chain.datasource.driver-class-name=com.mysql.cj.jdbc.Driver"
         };
+    }
+
+    /**
+     * 仅本类显式装配的限频身份端口，不替换认证Filter、nonce、Facade或生产安全配置。
+     * 每次返回新32字节测试快照，既不读取环境密钥，也不改变默认provider缺密钥失败关闭。
+     * 设计见 docs/superpowers/specs/2026-10-05-catalog-reliable-consumption-prerequisite-design.md
+     * 「九测试／夹具限定修复设计」。
+     */
+    @org.springframework.boot.test.context.TestConfiguration(proxyBeanMethods = false)
+    static class IdentityKeyTestConfiguration {
+        @org.springframework.context.annotation.Bean
+        com.aifuli.module.supplychain.infrastructure.security.RechargeFrequencyIdentityKeyProvider
+                testRechargeFrequencyIdentityKeyProvider() {
+            return () -> new byte[32];
+        }
     }
 
     private static String jdbcUrl() {

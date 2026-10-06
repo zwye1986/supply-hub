@@ -805,6 +805,9 @@ class ProjectAdminIntegrationTest {
             BuyerAccountOpeningService.class, AccountLedgerWriter.class,
             BuyerAdminCommandService.class, BuyerAdminQueryService.class,
             BuyerProductCommandService.class, BuyerProductQueryService.class,
+            com.aifuli.module.supplychain.tradecore.catalog.application.BuyerProductSelectionBatchTransactionalWorker.class,
+            com.aifuli.module.supplychain.tradecore.catalog.application.BuyerAcceptanceCatalogIdentityWriter.class,
+            com.aifuli.module.supplychain.tradecore.catalog.application.BuyerAcceptanceCatalogIdentityProbe.class,
             ProjectAdminCommandService.class, ProjectAdminQueryService.class,
             ProjectListingCommandService.class, ProjectListingQueryService.class, ProjectListingPriceSource.class,
             GenericBatchPricingService.class})

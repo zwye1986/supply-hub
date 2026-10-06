@@ -49,8 +49,19 @@ class StandardProjectDirectOrderQuoteSourceMigrationIntegrationTest {
                     9800,10000,10000,100,10100,'{}','ISSUED',NOW(3))
                     """);
         }
-        migrate(1);
+        String checksumBeforeReplay = sourceChangeSetChecksum();
+        assertThat(checksumBeforeReplay).isNotBlank();
+        assertThat(count("SELECT COUNT(*) FROM DATABASECHANGELOG WHERE ID='059-standard-project-direct-order-quote-source' AND EXECTYPE='EXECUTED'")).isEqualTo(1L);
+        // 真正重放同一059边界，不能让全局登记的下一个060变更集混入幂等证明。
+        migrate(null);
         assertThat(count("SELECT COUNT(*) FROM DATABASECHANGELOG")).isEqualTo(61L);
+        assertThat(sourceChangeSetChecksum()).isEqualTo(checksumBeforeReplay);
+        assertThat(count("SELECT COUNT(*) FROM DATABASECHANGELOG WHERE ID='059-standard-project-direct-order-quote-source' AND EXECTYPE='EXECUTED'")).isEqualTo(1L);
+        assertThat(count("SELECT COUNT(*) FROM DATABASECHANGELOG WHERE ID IN ('060-buyer-acceptance-catalog','061-append-schedule-identity-ledger')")).isZero();
+        assertThat(nullableSourceCount()).isEqualTo(2L);
+        assertThat(count("SELECT COUNT(*) FROM sc_standard_pricing_quote WHERE source_system='AIFULI_MALL' AND external_tenant_id='old-tenant' AND user_payable_amount_cents=10100")).isEqualTo(1L);
+        assertThat(count("SELECT COUNT(*) FROM sc_standard_pricing_quote WHERE source_system IS NULL AND external_tenant_id IS NULL AND buyer_order_no='ORD-HTTP'")).isEqualTo(1L);
+        assertThat(count("SELECT COUNT(*) FROM sc_standard_pricing_quote WHERE distribution_unit_price_cents=9800 AND sales_unit_price_cents=10000 AND product_subtotal_cents=10000 AND service_fee_cents=100 AND user_payable_amount_cents=10100")).isEqualTo(2L);
         assertThat(count("SELECT COUNT(*) FROM sc_standard_pricing_quote")).isEqualTo(2L);
         assertThat(count("SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='sc_standard_pricing_quote' AND INDEX_NAME='uk_sc_standard_quote_project_order'")).isEqualTo(2L);
         try (var connection = connection(); var statement = connection.createStatement(); var result = statement.executeQuery("""
@@ -75,11 +86,37 @@ class StandardProjectDirectOrderQuoteSourceMigrationIntegrationTest {
     private static java.sql.Connection connection() throws Exception {
         return DriverManager.getConnection(MYSQL.getJdbcUrl(), MYSQL.getUsername(), MYSQL.getPassword());
     }
-    private static void migrate(int count) throws Exception {
+    private static String sourceChangeSetChecksum() throws Exception {
+        try (var connection = connection(); var statement = connection.createStatement(); var result = statement.executeQuery(
+                "SELECT MD5SUM FROM DATABASECHANGELOG WHERE ID='059-standard-project-direct-order-quote-source'")) {
+            assertThat(result.next()).isTrue();
+            String checksum = result.getString(1);
+            assertThat(result.next()).isFalse();
+            return checksum;
+        }
+    }
+
+    /**
+     * 仅本测试实例裁至059；原ChangeSet对象、SQL路径与校验和规则全部保留。
+     * 设计见直接下单价格冻结设计§4.1，后续060/061由独立全量门禁覆盖。
+     */
+    private static void migrate(Integer count) throws Exception {
         try (var connection = connection()) {
             var database = DatabaseFactory.getInstance().findCorrectDatabaseImplementation(new JdbcConnection(connection));
             try (var migration = new Liquibase("db/changelog/db.changelog-master.yaml", new ClassLoaderResourceAccessor(), database)) {
-                migration.update(count, new Contexts(), new LabelExpression());
+                var changeSets = migration.getDatabaseChangeLog().getChangeSets();
+                String boundaryId = "059-standard-project-direct-order-quote-source";
+                assertThat(changeSets.stream().filter(changeSet -> boundaryId.equals(changeSet.getId())).count()).isEqualTo(1L);
+                int boundaryIndex = java.util.stream.IntStream.range(0, changeSets.size())
+                        .filter(index -> boundaryId.equals(changeSets.get(index).getId())).findFirst().orElseThrow();
+                assertThat(boundaryIndex).isEqualTo(60);
+                changeSets.subList(boundaryIndex + 1, changeSets.size()).clear();
+                assertThat(changeSets).hasSize(61);
+                if (count == null) {
+                    migration.update(new Contexts(), new LabelExpression());
+                } else {
+                    migration.update(count, new Contexts(), new LabelExpression());
+                }
             }
         }
     }

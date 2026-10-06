@@ -337,6 +337,17 @@ class BuyerAdminIntegrationTest {
         assertThat(buyerProductCode).startsWith("BPD_");
 
         BuyerProductDO product = productMapper.selectByCode(buyerProductCode);
+        var listing = context.getBean(com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerListingMapper.class)
+                .selectByBuyerAndSkuCode(product.getBuyerId(), buyerProductCode);
+        assertThat(listing).as("页面选品同事务建立唯一自动受理身份").isNotNull();
+        assertThat(listing.getManagementMode()).isEqualTo("AUTO_SELECTION");
+        assertThat(listing.getBuyerProductId()).isEqualTo(product.getId());
+        assertThat(listing.getStatus()).isEqualTo(com.aifuli.module.supplychain.tradecore.catalog.domain.BuyerListingStatus.DRAFT.getCode());
+        assertThat(listing.getCurrentVersionId()).isNull();
+        var projection = context.getBean(com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerListingAvailabilityMapper.class)
+                .selectByListingId(listing.getId());
+        assertThat(projection.getReasonCode()).isEqualTo("NOT_EVALUATED");
+        assertThat(projection.getAvailability()).isEqualTo(com.aifuli.module.supplychain.tradecore.catalog.domain.ListingAvailability.UNKNOWN.getCode());
         BuyerProductSettlementPriceVersionDO legacyTemplateVersion = BuyerProductSettlementPriceVersionDO.builder()
                 .buyerProductId(product.getId())
                 .versionNo(1)
@@ -561,6 +572,9 @@ class BuyerAdminIntegrationTest {
             BuyerAdminCommandService.class, BuyerAdminQueryService.class,
             BuyerInvoiceService.class,
             BuyerProductCommandService.class, BuyerProductQueryService.class,
+            com.aifuli.module.supplychain.tradecore.catalog.application.BuyerProductSelectionBatchTransactionalWorker.class,
+            com.aifuli.module.supplychain.tradecore.catalog.application.BuyerAcceptanceCatalogIdentityWriter.class,
+            com.aifuli.module.supplychain.tradecore.catalog.application.BuyerAcceptanceCatalogIdentityProbe.class,
             GenericBatchPricingService.class})
     static class TestConfiguration {
         @Bean

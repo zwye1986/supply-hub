@@ -203,7 +203,7 @@ public class BuyerFulfillmentCommandFacade {
                 targetSchema.schemaCode(), targetSchema.schemaVersion(),
                 encrypted == null ? null : encrypted.ciphertext(), targetDigest,
                 encrypted == null ? null : encrypted.keyVersion(), targetValid,
-                invariant, fingerprint, buyerOrderDigest, request.getPreviousReceiptVersion(), traceId);
+                invariant, fingerprint, buyerOrderDigest, request.getPreviousReceiptVersion(), traceId, targetSchema.catalogIdentity());
     }
 
     private byte[] canonicalTarget(Map<String, String> targetValues, TargetSchemaSnapshot targetSchema) {

@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.aifuli.module.supplychain.infrastructure.ledger.dal.mysql.OutboxAppendIdentityMapper">
+    <!-- 单槽排他建槽语句：INSERT ... ON DUPLICATE KEY UPDATE id=id（显式省略 id，重复分支仅令 id=id，不修改任何字段、时间或状态）。
+         设计依据：docs/superpowers/specs/2026-10-05-catalog-reliable-consumption-prerequisite-design.md#721-冻结排他建槽sql与首次所有权。 -->
+    <insert id="insertSlotOnDuplicateKeyUpdate">
+        INSERT INTO sc_outbox_append_identity (
+            aggregate_type, aggregate_id, aggregate_version, event_type,
+            binding_status, reservation_nonce, target_type, target_name,
+            payload_version, comparison_protocol, payload_json,
+            created_at
+        ) VALUES (
+            #{aggregateType}, #{aggregateId}, #{aggregateVersion}, #{eventType},
+            #{bindingStatus}, #{reservationNonce}, #{targetType}, #{targetName},
+            #{payloadVersion}, #{comparisonProtocol}, #{payloadJson},
+            #{createdAt}
+        )
+        ON DUPLICATE KEY UPDATE id = id
+    </insert>
+
+    <select id="selectForUpdate" resultType="com.aifuli.module.supplychain.infrastructure.ledger.dal.dataobject.OutboxAppendIdentityDO">
+        SELECT * FROM sc_outbox_append_identity
+        WHERE aggregate_type = #{aggregateType}
+          AND aggregate_id = #{aggregateId}
+          AND aggregate_version = #{aggregateVersion}
+          AND event_type = #{eventType}
+        FOR UPDATE
+    </select>
+
+    <update id="bindEventCas">
+        UPDATE sc_outbox_append_identity
+        SET binding_status = 20,
+            event_id = #{eventId},
+            bound_at = #{boundAt}
+        WHERE id = #{id}
+          AND binding_status = 10
+          AND reservation_nonce = #{reservationNonce}
+    </update>
+</mapper>

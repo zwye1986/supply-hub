@@ -1,6 +1,6 @@
 # 页面选品与订单受理目录衔接详细设计
 
-日期：2026-10-04。状态：设计草案；自动发布和手工目录兼容范围已经用户确认，旧 RPC 的移除联动见 §12 待确认项。本文先于实现，当前不表示已经交付。
+日期：2026-10-04。状态：A在身份/双编码及既定事务、NULL CAS、RR和管理安全范围内已最终验收（39候选、2139项运行门禁全绿，独立实现规格与完整质量复审均通过）；根核最终审查集合与受测哈希，4项质量首审阻断闭合，无剩余阻断。B进入可靠消费前置技术规格修订，原预审仍未通过，须修订可靠消费、生产者及Reader契约再复审，C仍依赖B。自动发布和手工目录兼容范围已经用户确认，旧 RPC 的移除联动见 §12 待确认项。本文先于实现，A的冻结候选验收不代表已经提交、部署或全配置闭环。
 
 关联设计：
 
@@ -68,6 +68,8 @@
 
 替换 Lifecycle 的 Schema 查询、claim 门禁定位、锁定 LST 三处直接 Mapper 查询；HTTP/RPC 都委派 Resolver。Facade 不接触 Mapper/DO。最终受理只按已定位 LST ID当前读加锁，并再次校验买家/SKU/自动关联；严禁锁前状态决定准入。
 
+**最终受理不得因身份定位提前建立RR一致性视图。** 身份定位在最终accept事务之外完成，可信不可变`CatalogIdentity`经应用快照传入受理命令/协调器，不向Facade暴露Mapper或DO，也不采信客户端提供的LST ID。最终事务先按receipt→LST ID→SKU当前读锁定；LST锁后核验行内买家/SKU/管理来源等不可变字段，涉及BPD等普通查询的关联核验放到SKU锁取得之后。禁止在最终accept中先调用普通读`resolve()`再锁LST/SKU；否则等待SKU期间前序订单提交后，限购/每日配额仍可能读到旧视图。所有HTTP/RPC及限频协调器调用路径必须传播同一应用身份快照；不存在身份仍按真实稳定拒绝处理，不补造身份。
+
 ### 3.2 创建协议
 
 在 `BuyerProductCommandService.addOrRevive` 的原供应链事务内、插入 BPD 后确保受理身份：
@@ -102,6 +104,8 @@ worker只捕获LST身份唯一冲突并包装明确`BuyerAcceptanceCatalogIdenti
 探测同SKU已有合法MANUAL/AUTO LST且编码无冲突时，只返回RETRY_WHOLE_BATCH；无获胜行说明冲突来源不明则保留原因失败；异SKU/编码/关联矛盾返回稳定冲突。原始参数整批最多重新执行2次（初次+最多2次重试，技术常量集中），每次重新定位/分配真实BPD，重新运行全部条件。返回codes只来自最后成功提交的worker结果；如果重试发现别的请求已把BPD置ACTIVE，仍按原重复业务错误结束，不把它当幂等选品成功。次数耗尽报稳定竞争失败并保留cause。
 
 短probe只用定位当前值，不在缺失键上持间隙锁继续写入，不和下一worker共用事务；第二个worker仍以数据库唯一键裁决。真实测试需验证两行批次后半行LST冲突会回滚前半行，重试完整后仅最终返回身份存在且全部价格/关系提交；还需证明外层rollbackOnly调用未进入worker/probe、无活动事务入口和真实代理边界。
+
+**A质量补正约束（不改变业务裁决与事务协议）：** BPD插入命中已识别的`uk_sc_buyer_product_sku`仍转换为原`BUYER_PRODUCT_DUPLICATE`，不进入目录身份probe或整批重试；转换后的业务异常必须保留实际`DuplicateKeyException`及其底层`SQLException`完整cause，不以新建无cause异常丢失诊断。只有真实捕获的技术异常转换需要cause，查询到已ACTIVE的普通业务拒绝不伪造SQL原因。probe作为独立事务编排边界，在任何数据库查询前用结构化debug记录`buyerId`、`platformSkuId`、`attemptedCode`，不在各层重复打印异常堆栈。Writer、probe、专用竞争异常及NULL版本守卫的重要中文注释须包含本文完整路径及真实章节标题/锚点；probe明确前置条件为worker真实代理已经完全回滚，且只探测、不继续写入。NULL版本和完整性守卫链接本文§10“DRAFT稳定响应与管理端可见结果”，禁止沿用不存在的“订单准入与回放”章节链接。
 
 ## 4. 数据库增量与来源所有权
 
@@ -144,12 +148,16 @@ MANUAL继续原商业价/生命周期契约。AUTO_SELECTION的内部`publishAut
 
 ## 5. 可复用基础设施及新增接口
 
+**B0技术前置单列设计：** `docs/superpowers/specs/2026-10-05-catalog-reliable-consumption-prerequisite-design.md`明确领取恢复/耗尽、转换资格、心跳、事务型Handler分派、源行提交栅栏、Inbox及稳定页/轮次。历史10/`deleg_08c77a41`批准与01/06原报告保留；既有切片1/2运行状态见集成文档，不在本轮重新验收。V4A切片3因真实空表三事务反例撤回“排他upsert创建者回滚后无死锁”保证，修订为仅纯本地完整worker首次加最多一次重跑（总≤2），精确本地账本锁标记+同一SQLException1213/40001+afterCompletion明确ROLLED_BACK+事务资源清理后才事务外重跑。技术领域fixture的run-04原XML12项全0不是生产代理+Druid或全部门禁通过；第二attempt再次真实死锁、提交不确定/rollback失败等门禁未证。本次按用户批准补正原预审deleg_bbb25a07的R01/R02，仅修订并送新独立预审，不批准实施或参数生效。共享nano起点15s不reset、C1000ms仅清理预留、统一R≥3500ms准入/退避前R-b≥3500及后重检；raw.getConnection(1500L)仅有限排队，借后重算E=min(commandDeadline-C,acquiredNano+6s)，事务/每Statement按floor及已有正限制收紧，不足1秒拒绝，MyBatis flush后与commit前guard、rollback不省略。唯一现有Druid池由原bean名稳定budget DataSource包装，manager/SqlSessionFactory/clock同wrapper key、非InfrastructureProxy/TransactionAware代理；非预算透明委派。唯一全局增量是独立int配置aifuli.supply-chain.datasource.connect-timeout-millis默认且仅1500，build后init前setConnectTimeout，用户接受HTTP/Liquibase/clock/六旧Handler新建连接及冷启动影响但它们不接retry。其它maxWait/maxActive/global socket不改、不另建池；真实Driver.connect/HostInfo优先级与冲突形式拒绝、Druid前提校验与恢复失败disable+discard、缓存/资源清理按B0§7.2.1冻结，不承诺TCP以外或15s硬结束。不可变账本/完整载荷/同事务源写绑定/提交guard/真实collation排序/旧Timer回填与维护窗口同版本切换保留，本轮仅本地文档及冻结输入、未实施重跑或自行批准。A选品/定价RPC、六旧Handler、引擎及实际B消费者均隔离，旧scheduleOnce参加更大业务事务只能向事务所有者传播异常、不得局部重跑，外呼Handler不包retry；新增业务语义不私设。B启用新生产者前必须先验收B0；源Outbox/Timer锁前缀仍按§4、追加/调度按§7.2/§7.2.1，不重复锁被消费的源行。
+
+**V4A最新idle例外设计修订（用户批准仅设计修订/预审；未独立预审、未实施）：** R02-ALLOWLIST、R01-PREPARATION、R02-DISCARD-FAILURE的来源仅为父任务提供的完整三项摘要，不冒称归档审查原JSON。B0§7.2.1列可编码有效值集合：retryCount=0、createScheduler=null、空filter、borrow=false/idle=true/return=false及原验证设置、精确默认MySQL checker/validation组合、defaultAutoCommit=true/removeAbandoned=false、单host直接Connector9.7标准socket；配置不符在预算入口失败关闭、不改共享属性。用户批准保留共享testWhileIdle=true，精确默认MySqlValidConnectionChecker及usePingMethod=true/validationQuery=null/validationQueryTimeout=-1旧路径明确允许，不因idle验证存在而拒绝；其它允许集合不放宽，不关闭idle验证、不改checker/global validation。实际运行配置及传输范围仍待验，默认匹配不等于生产可启用。默认checker实际发`/* ping */ SELECT 1`，默认validation timeout=-1；原idle验证失败discard/continue重借是获准非硬截止例外，raw.getConnection(1500L)仅每轮正数队列等待，累计borrow无有限上界，可超过15s或不能及时返回；不重置nano15s。raw返回后第一步检查cancel/deadline并清理late连接，不得暴露manager/启动worker，禁止Future借线程。原pool内部discard无强关闭证明例外只限既有验证路径，不扩成新预算污染/恢复失败/late连接清理宽松；后者继续严格R02.6协议。raw返回后manager看见连接前保存并安装network/socket，覆盖事务prepare/autoCommit、server prepare返回前网络、metadata/session/setup及封闭非递归SESSION control，委派前后重检；Statement记忆最小正timeout、缓存归还恢复，MyBatis flush后及commit前双guard保持。提前保存holder/physical/实际socket→disable阻止recycle→直接捕获Socket.close异常→同步abortInternal→仅一次discard(savedHolder)，禁止用Druid计数/emptySignal/driver isClosed证明物理关闭；源码中discard与abort链都吞close异常，直接标准socket关闭只证明本地传输资源，不保证服务端立即断线。恢复失败即清理失败禁retry，随后丢弃成功也不解禁；Connector/J9.7默认sslMode=PREFERRED，标准socketFactory不等于非TLS；不关闭TLS、不改现非预算行为。未知socket/未审TLS资源覆盖无法证明时该预算实现不得启用；下一独立预审可按明确受控supported transport范围评价，运行未知与TLS支持仍待验，不假实现TLS支持、不声称生产可上线；需改池/驱动内部或扩大支持时另审另授权。三阻断必需负例按B0§9逐项执行，不替代成TODO、不冒称已验证。新冻结`retry-idle-exception-design-review-input.json`及`retry-idle-exception-parent-design-audit.json`在仓外task-b0-ledger-evidence；原retry-resource输入SHA256 `c6bf3832cb77265e71ebd32c6e97afdb8d5d501194bf9d8b034e04edc7cd15c5`及历史retry-budget输入SHA256 `28e380ba361e9afd948337f461c94d1119f5af9b8f91e9883ef06c45eb2607e2`逐字保留。本轮仅四文档patch与证据冻结，生产Java/XML/DDL/测试未改，未构建/测试/DB或网络，未批准实施。
+
 实际已存在：
 
 - `OutboxEventRepository.java:22–49`：调用方现有事务追加LOCAL事件，默认maxAttempts=20，不投递。
-- `OutboxDeliveryEngine.java:123–164`：事务外投递注册Handler，失败退避，租约及fencing保证抢占；不是业务消费ExactlyOnce。
-- `InboxService.java:32–67`：可在调用方事务中开始/成功，`InboxEventMapper.selectForUpdate`和version CAS可复用。现有InboxAttempt不返回version，不能盲用0成功旧重试记录；桥接协调器需当前读Inbox DO的真实version后CAS，并核验payloadDigest。
-- `PersistentTimer.scheduleOnce(taskType,key,payload,fireAt)`；`DatabasePersistentTimer.java:35–63`和`PersistentTimerHandler.java:8–20`：任务可恢复、键唯一；Handler不得直接写领域表，应调生命周期入口。
+- `OutboxDeliveryEngine.java:123–164`：事务外投递注册Handler及正常异常退避已有实现，但Mapper目前只领取PENDING/RETRY，不恢复过期CLAIMED/DELIVERING；不能据现状承诺宕机抢占。死信路径写NULL与available_at NOT NULL冲突，B启用前须修复和真实MySQL验证。不是业务消费ExactlyOnce。
+- `InboxService.java:32–67`：调用方事务与当前锁/version CAS可复用，但现有InboxAttempt既不返回version也未封闭重试状态；真实成功CAS还要求PROCESSING。B须明确摘要、状态和版本检查及合法重试迁移，人工处理状态不得自动重试，不能盲用0或将所有非成功状态视为可处理。
+- `PersistentTimer.scheduleOnce(taskType,key,payload,fireAt)`；`DatabasePersistentTimer.java:35–63`和`PersistentTimerHandler.java:8–20`：键唯一和正常失败重试已有实现，但当前Mapper不恢复过期CLAIMED/EXECUTING，同键已有完成/死信记录也只返回旧handle；B须先完成恢复及新轮次身份契约。Handler不得直接写领域表，应调生命周期入口。
 - `SupplierRoutingApplicationService.route(RoutingInput)`：无持久化路由副作用，返回真实不可变候选/决策快照。现有内部大量普通读，不可直接加入accept的已有RR快照作为“当前供给”。
 
 新增应用接口：
@@ -169,8 +177,8 @@ MANUAL继续原商业价/生命周期契约。AUTO_SELECTION的内部`publishAut
 
 触发点全部在真实变更事务内追加Outbox；只追加，不同步调用publisher。事务回滚时请求一并回滚。
 
-1. **BPD创建/复活/移除**：BuyerProductCommandService.addProducts/addOrRevive/retire；创建/复活在最终行内定价保存后追加一条刷新请求，继承初始化产生的中间事件可以合并但不能漏掉最终版本。MANUAL关联不触发自动商业发布。
-2. **BPD通用版本变化**：GenericBatchPricingService.publishBuyer后追加BPD范围刷新，包括saveBuyer、initializeBuyerProduct、recalculatePlatformSku/rebuildBuyers；任何READY/非READY切换都触发。不能只监听页面手工保存。
+1. **BPD创建/复活/移除**：真实创建/复活链为BuyerProductCommandService.addProducts（NEVER事务外编排）→代理BuyerProductSelectionBatchTransactionalWorker.executeBatch→worker私有addOrRevive。每行最终行内定价saveBuyer之后在worker原事务登记真实刷新意图，整批领域写完成后按B0§7.2固定顺序同步flush账本及Outbox；flush后不再取新领域行锁，失败随整批回滚。不在NEVER编排层另开事务、裸afterCommit或无可靠提交的内存队列写请求，也不能只修改旧不可达私有addOrRevive。移除在BuyerProductCommandService.retire原事务收尾追加。中间初始化意图可以合并但不能漏最终版本，MANUAL关联不触发自动商业发布。
+2. **BPD通用版本变化**：GenericBatchPricingService.publishBuyer之后在原事务登记BPD最终版本意图，由实际最外层供应链写事务收尾按B0§7.2同步flush；saveBuyer、initializeBuyerProduct、recalculatePlatformSku/rebuildBuyers可能嵌套于整批worker和同步初始化链，不能把“最外层Java定价方法”误作事务收尾，publishBuyer之后的项目重建仍在flush之前。任何READY/非READY切换都触发。不能在重建循环尚待拿下一BuyerPricing/ProjectPricing锁时先持多个新增账本锁，也不能只监听页面手工保存。整事务失败不提交任何意图/Outbox。
 3. **PLT创建/复活/移除和项目状态**：ProjectListingCommandService.addProducts/retire、ProjectAdminCommandService的生效状态变化；刷新相关BPD以重新评估项目路由汇总。不发项目价格到买家级商业版本。
 4. **平台商品和主数据**：ProductCatalogCommandService保存SKU/SPU、applySkuStatus/applySpuStatus；BrandAdminService、CategoryCommandService、ProductTypeAdminService的影响有效性/归属/展示变更。SKU事件精确按SKU；SPU/品牌/类目/产品类型按关联分页展开。BuyerAdminCommandService状态变化也按买家展开。
 5. **Offer创建、发布、上下架/移除、商业字段更新**：SupplierOfferPublicationService.publish/listOnShelf；SupplierCooperativeProductService.updateCommercial/retire。前者已有target `supply-availability-recalculation`（:67、217–222），新增真实Handler转发到本target。换SKU编辑同时通知旧、新SKU，不能只通知修改后的SKU。
@@ -185,9 +193,9 @@ MANUAL继续原商业价/生命周期契约。AUTO_SELECTION的内部`publishAut
 
 ### 6.1 范围展开与至少一次消费
 
-范围Handler每次按LST主键升序扫描最多100条（配置化技术批量），只展开AUTO_SELECTION。每页在一个短事务中：当前读/核验Inbox事件摘要；追加每条listingId刷新事件；若还有下一页，追加同scope/下一afterId续页事件；最后以真实Inbox版本CAS成功。不能先标成功再调publisher。
+范围Handler每次按LST主键升序扫描最多100条（配置化技术批量），只展开AUTO_SELECTION。B0事务型执行器先锁/核源Outbox租约，再当前读/核验Inbox事件摘要；同一短事务追加每条listingId刷新事件、固定upperListingId的下一afterId续页事件，最后以真实Inbox版本CAS成功及源Outbox完成，并在提交前核租约。不能先标成功再调publisher；root/page/leaf身份及上界冻结按B0设计§7，不能只换eventId规避真实四列聚合唯一键。
 
-单LSTHandler的真实代理事务包括Inbox当前锁→Lifecycle刷新→Inbox成功；publisher失败则整个事务回滚，Outbox引擎按现有退避重投。不要独立提交Inbox成功而业务还没写完。来源载荷仅唤醒“读当前”，迟到旧事件不能切回旧版本。相同事件并行交付由Inbox行锁序列化，不同事件由LST锁和商业摘要唯一键幂等。
+单LSTHandler的真实代理事务包括源Outbox当前锁/有效租约→Inbox当前锁→Lifecycle刷新→Inbox成功→源完成与提交前守卫；publisher失败或源失格则整个事务回滚，仍合法的claim才可由引擎安排退避，否则等待回收。不要独立提交Inbox成功或源完成而业务还没写完。来源载荷仅唤醒“读当前”，迟到旧事件不能切回旧版本。相同事件并行交付由Inbox行锁序列化，不同事件由LST锁和商业摘要唯一键幂等。
 
 在B注册`supply-availability-recalculation`和`supplier-config-cache-invalidation`时读取其真实业务载荷，按封闭事件类型可靠转发资格刷新；不声称调用了当前不存在的cache实现。未知类型/损坏JSON抛异常，不能日志后成功。旧target重复投递只产生幂等分页或最终同来源刷新。不得修改既有Outbox事件的target或投递状态来补历史事件。
 
@@ -195,7 +203,7 @@ MANUAL继续原商业价/生命周期契约。AUTO_SELECTION的内部`publishAut
 
 自动发布/投影改变仍同事务追加BuyerCatalogChange，旧目录RPC分页/增量查询立即可读取；不得仅打日志宣称已推送商城。生产核对`buyer-catalog-change-fanout`也只有publisher的target声明、没有Handler。A不新增商业发布或该target生产者，不为此扩大范围。
 
-B复用发布代码若仍追加该target，则必须同时提供明确的本地消费Handler：核验真实changeId、buyer/LST/version归属，并以Inbox成功记录“目录游标已可拉取”，不执行尚未接入的外部HTTP/消息推送。用户可观察结果是原RPC增量目录游标可读，不承诺外部平台已收到通知。主动通知/外部fanout为未来边界，其实现需另设实际订阅契约和独立投递结果；本地Handler成功不可冒充主动通知已完成。Handler不把该商业变更再转成自动刷新，避免发布→刷新→发布循环。
+B复用发布代码若仍追加该target，则必须同时提供明确的本地消费Handler：真实payload为latestCursor、listingNo、listingVersion、availabilityVersion、changeType、occurredAt，不含changeId/buyerId/listingId。以latestCursor定位真实BuyerCatalogChange，再核验buyer/LST/version归属与载荷一致，并以Inbox成功记录“目录游标已可拉取”，不执行尚未接入的外部HTTP/消息推送。用户可观察结果是原RPC增量目录游标可读，不承诺外部平台已收到通知。主动通知/外部fanout为未来边界，其实现需另设实际订阅契约和独立投递结果；本地Handler成功不可冒充主动通知已完成。Handler不把该商业变更再转成自动刷新，避免发布→刷新→发布循环。
 
 ## 7. 自动发布、短事务和失败重试
 
@@ -207,7 +215,7 @@ B复用发布代码若仍追加该target，则必须同时提供明确的本地�
 4. DRAFT只有BPD ACTIVE、价格READY、商品有效、至少一个实际资格CONFIRMED路线时，发布真实商业版本并DRAFT→PUBLISHED。新价格未配置/供给未知/无路由时保持DRAFT，不写currentVersion。
 5. PUBLISHED且条件通过时，仅来源/商业内容变化才发布新版本；价格或供给暂不可用时保留历史商业current及PUBLISHED生命周期，投影置UNAVAILABLE/UNKNOWN，不把它改成人工SUSPENDED。
 6. 以投影version CAS写评估、来源、valid_until。状态/原因/basis改变才追加AVAILABILITY_CHANGED及目录变更Outbox；重复评估可更新evaluatedAt/下次边界但不产生游标风暴。
-7. 同事务调PersistentTimer.scheduleOnce，为nextBoundary安排一次重算。事务提交后Inbox成功；异常不吞，Outbox重投。
+7. 同事务调PersistentTimer.scheduleOnce，为nextBoundary安排一次重算。Outbox消费时业务写入、续页/Timer及Inbox成功一起提交；不得先独立提交publisher再标Inbox。事务外请求协调器可调用独立写事务，消费路径则必须加入Inbox所在写事务；新Reader仅为只读REQUIRES_NEW例外。异常不吞，Outbox重投。
 
 系统发布审计沿用真实触发选品/变更operator，若由补偿产生且源版本publishedBy为空，使用明确配置的系统操作人ID；启动配置缺失应阻止自动发布并记录稳定配置错误，不填0、随机运营用户或冒充发起人。来源和触发人分别审计。
 
@@ -216,7 +224,7 @@ B复用发布代码若仍追加该target，则必须同时提供明确的本地�
 ### 7.1 固定锁序及禁止项
 
 - 既有最终HTTP：receipt→LST→SKU→quote→PLT→BPD，保持原前缀；本切片最终供给读取不追加project/pricing/供给行锁。
-- 单LST消费：Inbox→LST→BPD→BuyerPricing→availability；不锁SKU/PLT/project，不在持这些锁时等待带锁的供给事务。
+- 单LST消费：B0基础设施源Outbox（或Timer）→Inbox（如适用）→LST→BPD→BuyerPricing→availability；不锁SKU/PLT/project，不等待带锁供给事务。领域写完成后按B0§7.2固定顺序追加不同子节点身份账本及源记录，随后只做已持锁的Inbox/源完成和提交守卫。消费者不访问自身源追加账本，重复生产者只核独立账本，不重复INSERT/FOR UPDATE旧源Outbox或Timer；仍以真实并发测试验证角色/多槽顺序和无间接锁环。
 - 定价生产者原锁链不变，只append Outbox；严禁GenericBatchPricingService.publishBuyer/rebuildBuyers里调用publisher锁LST。savePlatform已有SKU→platformPricing→buyerPricing→projectPricing，与受理LST→SKU会互锁。
 - BPD复活/移除不反锁LST；PLT变更不反锁BPD去更新整批LST；独立消费者处理这些投影。
 - 同时操作多个LST的消费者拆成单LST事务，不把整个供应商/平台事件展开成一次长事务。
@@ -232,14 +240,22 @@ B复用发布代码若仍追加该target，则必须同时提供明确的本地�
 
 当前实现 `route` 内的缺配置/不匹配异常有多种IllegalStateException。新增封闭 `SupplyQualificationUnavailableException`区分可恢复业务缺条件，公开evaluate返回资格原因；缺少/损坏已指向版本、重复已发布策略、JSON等继续传播系统异常，不泛catch IllegalStateException当未知供给。
 
-缺能力/已停用/没有有效Offer/配额耗尽为UNAVAILABLE；REQUIRED事实缺失/过期为UNKNOWN或其实际拒绝原因；已指向错误实体为引用损坏。现有FIXED及AUTO+ALL候选检查模式UNSUPPORTED (`SupplierRoutingApplicationService:278–296`) 表示该事实未被要求检查，不等于伪造库存充足。有效REMOTE_ON_DEMAND可无数量快照，符合主设计§5.10；此类结构资格可CONFIRMED。OPTIONAL缺事实产生UNKNOWN候选时，不能用于首次自动发布的“检查通过”。
+缺能力/已停用/没有有效Offer/配额耗尽为UNAVAILABLE；全部候选均因REQUIRED事实缺失、过期或UNKNOWN未通过时，Reader对该项目返回UNKNOWN并保留真实拒绝原因，不能因此自动发布或接受新单；已指向错误实体为引用损坏。现有FIXED及AUTO+ALL候选检查模式UNSUPPORTED (`SupplierRoutingApplicationService:278–296`) 表示该事实未被要求检查，不等于伪造库存充足。有效REMOTE_ON_DEMAND可无数量快照，符合主设计§5.10；此类结构资格可CONFIRMED。OPTIONAL缺事实产生UNKNOWN候选时，不能用于首次自动发布的“检查通过”。
+
+**B实施前的真实内核审计与已确认资格映射（整体B规格仍待独立复审，不提前改实现）：**
+
+- `SupplierRoutingApplicationService.resolveCandidate/evaluateEligibility/evaluateFact` 当前将OPTIONAL事实缺失、过期及UNKNOWN保留为eligible=true、availabilityClass=UNKNOWN；`SupplierRoutingEngine.decide`只按既有三策略及稳定同分规则排序，再选择首个eligible候选，不按CONFIRMED优先。已有`SupplierRoutingApplicationServiceIntegrationTest`源码也断言空事实时选中UNKNOWN；本次仅回读源码，未重新执行该测试。Reader不能把`decision.selected()`或`candidate.eligible()`转换成CONFIRMED证明。
+- 当前REQUIRED缺失/过期/UNKNOWN会淘汰候选并保留`*_FACT_REQUIRED/STALE/UNKNOWN`真实原因；现有ERROR事实则产生`*_ERROR`并淘汰，OPTIONAL也不例外。与`docs/superpowers/specs/2026-09-29-access-config-backend-impl-design.md#8-f-路由读取快照`关于未来库存ERROR映射UNKNOWN的契约必须按事实种类核对，不能在B里把所有库存/余额/健康ERROR统一改成OPTIONAL未知，或泛catch技术异常吞为无供给。
+- **用户已确认保留现有排序：** 同项目按既有三策略选中的首个eligible候选为OPTIONAL UNKNOWN时，Reader返回该首选的UNKNOWN，本项目不自动发布并拒绝新单；即使同项目较低候选为CONFIRMED，也不跳过首选、不重跑CONFIRMED-only候选池、不新增可用性排序优先级。只有真实首选eligible且CONFIRMED才构成本项目的确认资格。§8.2聚合的是各项目真实首选结果，不能聚合候选池；其他项目存在真实CONFIRMED首选时，买家级投影仍可AVAILABLE，但未知项目的HTTP仍拒绝。
+- **用户已确认REQUIRED全缺失的管理结果：** 全部候选因REQUIRED事实缺失、过期或UNKNOWN被淘汰，Reader将本项目资格及对应管理原因标为UNKNOWN，保留`*_FACT_REQUIRED/STALE/UNKNOWN`具体原因，事实补齐后重新评估。不改路由内核的eligible=false、availabilityClass及原淘汰原因，不把管理UNKNOWN反向提升为可下单。来源明确不可用仍按实际原因UNAVAILABLE，技术损坏仍抛系统异常；本确认不授权改变ERROR事实处理或旧RPC。
+- 当前生产受理构造`RoutingInput`仍使用空事实映射；实际生产树仅有InventorySource身份/Mapper，未发现InventorySnapshot读取器或库存刷新实现。`RoutingInput.factsBySupplierCode`只是调用方注入契约，不是已落库采集事实。未来接入真实快照须遵守上述9月29日设计的InventorySource维度，同供应商不同SKU/来源不能互借库存；不能凭空构造AVAILABLE及新时间戳满足REQUIRED。本期FIXED/UNSUPPORTED的REMOTE_ON_DEMAND结构资格与未来REMOTE_OBSERVED采集交付分别验收，不扩写“已有远程实时库存”。
 
 ### 8.2 买家级投影与项目级资格
 
 LST是买家/SKU级，无法存每个项目的独立授权。因此投影采用明确的汇总语义：
 
-- 有当前AVAILABLE PLT的ACTIVE项目时，以真实项目上下文逐个评估；存在一个CONFIRMED资格则买家投影可AVAILABLE。
-- 尚无任何可用项目选品时，允许用projectId=null评估买家/平台默认规则；只有实际匹配的非项目专属规则CONFIRMED才可发布。不能假造项目ID或用其他买家的项目凑可用性。
+- 有当前AVAILABLE PLT的ACTIVE项目时，以真实项目上下文逐个评估；存在一个真实首选eligible且CONFIRMED的项目资格则买家投影可AVAILABLE，不取同项目较低候选替代首选。
+- 尚无任何可用项目选品时，允许用projectId=null评估买家/平台默认规则；只有实际匹配的非项目专属规则首选eligible且CONFIRMED才可发布。不能假造项目ID或用其他买家的项目凑可用性。
 - 任意项目可用只代表买家目录存在可履约路线，不代表全部项目可下单。最终HTTP始终按真实认证项目评估；项目专属暂停、无路由或独立条件失败仍拒绝。
 - 无CONFIRMED而有UNKNOWN为UNKNOWN；全部已确定不可用为UNAVAILABLE；有效配置引用损坏报系统错误。
 
@@ -267,11 +283,11 @@ RPC的原`accept`模式仍保留旧AVAILABLE投影前置检查和原行为，不
 
 `nextBoundary`取所有已引用的未来validFrom/validTo、事实validUntil、路由生效/失效时刻、次日配额边界、投影最大评估间隔的最小值。默认最大间隔30秒、单页100为可配置技术参数；无实际未来依赖也有巡检边界。valid_until用于读侧防陈旧，不是实际订单资格证明。
 
-每次成功refresh同事务安排 `BUYER_SELECTION_CATALOG_REEVALUATE`，幂等键为listingId+basisDigest+boundary时间；相同已完成task不能承担新的未来轮次。处理器调Lifecycle，返回UPDATED/DEFERRED/TERMINAL等封闭码；抛异常按Timer重试和死信，禁止在Handler直接改领域表。
+每次成功refresh同事务安排 `BUYER_SELECTION_CATALOG_REEVALUATE`，幂等键以listingId+basisDigest+已冻结boundary时间的版本化身份摘要生成，符合实际128长度；相同已完成task不能承担新的未来轮次。处理器调Lifecycle，返回UPDATED/DEFERRED/TERMINAL等封闭码；B0事务型Timer执行器使业务/续页/下一轮/任务完成及成功审计同提交，不在finally另行完成。抛异常按合法claim重试和死信，禁止在Handler直接改领域表。
 
 另外实现 `BUYER_SELECTION_CATALOG_SWEEP` 全AUTO周期巡检，补偿遗漏事件、过期及Outbox死信：
 
-- ApplicationReady经明确Bootstrapping应用服务安排当前时间桶扫描和下一时间桶任务；已有完成桶不复用为新任务。
+- ApplicationReady经明确Bootstrapping应用服务，在单短事务幂等确保当前时间桶和下一合法未来桶；当前桶COMPLETED/DEAD/CANCELLED仍必须确保不同key的未来任务，不以旧handle当未来链成功。未来桶已存在时幂等复用合法非终态；未来桶也终态则按B0§8固定序有限向后探测/确保，超过lookahead上限稳定报阻塞，不重开旧key。并发实例及任一步失败全回滚按B0协议测试。
 - 每轮扫描按LST升序有限页，持久payload保存轮次/afterId；短事务追加每LST刷新Outbox及下一页/下一轮Timer。追加全部成功后才返回任务完成，宕机由原Timer重试。
 - 每轮即使无待评估行也安排下一轮；旧轮次重启时把下一轮推进到库时钟当前/下一桶，不无限补跑已错过时间桶。
 - 每LSTTimer与全巡检都是提示，真正状态决定只在LST锁内；定时重复/乱序均不能回退来源或恢复人工暂停。
@@ -281,7 +297,7 @@ RPC的原`accept`模式仍保留旧AVAILABLE投影前置检查和原行为，不
 
 ## 10. DRAFT稳定响应与管理端可见结果
 
-052已允许受理回执listing_version_no为NULL (`052-standard-order-project-key.sql:39–40`)。将Lifecycle.resolveAttemptListingVersionNo返回Integer：没有真实当前发布版本返回NULL；非空currentVersion指向不存在/错误归属版本继续抛系统异常。不能补1。
+052已允许受理回执listing_version_no为NULL (`052-standard-order-project-key.sql:39–40`)。将Lifecycle.resolveAttemptListingVersionNo返回Integer：没有真实当前发布版本返回NULL；非空currentVersion指向不存在/错误归属版本继续抛系统异常。不能补1。`FulfillmentAcceptanceReceiptMapper.reopenRetryable`的listingVersionNo参数也必须为Integer，CAS重开显式保留真实NULL，禁止自动拆箱或默认1；同号首次拒绝、正确CAS重开、再次拒绝及修复后续跑都遵守原版本/CAS契约，错误CAS不得重开。
 
 **A/C交付边界：** A只交付NULL尝试版本和原最终受理门禁的稳定拒绝，不交付首冻前Coordinator或“DRAFT不产生报价”。A沿当前HTTP编排：claim后只要数量/target/Schema有效仍可能冻结真实PLT价格，随后因LST DRAFT由accept保存可重试拒绝，报价保持ISSUED且未消费。这是原两段事务的真实结果，可允许补发布后CAS续跑，不是虚构目录价格；A测试必须如实断言该报价可能存在，不能宣称无报价/首冻前目录资格已经交付。
 
@@ -336,16 +352,18 @@ RPC的原`accept`模式仍保留旧AVAILABLE投影前置检查和原行为，不
 
 ## 13. 自动化测试与实际管理链路门禁
 
-仅跳过供应链以外模块单测。门禁按主设计§17执行；人工联调文档不能替代自动化。实现时同步维护`docs/集成测试.md`，本文起草不修改该文件。
+仅跳过供应链以外模块单测。门禁按`docs/superpowers/specs/2026-08-07-supply-chain-phase1-detailed-design.md#17-测试与发版门禁`执行；人工联调文档不能替代自动化。实现时同步维护`docs/集成测试.md`；本轮技术规格补正仅记审计与待实施矩阵，不冒称运行。
 
 ### 13.1 纯逻辑与契约
 
 - Resolver：BPD/旧别名同身份、跨buyer、双路径不同SKU碰撞、REMOVED身份仍可定位、没有LST、退役、原编码不规范化；新增兼容create保留前缀在服务层拒绝，真实DB大小写/等价字符和不同连接字符集绑定转换一致，非ASCII合法外部码仍可创建、存量原码不改。
 - 自动发布：真实来源READY、缺价、未知供给、来源引用损坏、摘要幂等、迟到旧来源读当前、display变更、暂停/退役不恢复、手工商业价未变；A旧publish服务经真实Controller/直接服务调用均拒AUTO外部价，AUTO人工恢复在B前失败关闭且无版本/指针/游标/Outbox副作用。
 - 投影：有效固定价REMOTE_ON_DEMAND无数量快照可按真实UNSUPPORTED模式通过；REQUIRED缺失/过期、OPTIONAL未知、有效期、项目专属路由汇总、所有项目不可用、库存不足及额度恢复。
+- 已确认资格映射：同项目首选UNKNOWN、较低候选CONFIRMED时不改选且不发布/接单；另一个项目真实首选CONFIRMED时买家投影可AVAILABLE但未知项目仍拒绝。全部候选因REQUIRED缺失/过期/UNKNOWN未通过时，管理结果UNKNOWN、保留逐候选实际原因且不更改内核淘汰结果；技术错误和明确缺货不借此变成可用。
 - 生产者清单逐入口验证append发生于真实事务，rollback不留刷新事件；unknown事件/损坏JSON不成功。
 - Inbox真实version重试、Outbox至少一次、Timer重复键和下一桶、死信/重启补偿；技术异常保留因果，无永久假AVAILABLE续期。
-- HTTP/RPC请求字段、响应receipt、BPD编码文档契约；报价PLT ID与履约LST ID分别验证。DRAFT NULL版本真实拒绝与既有CAS相符。
+- HTTP/RPC请求字段、响应receipt、BPD编码文档契约；报价PLT ID与履约LST ID分别验证。DRAFT NULL版本真实拒绝与既有CAS相符，覆盖ReceiptMapper的NULL首次拒绝→正确CAS重开→再次稳定拒绝、修复后续跑及错误CAS不重开，不能仅验证首次claim。
+- A质量回归：BPD同买家/SKU唯一键异常转换后保留原业务错误码及完整SQL cause，不调用目录probe、不重试；重要设计链接指向真实章节，独立probe在查询前记录三项定位参数且不增加逐层异常堆栈。真实MySQL两行批次负例须由数据库产生1062并核验`uk_sc_buyer_product_sku`、完整回滚及无孤儿残留，不仅使用mock worker证明cause和事务。
 - 架构测试保留Facade无DAL、routing.domain纯域、catalog不写账户账本、管理映射@PreAuthorize。新增reader/publisher不得借桥接访问system/member表或隐式RPC扫描。
 
 ### 13.2 真实MySQL并发与事务
@@ -353,6 +371,7 @@ RPC的原`accept`模式仍保留旧AVAILABLE投影前置检查和原行为，不
 在`supply-chain-integration`真实MySQL/Liquibase/Mapper下，以确定性latch验证：
 
 1. 同buyer/SKU页面并发选品，旧LST管理创建与页面并发；无双LST/双BPD，无跨SKU复用。两行批次在后行制造LST竞争：整个worker事务回滚、独立双唯一probe后重跑原整批，最终返回ID/编码均真实已提交；已ACTIVE普通重复仍原拒绝。以活动外层事务及rollbackOnly外层调用入口，必须在worker/probe开始前失败、无偷偷提交。补真实跨表负例：已有MANUAL LST(Y)被选品复用时，另create尝试以新BPD保留编码绑定SKU X，必须由保留命名空间拒绝，不出现竞态异SKU别名；大小写/trim变体同样验证。
+   A另外以确定性latch验证身份快照在accept之外定位：后一请求等待SKU锁时前一请求提交占额，后一请求取得SKU锁后的普通统计必须看到前序订单并拒绝超额，覆盖BPD和旧编码两条路径；不得靠mock或仅检查@Transactional注解宣称RR时序已验证。
 2. 目录关联/定价/Outbox任一失败整体回滚；消费者崩溃在商业版本插入、current CAS、投影、Inbox成功之前，均可恢复且不重复UPSERT。
 3. v1/v2事件乱序和重复；已有v2 current时迟到v1不能降级；自动来源及MANUAL版本不可交叉接管。
    A期间只创建DRAFT且无新刷新target Outbox；B启用真实Handler后启动sweep能补齐这些DRAFT。以MANUAL PUBLISHED/UNKNOWN及真实HUA_SHENG供给进行新HTTP受理，必须通过新事实资格成功，manual价/状态/共享UNKNOWN不变；对同manual旧RPC回归原UNKNOWN拒绝行为，不由BPD移除后台改投影。
@@ -386,7 +405,7 @@ HUA_SHENG外部响应可在自动化里使用协议真实的隔离HTTP stub；�
 
 前三个最小切片的独立完成标准：
 
-- **A：身份解析及安全封闭。** 交付自动管理字段/来源字段迁移、双编码Resolver、BPD保留命名空间、新兼容输入归一、NEVER事务外整批编排/独立代理worker/双唯一短probe和有界整批重试、同事务唯一DRAFT身份、内部补关联服务及NULL尝试版本。同时旧publish必须MANUAL-only，AUTO外部价发布拒绝、人工恢复在B前失败关闭；A只写DRAFT，完全不发尚无Handler的新刷新Outbox，不交付/recalculate HTTP、假重算成功响应、首冻前Coordinator或DRAFT不产生报价行为。通过Resolver契约、实际旧publish/status Controller负例、原选品Controller真实创建、真实MySQL整批回滚/外层事务/跨表保留码并发测试后可独立安全落地；DRAFT最终稳定拒绝可能保留真实未消费ISSUED报价，按§10如实验证。商业发布/无报价前置门禁闭环仍明确未完成。
+- **A：身份解析及安全封闭。** 交付自动管理字段/来源字段迁移、双编码Resolver、BPD保留命名空间、新兼容输入归一、NEVER事务外整批编排/独立代理worker/双唯一短probe和有界整批重试、同事务唯一DRAFT身份、内部补关联服务及NULL尝试版本（含ReceiptMapper的NULL CAS重开）。最终accept之外定位并传入可信应用身份快照，保持receipt→LST ID→SKU当前读前缀及SKU锁后建立普通读视图。同时旧publish必须MANUAL-only，AUTO外部价发布拒绝、人工恢复在B前失败关闭；A只写DRAFT，完全不发尚无Handler的新刷新Outbox，不交付/recalculate HTTP、假重算成功响应、首冻前Coordinator或DRAFT不产生报价行为。通过Resolver契约、实际旧publish/status Controller负例、原选品Controller真实创建、真实MySQL整批回滚/外层事务/跨表保留码并发、NULL CAS续跑及SKU锁等待后可见前序占额测试后可独立安全落地；DRAFT最终稳定拒绝可能保留真实未消费ISSUED报价，按§10如实验证。商业发布/无报价前置门禁闭环仍明确未完成。
 - **B：自动商业镜像与真实可用性。** 依赖A，真实consumer/Handler、producer及Timer同片启用，启动sweep补A期间DRAFT；交付真实来源publisher、新只读资格Reader供投影使用、Outbox/Inbox、全部当前生产者触发、手工兼容及管理状态回显。MANUAL不被自动写价/恢复/改共享availability，不能因此在C永久UNKNOWN拒绝。通过乱序/宕机/CAS、真实供给失效和从零管理发布测试；页面选品可以在条件具备后自动发布，但未通过C之前不能宣称最终供给门禁完整。
 - **C：当前供给准入与从零Controller集成。** 依赖B，交付HTTP最终新快照读取和路由快照复用、MANUAL PUBLISHED/UNKNOWN以真实资格替代旧投影前置门禁、DRAFT稳定拒绝及§12.2冻结身份回放前置修复；该修复保留两个Facade现有认证/buyer/project ACTIVE前置边界。通过RR旧快照反例、准入/停用并发、MANUAL UNKNOWN新HTTP/旧RPC差异回归、从零管理Controller→HUA_SHENG订单/资产/金额全链路。正式HUA_SHENG金额、确认及取券以其总设计§12.6为准。旧RPC移除待确认项不加入C的实现范围。
 

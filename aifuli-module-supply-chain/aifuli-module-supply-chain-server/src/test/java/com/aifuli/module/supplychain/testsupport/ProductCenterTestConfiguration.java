@@ -19,6 +19,7 @@ import org.springframework.context.annotation.Import;
         ProductTypeValidationService.class, ProductSellabilityService.class,
         ProductCategoryCoverageService.class, ProductDeletionValidator.class,
         FulfillmentTargetSchemaRegistry.class,
-        PlatformSkuSchemaRegistry.class, ProductClassificationValidationService.class})
+        PlatformSkuSchemaRegistry.class, ProductClassificationValidationService.class,
+        com.aifuli.module.supplychain.tradecore.catalog.application.BuyerAcceptanceCatalogResolver.class})
 public class ProductCenterTestConfiguration {
 }

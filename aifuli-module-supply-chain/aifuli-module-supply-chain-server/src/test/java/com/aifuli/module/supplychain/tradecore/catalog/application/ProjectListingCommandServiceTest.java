@@ -118,7 +118,12 @@ class ProjectListingCommandServiceTest {
         buyerProducts = new BuyerProductCommandService(
                 databaseClock, eventPublisher, buyerMapper, productMapper, l1Mapper, l1VersionMapper,
                 overrideMapper, overrideVersionMapper, buyerPricingMapper, businessNoGenerator, resolver,
-                new ProductSellabilityService(skuMapper, spuMapper), null);
+                new ProductSellabilityService(skuMapper, spuMapper), null,
+                new BuyerProductSelectionBatchTransactionalWorker(databaseClock, eventPublisher, buyerMapper,
+                        productMapper, l1Mapper, l1VersionMapper, overrideMapper, overrideVersionMapper,
+                        buyerPricingMapper, businessNoGenerator, resolver,
+                        new ProductSellabilityService(skuMapper, spuMapper), null,
+                        mock(BuyerAcceptanceCatalogIdentityWriter.class)), mock(BuyerAcceptanceCatalogIdentityProbe.class));
         when(projectPricingMapper.selectByListingId(any())).thenReturn(ProjectSkuPricingDO.builder()
                 .id(1L).listingId(80L).pricingStatus(PricingStatus.UNPRICED.name()).build());
         when(businessNoGenerator.next(BusinessNoPrefixes.PLT)).thenReturn(LISTING_CODE);

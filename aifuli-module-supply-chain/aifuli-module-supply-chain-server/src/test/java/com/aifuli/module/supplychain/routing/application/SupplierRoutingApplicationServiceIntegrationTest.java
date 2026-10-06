@@ -324,7 +324,7 @@ class SupplierRoutingApplicationServiceIntegrationTest {
                         100, 'CNY', ?, ?, ?, 1, 10, 0, 'ACCEPTED', 'FULFILLMENT', 0,
                         ?, 0, ?, ?)
                 """, "QUOTA_ORDER_1", buyer.getId(), buyer.getBuyerCode(), buyer.getBuyerName(),
-                "quota-user", "quota-buyer-order", 999_001L,
+                null, "quota-buyer-order", 999_001L,
                 supplier.getId(), supplier.getSupplierCode(), supplier.getSupplierName(),
                 sku.getId(), sku.getSkuCode(), sku.getSkuName(), new byte[32], acceptedAt, acceptedAt);
     }

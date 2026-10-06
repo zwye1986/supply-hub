@@ -82,7 +82,12 @@ class BuyerProductCommandServiceTest {
                 databaseClock, eventPublisher, buyerMapper, productMapper, l1Mapper, l1VersionMapper,
                 overrideMapper, overrideVersionMapper, buyerPricingMapper, businessNoGenerator,
                 new SettlementPriceResolver(), new ProductSellabilityService(skuMapper, spuMapper),
-                genericPricingService);
+                genericPricingService,
+                new BuyerProductSelectionBatchTransactionalWorker(databaseClock, eventPublisher, buyerMapper,
+                        productMapper, l1Mapper, l1VersionMapper, overrideMapper, overrideVersionMapper,
+                        buyerPricingMapper, businessNoGenerator, new SettlementPriceResolver(),
+                        new ProductSellabilityService(skuMapper, spuMapper), genericPricingService,
+                        mock(BuyerAcceptanceCatalogIdentityWriter.class)), mock(BuyerAcceptanceCatalogIdentityProbe.class));
         when(buyerMapper.selectByBuyerCodeForUpdate("BYR_A")).thenReturn(
                 BuyerDO.builder().id(5L).buyerCode("BYR_A").build());
         when(skuMapper.selectByCode("MOVIE_100")).thenReturn(PlatformSkuDO.builder()

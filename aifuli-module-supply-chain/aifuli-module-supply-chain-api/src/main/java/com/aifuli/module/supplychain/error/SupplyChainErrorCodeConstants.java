@@ -237,6 +237,13 @@ public interface SupplyChainErrorCodeConstants {
     ErrorCode PRODUCT_STATUS_TRANSITION_NOT_ALLOWED =
             error(1_050_001_170, "商品【{}】（{}）当前状态【{}】不支持变更为【{}】");
 
+    // 页面选品受理身份与安全管理边界，见桥接设计§3/§4.4。
+    ErrorCode BUYER_CATALOG_CODE_CONFLICT = error(1_050_001_171, "分销商品受理目录编码或归属冲突");
+    ErrorCode BUYER_CATALOG_AUTO_MANAGED = error(1_050_001_172, "页面选品自动目录不接受手工商业价格发布");
+    ErrorCode BUYER_CATALOG_NOT_READY = error(1_050_001_173, "自动受理目录尚未具备真实发布资格");
+    ErrorCode BUYER_CATALOG_RETIRED = error(1_050_001_174, "受理目录已退役，不能恢复或重新创建");
+    ErrorCode BUYER_CATALOG_IDENTITY_RACE = error(1_050_001_175, "受理目录身份竞争未收敛，请稍后重试");
+
     // 项目标准资产查询稳定错误，设计见 docs/superpowers/specs/2026-10-02-project-standard-query-asset-design.md#4-资产结果与封闭载荷。
     ErrorCode ASSET_QUERY_UNSUPPORTED_PRODUCT_TYPE =
             error(1_050_001_158, "此类商品不能查询资产，请通过查单接口获取订单信息");
@@ -262,6 +269,11 @@ public interface SupplyChainErrorCodeConstants {
     String DETAIL_UNAVAILABLE = "DETAIL_UNAVAILABLE";
 
     Map<Integer, RetryDirective> RETRY_DIRECTIVES = Map.ofEntries(
+            entry(BUYER_CATALOG_CODE_CONFLICT, RetryDirective.DO_NOT_RETRY),
+            entry(BUYER_CATALOG_AUTO_MANAGED, RetryDirective.DO_NOT_RETRY),
+            entry(BUYER_CATALOG_NOT_READY, RetryDirective.RETRY_SAME_KEY_AFTER_CONDITION_CHANGE),
+            entry(BUYER_CATALOG_RETIRED, RetryDirective.DO_NOT_RETRY),
+            entry(BUYER_CATALOG_IDENTITY_RACE, RetryDirective.RETRY_SAME_KEY),
             entry(FREQUENCY_RESOURCE_NOT_FOUND, RetryDirective.DO_NOT_RETRY),
             entry(FREQUENCY_VERSION_CONFLICT, RetryDirective.DO_NOT_RETRY),
             entry(FREQUENCY_STATE_INVALID, RetryDirective.DO_NOT_RETRY),

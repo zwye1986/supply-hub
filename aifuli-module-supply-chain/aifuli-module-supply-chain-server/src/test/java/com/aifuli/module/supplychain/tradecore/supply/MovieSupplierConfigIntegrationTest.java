@@ -31,6 +31,12 @@ class MovieSupplierConfigIntegrationTest {
             try (ConfigurableApplicationContext context = new SpringApplicationBuilder(TestConfiguration.class)
                     .web(WebApplicationType.NONE).run(
                             "--spring.config.name=movie-config-integration",
+                            // 本类仅验证本地已发布配置读取，不启用远程配置／注册中心。
+                            // 设计见B0「九测试／夹具限定修复设计」。
+                            "--spring.cloud.bootstrap.enabled=false",
+                            "--spring.cloud.nacos.discovery.enabled=false",
+                            "--spring.cloud.nacos.config.enabled=false",
+                            "--spring.cloud.nacos.config.import-check.enabled=false",
                             "--aifuli.supply-chain.enabled=true",
                             "--aifuli.supply-chain.datasource.url=" + mysql.getJdbcUrl(),
                             "--aifuli.supply-chain.datasource.username=" + mysql.getUsername(),

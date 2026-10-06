@@ -74,26 +74,56 @@ public class BuyerProductCommandService {
     private final SettlementPriceResolver settlementPriceResolver;
     private final ProductSellabilityService productSellabilityService;
     private final GenericBatchPricingService genericPricingService;
+    private final BuyerProductSelectionBatchTransactionalWorker selectionWorker;
+    private final BuyerAcceptanceCatalogIdentityProbe identityProbe;
+    /** 初次执行外最多整批重跑两次，见桥接设计§3.4。 */
+    private static final int MAX_IDENTITY_ATTEMPTS = 3;
 
-    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
+    @Transactional(transactionManager = TRANSACTION_MANAGER, propagation = org.springframework.transaction.annotation.Propagation.NEVER)
     public List<String> addProducts(String buyerCode, List<ProductLine> lines, Long operatorId) {
         log.info("关联分销商品 buyerCode={} skuCount={} operatorId={}",
                 buyerCode, lines == null ? 0 : lines.size(), operatorId);
-        if (lines == null || lines.isEmpty()) {
-            throw new IllegalArgumentException("At least one SKU is required");
+        if (org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive()) {
+            throw new IllegalStateException("选品整批编排必须在事务外调用");
         }
-        BuyerDO buyer = requireBuyerForUpdate(buyerCode);
-        LocalDateTime now = databaseClock.now();
-        List<String> codes = new ArrayList<>();
-        for (ProductLine line : lines) {
-            String buyerProductCode = addOrRevive(buyer, line, operatorId, now);
-            codes.add(buyerProductCode);
-            if (line.pricingOverrides() != null) {
-                genericPricingService.saveBuyer(buyerCode, List.of(buyerProductCode),
-                        line.pricingOverrides(), operatorId);
+        for (int attempt = 1; attempt <= MAX_IDENTITY_ATTEMPTS; attempt++) {
+            try {
+                return selectionWorker.executeBatch(buyerCode, lines, operatorId);
+            } catch (BuyerAcceptanceCatalogIdentityRaceException race) {
+                if (attempt == MAX_IDENTITY_ATTEMPTS) {
+                    var exhausted = exception(com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BUYER_CATALOG_IDENTITY_RACE);
+                    exhausted.initCause(race);
+                    throw exhausted;
+                }
+                // worker代理已经完全退出并回滚，probe为另一代理短事务；下一轮重新分配BPD并执行原整批。
+                // 见 docs/superpowers/specs/2026-10-04-buyer-selection-acceptance-catalog-bridge-design.md#34-批次事务边界真实调用者与竞争重试。
+                identityProbe.requireWholeBatchRetry(race);
+                log.debug("受理身份竞争整批回滚后重跑 buyerCode={} attempt={}", buyerCode, attempt);
             }
         }
-        return codes;
+        throw new IllegalStateException("选品整批重试不可达");
+    }
+
+    /** A期内部补关联：不追加刷新、不声称已可售；同整批协议，见桥接设计§3.3/§3.4。 */
+    @Transactional(transactionManager = TRANSACTION_MANAGER, propagation = org.springframework.transaction.annotation.Propagation.NEVER)
+    public String ensureIdentity(String buyerProductCode, Long operatorId) {
+        log.info("补受理目录身份 buyerProductCode={} operatorId={}", buyerProductCode, operatorId);
+        if (org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive()) {
+            throw new IllegalStateException("补关联编排必须在事务外调用");
+        }
+        for (int attempt = 1; attempt <= MAX_IDENTITY_ATTEMPTS; attempt++) {
+            try {
+                return selectionWorker.ensureIdentity(buyerProductCode, operatorId);
+            } catch (BuyerAcceptanceCatalogIdentityRaceException race) {
+                if (attempt == MAX_IDENTITY_ATTEMPTS) {
+                    var exhausted = exception(com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BUYER_CATALOG_IDENTITY_RACE);
+                    exhausted.initCause(race);
+                    throw exhausted;
+                }
+                identityProbe.requireWholeBatchRetry(race);
+            }
+        }
+        throw new IllegalStateException("补关联重试不可达");
     }
 
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)

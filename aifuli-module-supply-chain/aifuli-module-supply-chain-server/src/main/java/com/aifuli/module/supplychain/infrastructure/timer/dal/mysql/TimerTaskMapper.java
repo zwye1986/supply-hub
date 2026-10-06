@@ -1,11 +1,11 @@
 package com.aifuli.module.supplychain.infrastructure.timer.dal.mysql;
 
 import com.aifuli.framework.mybatis.core.mapper.BaseMapperX;
+import com.aifuli.module.supplychain.infrastructure.claim.ClaimRecoveryPolicy;
 import com.aifuli.module.supplychain.infrastructure.timer.dal.dataobject.TimerTaskDO;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
-import org.apache.ibatis.annotations.Select;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -19,25 +19,20 @@ public interface TimerTaskMapper extends BaseMapperX<TimerTaskDO> {
     short STATUS_RETRY = 30;
     short STATUS_COMPLETED = 40;
     short STATUS_CANCELLED = 50;
+    short STATUS_DEAD = 60;
 
     /**
-     * 扫描可领取 Timer 任务并加行锁。
-     *
-     * <p><b>为何保留 {@code @Select}（开发规范第 8 条例外）</b>：
-     * <ul>
-     *   <li>依赖 MySQL 方言 {@code FOR UPDATE SKIP LOCKED}，多实例并发领取时跳过已被他事务锁定的行；</li>
-     *   <li>条件含租约过期判定、状态 IN、按 priority/next_fire_at/id 排序与 LIMIT；</li>
-     *   <li>{@code LambdaQueryWrapper} 无法类型安全表达 SKIP LOCKED；用 {@code last(...)} 硬拼易漏改语义。</li>
-     * </ul>
-     * 若后续迁出注解，应优先落到 XML Mapper，而不是强行改成 Lambda。
+     * 方言SKIP LOCKED使用参数化XML，恢复仅依据活动租约，保留优先级/时间/id排序。
+     * 设计见 docs/superpowers/specs/2026-10-05-catalog-reliable-consumption-prerequisite-design.md#31-扫描和预算。
      */
-    @Select("SELECT * FROM sc_timer_task WHERE status IN (0, 30) "
-            + "AND next_fire_at <= #{now} "
-            + "AND (lease_until IS NULL OR lease_until < #{now}) "
-            + "ORDER BY priority DESC, next_fire_at ASC, id ASC "
-            + "LIMIT #{batchSize} FOR UPDATE SKIP LOCKED")
     List<TimerTaskDO> selectClaimable(@Param("now") LocalDateTime now,
                                      @Param("batchSize") int batchSize);
+
+    /**
+     * 非锁定有限诊断，不把缺租约的损坏活动行纳入领取批次，更不自动修复。
+     * 设计见 docs/superpowers/specs/2026-10-05-catalog-reliable-consumption-prerequisite-design.md#31-扫描和预算。
+     */
+    List<Long> selectBrokenActiveLeaseIds(@Param("limit") int limit);
 
     default TimerTaskDO selectByIdForUpdate(Long id) {
         return selectOneForUpdate(TimerTaskDO::getId, id);
@@ -50,7 +45,8 @@ public interface TimerTaskMapper extends BaseMapperX<TimerTaskDO> {
 
     default int claim(Long id, long expectedVersion, String leaseOwner, LocalDateTime leaseUntil,
                       LocalDateTime now) {
-        return update(null, new LambdaUpdateWrapper<TimerTaskDO>()
+        return update(null, dueRow(id, expectedVersion, now)
+                .apply("attempt_count < max_attempts")
                 .set(TimerTaskDO::getStatus, STATUS_CLAIMED)
                 .setSql("fencing_token = fencing_token + 1")
                 .setSql("attempt_count = attempt_count + 1")
@@ -58,36 +54,79 @@ public interface TimerTaskMapper extends BaseMapperX<TimerTaskDO> {
                 .set(TimerTaskDO::getLeaseUntil, leaseUntil)
                 .set(TimerTaskDO::getLastErrorCode, null)
                 .setSql("version = version + 1")
-                .set(TimerTaskDO::getUpdatedAt, now)
-                .eq(TimerTaskDO::getId, id)
-                .eq(TimerTaskDO::getVersion, expectedVersion)
-                .in(TimerTaskDO::getStatus, STATUS_PENDING, STATUS_RETRY));
+                .set(TimerTaskDO::getUpdatedAt, now));
     }
 
-    default int renewLease(Long id, long fencingToken, String leaseOwner, LocalDateTime leaseUntil,
-                           LocalDateTime now) {
+    /**
+     * 耗尽到期行死信，保留非空计划时间，不追加/覆盖execution或补startedAt。
+     * 清owner/lease、终态及version递增使旧claim失格，不再消耗尝试预算。
+     * 设计见 docs/superpowers/specs/2026-10-05-catalog-reliable-consumption-prerequisite-design.md#33-timer审计与失败处理。
+     */
+    default int exhaustBudget(Long id, long expectedVersion, LocalDateTime now) {
+        return update(null, dueRow(id, expectedVersion, now)
+                .apply("attempt_count >= max_attempts")
+                .set(TimerTaskDO::getStatus, STATUS_DEAD)
+                .set(TimerTaskDO::getLeaseOwner, null)
+                .set(TimerTaskDO::getLeaseUntil, null)
+                .set(TimerTaskDO::getLastErrorCode, ClaimRecoveryPolicy.BUDGET_EXHAUSTED)
+                .setSql("version = version + 1")
+                .set(TimerTaskDO::getUpdatedAt, now));
+    }
+
+    /**
+     * 领取与预算死信共享当前version/前态/到期CAS，列间预算比较用固定技术SQL，无用户拼接。
+     * 设计见 docs/superpowers/specs/2026-10-05-catalog-reliable-consumption-prerequisite-design.md#32-转换表。
+     */
+    default LambdaUpdateWrapper<TimerTaskDO> dueRow(Long id, long expectedVersion, LocalDateTime now) {
+        return new LambdaUpdateWrapper<TimerTaskDO>()
+                .eq(TimerTaskDO::getId, id)
+                .eq(TimerTaskDO::getVersion, expectedVersion)
+                .and(w -> w.in(TimerTaskDO::getStatus, STATUS_PENDING, STATUS_RETRY)
+                        .le(TimerTaskDO::getNextFireAt, now)
+                        .and(lease -> lease.isNull(TimerTaskDO::getLeaseUntil)
+                                .or().le(TimerTaskDO::getLeaseUntil, now))
+                        .or(active -> active.in(TimerTaskDO::getStatus, STATUS_CLAIMED, STATUS_EXECUTING)
+                                .isNotNull(TimerTaskDO::getLeaseUntil)
+                                .le(TimerTaskDO::getLeaseUntil, now)));
+    }
+
+    default int renewLease(Long id, Long expectedVersion, long fencingToken, String leaseOwner,
+                           LocalDateTime leaseUntil, LocalDateTime now) {
         return update(null, new LambdaUpdateWrapper<TimerTaskDO>()
                 .set(TimerTaskDO::getLeaseUntil, leaseUntil)
                 .setSql("version = version + 1")
                 .set(TimerTaskDO::getUpdatedAt, now)
                 .eq(TimerTaskDO::getId, id)
+                .eq(expectedVersion != null, TimerTaskDO::getVersion, expectedVersion)
                 .eq(TimerTaskDO::getFencingToken, fencingToken)
                 .eq(TimerTaskDO::getLeaseOwner, leaseOwner)
+                .gt(TimerTaskDO::getLeaseUntil, now)
                 .in(TimerTaskDO::getStatus, STATUS_CLAIMED, STATUS_EXECUTING));
     }
 
-    default int markExecuting(Long id, long fencingToken, String leaseOwner, LocalDateTime now) {
+    default int renewLease(Long id, long fencingToken, String leaseOwner, LocalDateTime leaseUntil,
+                           LocalDateTime now) {
+        return renewLease(id, null, fencingToken, leaseOwner, leaseUntil, now);
+    }
+
+    default int markExecuting(Long id, Long expectedVersion, long fencingToken, String leaseOwner, LocalDateTime now) {
         return update(null, new LambdaUpdateWrapper<TimerTaskDO>()
                 .set(TimerTaskDO::getStatus, STATUS_EXECUTING)
                 .setSql("version = version + 1")
                 .set(TimerTaskDO::getUpdatedAt, now)
                 .eq(TimerTaskDO::getId, id)
+                .eq(expectedVersion != null, TimerTaskDO::getVersion, expectedVersion)
                 .eq(TimerTaskDO::getFencingToken, fencingToken)
                 .eq(TimerTaskDO::getLeaseOwner, leaseOwner)
+                .gt(TimerTaskDO::getLeaseUntil, now)
                 .eq(TimerTaskDO::getStatus, STATUS_CLAIMED));
     }
 
-    default int complete(Long id, long fencingToken, String leaseOwner, LocalDateTime now) {
+    default int markExecuting(Long id, long fencingToken, String leaseOwner, LocalDateTime now) {
+        return markExecuting(id, null, fencingToken, leaseOwner, now);
+    }
+
+    default int complete(Long id, Long expectedVersion, long fencingToken, String leaseOwner, LocalDateTime now) {
         return update(null, new LambdaUpdateWrapper<TimerTaskDO>()
                 .set(TimerTaskDO::getStatus, STATUS_COMPLETED)
                 .set(TimerTaskDO::getLeaseOwner, null)
@@ -95,13 +134,19 @@ public interface TimerTaskMapper extends BaseMapperX<TimerTaskDO> {
                 .setSql("version = version + 1")
                 .set(TimerTaskDO::getUpdatedAt, now)
                 .eq(TimerTaskDO::getId, id)
+                .eq(expectedVersion != null, TimerTaskDO::getVersion, expectedVersion)
                 .eq(TimerTaskDO::getFencingToken, fencingToken)
                 .eq(TimerTaskDO::getLeaseOwner, leaseOwner)
+                .gt(TimerTaskDO::getLeaseUntil, now)
                 .in(TimerTaskDO::getStatus, STATUS_CLAIMED, STATUS_EXECUTING));
     }
 
-    default int finishAttempt(Long id, long fencingToken, String leaseOwner, short newStatus,
-                              LocalDateTime nextFireAt, String errorCode, LocalDateTime now) {
+    default int complete(Long id, long fencingToken, String leaseOwner, LocalDateTime now) {
+        return complete(id, null, fencingToken, leaseOwner, now);
+    }
+
+    default int finishAttempt(Long id, Long expectedVersion, long fencingToken, String leaseOwner,
+                              short newStatus, LocalDateTime nextFireAt, String errorCode, LocalDateTime now) {
         return update(null, new LambdaUpdateWrapper<TimerTaskDO>()
                 .set(TimerTaskDO::getStatus, newStatus)
                 .set(TimerTaskDO::getLeaseOwner, null)
@@ -113,9 +158,16 @@ public interface TimerTaskMapper extends BaseMapperX<TimerTaskDO> {
                 .setSql("version = version + 1")
                 .set(TimerTaskDO::getUpdatedAt, now)
                 .eq(TimerTaskDO::getId, id)
+                .eq(expectedVersion != null, TimerTaskDO::getVersion, expectedVersion)
                 .eq(TimerTaskDO::getFencingToken, fencingToken)
                 .eq(TimerTaskDO::getLeaseOwner, leaseOwner)
+                .gt(TimerTaskDO::getLeaseUntil, now)
                 .in(TimerTaskDO::getStatus, STATUS_CLAIMED, STATUS_EXECUTING));
+    }
+
+    default int finishAttempt(Long id, long fencingToken, String leaseOwner, short newStatus,
+                              LocalDateTime nextFireAt, String errorCode, LocalDateTime now) {
+        return finishAttempt(id, null, fencingToken, leaseOwner, newStatus, nextFireAt, errorCode, now);
     }
 
     default int cancel(Long id, long expectedVersion, LocalDateTime now) {

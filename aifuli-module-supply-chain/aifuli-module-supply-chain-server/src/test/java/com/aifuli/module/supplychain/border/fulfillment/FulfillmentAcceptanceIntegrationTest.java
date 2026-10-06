@@ -426,7 +426,106 @@ class FulfillmentAcceptanceIntegrationTest {
         }
     }
 
+    @Test
+    void bpdWaitsForSkuThenSeesPredecessorCommittedDailyQuota() throws Exception { verifyQuotaVisibility(true); }
+
+    @Test
+    void oldAliasWaitsForSkuThenSeesPredecessorCommittedDailyQuota() throws Exception { verifyQuotaVisibility(false); }
+
+    /** 两个不同买家LST共用SKU，后一事务确实等待SKU而非LST；普通读只能在锁后建立RR，见桥接设计§3.1/§13.2。 */
+    private void verifyQuotaVisibility(boolean useBpd) throws Exception {
+        try (var context = applicationContext(SelectionConfiguration.class)) {
+            Fixture fixture = seed(context, true);
+            var jdbc = new JdbcTemplate(context.getBean("supplyChainDataSource", DataSource.class));
+            var sku = context.getBean(PlatformSkuMapper.class).selectByCode("SKU_001_100");
+            var now = context.getBean(com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock.class).now();
+            context.getBean(SupplierSkuDailyQuotaMapper.class).insert(SupplierSkuDailyQuotaDO.builder()
+                    .supplierId(fixture.supplier().getId()).platformSkuId(sku.getId()).dailyLimit(1L).version(0L)
+                    .createdBy(1L).updatedBy(1L).createdAt(now).updatedAt(now).build());
+            String buyerCode = context.getBean(BuyerCommandService.class).createBuyer(new BuyerCommandService.CreateBuyerCommand(
+                    null, "第二买家", "第二买家", null, null, "AIFULI_MALL", "tenant-next", now.minusMinutes(5), 1L));
+            Long buyerId = context.getBean(com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerMapper.class).selectByBuyerCode(buyerCode).getId();
+            insertActiveProject(context.getBean(BuyerProjectMapper.class), "PRJ_NEXT", buyerId, now);
+            String listingNo = context.getBean(ProductCatalogCommandService.class).createBuyerListing(
+                    new ProductCatalogCommandService.CreateBuyerListingCommand(buyerCode, "SKU_001_100", "next-alias", 1L));
+            context.getBean(BuyerListingPublicationService.class).publish(new BuyerListingPublicationService.PublishListingCommand(
+                    listingNo, 0L, 9800L, "合法手工价格", now.minusMinutes(1), null, "测试", 1L, "trace-next", null, null));
+            var listing = context.getBean(BuyerListingMapper.class).selectByListingNo(listingNo);
+            var availability = context.getBean(BuyerListingAvailabilityMapper.class).selectByListingId(listing.getId());
+            availability.setAvailability(ListingAvailability.AVAILABLE.getCode());
+            context.getBean(BuyerListingAvailabilityMapper.class).updateById(availability);
+            var selection = context.getBean(com.aifuli.module.supplychain.tradecore.catalog.application.BuyerProductCommandService.class);
+            String bpd = selection.addProducts(buyerCode, List.of(new com.aifuli.module.supplychain.tradecore.catalog.application.BuyerProductCommandService.ProductLine(
+                    "SKU_001_100", null, null, null, null, null)), 1L).getFirst();
+
+            var reached = new CountDownLatch(1); var release = new CountDownLatch(1); var secondAtSku = new CountDownLatch(1);
+            var interceptor = new com.aifuli.module.supplychain.testsupport.DeterministicSqlInterceptor();
+            var acquired = new java.util.concurrent.atomic.AtomicBoolean();
+            interceptor.use(new com.aifuli.module.supplychain.testsupport.DeterministicSqlInterceptor.Hook() {
+                public void before(String statement, String sql, Object params) {
+                    if (Thread.currentThread().getName().equals("quota-second") && sql.contains("sc_platform_sku") && sql.toUpperCase().contains("FOR UPDATE")) {
+                        secondAtSku.countDown();
+                    }
+                }
+                public void after(String statement, String sql, Object params) throws Exception {
+                    if (sql.contains("sc_platform_sku") && sql.toUpperCase().contains("FOR UPDATE")) {
+                        if (Thread.currentThread().getName().equals("quota-first") && acquired.compareAndSet(false, true)) {
+                            reached.countDown(); com.aifuli.module.supplychain.testsupport.DeterministicSqlInterceptor.await(release);
+                        } else if (Thread.currentThread().getName().equals("quota-second")) {
+                            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_supply_chain_order WHERE buyer_order_no='QUOTA-FIRST'", Long.class)).isEqualTo(1L);
+                        }
+                    }
+                }
+            });
+            context.getBean("supplyChainSqlSessionFactory", org.apache.ibatis.session.SqlSessionFactory.class).getConfiguration().addInterceptor(interceptor);
+            var facade = context.getBean(BuyerFulfillmentCommandFacade.class);
+            var secondRequest = request("QUOTA-SECOND"); secondRequest.setExternalTenantId("tenant-next");
+            secondRequest.setProjectCode("PRJ_NEXT"); secondRequest.setBuyerSkuCode(useBpd ? bpd : "next-alias");
+            try (var firstExecutor = Executors.newSingleThreadExecutor(r -> new Thread(r, "quota-first"));
+                 var secondExecutor = Executors.newSingleThreadExecutor(r -> new Thread(r, "quota-second"))) {
+                var first = firstExecutor.submit(() -> facade.acceptFulfillment(request("QUOTA-FIRST")));
+                try {
+                    com.aifuli.module.supplychain.testsupport.DeterministicSqlInterceptor.await(reached);
+                    var second = secondExecutor.submit(() -> facade.acceptFulfillment(secondRequest));
+                    com.aifuli.module.supplychain.testsupport.DeterministicSqlInterceptor.await(secondAtSku);
+                    boolean waiting = false; long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(10);
+                    try (var connection = java.sql.DriverManager.getConnection(MYSQL.getJdbcUrl(), "root", MYSQL.getPassword())) {
+                        while (!waiting && System.nanoTime() < deadline) {
+                            try (var query = connection.createStatement(); var rows = query.executeQuery("SELECT COUNT(*) FROM performance_schema.data_lock_waits w JOIN performance_schema.data_locks d ON d.ENGINE_LOCK_ID=w.REQUESTING_ENGINE_LOCK_ID WHERE d.OBJECT_NAME='sc_platform_sku'")) {
+                                rows.next(); waiting = rows.getLong(1) > 0;
+                            }
+                            if (!waiting) Thread.sleep(20);
+                        }
+                    }
+                    assertThat(waiting).as("必须真实等待SKU当前读锁").isTrue(); release.countDown();
+                    assertThat(first.get(20, java.util.concurrent.TimeUnit.SECONDS).getReceiptStatus()).isEqualTo(FulfillmentReceiptStatus.ACCEPTED);
+                    var rejected = second.get(20, java.util.concurrent.TimeUnit.SECONDS);
+                    assertThat(rejected.getReceiptStatus()).isEqualTo(FulfillmentReceiptStatus.REJECTED_RETRYABLE);
+                    assertThat(rejected.getRejectionCode()).isEqualTo(AcceptanceRejectionCode.NO_ROUTABLE_SUPPLIER.name());
+                    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_supply_chain_order", Long.class)).isEqualTo(1L);
+                } finally { release.countDown(); interceptor.reset(); }
+            }
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @Import({com.aifuli.module.supplychain.tradecore.catalog.application.BuyerProductCommandService.class,
+            com.aifuli.module.supplychain.tradecore.catalog.application.BuyerProductSelectionBatchTransactionalWorker.class,
+            com.aifuli.module.supplychain.tradecore.catalog.application.BuyerAcceptanceCatalogIdentityWriter.class,
+            com.aifuli.module.supplychain.tradecore.catalog.application.BuyerAcceptanceCatalogIdentityProbe.class,
+            com.aifuli.module.supplychain.tradecore.catalog.application.SettlementPriceResolver.class})
+    static class SelectionConfiguration {
+        @Bean com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericBatchPricingService selectionPricing() {
+            // 这里只测试真实受理/SQL视图；商业价与报价沿既有独立fixture，页面定价完整性另由桥接Controller门禁验证。
+            return mock(com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericBatchPricingService.class);
+        }
+    }
+
     Fixture seed(ConfigurableApplicationContext context) {
+        return seed(context, false);
+    }
+
+    private Fixture seed(ConfigurableApplicationContext context, boolean allBuyers) {
         // 普通流程fixture明确建立已核验READY（测试密钥端口仅返回测试专用32字节key），不改变生产初始CLOSED。
         // 真实离线覆盖验收由RechargeFrequencyMigrationIntegrationTest独立执行。
         var gateJdbc = new JdbcTemplate(context.getBean("supplyChainDataSource", DataSource.class));
@@ -486,7 +585,7 @@ class FulfillmentAcceptanceIntegrationTest {
                         now.minusHours(1), now.plusDays(1), List.of(
                         new RoutingPolicyPublicationService.RuleDraft(
                                 "WS_TELCO", "吾盛话费路由", "FIXED", "QINAMENG",
-                                "SPECIFIED", List.of("BYR_001"),
+                                allBuyers ? "ALL" : "SPECIFIED", allBuyers ? List.of() : List.of("BYR_001"),
                                 "ALL", List.of(),
                                 "SPECIFIED", List.of("EQUITY_PRODUCT"),
                                 "ALL", List.of(),

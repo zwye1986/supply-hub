@@ -54,6 +54,8 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapp
 import com.aifuli.module.supplychain.tradecore.catalog.domain.BuyerListingStatus;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.ListingAvailability;
 import com.aifuli.module.supplychain.tradecore.catalog.application.ProductSellabilityService;
+import com.aifuli.module.supplychain.tradecore.catalog.application.BuyerAcceptanceCatalogResolver;
+import com.aifuli.module.supplychain.tradecore.catalog.application.BuyerAcceptanceCatalogResolver.CatalogIdentity;
 import com.aifuli.module.supplychain.tradecore.catalog.pricing.ProjectQuoteKeyContext;
 import com.aifuli.module.supplychain.tradecore.catalog.pricing.ProductNotSaleableException;
 import com.aifuli.module.supplychain.tradecore.catalog.pricing.StandardPricingQuoteService;
@@ -120,6 +122,7 @@ public class FulfillmentAcceptanceLifecycle {
     private final BOrderMapper bOrderMapper;
     private final FulfillmentOperationMapper operationMapper;
     private final BuyerListingMapper listingMapper;
+    private final BuyerAcceptanceCatalogResolver catalogResolver;
     private final BuyerListingVersionMapper listingVersionMapper;
     private final BuyerListingAvailabilityMapper listingAvailabilityMapper;
     private final PlatformSkuMapper skuMapper;
@@ -146,17 +149,17 @@ public class FulfillmentAcceptanceLifecycle {
     @Transactional(transactionManager = TRANSACTION_MANAGER, readOnly = true)
     public TargetSchemaSnapshot resolveTargetSchema(Long buyerId, String buyerSkuCode) {
         log.debug("[履约][lifecycle] resolveTargetSchema 入口 buyerId={}, buyerSkuCode={}", buyerId, buyerSkuCode);
-        BuyerListingDO listing = listingMapper.selectByBuyerAndSkuCode(buyerId, buyerSkuCode);
-        if (listing == null) {
+        CatalogIdentity identity = catalogResolver.resolve(buyerId, buyerSkuCode);
+        if (!identity.available()) {
             return TargetSchemaSnapshot.unavailable();
         }
-        PlatformSkuDO sku = skuMapper.selectById(listing.getPlatformSkuId());
+        PlatformSkuDO sku = skuMapper.selectById(identity.platformSkuId());
         if (sku == null || sku.getTargetSchemaCode() == null || sku.getTargetSchemaVersion() == null) {
             return TargetSchemaSnapshot.unavailable();
         }
         // platformSkuId 是服务端解析的商品身份，供格式 2 指纹的「服务端冻结商品身份（可解析时）」成分。
-        return new TargetSchemaSnapshot(listing.getPlatformSkuId(),
-                sku.getTargetSchemaCode(), sku.getTargetSchemaVersion(), true);
+        return new TargetSchemaSnapshot(identity.platformSkuId(),
+                sku.getTargetSchemaCode(), sku.getTargetSchemaVersion(), true, identity);
     }
 
     /**
@@ -184,7 +187,9 @@ public class FulfillmentAcceptanceLifecycle {
                 || !Arrays.equals(existing.getRequestFingerprint(), command.requestFingerprint())) {
             // 已接受同指纹请求只回放；其余MOBILE写路径先核验门禁，暂时关闭不固化为业务终拒。
             // 设计见 docs/superpowers/specs/2026-09-30-direct-recharge-mobile-spu-frequency-design.md#101-迁移执行与核实边界。
-            gateListing = listingMapper.selectByBuyerAndSkuCode(command.buyerId(), command.buyerSkuCode());
+            CatalogIdentity identity = command.catalogIdentity() == null
+                    ? catalogResolver.resolve(command.buyerId(), command.buyerSkuCode()) : command.catalogIdentity();
+            gateListing = identity.available() ? listingMapper.selectById(identity.listingId()) : null;
             if (gateListing != null) {
                 rechargeFrequencyLifecycle.requireAcceptanceReady(gateListing.getPlatformSkuId(), command.targetAccountType());
             }
@@ -519,8 +524,12 @@ public class FulfillmentAcceptanceLifecycle {
      * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#35-sku-限购计算并发与释放规则}。</p>
      */
     private LockedListing lockListingAndSku(PreparedAcceptance command) {
-        BuyerListingDO listing = listingMapper.selectByBuyerAndSkuCodeForUpdate(
-                command.buyerId(), command.buyerSkuCode());
+        CatalogIdentity identity = command.catalogIdentity();
+        if (identity != null && (!Objects.equals(identity.buyerId(), command.buyerId())
+                || !Objects.equals(identity.requestedCode(), command.buyerSkuCode()))) {
+            throw new IllegalStateException("可信受理目录身份与应用命令不一致");
+        }
+        BuyerListingDO listing = catalogResolver.lockResolvedIdentity(identity);
         if (listing == null) {
             throw rejection(command.receiptIdHint(), null, AcceptanceReceiptStatus.REJECTED_RETRYABLE,
                     AcceptanceRejectionCode.LISTING_VERSION_EXPIRED);
@@ -530,6 +539,7 @@ public class FulfillmentAcceptanceLifecycle {
             throw rejection(command.receiptIdHint(), null, AcceptanceReceiptStatus.REJECTED_RETRYABLE,
                     AcceptanceRejectionCode.SKU_NOT_SALEABLE);
         }
+        catalogResolver.verifyAssociationAfterSkuLock(identity, listing);
         return new LockedListing(listing, sku);
     }
 
@@ -538,8 +548,7 @@ public class FulfillmentAcceptanceLifecycle {
         BuyerListingDO listing = locked.listing();
         // 业务版本由服务端取得：按 Listing 当前发布版本锁定校验，不再接受调用方提交的商品版本。
         // 设计见 docs/superpowers/specs/2026-10-02-standard-acceptance-project-key-design.md#2-首次身份与重放优先。
-        BuyerListingVersionDO version = listing.getCurrentVersionId() == null
-                ? null : listingVersionMapper.selectById(listing.getCurrentVersionId());
+        BuyerListingVersionDO version = requireCurrentListingVersion(listing);
         if (version == null || listing.getStatus() != BuyerListingStatus.PUBLISHED.getCode()
                 || version.getValidFrom().isAfter(now)
                 || (version.getValidTo() != null && !version.getValidTo().isAfter(now))) {
@@ -716,21 +725,30 @@ public class FulfillmentAcceptanceLifecycle {
 
     /**
      * 服务端解析本次尝试的商品业务版本号（回执 listing_version_no）。
-     * Listing 关系无法解析出当前发布版本时受理注定失败（INVALID_TARGET/LISTING_VERSION_EXPIRED），
-     * 此处快速失败而不以版本 1 伪造服务端快照；052 已将该列改为可空，但新受理仍解析到当前发布版本。
-     * 设计见 docs/superpowers/specs/2026-10-02-standard-acceptance-project-key-design.md#2-首次身份与重放优先。
+     * 未发布目录没有商业版本，本次尝试保留真实 NULL；非空 current 指针损坏属于系统故障。
+     * 设计见 docs/superpowers/specs/2026-10-04-buyer-selection-acceptance-catalog-bridge-design.md#10-draft稳定响应与管理端可见结果。
      */
-    private int resolveAttemptListingVersionNo(PreparedAcceptance command, BuyerListingDO gateListing) {
+    private Integer resolveAttemptListingVersionNo(PreparedAcceptance command, BuyerListingDO gateListing) {
+        BuyerListingVersionDO version = requireCurrentListingVersion(gateListing);
+        return version == null ? null : version.getVersionNo();
+    }
+
+    /**
+     * claim 与最终受理共享同一完整性检查，避免最终锁定后把损坏的非空来源降级为可重试草稿。
+     * 仅目录不存在或 current 为空表示尚未发布，不得把跨目录版本或非法业务版本号当成缺条件。
+     * 设计见 docs/superpowers/specs/2026-10-04-buyer-selection-acceptance-catalog-bridge-design.md#10-draft稳定响应与管理端可见结果。
+     */
+    private BuyerListingVersionDO requireCurrentListingVersion(BuyerListingDO gateListing) {
         if (gateListing == null || gateListing.getCurrentVersionId() == null) {
-            throw new IllegalStateException("Buyer listing has no resolvable current version: buyerSkuCode="
-                    + command.buyerSkuCode());
+            return null;
         }
         BuyerListingVersionDO version = listingVersionMapper.selectById(gateListing.getCurrentVersionId());
-        if (version == null || version.getVersionNo() == null || version.getVersionNo() < 1) {
+        if (version == null || !Objects.equals(version.getListingId(), gateListing.getId())
+                || version.getVersionNo() == null || version.getVersionNo() < 1) {
             throw new IllegalStateException("Buyer listing version snapshot is broken: listingId="
                     + gateListing.getId());
         }
-        return version.getVersionNo();
+        return version;
     }
 
     private void requireProcessingReceipt(FulfillmentAcceptanceReceiptDO receipt,
@@ -839,7 +857,11 @@ public class FulfillmentAcceptanceLifecycle {
      * 加密与请求指纹准备阶段使用的平台 SKU Schema 快照（含服务端解析的商品身份）。
      * platformSkuId 供格式 2 指纹的「服务端冻结商品身份（可解析时）」成分；不可解析时为 null。
      */
-    public record TargetSchemaSnapshot(Long platformSkuId, String schemaCode, int schemaVersion, boolean available) {
+    public record TargetSchemaSnapshot(Long platformSkuId, String schemaCode, int schemaVersion, boolean available,
+                                       CatalogIdentity catalogIdentity) {
+        public TargetSchemaSnapshot(Long platformSkuId, String schemaCode, int schemaVersion, boolean available) {
+            this(platformSkuId, schemaCode, schemaVersion, available, null);
+        }
         private static TargetSchemaSnapshot unavailable() {
             return new TargetSchemaSnapshot(null, "", 0, false);
         }
@@ -875,6 +897,7 @@ public class FulfillmentAcceptanceLifecycle {
         private final byte[] buyerOrderDigest;
         private final Long previousReceiptVersion;
         private final String traceId;
+        private final CatalogIdentity catalogIdentity;
         private long receiptIdHint;
 
         public PreparedAcceptance(Long projectId, String projectCode, String projectName,
@@ -886,6 +909,19 @@ public class FulfillmentAcceptanceLifecycle {
                                   String targetKeyVersion, boolean targetValid,
                                   byte[] invariantFingerprint, byte[] requestFingerprint,
                                   byte[] buyerOrderDigest, Long previousReceiptVersion, String traceId) {
+            this(projectId, projectCode, projectName, buyerId, buyerCode, buyerName, buyerOrderNo,
+                    fulfillmentAccountValue, targetAccountType, buyerSkuCode, quantity, targetSchemaCode,
+                    targetSchemaVersion, targetCiphertext, targetDigest, targetKeyVersion, targetValid,
+                    invariantFingerprint, requestFingerprint, buyerOrderDigest, previousReceiptVersion, traceId, null);
+        }
+
+        public PreparedAcceptance(Long projectId, String projectCode, String projectName,
+                                  Long buyerId, String buyerCode, String buyerName,
+                                  String buyerOrderNo, String fulfillmentAccountValue, String targetAccountType,
+                                  String buyerSkuCode, long quantity, String targetSchemaCode, int targetSchemaVersion,
+                                  byte[] targetCiphertext, byte[] targetDigest, String targetKeyVersion, boolean targetValid,
+                                  byte[] invariantFingerprint, byte[] requestFingerprint,
+                                  byte[] buyerOrderDigest, Long previousReceiptVersion, String traceId, CatalogIdentity catalogIdentity) {
             this.projectId = projectId;
             this.projectCode = projectCode;
             this.projectName = projectName;
@@ -908,6 +944,7 @@ public class FulfillmentAcceptanceLifecycle {
             this.buyerOrderDigest = buyerOrderDigest.clone();
             this.previousReceiptVersion = previousReceiptVersion;
             this.traceId = traceId;
+            this.catalogIdentity = catalogIdentity;
         }
 
         public Long projectId() { return projectId; }
@@ -932,6 +969,7 @@ public class FulfillmentAcceptanceLifecycle {
         public byte[] buyerOrderDigest() { return buyerOrderDigest.clone(); }
         public Long previousReceiptVersion() { return previousReceiptVersion; }
         public String traceId() { return traceId; }
+        public CatalogIdentity catalogIdentity() { return catalogIdentity; }
         public long receiptIdHint() { return receiptIdHint; }
         private void receiptIdHint(long value) { this.receiptIdHint = value; }
     }

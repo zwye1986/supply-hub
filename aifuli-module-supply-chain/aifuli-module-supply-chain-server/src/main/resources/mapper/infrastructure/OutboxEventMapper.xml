@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.aifuli.module.supplychain.infrastructure.outbox.OutboxEventMapper">
+    <!-- MySQL跳锁方言不能由Lambda表达；普通计划与活动租约分别判定。
+         设计见 docs/superpowers/specs/2026-10-05-catalog-reliable-consumption-prerequisite-design.md#31-扫描和预算。 -->
+    <select id="selectDeliverable" resultType="com.aifuli.module.supplychain.infrastructure.outbox.OutboxEventDO">
+        <bind name="pending" value="@com.aifuli.module.supplychain.infrastructure.outbox.OutboxEventMapper@STATUS_PENDING"/>
+        <bind name="retry" value="@com.aifuli.module.supplychain.infrastructure.outbox.OutboxEventMapper@STATUS_RETRY"/>
+        <bind name="claimed" value="@com.aifuli.module.supplychain.infrastructure.outbox.OutboxEventMapper@STATUS_CLAIMED"/>
+        <bind name="delivering" value="@com.aifuli.module.supplychain.infrastructure.outbox.OutboxEventMapper@STATUS_DELIVERING"/>
+        SELECT * FROM sc_outbox_event
+        WHERE (status IN (#{pending}, #{retry}) AND available_at &lt;= #{now}
+               AND (lease_until IS NULL OR lease_until &lt;= #{now}))
+           OR (status IN (#{claimed}, #{delivering}) AND lease_until IS NOT NULL AND lease_until &lt;= #{now})
+        ORDER BY available_at ASC, id ASC
+        LIMIT #{batchSize} FOR UPDATE SKIP LOCKED
+    </select>
+    <select id="selectBrokenActiveLeaseIds" resultType="java.lang.Long">
+        <bind name="claimed" value="@com.aifuli.module.supplychain.infrastructure.outbox.OutboxEventMapper@STATUS_CLAIMED"/>
+        <bind name="delivering" value="@com.aifuli.module.supplychain.infrastructure.outbox.OutboxEventMapper@STATUS_DELIVERING"/>
+        SELECT id FROM sc_outbox_event
+        WHERE status IN (#{claimed}, #{delivering}) AND lease_until IS NULL
+        ORDER BY id LIMIT #{limit}
+    </select>
+</mapper>

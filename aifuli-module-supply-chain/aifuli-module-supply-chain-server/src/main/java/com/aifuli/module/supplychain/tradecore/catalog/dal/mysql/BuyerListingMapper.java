@@ -8,6 +8,24 @@ import org.apache.ibatis.annotations.Mapper;
 @Mapper
 public interface BuyerListingMapper extends BaseMapperX<BuyerListingDO> {
 
+    /** 排序规则专属标量比较，Lambda不能表达有界字符前缀；见桥接设计§3.1。 */
+    boolean isReservedBuyerProductCode(@org.apache.ibatis.annotations.Param("normalizedCode") String normalizedCode,
+                                      @org.apache.ibatis.annotations.Param("reservedPrefix") String reservedPrefix);
+
+    default BuyerListingDO selectByBuyerAndSku(Long buyerId, Long skuId) {
+        return selectOne(new LambdaQueryWrapper<BuyerListingDO>().eq(BuyerListingDO::getBuyerId, buyerId)
+                .eq(BuyerListingDO::getPlatformSkuId, skuId));
+    }
+
+    default BuyerListingDO selectByBuyerAndSkuForUpdate(Long buyerId, Long skuId) {
+        return selectOneForUpdate(new LambdaQueryWrapper<BuyerListingDO>().eq(BuyerListingDO::getBuyerId, buyerId)
+                .eq(BuyerListingDO::getPlatformSkuId, skuId));
+    }
+
+    default BuyerListingDO selectByIdForUpdate(Long id) {
+        return selectOneForUpdate(BuyerListingDO::getId, id);
+    }
+
     default BuyerListingDO selectByListingNo(String listingNo) {
         return selectOne(BuyerListingDO::getListingNo, listingNo);
     }

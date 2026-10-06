@@ -47,10 +47,12 @@ public class SupplyChainDataSourceConfiguration {
         DruidDataSource dataSource = properties.initializeDataSourceBuilder()
                 .type(DruidDataSource.class)
                 .build();
+        // 设置 R02 获审物理建连超时 1500ms
+        dataSource.setConnectTimeout(properties.getConnectTimeoutMillis());
         // 每个物理连接都固定 UTC+8，CURRENT_TIMESTAMP(3) 才能稳定表示上海本地时间。
         // 设计见 docs/superpowers/specs/2026-09-04-supply-chain-database-local-time-design.md#21-存储类型与时区。
         dataSource.setConnectionInitSqls(List.of("SET time_zone = '+08:00'"));
-        return dataSource;
+        return new BudgetRoutingDataSource(dataSource);
     }
 
     @Bean
@@ -69,9 +71,10 @@ public class SupplyChainDataSourceConfiguration {
     }
 
     @Bean("supplyChainTransactionManager")
-    JdbcTransactionManager supplyChainTransactionManager(
+    SupplyChainTransactionObservationManager supplyChainTransactionManager(
             @Qualifier("supplyChainDataSource") DataSource dataSource) {
-        return new JdbcTransactionManager(dataSource);
+        JdbcTransactionManager delegate = new JdbcTransactionManager(dataSource);
+        return new SupplyChainTransactionObservationManager(delegate, dataSource);
     }
 
     @Bean("supplyChainSqlSessionFactory")

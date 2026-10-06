@@ -44,6 +44,12 @@ HTTP 首次有效受理尝试自动生成或复用项目订单永久报价，调
 
 不修改035/051/054–058，不补造历史来源、不改已发布摘要或订单价格，不新增物理外键。迁移后基线为61变更集/123业务表/295 DATETIME列。Liquibase 实测升级、旧数据保留与重放；其它模块库不访问。
 
+### 4.1 059固定升级与真正重放边界（2026-10-06，测试限定授权）
+
+用户明确批准仅修复既有 `StandardProjectDirectOrderQuoteSourceMigrationIntegrationTest`，固定059边界；不修改生产、历史SQL或全局changelog。测试通过实际Liquibase `getDatabaseChangeLog()` 解析原登记，在测试实例内找到唯一 `059-standard-project-direct-order-quote-source`，确认它位于第61个变更集，再从该实例的可变 `getChangeSets()` 列表移除其后项；保留前61个原ChangeSet对象、原文件路径与真实SQL/checksum，不改变其上下文、标签或执行规则。Liquibase 4.31.1 的update/updateCount向实际命令传递该DatabaseChangeLog，不能用对全局登记的第二次update(1)冒充059重放。
+
+同一固定边界先真实执行前60个，再应用059；之后重新解析相同固定边界执行无数量限制update，必须无新增变更集。断言061/060从未执行、总数仍61，059的MD5SUM与EXECTYPE在重放前后相同；原RPC来源与价格、HTTP双NULL来源、价格快照、永久键索引及两列中文注释全部保留并复核。此测试只证明059升级/幂等；060/061全量迁移另由独立完整profile及全量迁移门禁覆盖，不能机械改为63并宣称重放已证。执行结果尚待真实隔离MySQL验证；不是生产行为RED或验收。
+
 ## 5. 验证与影响
 
 TDD 验证可信首签、原报价复用、不调用重定价、项目/SKU/数量冲突、缺选品或停用、READY 与费用快照、异常不吞、普通回放不首冻、无效目标不首冻。真实 MySQL 验证 HTTP 不预签报价仍下单/履约/查单/资产、同参并发唯一报价/订单/资金、旧 RR 快照等待项目锁后复用已提交报价、RPC 与 HTTP 首签竞争、跨项目同号隔离、失败后 ISSUED 保留且无消费/资金残留、改价后的 CAS 原价重试、新号新价、当前项目选品停用拒绝。确定性latch测试在首冻提交/accept前真实retire项目选品与分销商品，恢复HTTP后不得建单/消费/预占/Outbox；另在accept取得准入锁后启动真实retire，必须等待订单提交，证明线性化。

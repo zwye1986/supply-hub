@@ -23,6 +23,11 @@ public class BuyerListingDO {
     private Long buyerId;
     private Long platformSkuId;
     private String buyerSkuCode;
+    /** 受理目录管理来源：MANUAL手工管理，AUTO_SELECTION页面选品自动管理 */
+    @Builder.Default
+    private String managementMode = com.aifuli.module.supplychain.tradecore.catalog.domain.BuyerListingManagementMode.MANUAL.name();
+    /** 自动受理目录关联的分销商品主键，逻辑引用sc_buyer_product.id；手工目录为空 */
+    private Long buyerProductId;
     private Long currentVersionId;
     private Short status;
     @Version

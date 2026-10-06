@@ -1,6 +1,8 @@
 package com.aifuli.module.supplychain.infrastructure.timer;
 
 import com.aifuli.module.supplychain.infrastructure.identity.BusinessNoGenerator;
+import com.aifuli.module.supplychain.infrastructure.ledger.AppendScheduleIdentityLedgerService;
+import com.aifuli.module.supplychain.infrastructure.ledger.SystemIntegrityException;
 import com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock;
 import com.aifuli.module.supplychain.infrastructure.timer.dal.dataobject.TimerTaskDO;
 import com.aifuli.module.supplychain.infrastructure.timer.dal.mysql.TimerTaskMapper;
@@ -8,7 +10,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
-import org.springframework.dao.DuplicateKeyException;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -16,7 +18,7 @@ import java.time.LocalDateTime;
 
 /** {@link PersistentTimer} 的数据库实现；任务真相源为 {@code sc_timer_task}。
  *
- * <p>设计详见 {@code docs/superpowers/specs/2026-08-07-supply-chain-phase1-detailed-design.md#持久化定时器}。</p>
+ * <p>设计详见 {@code docs/superpowers/specs/2026-10-05-catalog-reliable-consumption-prerequisite-design.md#81-真实-timer-调度与账本绑定实现r3-02t}。</p>
  */
 @Service
 @RequiredArgsConstructor
@@ -30,6 +32,7 @@ public class DatabasePersistentTimer implements PersistentTimer {
     private final ObjectMapper objectMapper;
     private final PersistentTimerHandlerRegistry handlerRegistry;
     private final SupplyChainDatabaseClock databaseClock;
+    private final ObjectProvider<AppendScheduleIdentityLedgerService> ledgerServiceProvider;
 
     @Override
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
@@ -38,28 +41,50 @@ public class DatabasePersistentTimer implements PersistentTimer {
                 || payload == null || fireAt == null) {
             throw new IllegalArgumentException("Timer schedule parameters are required");
         }
+        LocalDateTime now = databaseClock.now();
+        String payloadJson = writeJson(payload);
+
+        AppendScheduleIdentityLedgerService ledgerService = ledgerServiceProvider.getIfAvailable();
+        if (ledgerService != null) {
+            AppendScheduleIdentityLedgerService.TimerReservationResult reservation =
+                    ledgerService.reserveTimerSlot(taskType, idempotencyKey, 1, "LEGACY_JSON_V1", payloadJson, now);
+
+            if (!reservation.firstReserved()) {
+                return new TimerHandle(reservation.existingTaskNo(), reservation.existingTaskId(), 0L);
+            }
+
+            TimerTaskDO task = TimerTaskDO.builder()
+                    .taskNo(businessNoGenerator.next("TMR_"))
+                    .taskType(taskType).idempotencyKey(idempotencyKey)
+                    .payloadVersion(1).payloadJson(payloadJson)
+                    .scheduleType(SCHEDULE_ONCE).nextFireAt(databaseClock.fromInstant(fireAt))
+                    .priority(0).shard(0).status((short) 0).attemptCount(0)
+                    .maxAttempts(handlerRegistry.maxAttempts(taskType))
+                    .fencingToken(0L).createdAt(now).updatedAt(now).version(0L).build();
+
+            int inserted = timerTaskMapper.insert(task);
+            if (inserted != 1 || task.getId() == null || task.getId() <= 0) {
+                throw new SystemIntegrityException("Timer源任务插入失败: taskType=" + taskType + ", key=" + idempotencyKey);
+            }
+
+            ledgerService.bindTimerTask(reservation.slotId(), reservation.nonce(), task.getId(), task.getTaskNo(), now);
+            return new TimerHandle(task.getTaskNo(), task.getId(), 0L);
+        }
+
+        // 仅供无账本依赖的狭窄夹具降级兼容；生产环境始终经组件扫描注入账本服务
         TimerTaskDO existing = timerTaskMapper.selectByTypeAndKey(taskType, idempotencyKey);
         if (existing != null) {
             return new TimerHandle(existing.getTaskNo(), existing.getId(), existing.getFencingToken());
         }
-        LocalDateTime now = databaseClock.now();
         TimerTaskDO task = TimerTaskDO.builder()
                 .taskNo(businessNoGenerator.next("TMR_"))
                 .taskType(taskType).idempotencyKey(idempotencyKey)
-                .payloadVersion(1).payloadJson(writeJson(payload))
+                .payloadVersion(1).payloadJson(payloadJson)
                 .scheduleType(SCHEDULE_ONCE).nextFireAt(databaseClock.fromInstant(fireAt))
                 .priority(0).shard(0).status((short) 0).attemptCount(0)
                 .maxAttempts(handlerRegistry.maxAttempts(taskType))
                 .fencingToken(0L).createdAt(now).updatedAt(now).version(0L).build();
-        try {
-            timerTaskMapper.insert(task);
-        } catch (DuplicateKeyException duplicate) {
-            TimerTaskDO retry = timerTaskMapper.selectByTypeAndKey(taskType, idempotencyKey);
-            if (retry == null) {
-                throw duplicate;
-            }
-            return new TimerHandle(retry.getTaskNo(), retry.getId(), retry.getFencingToken());
-        }
+        timerTaskMapper.insert(task);
         return new TimerHandle(task.getTaskNo(), task.getId(), task.getFencingToken());
     }
 

@@ -1,6 +1,7 @@
 package com.aifuli.module.supplychain.tradecore.catalog;
 
 import com.aifuli.framework.common.pojo.PageResult;
+import com.aifuli.framework.common.exception.ServiceException;
 import com.aifuli.module.supplychain.api.catalog.dto.BuyerCatalogChangeBatchRespDTO;
 import com.aifuli.module.supplychain.api.catalog.dto.BuyerCatalogChangesReqDTO;
 import com.aifuli.module.supplychain.api.catalog.dto.BuyerCatalogItemRespDTO;
@@ -32,7 +33,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
 import com.aifuli.module.supplychain.testsupport.ProductCenterTestConfiguration;
-import org.springframework.dao.DataIntegrityViolationException;
+
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.testcontainers.containers.MySQLContainer;
 
@@ -43,6 +44,7 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BUYER_CATALOG_CODE_CONFLICT;
 
 class MasterDataLifecycleIntegrationTest {
 
@@ -157,7 +159,15 @@ class MasterDataLifecycleIntegrationTest {
             assertThatThrownBy(() -> catalogService.createBuyerListing(
                     new ProductCatalogCommandService.CreateBuyerListingCommand(
                             "BYR_001", "SKU_001_100", "WS-TELCO-100-OTHER", 1L)))
-                    .isInstanceOf(DataIntegrityViolationException.class);
+                    .isInstanceOf(ServiceException.class)
+                    .extracting(failure -> ((ServiceException) failure).getCode())
+                    .isEqualTo(BUYER_CATALOG_CODE_CONFLICT.getCode());
+            // 唯一身份冲突必须稳定失败且不改写存量手工目录；见桥接设计§3.1/§3.2。
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_buyer_listing", Long.class)).isEqualTo(1L);
+            assertThat(listingMapper.selectByListingNo(listingNo)).isEqualTo(afterSecond);
+            assertThat(versionMapper.selectById(afterSecond.getCurrentVersionId())).isEqualTo(secondVersion);
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_buyer_catalog_change", Long.class)).isEqualTo(2L);
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_outbox_event", Long.class)).isEqualTo(2L);
 
             publicationService.changeStatus(changeStatus(listingNo, 2, BuyerListingStatus.SUSPENDED));
             publicationService.changeStatus(changeStatus(listingNo, 3, BuyerListingStatus.PUBLISHED));

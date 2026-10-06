@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.aifuli.module.supplychain.infrastructure.timer.dal.mysql.TimerTaskMapper">
+    <!-- MySQL跳锁方言不能由Lambda表达；恢复不受旧计划时间阻挡，保留优先级与原排序。
+         设计见 docs/superpowers/specs/2026-10-05-catalog-reliable-consumption-prerequisite-design.md#31-扫描和预算。 -->
+    <select id="selectClaimable" resultType="com.aifuli.module.supplychain.infrastructure.timer.dal.dataobject.TimerTaskDO">
+        <bind name="pending" value="@com.aifuli.module.supplychain.infrastructure.timer.dal.mysql.TimerTaskMapper@STATUS_PENDING"/>
+        <bind name="retry" value="@com.aifuli.module.supplychain.infrastructure.timer.dal.mysql.TimerTaskMapper@STATUS_RETRY"/>
+        <bind name="claimed" value="@com.aifuli.module.supplychain.infrastructure.timer.dal.mysql.TimerTaskMapper@STATUS_CLAIMED"/>
+        <bind name="executing" value="@com.aifuli.module.supplychain.infrastructure.timer.dal.mysql.TimerTaskMapper@STATUS_EXECUTING"/>
+        SELECT * FROM sc_timer_task
+        WHERE (status IN (#{pending}, #{retry}) AND next_fire_at &lt;= #{now}
+               AND (lease_until IS NULL OR lease_until &lt;= #{now}))
+           OR (status IN (#{claimed}, #{executing}) AND lease_until IS NOT NULL AND lease_until &lt;= #{now})
+        ORDER BY priority DESC, next_fire_at ASC, id ASC
+        LIMIT #{batchSize} FOR UPDATE SKIP LOCKED
+    </select>
+    <select id="selectBrokenActiveLeaseIds" resultType="java.lang.Long">
+        <bind name="claimed" value="@com.aifuli.module.supplychain.infrastructure.timer.dal.mysql.TimerTaskMapper@STATUS_CLAIMED"/>
+        <bind name="executing" value="@com.aifuli.module.supplychain.infrastructure.timer.dal.mysql.TimerTaskMapper@STATUS_EXECUTING"/>
+        SELECT id FROM sc_timer_task
+        WHERE status IN (#{claimed}, #{executing}) AND lease_until IS NULL
+        ORDER BY id LIMIT #{limit}
+    </select>
+</mapper>

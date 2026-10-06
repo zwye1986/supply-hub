@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.aifuli.module.supplychain.infrastructure.ledger.dal.mysql.TimerScheduleIdentityMapper">
+    <!-- 单槽排他建槽语句：INSERT ... ON DUPLICATE KEY UPDATE id=id（显式省略 id，重复分支仅令 id=id，不修改任何字段、时间或状态）。
+         设计依据：docs/superpowers/specs/2026-10-05-catalog-reliable-consumption-prerequisite-design.md#721-冻结排他建槽sql与首次所有权。 -->
+    <insert id="insertSlotOnDuplicateKeyUpdate">
+        INSERT INTO sc_timer_schedule_identity (
+            task_type, idempotency_key,
+            binding_status, reservation_nonce,
+            payload_version, comparison_protocol, payload_json,
+            created_at
+        ) VALUES (
+            #{taskType}, #{idempotencyKey},
+            #{bindingStatus}, #{reservationNonce},
+            #{payloadVersion}, #{comparisonProtocol}, #{payloadJson},
+            #{createdAt}
+        )
+        ON DUPLICATE KEY UPDATE id = id
+    </insert>
+
+    <select id="selectForUpdate" resultType="com.aifuli.module.supplychain.infrastructure.ledger.dal.dataobject.TimerScheduleIdentityDO">
+        SELECT * FROM sc_timer_schedule_identity
+        WHERE task_type = #{taskType}
+          AND idempotency_key = #{idempotencyKey}
+        FOR UPDATE
+    </select>
+
+    <update id="bindTaskCas">
+        UPDATE sc_timer_schedule_identity
+        SET binding_status = 20,
+            task_no = #{taskNo},
+            task_id = #{taskId},
+            bound_at = #{boundAt}
+        WHERE id = #{id}
+          AND binding_status = 10
+          AND reservation_nonce = #{reservationNonce}
+    </update>
+</mapper>

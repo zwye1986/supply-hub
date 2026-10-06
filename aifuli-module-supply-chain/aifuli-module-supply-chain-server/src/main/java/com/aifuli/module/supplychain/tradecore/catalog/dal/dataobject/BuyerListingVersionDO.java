@@ -20,6 +20,10 @@ public class BuyerListingVersionDO {
     private Long id;
     private Long listingId;
     private Integer versionNo;
+    /** 自动商业快照来源的分销通用定价版本主键，逻辑引用sc_buyer_sku_pricing_version.id；手工版本为空 */
+    private Long sourceBuyerPricingVersionId;
+    /** 自动商业快照来源及展示商业字段的SHA256摘要；手工版本为空 */
+    private byte[] commercialSnapshotDigest;
     private Long buyerSettlementUnitPrice;
     private String currency;
     private String displayName;

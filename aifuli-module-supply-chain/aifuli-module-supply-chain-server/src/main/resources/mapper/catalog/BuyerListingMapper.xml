@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerListingMapper">
+    <!-- MySQL排序规则的有界逐字符前缀比较；不能用Java大小写/固定四字符推定组合字符的等价性。
+         绑定两侧先CONVERT，以避免连接字符集不同导致COLLATE非法；见桥接设计§3.1。 -->
+    <select id="isReservedBuyerProductCode" resultType="java.lang.Boolean">
+        WITH RECURSIVE prefix_lengths(n) AS (
+            SELECT 1
+            UNION ALL
+            SELECT n + 1 FROM prefix_lengths
+            WHERE n &lt; CHAR_LENGTH(CONVERT(#{normalizedCode} USING utf8mb4)) AND n &lt; 64
+        )
+        SELECT EXISTS (
+            SELECT 1 FROM prefix_lengths
+            WHERE LEFT(CONVERT(#{normalizedCode} USING utf8mb4), n) COLLATE utf8mb4_0900_ai_ci
+                = CONVERT(#{reservedPrefix} USING utf8mb4) COLLATE utf8mb4_0900_ai_ci
+        )
+    </select>
+</mapper>

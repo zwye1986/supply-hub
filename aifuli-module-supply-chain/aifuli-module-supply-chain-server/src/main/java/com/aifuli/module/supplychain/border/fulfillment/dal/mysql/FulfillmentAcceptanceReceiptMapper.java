@@ -33,7 +33,7 @@ public interface FulfillmentAcceptanceReceiptMapper extends BaseMapperX<Fulfillm
         return selectOneForUpdate(FulfillmentAcceptanceReceiptDO::getId, id);
     }
 
-    default int reopenRetryable(Long id, long expectedVersion, int listingVersionNo,
+    default int reopenRetryable(Long id, long expectedVersion, Integer listingVersionNo,
                                 byte[] requestFingerprint, LocalDateTime updatedAt) {
         return update(null, new LambdaUpdateWrapper<FulfillmentAcceptanceReceiptDO>()
                 .set(FulfillmentAcceptanceReceiptDO::getListingVersionNo, listingVersionNo)
