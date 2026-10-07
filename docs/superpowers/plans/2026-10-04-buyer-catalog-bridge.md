@@ -6,6 +6,10 @@
 
 详细设计：`docs/superpowers/specs/2026-10-04-buyer-selection-acceptance-catalog-bridge-design.md`。用户已确认BPD编码、新选品自动发布、旧手工目录保留原商业管理；旧RPC移除联动仍待回答，该项单独隔离。设计须先修复独立审查问题，才开始对应实现。
 
+## 当前有效推进状态（2026-10-07）
+
+用户要求继续推进整个业务闭环。本阶段依赖矩阵、授权边界及可隔离华昇通信实施候选见 [业务闭环下一阶段推进计划](2026-10-07-business-closure-next-stage.md)。Task A 复用既有验收；R3-03 二次重开修正已重新通过父验收（详见专用修正计划 §7），不再列为当前待修。R3-04 保持 `PAUSED_BY_USER_BOUNDARY_UNRESOLVED`，不得恢复研究/实施；整体 B0、R3-05+、B1 商业发布及 C 启用仍未放行。下文旧重开/预审条目保留历史，不以旧复选框或失败汇总覆盖最新 R3-03 有限验收，也不以其通过抵消整体未完成项。下一可隔离工作是按既有获审详细设计推进 HUA_SHENG Task3-A，先当前基线独立预审、后垂直 TDD；仅通信事实，不注册生产适配器、不解除目录阻断。本轮不暂存、提交、推送、部署或操作真实供应商/业务库。
+
 ## Task A：唯一受理身份与双编码解析
 
 文件范围（实现时按实际调用链核对）：catalog应用层新增Resolver/身份确保服务与封闭管理来源，BuyerProductCommandService、ProductCatalogCommandService、BuyerListingPublicationService；BuyerProductMapper/BuyerListingMapper及相关DO；FulfillmentAcceptanceLifecycle三处身份读取和NULL尝试版本、FulfillmentAcceptanceReceiptMapper的NULL CAS重开；HTTP/RPC Facade和限频协调器仅传播事务外定位的可信应用身份快照；供应链错误码；下一独立Liquibase变更集和YAML；内部补关联契约及测试。Facade仍不接DAL，不改金额/资金/履约，不注册HUA_SHENG。
