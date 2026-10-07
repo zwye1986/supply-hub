@@ -6,6 +6,7 @@ import com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeS
 import com.aifuli.module.supplychain.infrastructure.identity.dal.mysql.BusinessCodeScopeMapper;
 import com.aifuli.module.supplychain.infrastructure.identity.dal.mysql.BusinessCodeClaimMapper;
 import com.aifuli.module.supplychain.infrastructure.identity.dal.mysql.BusinessCodeExistingMapper;
+import com.aifuli.module.supplychain.infrastructure.ledger.LedgerPostFlushWriteGuardInterceptor;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.extension.plugins.MybatisPlusInterceptor;
 import com.baomidou.mybatisplus.extension.plugins.inner.OptimisticLockerInnerInterceptor;
@@ -92,7 +93,9 @@ public class SupplyChainDataSourceConfiguration {
         MybatisPlusInterceptor interceptor = new MybatisPlusInterceptor();
         interceptor.addInnerInterceptor(new PaginationInnerInterceptor());
         interceptor.addInnerInterceptor(new OptimisticLockerInnerInterceptor());
-        factory.setPlugins(interceptor);
+        // R3-03 flush 后写守卫：仅装配本 supplyChainSqlSessionFactory（§7.2.2(7)），
+        // 无 FLUSHED 收集上下文的事务完全透明。
+        factory.setPlugins(new LedgerPostFlushWriteGuardInterceptor(dataSource), interceptor);
         return Objects.requireNonNull(factory.getObject());
     }
 

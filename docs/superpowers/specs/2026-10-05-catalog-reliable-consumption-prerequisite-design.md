@@ -32,6 +32,14 @@ F01–F13精确修复片、完整条款索引、真实TDD正反例、运行失�
 
 R3-02O-S预审回执（2026-10-05）：rev1候选交独立预审`deleg_ffc1b748`，结果passed=false，阻断B1/B2。用户随即裁定D1–D4并授权仅按裁定修订设计：D1旧appendLocal隔离改为Java粗过滤快路径＋候选时调用方同事务连接参数化只读SELECT（utf8mb4_0900_ai_ci collation等价、零锁副作用），机制固定为程序化Advisor（spring-aop核心类NameMatchMethodPointcut指向bean outboxEventRepository＋方法appendLocal，不加aspectjweaver/@AspectJ/新依赖），须在main实际装配并以AopUtils.isAopProxy断言，对已核14处appendLocal调用点/7个bean逐点证明该SELECT不成为事务第一条一致性读，写入设计；独立连接方案废弃，容量§5不受影响。D2 LedgerJsonEncoding改public（保留final、private构造不可实例化、算法与预算常量不变；写明非A39、仅暴露静态工具语义、ArchUnit不增加新限制，底座仍嵌套在OutboxEventRepository）。D3删除DefaultAppendScheduleIdentityLedgerService的Outbox reserve/bind死代码（Timer方法不动），ArchUnit白名单明确OutboxAppendIdentityMapper写方法仅允许底座（及测试）访问，其它生产类禁依赖；OutboxAppendIdentityDO等按需调整权限。D4两测试（AppendScheduleIdentityLedgerIntegrationTest的Outbox段、LedgerComparisonEntryContractTest的Outbox断言）按同模块privateLookupIn反射桥驱动main底座重写，原字节+SHA归档后重写；Timer段保持公开API不动。预审R1–R9及O-S01~O-S11矩阵条款全部保留不得降低，O-S08补充生产装配断言、advisor SELECT零锁副作用/语句计数、快照时序负例三项；具体参数化SQL与粗过滤边界冻结于§7.2.1。B完整BCS schema未冻不造接口字段，B入口继续失败关闭；不新增生产LEGACY入口、不改旧appendLocal行为语义。修订后rev2候选仍为`DESIGN_SEPARATION_PENDING_INDEPENDENT_REVIEW`，交父再次独立预审；不自行通过预审、不实施代码或测试。rev2预审回执（2026-10-05）：rev2候选交独立预审`deleg_045e4f3c`，结果passed=false，阻断BLK-1~4。用户已逐项裁定并授权仅按裁定修订设计：**BLK-1**批准零DB放行收窄为可证明安全集合（null、码点<31、含ASCII非[A-Za-z_]码点），其余一律参数化候选SELECT；O-S08b补充U+0301/U+034F等组合附标插入、é→E预组合替换、零权重候选边界，真实MySQL验证后逐项固定。**BLK-2**父已确认两重复文件（`infrastructure/ledger/LedgerJsonEncoding 2.java`、`catalog-reliable-consumption-prerequisite-design 2.md`）授权备份移出并逐文件核验SHA（0c1ac825…、3accfbc5…，见`r3-02o/blk2-parent-confirmation.json`），正式两文件未改动。**BLK-3**批准将『底座仍是其唯一生产调用者』改为『除账本服务Timer路径既有调用者外，底座是唯一新增跨包生产调用者；ArchUnit不为LedgerJsonEncoding新增限制』。**BLK-4**批准D4范围枚举改为test02–test08（或全部Outbox段），设计/计划/集成记录三处同步。非阻断同步修正：冻结表#6首调用方法名改createPaymentOrder、#9/#12字面首读表述精度、O-S08b的data_locks断言改probe前后增量对比、设计补充main显式注册auto-proxy creator（DefaultAdvisorAutoProxyCreator或BeanNameAutoProxyCreator，均spring-aop核心类无新依赖）的装配措辞。修订后rev3候选仍为`DESIGN_SEPARATION_PENDING_INDEPENDENT_REVIEW`，交父再次独立预审；不自行通过预审、不实施代码或测试。
 
+### 2026-10-06 P0 依赖校准与 R3-03 独立隔离重开（设计先行）
+
+- **原冻结强制契约（R3-03 规范性条款，不因补核放宽，仍以原章节原文为准）**：§7.2(5)（真实写点记录事务内刷新意图、整批/级联结束后只 flush 一次、中间意图合并保留最终真实版本、flush 后不再取得新的领域行锁、嵌套方法不提前 flush、最后一行/最终版本不漏、flush 后新增领域锁或意图使整事务失败关闭）；§7.2.1(6)（Outbox 账本在前 Timer 在后、表内按业务 unique 列顺序比较完整键、数值按数值、字符串按源列实际 `utf8mb4_0900_ai_ci` 等效排序/等价关系、收集器在取得首个账本锁前完成身份集合/等价合并/异载荷检查及排序、排序键可由无实体表参数化 SQL 按同 collation 确定、不提前建立领域 RR 视图、锁后发现新意图整事务失败、自增空洞正常）；§7.2.2 全部协议意图（最外层归属、单次 flush、双向 beforeCommit 守卫、afterCompletion 清空）——实现算法由本次修正文本替代，不散落历史矛盾；§7.2.1(1–5) 排他建槽/nonce/RESERVED→BOUND/CAS1（经已闭环 R3-02O/02T 底座复用）；§9「追加/调度唯一键」「间接锁环」两行中 R3-03 部分（多槽排序/合并、第二槽及后续槽/源/绑定失败整批回滚、RESERVED/flush 提交守卫、不能仅靠 mock 锁序或死锁重试）；F10。
+- **后加候选/依赖（已闭环，复用不重验）**：R3-01 `LedgerJsonEncoding`（canonicalBytes/legacyMatches）；R3-02O 私有底座 `TrustedOutboxAppendCore`＋O-S07 祖先 localRollbackOnly 观测 manager（`SupplyChainTransactionObservationManager`）；R3-02T `DatabasePersistentTimer.scheduleOnce` 账本路径；D1 advisor 旧 appendLocal 隔离。R01/R02 预算与 V4A 重跑为 §7.2.1 已冻结但实施未开始的规范：R3-03 不接入预算包装、不动 coordinator/`BudgetContext`；V4A 完整事务重跑属 R3-08。
+- **部署前置**：R3-03 无新增 DDL/迁移/部署前置；不需要 R3-04（旧 Timer 回填/启动切换）先行——新键直接写账本，跨事务重复走既有 BOUND 重复路径；不要求商业生产者/消费者接线（§9 明文：技术领域 fixture 证明最外层完整 worker 的同构收集/flush 边界，真实商业 saveBuyer/初始化/项目级联留后续 B 接线验收）。
+- **隔离验收声明**：R3-03 可独立隔离验收（运行依赖全部为已闭环项＋061 既有两账本表＋`SystemIntegrityException`）；R3-04 保持 `PAUSED_BY_USER_BOUNDARY_UNRESOLVED`，不因 R3-03 进展解除暂停；R3-05/06/07/08 未开始、商业启用不放行。§7.2 撤回的单槽 1213 反例保留；一次 A/Z 并发成功只证排序；完整事务重跑属后 08，不擅改 R3-03 为所有死锁绝无。
+- **本轮产物与边界**：仓内仅三份既有文档 patch＋新计划 `docs/superpowers/plans/2026-10-06-r3-03-reopened-repair.md`；仓外证据根 `task-b0-ledger-evidence/slice3-reacceptance/r3-03-repair-20261006/`（design-handoff.json / clause-matrix.json / report.md，含 HEAD、git 状态、输入/源哈希、完整 SQL/接口算法/真实调用链/白名单/每条 RED 负例）。状态 `DESIGN_PENDING_INDEPENDENT_PRE_REVIEW`：未实施、未运行测试、未验收；完成即交回，不自主派审查。
+
 ## 1. 目标、依据与范围
 
 B0先提供可用于B本地目录消费的事务栅栏，修复Outbox/Timer宕机恢复、失格执行者与Inbox状态协议。只改善成功标记的CAS不足以阻止旧worker提交本地业务。
@@ -470,40 +478,142 @@ BOUND重复只当前锁读账本，核完整业务键、已BOUND映射非空合�
 
 ### 7.2.2 完整技术 worker 意图收集、数据库 Collation 确定性排序与单次 Flush 协议（R3-03）
 
-1. **职责与生命周期归属**：
-   - 意图收集器 `LocalLedgerIntentCollector` 严格归属于**实际最外层供应链写事务**（通过 `TransactionSynchronization` 绑定当前事务物理连接与 holder）；
-   - 在业务前置写与领域操作期间，调用方通过 `recordOutboxIntent(...)` 和 `recordTimerIntent(...)` 暂存事件与定时调度意图；
+**2026-10-06 修正替代声明（覆盖旧算法文本，本小节为 R3-03 唯一规范性来源）：** 旧版§7.2.2（2026-10-05，`deleg_23a851ff` 时代实现）已被父补核裁定不满足冻结契约，明确废止以下旧算法：Java `String.CASE_INSENSITIVE_ORDER.thenComparing(compareTo)` 不是数据库 Collation；`aggregateType+"|"+aggregateId+...` 字符串拼接键存在复合键分隔碰撞；同键合并只比 payload 不比 target/version；Outbox 意图经旧 `appendLocal` 严格 INSERT，绕过账本底座，无 RESERVED 守卫；收集器不核事务归属/read-only/rollbackOnly/外层 scope；守卫同步覆写 `TransactionSynchronization.flush()`，状态机可被 Spring `triggerFlush` 回调重入；flush 后无领域写守卫。本节为修正设计候选，状态 `DESIGN_PENDING_INDEPENDENT_PRE_REVIEW`：未实施、未运行测试、未验收。依赖 R3-01／R3-02O／R3-02T／O-S07（均已闭环）复用其冻结产物，不改动其内容。完整条款矩阵与 RED 负例见 `docs/superpowers/plans/2026-10-06-r3-03-reopened-repair.md` 及仓外 `r3-03-repair-20261006/clause-matrix.json`。
+
+**2026-10-06 rev2 修订（首轮独立预审回执 failed 后按裁定修订，阶段仍 `DESIGN_PENDING_INDEPENDENT_PRE_REVIEW`）：** 独立预审裁决 35 passed／11 failed／0 unknown，三组阻断，本小节已按预审最小修订方向与用户裁定完成 rev2（不重做已成立部分）：**BLK-1** 第 4 点两条冻结 SQL 由「GROUP BY 返回分组代表键」改为「逐键返回行＋`DENSE_RANK() OVER (ORDER BY 已带 collation 派生列)` 组号＋原始精确列回传定位」，并同步第 3 点 Java 处理语义（按组号分组、组内合并/冲突、按组号顺序逐槽执行）；**BLK-2（用户裁定 B）** 第 6 点删除生产 `appendLocalTechnical` 通道：生产 collector 对 Outbox 槽执行保持失败关闭（零 DAL 前 `SystemIntegrityException`、不静默跳过），协议由仅 src/test 同模块反射桥驱动真实 main 底座证明，商业接线时再裁决生产执行通道（R3-02O-S 冻结边界文本不改）；**BLK-3** 第 7 点冻结锁定 SELECT 词法规则、既有 7 个 Mapper XML 语句分类表与假阳/假阴负控制；**N1** 第 5 点 triggerFlush 事实表述按本地 spring-tx-6.2.18 源码勘误（原「仅 JtaTransactionObject.flush() 调用」为旧版描述），并随修订固化 N2–N8。未实施、未运行测试、未验收。
+
+1. **职责与生命周期归属（收集窗口与最外层 owner 能力）**：
+   - 意图收集器 `LocalLedgerIntentCollector` 严格归属于**实际最外层供应链写事务**：`TransactionContext` 经 `TransactionSynchronizationManager.registerSynchronization` 注册为 `TransactionSynchronization`，绑定本次 `ConnectionHolder`，`afterCompletion` 清空；不裸 ThreadLocal、不跨线程复用。
+   - `recordOutboxIntent`／`recordTimerIntent`／`flush` 每次进入必须通过**全部**资源守卫，任一不满足即 `SystemIntegrityException` 且零 SQL 副作用：`isActualTransactionActive`、`isSynchronizationActive`、非 `isCurrentTransactionReadOnly`、`getResource(supplyChainDataSource)` 为已同步 `ConnectionHolder`、holder 非 rollbackOnly、当前代理 status 非 rollbackOnly（`TransactionAspectSupport.currentTransactionStatus`，`NoTransactionException` 仅代表无代理的 TransactionTemplate 路径，仍须前面资源项齐全）、活动同步集合存在本 holder 的未 completed `SupplyChainTransactionObservationManager.Scope`、Scope 在途全部 status 非 rollbackOnly。错 manager（另开事务无 Scope）、只读、rollbackOnly、外层 scope 不明（手动 bindResource 无 Scope）、未知 manager 一律拒绝。REQUIRED 嵌套代理 join 同一 holder／Scope 复用同一 TransactionContext，不得另建上下文。
    - 在领域写全部完成前，意图仅在事务本地内存中缓冲，**禁止提前建槽、禁止对账本表加锁**。
 
-2. **等价合并与冲突拒绝规则**：
-   - 同一事务内，对同一逻辑唯一键的多次意图调用：
-     - Outbox 键为 `(aggregateType, aggregateId, aggregateVersion, eventType)`；
-     - Timer 键为 `(taskType, idempotencyKey)`；
-   - 若重复调用的载荷内容等价（依据 `LedgerJsonEncoding.canonicalBytes` 规范化比对）：
-     - 允许幂等合并，保留最终版本元数据，避免在同一事务内向同一键提交重复建槽；
-   - 若重复调用的载荷内容冲突（异 payload、异 target、异 payloadVersion）：
-     - 收集器在收集或 flush 阶段立即抛出 `SystemIntegrityException` 阻断执行，防止同一事务内产生逻辑互斥的待发事件。
+2. **身份记录与深不可变（复合键分隔碰撞、mutable payload 防污染）**：
+   - 键为不可变 record 元组 `OutboxKey(aggregateType, aggregateId, aggregateVersion, eventType)`／`TimerKey(taskType, idempotencyKey)`，内存映射以 record 为键，**禁止任何分隔符拼接编码**。旧 `"|"` 拼接键的复合键分隔碰撞（如 `("A|B","C",1,"E")` vs `("A","B|C",1,"E")`）必须作为 RED 负例被新实现消除。键 record 采用**显式 getter 命名**（`aggregateType()` 等，不依赖 MyBatis Reflector 字段回退——3.5.19 `GetFieldInvoker` 字段回退已核可读，仍以显式 getter 为准），XML `#{k.*}` 绑定契约测试固化（N2）。
+   - record 时立即序列化 payload 为 JSON 字符串并执行 `LedgerJsonEncoding.canonicalBytes`（预算＋语法＋规范化），缓冲不可变 String 与 canonical byte[]；调用方事后修改原 JsonNode／Object 不影响已缓冲意图。`fireAt` 为不可变 Instant。每个意图记录时递增单调 `recordSeq`（记录时点顺序），作为 DB 等价组合并时「最后记录元数据」的判定依据（第 3 点）。
+   - `OutboxIntent` 显式携带 `targetType`（仅 LOCAL）、`targetName`、`payloadVersion`（≥1）、`comparisonProtocol`（仅 `LEGACY_JSON_V1`）；`TimerIntent` 携带 `payloadVersion`（仅 1，与 `scheduleOnce` 冻结一致）、`comparisonProtocol`（仅 `LEGACY_JSON_V1`）。记录时校验。
 
-3. **确定性多槽全局锁序（Collation-Aware Ordering）**：
-   - 为彻底防止并发事务在提交多槽时因加锁顺序相反发生行锁死锁（1213 / 40001）：
-     - **第一级：类型有序**：所有 Outbox 槽排在所有 Timer 槽之前；
-     - **第二级：索引字段有序**：
-       - Outbox 内部按 `(aggregate_type, aggregate_id, aggregate_version, event_type)` 升序排序；
-       - Timer 内部按 `(task_type, idempotency_key)` 升序排序；
-     - **Collation 准确性保障**：
-       - 数据库唯一键采用 `utf8mb4_0900_ai_ci` 排序规则（不区分大小写与重音）；
-       - Java 原生 `String.compareTo` 仅按 Unicode code point / UTF-16 码元排序，与数据库实际权重存在倒序风险（如非 ASCII 字符、组合附标等）；
-       - 排序权重必须与源表唯一索引实际 collation 完全对齐；若候选键包含非纯 ASCII 字母数字字符，使用调用方事务连接执行参数化无表 `ORDER BY` 表达式确定全局顺序，绝不 Java 盲目归一。
+3. **等价合并与冲突拒绝（数据库 Collation 分组＋最终元数据）**：
+   - 权威等价分组**不由 Java 决定**：flush 冻结阶段执行参数化无实体表 SQL（第 4 点），数据库按 `utf8mb4_0900_ai_ci` 对字符串列排序并计算等价组号 `grp`（`DENSE_RANK`，废弃 GROUP BY——GROUP BY 每等价组只返回一行代表键，无法映射组成员），数值列按数值。Java 按 SQL 返回行序处理：每行以原始精确列 `k*_orig` 定位内存 record（内存 map 以原始元组为键、字节相等快路径已预合并相同精确元组，每行恰定位唯一 record），`grp` 相同即同一 DB 等价组。同一等价组内：`targetType`／`targetName`／`payloadVersion`／`comparisonProtocol` 与 canonical payload 全等 → 合并为单槽，**保留最后记录意图的元数据**（`recordSeq` 最大者；Outbox：targetName／traceId／occurredAt；Timer：fireAt）；任一不同 → `SystemIntegrityException`，且发生在**首个账本锁之前**，该组零账本/源 DAL 交互。
+   - 字节相等快速路径仅作内存 map 预合并，不作为 DB 等价判断依据。大小写／重音／组合字符等价、复合键分隔碰撞均以真实 MySQL 验证后逐项固定为反例。
+   - 组号 `grp` 仅作等价分组依据（DENSE_RANK 保证同组行相邻）；槽执行顺序以返回行序（数据库 Collation 序）为准，Outbox 全部组先于 Timer 全部组（第 6 点）。
 
-4. **单次 Flush 语义与提交前守卫**：
-   - `flush()` 必须在最外层业务事务中、所有领域行写完成之后且在事务提交之前执行，**且同一事务内只能 flush 一次**；
-   - `flush()` 执行时：
-     - 冻结收集器，按确定性全局排序依次执行各槽的排他建槽（`reserveTimerSlot` / 私有底座追加）、真实源插入与 CAS 绑定；
-     - 任何一个槽的建槽、插入或绑定失败，立即抛出异常并整事务回滚，无孤儿槽、无孤儿源行；
-   - `flush()` 执行完毕后：
-     - 收集器状态标记为 `FLUSHED`；
-     - 收集器注册的 `beforeCommit` 守卫强制校验：`FLUSHED` 之后若发生任何新意图追加或新增领域写锁，立即抛出 `SystemIntegrityException` 阻断提交；
-     - 事务 `afterCompletion` 回调彻底清空事务本地收集器状态，防止工作线程被线程池复用时产生上下文泄露。
+4. **冻结参数化无实体表排序/分组 SQL（每 flush 每类恰好 1 条，首个账本锁之前执行；rev2 逐键返回行＋DENSE_RANK 组号＋原始精确列定位）**：
+
+   不使用 GROUP BY（GROUP BY 每等价组仅返回一行代表键，Java 无法重演 collation 等价、无法把 DB 等价组成员映射回内存 record）。改为**逐键返回一行**：外层投影 collation 派生列（数据库排序/等价的唯一权威）＋原始精确列 `k*_orig`（仅回传定位，字符串不 CAST 归一，数值 CAST AS SIGNED 无损）＋`DENSE_RANK() OVER (ORDER BY 已带 collation 的派生列) AS grp` 等价组号。每 flush 每类（Outbox／Timer）恰好执行 1 条；N=0 不执行；参数化绑定（MyBatis foreach，禁止拼接外部输入）；无实体表派生表 → 零 InnoDB 访问。
+
+   ```sql
+   -- Outbox 意图（N≥1 时恰好执行 1 条；N=0 不执行）
+   SELECT CAST(t.k1 AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_0900_ai_ci AS aggregate_type,
+          CAST(t.k2 AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_0900_ai_ci AS aggregate_id,
+          CAST(t.k3 AS SIGNED)                                AS aggregate_version,
+          CAST(t.k4 AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_0900_ai_ci AS event_type,
+          t.k1_orig                                           AS aggregate_type_orig,
+          t.k2_orig                                           AS aggregate_id_orig,
+          t.k3_orig                                           AS aggregate_version_orig,
+          t.k4_orig                                           AS event_type_orig,
+          DENSE_RANK() OVER (ORDER BY t.k1, t.k2, t.k3, t.k4) AS grp
+   FROM (
+     <foreach collection="keys" item="k" separator=" UNION ALL ">
+     SELECT CAST(#{k.aggregateType}    AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_0900_ai_ci AS k1,
+            CAST(#{k.aggregateId}      AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_0900_ai_ci AS k2,
+            CAST(#{k.aggregateVersion} AS SIGNED)                                AS k3,
+            CAST(#{k.eventType}        AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_0900_ai_ci AS k4,
+            #{k.aggregateType}    AS k1_orig,
+            #{k.aggregateId}      AS k2_orig,
+            CAST(#{k.aggregateVersion} AS SIGNED) AS k3_orig,
+            #{k.eventType}        AS k4_orig
+     </foreach>
+   ) t
+   ORDER BY t.k1, t.k2, t.k3, t.k4
+   ```
+
+   ```sql
+   -- Timer 意图（N≥1 时恰好执行 1 条；N=0 不执行）
+   SELECT CAST(t.k1 AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_0900_ai_ci AS task_type,
+          CAST(t.k2 AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_0900_ai_ci AS idempotency_key,
+          t.k1_orig                                     AS task_type_orig,
+          t.k2_orig                                     AS idempotency_key_orig,
+          DENSE_RANK() OVER (ORDER BY t.k1, t.k2)       AS grp
+   FROM (
+     <foreach collection="keys" item="k" separator=" UNION ALL ">
+     SELECT CAST(#{k.taskType}      AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_0900_ai_ci AS k1,
+            CAST(#{k.idempotencyKey} AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_0900_ai_ci AS k2,
+            #{k.taskType}      AS k1_orig,
+            #{k.idempotencyKey} AS k2_orig
+     </foreach>
+   ) t
+   ORDER BY t.k1, t.k2
+   ```
+
+   窗口 `ORDER BY t.k1…` 与最外层 `ORDER BY t.k1…` 均引用派生表**已带 `COLLATE utf8mb4_0900_ai_ci`** 的列（派生列 collation 已生效，窗口内不重复写 COLLATE）；`t.k3` 为 `SIGNED` 数值，数值列按数值排序；`k*_orig` 为参数精确回传（字符串列不做 CAST 归一——原值字节不变，仅回传定位用；数值列 `CAST AS SIGNED` 对 long 十进制无损，定位列即精确值），Java 侧与提交时的原始参数逐字/逐值比对定位内存 record（Outbox `aggregate_version_orig` 按 long 解析比对）。
+
+   两条 SQL 均为**无实体表派生表表达式**：参数化绑定（MyBatis foreach，禁止拼接外部输入），不访问任何 InnoDB 表 → 不取得任何行/间隙锁（`performance_schema.data_locks` 前后增量 0）、不建立 RR 读视图（O-S08c 式结构证明＋负例），执行经调用方事务连接的 `supplyChainSqlSessionFactory` 同连接，不新借池连接、不切换 manager、不进入 R01/R02 预算资格判定。分组（grp）与排序同一条语句由数据库 Collation 完成；执行时点固定在**首个账本锁之前**，锁后发现新意图必须整事务失败，不得边发现边追加。Connector/J 源 INSERT 前的 `SELECT @@SESSION.transaction_read_only` 按 R3-02O 冻结白名单以完整 SQL digest 匹配，其它 SELECT 拒绝。UNION ALL 分支数 N 为单事务意图数，技术 fixture 规模下无 max_allowed_packet/解析器风险（N 不设设计上限，超限即驱动/协议报错阻断 flush，属失败关闭；N6）。
+
+   处理语义（Java，冻结）：
+   - 按 SQL 返回行序逐行处理；每行以 `k*_orig` 精确定位唯一内存 record（原始元组在内存 map 中唯一，字节相等快路径已预合并相同精确元组）。
+   - 相同 `grp` 的相邻行构成一个 DB 等价组（DENSE_RANK 保证同组相邻）；组内执行第 3 点全等/冲突判定与合并（保留 `recordSeq` 最大者的元数据）。
+   - 槽执行按组号升序（即返回行序）、组内合并后每等价组恰执行 1 槽；Outbox 全部组执行先于 Timer 全部组（生产 Outbox 执行入口失败关闭，见第 6 点；测试路径经反射桥驱动真实底座证明协议）。
+   - 任一组冲突 → `SystemIntegrityException` 整体失败，发生在首个账本锁之前；该 flush 零账本/源 DAL 交互。
+   - 语句计数义务：Timer 生产路径每 flush 恰 1 条 Timer SQL（N≥1）；Outbox SQL 由测试夹具路径经生产 `CollationOrderingMapper` 驱动，每夹具 flush 等价步骤恰 1 条（N≥1）；生产 collector 对含 Outbox 意图的 flush 在分组 SQL 前失败关闭（第 6 点），故生产路径 Outbox SQL 执行数为 0（N5 同范围声明）。
+
+5. **单次 Flush 语义、Spring 回调防偷触发与提交前守卫**：
+   - 事实核验（N1 勘误，已读本地 spring-tx-6.2.18-sources.jar）：`AbstractPlatformTransactionManager.prepareForCommit` 为空实现；`TransactionSynchronizationUtils.triggerFlush()` 为 public 静态方法，在 spring-tx 6.2.18 内**无任何框架内调用者**（原设计「仅 `JtaTransactionObject.flush()` 调用」为旧版描述，6.2.18 已无该调用点）；MyBatis-Spring 3.0.5 不调用 triggerFlush。当前 JdbcTransactionManager 路径不被偷触发（结论方向不变且更保守），但 triggerFlush 为 public 静态方法，未来框架版本／外部代码仍可调用，守卫同步覆写 `flush()` 会使状态机可被重入。
+   - 冻结：事务守卫 `TransactionSynchronization` **不得覆写 `flush()`**（保留接口默认 no-op）；显式 flush 仅经 `LocalLedgerIntentCollector.flush()` 公共入口进入状态机。结构 RED 负例：对旧实现（覆写 flush 的同步）在显式 flush 后调用 `TransactionSynchronizationUtils.triggerFlush()` → `SystemIntegrityException`（证明旧实现可被偷触发）；新实现同一编排 → 无副作用（GREEN）。新增 ArchitectureTest：生产 `infrastructure.ledger`／`infrastructure.outbox` 的 `TransactionSynchronization` 实现不得覆写 `flush()`，含违规 fixture 负控制。
+   - 状态机 `COLLECTING → FLUSHING → FLUSHED`；同一事务只能显式 flush 一次，二次显式 flush → `SystemIntegrityException`。
+   - 嵌套提前 flush 拒绝：Spring 无法从方法层区分嵌套调用，编码契约＝**恰好一次 flush＋flush 后写守卫**（第 7 点）：嵌套方法提前 flush 后，外层任何后续领域写／行锁触发失败关闭，整事务失败，不存在“部分提交后继续写”的成功路径。
+   - `flush()` 执行：冻结收集器，按第 4 点分组排序结果依次执行各槽。**生产路径**：含 Outbox 意图 → 第 6 点失败关闭（零 DAL）；仅 Timer 意图 → Timer 按组序经 `scheduleOnce`（R3-02T 已闭环路径，排他建槽／真实源插入／CAS 绑定）执行。**测试路径**：Outbox 槽经反射桥驱动真实底座执行（第 6 点）。任何槽的建槽、插入或绑定失败，异常原样上抛并**保留完整 cause 链**（不 catch-swallow、不局部重试；包裹时以原异常为 cause），整事务回滚，无孤儿槽、无孤儿源行。
+   - `beforeCommit` 双向守卫（N7 分层表述）：存在非空意图且未 FLUSHED → 拒；FLUSHED 之后任何新意图追加 → 拒（record API 守卫）；FLUSHED 之后新领域写锁由第 7 点拦截器在**执行前**抛异常承担——beforeCommit 本身只核意图状态，双层机制合计满足「flush 后新增领域锁或意图使整事务失败关闭」契约。残留 RESERVED／未验证绑定由底座与 Timer 服务既有守卫拒绝。`afterCompletion` 彻底清空收集器状态（不重置回可复用 COLLECTING），防止线程池复用上下文泄露；afterCompletion 返回后活动同步集合不再含本 TransactionContext（Spring 自动解注册），第 7 点拦截器「存在 FLUSHED 上下文」判定在同线程后续事务自然为假（N3）。
+
+6. **槽执行协议（Outbox 生产失败关闭＋测试反射桥证明、Timer 经 scheduleOnce、RESERVED 守卫）**：
+   - Outbox（**用户裁定 B，rev2 冻结；不新增生产 `appendLocalTechnical` 通道，`OutboxEventRepository.java` 零修改**）：
+     - 生产失败关闭：生产 `LocalLedgerIntentCollector.flush()` 冻结意图集合含 Outbox 意图 → 立即抛 `SystemIntegrityException`（**零 DAL**：发生在任何分组 SQL、任何账本锁、任何源 DAL 之前；**不静默跳过**——不得跳过 Outbox 仅执行 Timer 并提交），整事务失败关闭。当前生产无 Outbox 意图产生者（collector 无生产调用者），此为防御性契约。
+     - 协议证明（测试路径）：新增仅 src/test 的同模块 `privateLookupIn` 反射桥 `TrustedOutboxTechnicalAppendBridge`（参照既有 `TrustedOutboxAppendCoreBridge` 模式；JDK21 同 unnamed module，无需 add-opens），构造 `VerifiedAppendCommand`（targetType=LOCAL、comparisonProtocol=LEGACY_JSON_V1、correlationId/causationId=null）并调用**同一**真实 main 底座 `TrustedOutboxAppendCore.append`——底座排他建槽／当前锁读／nonce／首次源 INSERT1／源当前读核验／CAS1／RESERVED 提交守卫原样复用，**算法不复制**。测试夹具以生产 `CollationOrderingMapper`（第 4 点冻结 SQL）取得 DB 等价分组与组序，按组序经桥逐槽驱动底座，证明等价合并／异载荷冲突／组序执行／第二槽整批回滚协议；分组编排仅测试代码，所用分组 SQL 与槽执行底座均为真实 main 产物，不做第二套 test-only 算法（无 Java collation 归一、无底座复制）。
+     - 未来待裁决（仅记录，本次不实施）：**商业接线时再裁决生产执行通道**（生产 collector 接入 Outbox 执行的技术通道形态，届时独立预审并说明与 R3-02O-S 冻结边界文本「不新增生产 LEGACY 入口」的张力消解）。本次**不改** R3-02O-S 冻结边界文本（§7.2.1）。
+     - 不变项：`OutboxAppendIdentityMapper` 三写方法仍仅底座；B 入口 `appendLocalIdempotent` 继续 DAL 前失败关闭；旧 `appendLocal` 方法体字节不变、D1 advisor 不变。
+   - Timer：经 `DatabasePersistentTimer.scheduleOnce`（R3-02T 已闭环）执行；payloadVersion=1／LEGACY_JSON_V1 与意图一致；重复键、异载荷、终态不重开等冻结语义由该路径承担。
+   - 执行顺序：Outbox 全部组先于 Timer 全部组（表内按组号/行序＝数据库 Collation 序；Outbox 执行仅在测试桥路径）。
+
+7. **flush 后写守卫（真实 DML／行锁，不能只 record API；锁定 SELECT 词法规则 rev2 冻结）**：
+   - 生产 MyBatis Interceptor（候选名 `LedgerPostFlushWriteGuardInterceptor`）仅装配于 `supplyChainSqlSessionFactory`（main 实际装配，不改其它模块／其它 SqlSessionFactory；`SupplyChainDataSourceConfiguration` 非 A39）：当活动同步集合存在状态 FLUSHED 的 TransactionContext 且其 holder 匹配当前事务连接时，`Executor.update`（INSERT/UPDATE/DELETE）及**锁定 SELECT**（按下列冻结词法规则判别）执行前抛 `SystemIntegrityException`。FLUSHING 窗口内（flush 自身写入）不拦截；普通无锁 SELECT 不拦截（负控制证明不过度拦截）；无活动收集上下文的事务完全透明；同线程下一事务不拦截（无 ThreadLocal 泄漏）。`TransactionContext` 以同包 package-private 暴露状态与 holder 供拦截器核验（`LocalLedgerIntentCollector.java` 属白名单）。
+   - **锁定 SELECT 词法规则（2026-10-06 rev2 冻结，大小写不敏感；识别在语句级别，去除注释与字面量后词法检测）**：
+     1. **判别对象**：拦截器在 `Executor.query` 处取得 `BoundSql.getSql()`（动态标签已展开的语句文本，`#{}` 已替换为 `?` 占位），对整条语句做**语句级**扫描——子查询／CTE／括号嵌套深度不影响判定，任一顶层（NORMAL 状态）位置命中即判锁定（fail-closed 方向）；同一 MappedStatement 的展开文本确定，判别结果可按语句签名缓存。
+     2. **词法剥离（单遍状态机，固定顺序）**：单引号、双引号与反引号三种字面量/引用标识符（单引号内两个连续单引号或反斜杠转义不结束、双引号内两个连续双引号或反斜杠转义不结束、反引号内两个连续反引号不结束）；`-- ` 至行尾（MySQL 要求 `--` 后随空白或行尾）与 `#` 至行尾两种行注释；`/* … */` 块注释（MySQL 不嵌套）。剥离后仅在顶层（NORMAL 状态）做模式匹配。
+     3. **匹配模式**（NORMAL 状态、任意空白记为 `[ \t\r\n]+`）：`FOR UPDATE`、`FOR SHARE`、`LOCK IN SHARE MODE`；其后可选 `OF 列列表` 及可选 `NOWAIT`／`SKIP LOCKED` 后缀——后缀与 `OF` 变体**不改变锁定判定**（一并判锁定）。`FOR`／`LOCK` 为 MySQL 保留字，不能作裸标识符，字面量/注释/反引号标识符内的文本已在剥离阶段排除，故无需额外边界回看。
+     4. **假阳负控制（必须判非锁定、放行）**：字符串字面量内 `'FOR UPDATE'`／`"FOR UPDATE"`；行注释内 `-- FOR UPDATE`／`# FOR UPDATE`；块注释内 `/* FOR UPDATE */`；反引号标识符 `` `for update` ``；整条语句无锁定子句的普通 SELECT（含子查询无锁、外层无锁）；列名/别名仅含 `update`（如 `SELECT u.update_time FROM t u`）。
+     5. **假阴负控制（必须判锁定、拒）**：大小写变体（`for update`／`For Update`／`FOR UPDATE`）；多空白/换行变体（`FOR \n UPDATE`、`LOCK  IN   SHARE  MODE`）；`FOR UPDATE SKIP LOCKED`；`FOR UPDATE OF c1, c2`；`FOR UPDATE NOWAIT`；`FOR SHARE`／`FOR SHARE OF c1`；`LOCK IN SHARE MODE`；`ORDER BY … LIMIT 1 FOR UPDATE`（锁定子句前有 ORDER BY/LIMIT）；子查询在前、外层 `FOR UPDATE`（`… WHERE id IN (SELECT …) ORDER BY id FOR UPDATE`）。
+     6. **既有 7 个 Mapper XML 全量语句分类表（rev2 按 HEAD 实核；实施前逐条重核语句文本，漂移即停报）**：
+        | XML | 语句 | 判定 |
+        | --- | --- | --- |
+        | fulfillment/RechargeFrequencyEntryMapper.xml | selectByIdForUpdate | 锁定 |
+        | fulfillment/RechargeFrequencyEntryMapper.xml | selectFirstWaitingForUpdate（ORDER BY … LIMIT 1 FOR UPDATE） | 锁定 |
+        | fulfillment/RechargeFrequencyExecutionMapper.xml | lockRequest／lockOrder | 锁定 |
+        | fulfillment/RechargeFrequencyExecutionMapper.xml | lockBOrders（ORDER BY id FOR UPDATE） | 锁定 |
+        | fulfillment/RechargeFrequencyExecutionMapper.xml | lockOperations（IN 子查询＋外层 ORDER BY id FOR UPDATE） | 锁定 |
+        | fulfillment/RechargeFrequencyQueueMapper.xml | selectByIdForUpdate | 锁定 |
+        | infrastructure/OutboxAppendIdentityMapper.xml | insertSlotOnDuplicateKeyUpdate | 写语句（Executor.update 拦截，非锁定判别） |
+        | infrastructure/OutboxAppendIdentityMapper.xml | selectForUpdate | 锁定 |
+        | infrastructure/OutboxAppendIdentityMapper.xml | bindEventCas | 写语句 |
+        | infrastructure/OutboxEventMapper.xml | selectDeliverable（LIMIT … FOR UPDATE SKIP LOCKED） | 锁定 |
+        | infrastructure/OutboxEventMapper.xml | selectBrokenActiveLeaseIds | 非锁定（放行） |
+        | infrastructure/TimerScheduleIdentityMapper.xml | insertSlotOnDuplicateKeyUpdate | 写语句 |
+        | infrastructure/TimerScheduleIdentityMapper.xml | selectForUpdate | 锁定 |
+        | infrastructure/TimerScheduleIdentityMapper.xml | bindTaskCas | 写语句 |
+        | infrastructure/TimerTaskMapper.xml | selectClaimable（LIMIT … FOR UPDATE SKIP LOCKED） | 锁定 |
+        | infrastructure/TimerTaskMapper.xml | selectBrokenActiveLeaseIds | 非锁定（放行） |
+        **与既有含 FOR UPDATE 的 XML 面兼容**：无收集上下文事务中上述锁定/写语句完全透明（守卫仅 FLUSHED 上下文生效，其余事务行为零改变）；FLUSHED 上下文中上述锁定 SELECT 与写语句被拒（契约要求：flush 后不得再取领域行锁）。
+     7. **装配与链序（N4）**：`SupplyChainDataSourceConfiguration.supplyChainSqlSessionFactory` 将 `LedgerPostFlushWriteGuardInterceptor` 与既有 `MybatisPlusInterceptor`（PaginationInnerInterceptor／OptimisticLockerInnerInterceptor）一同加入 `factory.setPlugins` 链（MyBatis 按注册顺序包装）；守卫在 `invocation.proceed()` 前完成上下文与词法判别并抛出，分页/乐观锁插件不改写锁定子句文本；负控制固定：互换链序，锁定语句仍拒、非锁定语句仍放行。
+     8. **范围声明（N5）**：写守卫范围是 MyBatis 层（`supplyChainSqlSessionFactory` 全部 Mapper）；生产直连 JDBC 领域写面（`BusinessCodeLegacyBackfill` 的 JdbcTemplate、预算 wrapper、clock）当前为零且均无收集上下文（上下文门控透明），该事实实施时重核并写入测试断言；生产路径 Outbox 分组 SQL 执行数为 0 属同一范围声明（第 4 点）。
+     9. **FLUSHING 窗口不变量（N8）**：FLUSHING 放行仅覆盖 flush 路径固定代码（分组 SQL＋`scheduleOnce` 写入＋测试路径底座写入，无领域写）；`flush()` 实现内注释冻结「不得在 FLUSHING 窗口引入任何领域写」。
+   - `recordOutboxIntent`／`recordTimerIntent` 在 FLUSHED 后调用 → 拒（record API 守卫保留）。
+   - 目标：flush 后任何新领域写／行锁／意图 → 整事务失败关闭。
+
+8. **死锁声明边界**：确定性分组排序仅消除“两事务对同一多槽集合以相反顺序加锁”的锁序环风险，**不宣称无死锁**；§7.2 撤回的单槽 1213 反例保留不改 GREEN；一次 A/Z 并发成功只是排序证据；完整事务重跑（V4A／coordinator）属 R3-08，本片不动 coordinator／BudgetContext／retry。
+
+9. **最小运行字节白名单（拟名，实施前核对既有类；rev2 按用户裁定 B 调整）**：
+   - 修改生产：`infrastructure/ledger/LocalLedgerIntentCollector.java`、`infrastructure/configuration/SupplyChainDataSourceConfiguration.java`（supplyChainSqlSessionFactory 注册拦截器；该文件不在 A39）。**`infrastructure/outbox/OutboxEventRepository.java` 零修改**（rev2：不新增生产通道，底座／`VerifiedAppendCommand`／`BindingProof` 全部字节不变）。
+   - 新增生产：`infrastructure/ledger/dal/mysql/CollationOrderingMapper.java`＋`src/main/resources/mapper/infrastructure/CollationOrderingMapper.xml`（第 4 点两条无实体表参数化 SQL）、`infrastructure/ledger/LedgerPostFlushWriteGuardInterceptor.java`。
+   - 测试：重写/扩展 `LocalLedgerIntentFlushIntegrationTest`（Outbox 段改为生产失败关闭断言，Timer 段保留；原字节归档）；新增 `LocalLedgerIntentCollationOrderingIntegrationTest`（Outbox 排序/合并/组序经生产 `CollationOrderingMapper`＋反射桥驱动真实底座）、`LocalLedgerIntentPostFlushGuardIntegrationTest`（锁定 SELECT 词法规则正反例＋假阳/假阴负控制）、`architecture/LocalLedgerIntentCollectorArchitectureTest`（禁止生产新增 Outbox 执行通道的负控制——除既有 `OutboxEventRepository` 自身外任何生产类不得依赖 `TrustedOutboxAppendCore`；mapper 写方法仍仅底座；同步不得覆写 flush()；`CollationOrderingMapper` 仅 collector 及测试可调用）、仅 src/test 反射桥 `infrastructure/ledger/TrustedOutboxTechnicalAppendBridge.java`。
+   - 零修改：A39 全 39 路径、历史 changelog（061 不追加）、旧 `appendLocal` 方法体、**`OutboxEventRepository.java` 全文件**、`LocalLedgerTransactionalWorkerCoordinator`／`LocalLedgerDeadlockDetector`／`LocalLedgerDeadlockException`／BudgetContext／预算包装、R3-04 全部、O-S01~O-S11／R1–R9 已闭环产物、既有 `OutboxAppendIsolationArchitectureTest`（新规则进新文件）。若实施需超出白名单，停报最小 diff。
 
 ### 7.3 页上界与原子续页
 

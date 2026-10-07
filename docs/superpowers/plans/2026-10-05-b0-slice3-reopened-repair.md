@@ -144,13 +144,20 @@ RED先测真实源缺失／伪造映射；再源聚合unique、eventId unique／
 
 ### R3-03：完整技术worker意图收集／collation／flush
 
-**二次补核重开：REOPENED_ACCEPTANCE_NOT_VALID。** 下列已勾选条目仅保留历史实施／审查／运行记录，不再作为完整条款验收。Java比较器未实现数据库Collation排序与等价合并；嵌套／最外层归属、完整元数据冲突、flush后领域锁与RESERVED守卫待逐项补核。先完成R3-04修正，再以实际事务连接、无表参数化SQL及真实数据库负例修复本项；禁止因ASCII反序并发单次成功降低获审要求。
+**二次补核重开：REOPENED_ACCEPTANCE_NOT_VALID（2026-10-06 修正设计候选 rev2 已冻结，待独立预审）。** 下列已勾选条目仅保留历史实施／审查／运行记录，不再作为完整条款验收。Java比较器未实现数据库Collation排序与等价合并；嵌套／最外层归属、完整元数据冲突、flush后领域锁与RESERVED守卫待逐项补核。先完成R3-04修正，再以实际事务连接、无表参数化SQL及真实数据库负例修复本项；禁止因ASCII反序并发单次成功降低获审要求。
 
-- [ ] 冻结完整缺口矩阵、实际调用链与修正设计，并独立预审。
-- [ ] 分行为RED→GREEN修正并验证最终候选；独立规格／质量复审及父最终验收。
+**2026-10-06 实际实现追读与P0校准结论（本轮设计先行）：**
+- 真实实现（HEAD `d1762b6`）与旧§7.2.2全部条款存在如下确定性偏差：`LocalLedgerIntentCollector` 排序用 `String.CASE_INSENSITIVE_ORDER.thenComparing(compareTo)`（非数据库Collation）；键为 `aggregateType+"|"+aggregateId+"|"+aggregateVersion+"|"+eventType` 拼接（复合键分隔碰撞）；同键合并仅比较 payload，不比对 targetName/payloadVersion/protocol；Outbox 意图 flush 走旧 `appendLocal` 严格INSERT（无账本底座、无RESERVED守卫），Timer 意图走已闭环 `scheduleOnce`；`TransactionContext` 覆写 `TransactionSynchronization.flush()`（状态机可被 Spring triggerFlush 偷触发——已核本地 spring-tx-6.2.18-sources.jar `prepareForCommit` 为空实现、`triggerFlush()` 为 public 静态方法且 6.2.18 内无框架内调用者、MyBatis-Spring 3.0.5 不调用，当前不触发但存在重入风险）；`requireContext` 仅查 `isActualTransactionActive`（不核 manager 归属/Scope/read-only/rollbackOnly）；flush 后无真实 DML/行锁守卫；`afterCompletion` 将状态重置为 COLLECTING（与旧测试预期一致，但需改为清空）。
+- 生产调用者：`LocalLedgerIntentCollector`、`LocalLedgerTransactionalWorkerCoordinator`、`appendLocalIdempotent`（B入口）均无生产调用者；collector 唯一测试调用者为 `LocalLedgerIntentFlushIntegrationTest`。coordinator 属 R3-08 范围，本片不动。
+- P0 校准（详见主设计新增「2026-10-06 P0 依赖校准与 R3-03 独立隔离重开」与 `2026-10-06-r3-03-reopened-repair.md`）：原冻结强制契约=§7.2(5)、§7.2.1(1–6)、§7.2.2协议意图、§9两行R3-03部分、F10；依赖复用已闭环 R3-01/02O/02T/O-S07；R01/R02预算与V4A重跑不属本片（不动 coordinator/BudgetContext）；无部署前置、不需要 R3-04 先行；可独立隔离验收；R3-04 保持 `PAUSED_BY_USER_BOUNDARY_UNRESOLVED`，R3-05/06/07/08 未开始、商业启用不放行；1213 单槽反例保留、完整事务重跑属后 08。
 
-- [x] 设计先行：主设计文档新增 §7.2.2 完整技术 worker 意图收集、数据库 Collation 确定性排序与单次 Flush 协议（R3-03）。
-- [x] 方案设计独立预审通过（`deleg_23a851ff` passed）。
+- [ ] 冻结完整缺口矩阵、实际调用链与修正设计，并独立预审。 ← 本轮完成设计冻结与矩阵编制（`DESIGN_PENDING_INDEPENDENT_PRE_REVIEW`），首轮独立预审 returned failed（35 passed／11 failed／0 unknown，BLK-1/2/3）；rev2 已按预审最小修订方向与用户裁定修订，**再次独立预审未开始、未通过**。
+- [ ] 分行为RED→GREEN修正并验证最终候选；独立规格／质量复审及父最终验收。 ← 未开始。
+
+**2026-10-06 rev2 修订（独立预审回执后按裁定修订，阶段仍 `DESIGN_PENDING_INDEPENDENT_PRE_REVIEW`）：** 首轮预审 35 passed／11 failed／0 unknown，三阻断：BLK-1（冻结派生表 SQL 仅返回分组代表键，Java 无法枚举 DB 等价组成员，合并/冲突/组序在恰1条约束下不可实现）、BLK-2（`appendLocalTechnical` 通道同时命中 R3-02O-S 三条范畴性禁令：不新增生产LEGACY入口／第三个生产写入口即blocked／不能用架构规则替代private语言边界）、BLK-3（锁定 SELECT 词法规则未闭合）。rev2：① BLK-1 两条冻结 SQL 改逐键返回行＋`DENSE_RANK() OVER (ORDER BY 已带 collation 派生列)` 组号＋原始精确列 `k*_orig` 回传定位，废弃 GROUP BY（仍每 flush 每类恰 1 条、参数化、零 InnoDB 访问、首个账本锁前）；Java 按 grp 聚类、按原始列定位、组内合并/冲突、按组序逐槽执行。② BLK-2 用户选 B——不新增生产 `appendLocalTechnical` 通道，`OutboxEventRepository.java` 零修改：生产 collector 对 Outbox 槽执行保持失败关闭（零 DAL 前 `SystemIntegrityException`、不静默跳过、整事务失败），协议由仅 src/test 同模块反射桥（参照既有 `TrustedOutboxAppendCoreBridge`）驱动真实 main 底座证明；商业接线时再裁决生产执行通道（R3-02O-S 冻结边界文本不改，仅记录未来待裁决）。③ BLK-3 冻结锁定 SELECT 词法规则（剥离 `'`/`"`/反引号字面量与 `--`/`#`/`/* */` 注释后顶层匹配 `FOR UPDATE`/`FOR SHARE`/`LOCK IN SHARE MODE`，含 `OF 列`/`NOWAIT`/`SKIP LOCKED` 后缀，大小写不敏感，语句级含子查询/CTE/括号）与 7 个既有 Mapper XML 全量语句分类表、假阳（字面量/注释/反引号标识符/普通SELECT）与假阴（大小写/空白/后缀/FOR SHARE/LOCK IN SHARE MODE/子查询外层）负控制。④ N1 triggerFlush 描述按本地 6.2.18 源码勘误（prepareForCommit 空实现、6.2.18 内无框架调用者）。未实施、未运行测试、未验收；待再次独立预审。
+
+- [x] 设计先行：主设计文档新增 §7.2.2 完整技术 worker 意图收集、数据库 Collation 确定性排序与单次 Flush 协议（R3-03）。 ← 历史记录；2026-10-06 已由修正替代文本整体替换，原算法废止。
+- [x] 方案设计独立预审通过（`deleg_23a851ff` passed）。 ← 历史记录；该预审不覆盖补核缺口，不得沿用放行修正候选。
 - [x] 编写真实 MySQL TDD 测试（`LocalLedgerIntentFlushIntegrationTest`）：
   - 嵌套/多行领域写后单次 flush，所有 Outbox 与 Timer 槽同事务持久化；
   - 同键等价载荷合并且保留最终版本元数据；
@@ -158,12 +165,13 @@ RED先测真实源缺失／伪造映射；再源聚合unique、eventId unique／
   - 多槽按确定性 Collation 顺序加锁，并发反序事务不发生 1213 死锁；
   - 第二槽或后续槽/绑定失败整事务回滚，无任何孤儿槽或孤儿任务；
   - flush 后再次记录意图或获取新领域写锁被 beforeCommit 守卫严格阻断（追加用例 7 验证通过）。
-- [x] 生产代码实现：`LocalLedgerIntentCollector`，实现内存缓冲、确定性Collation排序、等价合并、状态机与提交前守卫。
-- [x] 运行定向门禁与全量门禁：第48轮全门禁313 XML / 2692用例全0，第49轮API契约7类45用例全0；独立规格审查（`deleg_dc653862` passed）与质量安全审查（`deleg_8dec5398` passed）；父验收完成（`parent-r3-03-final-acceptance.json`）。R3-03 闭环。
+  ← 历史记录（7用例原XML保留）；逐项补核：等价合并非DB Collation、A/Z并发单次成功非无死锁证明、flush后守卫仅record API无DML/行锁。
+- [x] 生产代码实现：`LocalLedgerIntentCollector`，实现内存缓冲、确定性Collation排序、等价合并、状态机与提交前守卫。 ← 历史记录；该实现已裁定为旧算法，修正实施按主设计§7.2.2新文本重写。
+- [x] 运行定向门禁与全量门禁：第48轮全门禁313 XML / 2692用例全0，第49轮API契约7类45用例全0；独立规格审查（`deleg_dc653862` passed）与质量安全审查（`deleg_8dec5398` passed）；父验收完成（`parent-r3-03-final-acceptance.json`）。R3-03 闭环。 ← 历史记录；**完整协议验收已失效（REOPENED_ACCEPTANCE_NOT_VALID）**，原XML保留，不得沿用为修正后候选门禁。
 
 依赖02O/T。新增事务归属收集器和纯本地技术域fixture；不接真实saveBuyer。实际最外层供应链事务记录意图，嵌套/多行/级联全部领域写完，首个账本锁前冻结完整集合，等价合并且异载荷失败；参数化无实体表SQL按源unique实际collation和数值确定排序（Outbox先Timer），不得Java归一外部编码、提前建立领域RR视图。只flush一次，随后不得新领域锁／新意图。
 
-RED→GREEN分别验嵌套提前flush、最后行最终版本、大小写／组合字符同collation等价合并与异载荷拒绝、反序并发排序、第二槽/源/绑定失败整批回滚、flush后新增锁/意图拒绝及RESERVED guard。fixture真实SQL记录/锁证据，mock顺序不足。真实商业链门禁明确留后续，不减原获审要求。
+RED→GREEN分别验嵌套提前flush、最后行最终版本、大小写／组合字符同collation等价合并与异载荷拒绝、反序并发排序、第二槽/源/绑定失败整批回滚、flush后新增锁/意图拒绝及RESERVED guard。fixture真实SQL记录/锁证据，mock顺序不足。真实商业链门禁明确留后续，不减原获审要求。修正实施顺序、垂直RED→GREEN清单与完整条款矩阵以专用计划 `docs/superpowers/plans/2026-10-06-r3-03-reopened-repair.md` 为准。
 
 ### R3-04：强制旧Timer迁移／启动切换检查
 

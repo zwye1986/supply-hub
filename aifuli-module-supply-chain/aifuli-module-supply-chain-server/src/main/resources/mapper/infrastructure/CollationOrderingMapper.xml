@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- R3-03 §7.2.2(4) 冻结参数化无实体表排序/分组 SQL（rev2 逐键返回行＋DENSE_RANK 组号＋k*_orig 原始精确列定位，废弃 GROUP BY）。
+     每 flush 每类恰好执行 1 条（N≥1；N=0 不执行）；参数化 foreach 绑定，禁止拼接外部输入；零 InnoDB 访问；
+     执行时点固定在首个账本锁之前。设计：docs/superpowers/specs/2026-10-05-catalog-reliable-consumption-prerequisite-design.md#722 -->
+<mapper namespace="com.aifuli.module.supplychain.infrastructure.ledger.dal.mysql.CollationOrderingMapper">
+
+    <!-- Outbox 意图（N≥1 时恰好执行 1 条；N=0 不执行） -->
+    <select id="orderOutboxKeys" resultType="com.aifuli.module.supplychain.infrastructure.ledger.dal.mysql.CollationOrderingMapper$OutboxKeyRow">
+        SELECT CAST(t.k1 AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_0900_ai_ci AS aggregate_type,
+               CAST(t.k2 AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_0900_ai_ci AS aggregate_id,
+               CAST(t.k3 AS SIGNED)                                AS aggregate_version,
+               CAST(t.k4 AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_0900_ai_ci AS event_type,
+               t.k1_orig                                           AS aggregate_type_orig,
+               t.k2_orig                                           AS aggregate_id_orig,
+               t.k3_orig                                           AS aggregate_version_orig,
+               t.k4_orig                                           AS event_type_orig,
+               DENSE_RANK() OVER (ORDER BY t.k1, t.k2, t.k3, t.k4) AS grp
+        FROM (
+          <foreach collection="keys" item="k" separator=" UNION ALL ">
+          SELECT CAST(#{k.aggregateType}    AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_0900_ai_ci AS k1,
+                 CAST(#{k.aggregateId}      AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_0900_ai_ci AS k2,
+                 CAST(#{k.aggregateVersion} AS SIGNED)                                AS k3,
+                 CAST(#{k.eventType}        AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_0900_ai_ci AS k4,
+                 #{k.aggregateType}    AS k1_orig,
+                 #{k.aggregateId}      AS k2_orig,
+                 CAST(#{k.aggregateVersion} AS SIGNED) AS k3_orig,
+                 #{k.eventType}        AS k4_orig
+          </foreach>
+        ) t
+        ORDER BY t.k1, t.k2, t.k3, t.k4
+    </select>
+
+    <!-- Timer 意图（N≥1 时恰好执行 1 条；N=0 不执行） -->
+    <select id="orderTimerKeys" resultType="com.aifuli.module.supplychain.infrastructure.ledger.dal.mysql.CollationOrderingMapper$TimerKeyRow">
+        SELECT CAST(t.k1 AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_0900_ai_ci AS task_type,
+               CAST(t.k2 AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_0900_ai_ci AS idempotency_key,
+               t.k1_orig                                     AS task_type_orig,
+               t.k2_orig                                     AS idempotency_key_orig,
+               DENSE_RANK() OVER (ORDER BY t.k1, t.k2)       AS grp
+        FROM (
+          <foreach collection="keys" item="k" separator=" UNION ALL ">
+          SELECT CAST(#{k.taskType}      AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_0900_ai_ci AS k1,
+                 CAST(#{k.idempotencyKey} AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_0900_ai_ci AS k2,
+                 #{k.taskType}      AS k1_orig,
+                 #{k.idempotencyKey} AS k2_orig
+          </foreach>
+        ) t
+        ORDER BY t.k1, t.k2
+    </select>
+
+</mapper>
