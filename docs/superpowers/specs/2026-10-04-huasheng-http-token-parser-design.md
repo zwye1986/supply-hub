@@ -820,3 +820,96 @@ A4 片（真实本地 HTTPS 传输）已完成全部规范实现、4 轮垂直 T
 2. **独立质量与安全审查** `deleg_52747bc8` passed=true：security_concerns 与 logic_errors 为空，private 窄 TLS 构造由 ArchUnit 双向封锁且生产零调用，HTTP/2 coalescing 421 负控制真实生效，isOneShot 与二次 writeTo 守卫生效，503 极大 Retry-After 异常保留状态并捕获原 NFE 同引用，HuashengHttpSafeLog 有界 1024 键与 2 分钟闲置退休生效，脱敏与拒绝序列化过审。
 3. **父最终核验**：9 个候选文件当前工作区哈希与清单 100% 吻合，HEAD 2b61ba41 未变，暂存区 index 为空，三门禁原 XML 聚合 0 错误，两份复审报告哈希一致，父最终验收成立（见仓外 `parent-a4-final-acceptance.json`）。
 **范围界限**：本片仅验收 A4 真实本地 HTTPS 传输纯逻辑，不关闭完整 Task3-A，不解除 R3-04 暂停或目录商业前置限制，未做 Git commit/push，无真实网络/供应商访问。
+
+## 18. Token 管理、内存缓存与通信门面（A5 片）技术接口附表（2026-10-07 预审通过）
+
+本节依据 A5 片独立只读设计针对性预审 `deleg_bf3a667f`（报告归档于 `business-closure-20261007/prereview-a5/`）的裁决与冻结契约制定。预审结论通过（passed=true，0 阻断，0 需重开文件）。本附表为 A5 片实施的唯一规范性依据。
+
+### 18.1 架构分层解耦与六边形依赖（AD-4 / AD-A5-01）
+
+1. **包边界与依赖隔离**：
+   - 应用层包：`com.aifuli.module.supplychain.border.fulfillment.application.huasheng`；
+   - 基础设施包：`com.aifuli.module.supplychain.infrastructure.token.huasheng`；
+   - 应用层仅定义缓存端口 `HuashengTokenCachePort`；基础设施层 `HuashengInMemoryTokenCache` 实现该端口；应用生产代码**绝不 import `infrastructure.token.huasheng.*` 具体实现**。
+   - `supplieradapter.huasheng` 严禁依赖应用包 `border.fulfillment.application.huasheng` 或基础设施包 `infrastructure.token`；
+   - 组件由测试显式装配组合，暂无 `@Component` 或 Spring 自动扫描注入，无 `AdapterMetadata` 或 `OperationExecutorPort` 生产注册。
+2. **独立架构守卫**：新增独立测试类 `HuashengApplicationArchitectureTest` 校验 AD-4 依赖反转边界，已有 `HuashengProtocolArchitectureTest` 保持 0 修改。
+
+### 18.2 复合身份、材料指纹与缓存条目（AD-A5-02 ～ AD-A5-04）
+
+1. **`HuashengCredentialIdentity` 纯值模型**：
+   - 封装 `credentialSetId`（正整数 long）与不可变排序凭据项快照列表 `List<CredentialItemSnapshot>`（包含 `itemId, itemKey, providerType, activeSecretVersion`）；
+   - 排序规则：按 `itemKey` 升序，同 key 按 `itemId` 升序；`toString()` 严格脱敏仅输出 `credentialSetId` 与项数量。
+2. **`HuashengAuthorizedCallContext` 授权上下文**：
+   - 包装纯协议 `HuashengCallContext` 与应用层 `HuashengCredentialIdentity`；
+   - `toTokenIdentity()` 工厂方法生成缓存身份模型；`toString()` 仅输出 `operationNo` 与 `connectorVersionId`。
+3. **`HuashengTokenIdentity` 复合缓存主键**：
+   - 组成维度：`supplierCode, connectorVersionId, normalizedBaseUrl, appId, credentialSetId, sortedItemVersions`，以及**进程内随机 HMAC-SHA256 密钥计算的材料指纹**；
+   - 材料指纹由进程启动时生成的安全随机密钥对长度分帧的 `appSecret` 与规范化 `privateKey` DER 计算，只在内存中使用，不进日志/配置/审计；杜绝不同环境、不同连接器版本、不同凭据版本或 ENV 变化时的缓存串用。
+4. **`HuashengTokenEntry` 不可变缓存条目**：
+   - 持有 `accessToken, generation, expiresAt, leaseDeadlineNanos`；
+   - `isUsable(clock, nanoTicker)` 执行双时钟校验（Wall Clock 过期检查与单调 Ticker 租约检查），防止系统时钟倒退导致使用过期 Token；
+   - `toString()` 固定脱敏返回 `HuashengTokenEntry[redacted]`，类级标注 `@JsonSerialize(using = HuashengInternalOnlySerializer.class)` 拒绝意外序列化。
+5. **`HuashengTokenPolicy` TTL 策略**：
+   - 命名常量 `MAX_ACCEPTED_TTL_SECONDS = 7200`；`refreshAhead = Math.min(300L, ttlSeconds / 10L)`；
+   - 校验规则：`ttlSeconds <= 0` 拒绝；`ttlSeconds > 7200`（例如 7201）在应用层拒绝为本地策略 `TOKEN_TTL_UNACCEPTABLE`（返回 Failed，原因 PREFLIGHT）；
+   - Token 字符串最多 8192 字符，禁止包含 CR/LF/NUL，不 trim。
+
+### 18.3 内存缓存实现与单飞锁（AD-A5-05）
+
+1. **`HuashengInMemoryTokenCache` 核心机制**：
+   - 内部采用 `ConcurrentHashMap<HuashengTokenIdentity, CacheSlot>`，容量上限 **1024 键**；
+   - 键级单飞锁：并发获取同一身份 Token 时仅由单个线程执行网络外呼，其余竞争线程在锁内二次检查缓存直接复用；
+   - CAS 代次（generation）防护：`invalidateIfGeneration(identity, generation)` 仅在代次匹配时失效；迟到的旧业务 61 绝不删除已被并发线程刷新的新 generation Token；
+   - 锁引用计数与惰性退休：槽位空闲且无在途锁定时自动从 map 清理，防止历史键无限驻留导致内存泄漏；
+   - 容量超限保护：键数达到 1024 时优先清理已过期条目；若仍满则安全失败抛出异常，绝不驱逐正在授权中的活跃锁造成并发刷 Token。
+
+### 18.4 有界 61 重试编排、预算与调用门面（AD-A5-06 ～ AD-A5-08）
+
+1. **`HuashengCallBudget` 调用预算**：
+   - 包含最大可用业务物理发送次数（本地上限 2，范围 `[1, 2]`）与绝对单调截止纳秒 `deadlineNanos`；
+   - 每次物理发送（TOKEN 或业务）前原子检查剩余预算与截止纳秒；预算耗尽或已过截止立即终止。
+2. **`HuashengCallResult<T>` 密封对外结果类族**：
+   - `public sealed interface HuashengCallResult<T> permits Parsed, BusinessError, HttpFailure, TransportFailure, InvalidResponse, LocalFailure`；
+   - `attempts()` 返回不可变 `List<HuashengExchangeEvidence>`（有界至多 2 TOKEN + 2 业务的安全证据）；
+   - `wasBusinessCallStarted()` 保守指示业务外呼是否已发起；
+   - 失败分支仅携带 `HuashengFailureDiagnostics` 安全值，绝不暴露 `Throwable`、`HuashengProtectedFailure` 或原始正文。
+3. **`HuashengCommunicationFacade` 统一门面与有界 61 编排**：
+   - 公开方法：`place`、`confirm`、`query`、`take`；
+   - 调用流程：检查预算/deadline → 获取 Token（从缓存或 1 次 TOKEN 外呼）→ 组装业务 WireRequest（新 timestamp + 32 字符 UUID nonce）→ HTTP 发送 → 严格解析响应；
+   - 有界 61 逻辑：仅在合法 2xx 响应且业务 `code == 61` 时触发：按使用的 generation 失效缓存 → 重新获取 Token（复用较新 Token 或 1 次强制刷新）→ 使用完全相同业务业务模型、全新时间戳/nonce/密文/签名再次发送 → 返回第二次事实；
+   - 终止条件：第二次业务响应仍为 61 时直接返回 `BusinessError`；非 2xx、非法 JSON、超时或 66 均不触发刷新重发；至多 2 业务 + 2 TOKEN；
+   - 错误投影：首次业务发送前本地/加密/参数失败抛出 `HuashengProtocolException`（`wasBusinessCallStarted = false`）；首次业务发送后的本地构造/刷新超时/预算耗尽返回 `LocalFailure`，保留已发送证据。
+4. **`HuashengSafeLog` 应用层安全日志**：
+   - 入口 debug 记录脱敏标识（`operationNo, connectorVersionId, endpoint, traceId`）；
+   - 异常仅接收 `HuashengFailureDiagnostics`，按 `endpoint + failureKind + rawCode` 分钟桶聚合限频（首条 WARN + 抑制计数），上限 1024 键，闲置 2 分钟惰性退休；A4 已记录的传输失败不重复记录。
+
+### 18.5 最小写白名单与零重开（总计 17 个文件）
+
+1. **新增 main 文件（12 个）**：
+   - `border/fulfillment/application/huasheng/` (11 个)：
+     * `HuashengCredentialIdentity.java`
+     * `HuashengAuthorizedCallContext.java`
+     * `HuashengTokenIdentity.java`
+     * `HuashengTokenCachePort.java`
+     * `HuashengTokenEntry.java`
+     * `HuashengTokenPolicy.java`
+     * `HuashengTokenManager.java`
+     * `HuashengCallBudget.java`
+     * `HuashengCallResult.java`
+     * `HuashengCommunicationFacade.java`
+     * `HuashengSafeLog.java`
+   - `infrastructure/token/huasheng/` (1 个)：
+     * `HuashengInMemoryTokenCache.java`
+2. **新增 test 文件（5 个）**：
+   - `border/fulfillment/application/huasheng/HuashengTokenManagerTest.java` (Surefire)
+   - `infrastructure/token/huasheng/HuashengTokenCacheTest.java` (Surefire)
+   - `border/fulfillment/application/huasheng/HuashengCommunicationFacadeContractTest.java` (Failsafe)
+   - `architecture/HuashengApplicationArchitectureTest.java` (Surefire)
+   - `border/fulfillment/application/huasheng/HuashengApplicationSensitiveDiagnosticsTest.java` (Surefire)
+3. **重开修改文件（0 个）**：0 重开，前片 A1～A4 生产及测试代码保持 100% 字节不变。
+4. **pom / 资源 / DDL 修改**：0 改动。
+5. **门禁规范**：
+   - Gate 1 定向纯测（既有 15 类 + A5 4 类新纯单测）；
+   - Gate 2 全供应链纯测与架构测试；
+   - Gate 3 Failsafe 契约测试（既有 3 类 + `HuashengCommunicationFacadeContractTest`）。

@@ -237,8 +237,14 @@ N-A4-R2-01～12 非阻断实施义务保留在第二轮报告，设计放行后�
 
 ### 6.4 A5 Token/缓存/Facade/安全日志
 
-- 范围：应用包 `HuashengTokenManager/HuashengTokenCachePort/HuashengTokenIdentity/HuashengTokenPolicy`、infra 包 `HuashengInMemoryTokenCache`（§8）、`HuashengCommunicationFacade/HuashengCallResult/HuashengCallBudget/HuashengSafeLog`（§7.2/§9）；有界 61 至多 2 业务+2 TOKEN、budget/deadline 逐发送检查、PREFLIGHT/LocalFailure 与累计 evidence、限频聚合与有界键。
-- 测试：`HuashengTokenManagerTest/HuashengTokenCacheTest/HuashengCommunicationFacadeContractTest`+SensitiveDiagnostics 扩展；ArchUnit 扩 A5 依赖规则（AD-4 全链）。门禁=完整纯测/架构+QNM Failsafe+两 Failsafe 契约。
+- 范围（已由设计 §18 完整冻结）：应用包 11 类（`HuashengCredentialIdentity/HuashengAuthorizedCallContext/HuashengTokenIdentity/HuashengTokenCachePort/HuashengTokenEntry/HuashengTokenPolicy/HuashengTokenManager/HuashengCallBudget/HuashengCallResult/HuashengCommunicationFacade/HuashengSafeLog`），infra 包 1 类（`HuashengInMemoryTokenCache`）。有界 61 至多 2 业务 + 2 TOKEN，budget/deadline 逐发送检查，PREFLIGHT/LocalFailure 与累计 evidence 聚合，内存单飞锁 + CAS generation + 1024 键上限。
+- 测试：5 类（`HuashengTokenManagerTest/HuashengTokenCacheTest/HuashengCommunicationFacadeContractTest/HuashengApplicationArchitectureTest/HuashengApplicationSensitiveDiagnosticsTest`）。
+
+### 6.4.1 A5 独立预审推进状态（2026-10-07）
+
+- [x] 独立只读预审 `deleg_bf3a667f` 返回 passed=true（0 阻断，0 重开文件）。
+- [x] 详细设计已补 §18 技术接口附表，完整冻结复合身份模型、Token 策略、内存单飞锁缓存、有界 61 重试编排、安全日志与 12 新 main + 5 新 test 白名单（0 重开文件）。
+- [ ] 呈报用户确认实施授权，由唯一实施者按 §18 冻结白名单与垂直 TDD 执行编码并跑通门禁。
 
 ### 6.5 四片共通边界
 
