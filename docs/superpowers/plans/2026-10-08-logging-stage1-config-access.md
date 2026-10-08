@@ -57,7 +57,7 @@
 **Files:**
 - 无（仅验证）
 
-- [ ] **Step 1: 确认 aifuli-server 类路径含 monitor starter 与 encoder**
+- [x] **Step 1: 确认 aifuli-server 类路径含 monitor starter 与 encoder**
 
 Run:
 
@@ -75,7 +75,7 @@ com.aifuli:aifuli-server:jar:...
 ```
 确认 monitor starter 与 encoder 均通过 `system-server` 传递依赖进入。注：不能加 `-q`，否则 dependency:tree 的 INFO 输出会被完全屏蔽。
 
-- [ ] **Step 2: 确认 taobao-flash-channel 直接声明 monitor starter**
+- [x] **Step 2: 确认 taobao-flash-channel 直接声明 monitor starter**
 
 Run:
 
@@ -91,7 +91,7 @@ com.aifuli:aifuli-channel-taobao-flash-server:jar:...
    \- net.logstash.logback:logstash-logback-encoder:jar:...:compile
 ```
 
-- [ ] **Step 3: 确认现有 dev 配置基线，供新增配置对齐**
+- [x] **Step 3: 确认现有 dev 配置基线，供新增配置对齐**
 
 Run:
 
@@ -119,7 +119,7 @@ aifuli:
 **Files:**
 - Modify: `aifuli-framework/aifuli-spring-boot-starter-monitor/src/test/java/com/aifuli/framework/tracer/config/LogbackElkAppenderConfigurationTest.java:44-60`
 
-- [ ] **Step 1: 扩展参数化用例与模块路径映射**
+- [x] **Step 1: 扩展参数化用例与模块路径映射**
 
 将 `@CsvSource` 与 `switch` 改为：
 
@@ -153,7 +153,7 @@ aifuli:
         };
 ```
 
-- [ ] **Step 2: 运行测试确认 RED**
+- [x] **Step 2: 运行测试确认 RED**
 
 Run:
 
@@ -164,7 +164,7 @@ mvn -B -ntp -pl aifuli-framework/aifuli-spring-boot-starter-monitor -am test \
 
 Expected: FAILURE。`infra`、`member`、`aifuli`、`taobaoflash` 的 `dev/true` 组合失败，失败原因为本地文件断言不含 `[probe-trace]`（pattern 缺 `%X{traceId}`）；`taobaoflash` 的 `dev/true` 还会在读取 `logback-spring.xml` 时抛 `FileNotFoundException`。既有 `gateway`、`system`、`supplychain` 12 组必须仍然通过——若它们也失败，说明基线已被破坏，先修复再继续。
 
-- [ ] **Step 3: 提交测试（保留 RED 证据）**
+- [x] **Step 3: 提交测试（保留 RED 证据）**
 
 ```bash
 git add aifuli-framework/aifuli-spring-boot-starter-monitor/src/test/java/com/aifuli/framework/tracer/config/LogbackElkAppenderConfigurationTest.java
@@ -179,7 +179,7 @@ git commit -m "扩展真实根配置测试覆盖 infra、member、aifuli、taoba
 - Modify: `aifuli-module-infra/aifuli-module-infra-server/src/main/resources/logback-spring.xml`
 - Modify: `aifuli-module-infra/aifuli-module-infra-server/src/main/resources/application-dev.yaml`
 
-- [ ] **Step 1: 用完整内容替换 logback-spring.xml**
+- [x] **Step 1: 用完整内容替换 logback-spring.xml**
 
 ```xml
 <configuration>
@@ -253,7 +253,7 @@ git commit -m "扩展真实根配置测试覆盖 infra、member、aifuli、taoba
 </configuration>
 ```
 
-- [ ] **Step 2: 在 application-dev.yaml 末尾追加 ELK 配置**
+- [x] **Step 2: 在 application-dev.yaml 末尾追加 ELK 配置**
 
 在文件末尾追加（该文件当前无顶层 `aifuli:` 节点）：
 
@@ -270,7 +270,7 @@ aifuli:
       port: 50000
 ```
 
-- [ ] **Step 3: 运行 infra 组合确认 GREEN**
+- [x] **Step 3: 运行 infra 组合确认 GREEN**
 
 Run:
 
@@ -281,7 +281,7 @@ mvn -B -ntp -pl aifuli-framework/aifuli-spring-boot-starter-monitor -am test \
 
 Expected: `infra` 4 组全部通过；`member`、`aifuli`、`taobaoflash` 仍为 RED（尚未接入）。
 
-- [ ] **Step 4: 提交**
+- [x] **Step 4: 提交**
 
 ```bash
 git add aifuli-module-infra/aifuli-module-infra-server/src/main/resources/logback-spring.xml \
@@ -297,7 +297,7 @@ git commit -m "接入 infra-server 集中式日志配置并补齐本地 traceId 
 - Modify: `aifuli-module-member/aifuli-module-member-server/src/main/resources/logback-spring.xml`
 - Modify: `aifuli-module-member/aifuli-module-member-server/src/main/resources/application-dev.yaml`
 
-- [ ] **Step 1: 更新 logback-spring.xml 的 pattern 并引入共享片段**
+- [x] **Step 1: 更新 logback-spring.xml 的 pattern 并引入共享片段**
 
 将第 5、6 行替换为：
 
@@ -333,7 +333,7 @@ git commit -m "接入 infra-server 集中式日志配置并补齐本地 traceId 
 
 **不要修改** `PLATFORM_API_WUSHENG_INBOUND*`、`PLATFORM_API_WUSHENG_OUTBOUND*` appender 及其两个 `<logger ... additivity="false">` 节点。它们按 2026-10-08 决策继续只写本地独立文件。
 
-- [ ] **Step 2: 在 application-dev.yaml 末尾追加 ELK 配置**
+- [x] **Step 2: 在 application-dev.yaml 末尾追加 ELK 配置**
 
 ```yaml
 
@@ -348,7 +348,7 @@ aifuli:
       port: 50000
 ```
 
-- [ ] **Step 3: 运行 member 组合确认 GREEN**
+- [x] **Step 3: 运行 member 组合确认 GREEN**
 
 Run:
 
@@ -359,7 +359,7 @@ mvn -B -ntp -pl aifuli-framework/aifuli-spring-boot-starter-monitor -am test \
 
 Expected: `member` 4 组通过；`aifuli`、`taobaoflash` 仍 RED。
 
-- [ ] **Step 4: 提交**
+- [x] **Step 4: 提交**
 
 ```bash
 git add aifuli-module-member/aifuli-module-member-server/src/main/resources/logback-spring.xml \
@@ -375,11 +375,11 @@ git commit -m "接入 member-server 集中式日志配置并保持华昇专用�
 - Modify: `aifuli-server/src/main/resources/logback-spring.xml`
 - Modify: `aifuli-server/src/main/resources/application-dev.yaml`
 
-- [ ] **Step 1: 用完整内容替换 logback-spring.xml**
+- [x] **Step 1: 用完整内容替换 logback-spring.xml**
 
 内容与 Task 3 Step 1 的 XML 完全一致（`aifuli-server` 现有文件含同样的 SkyWalking 注释块，替换后结构不变，仅 pattern、include 与 root 挂载为新增）。
 
-- [ ] **Step 2: 在已有 `aifuli:` 节点下追加 ELK 配置**
+- [x] **Step 2: 在已有 `aifuli:` 节点下追加 ELK 配置**
 
 `aifuli-server/src/main/resources/application-dev.yaml` 第 150 行已有顶层 `aifuli:` 节点。将
 
@@ -403,7 +403,7 @@ aifuli:
 
 注意：该文件第 124 行已存在顶层 `logging.file.name`，与 `aifuli.logging.elk` 是不同键路径，不得合并或覆盖。
 
-- [ ] **Step 3: 运行 aifuli 组合确认 GREEN**
+- [x] **Step 3: 运行 aifuli 组合确认 GREEN**
 
 Run:
 
@@ -414,7 +414,7 @@ mvn -B -ntp -pl aifuli-framework/aifuli-spring-boot-starter-monitor -am test \
 
 Expected: `aifuli` 4 组通过；`taobaoflash` 仍 RED。
 
-- [ ] **Step 4: 提交**
+- [x] **Step 4: 提交**
 
 ```bash
 git add aifuli-server/src/main/resources/logback-spring.xml \
@@ -430,7 +430,7 @@ git commit -m "接入 aifuli-server 集中式日志配置并补齐本地 traceId
 - Create: `aifuli-module-supply-chain/aifuli-channel-taobao-flash-server/src/main/resources/logback-spring.xml`
 - Create: `aifuli-module-supply-chain/aifuli-channel-taobao-flash-server/src/main/resources/application-dev.yaml`
 
-- [ ] **Step 1: 新建 logback-spring.xml**
+- [x] **Step 1: 新建 logback-spring.xml**
 
 该进程此前没有根 Logback 配置，依赖 Spring Boot 默认输出，本步建立与其它进程一致的结构（无 SkyWalking 注释块、无 `logging.file.name`，`LOG_FILE` 沿用 Spring Boot 默认行为，与 `supply-chain-server` 一致）：
 
@@ -495,7 +495,7 @@ git commit -m "接入 aifuli-server 集中式日志配置并补齐本地 traceId
 </configuration>
 ```
 
-- [ ] **Step 2: 新建 application-dev.yaml**
+- [x] **Step 2: 新建 application-dev.yaml**
 
 该模块 `application.yaml` 通过 `optional:classpath:application-${spring.profiles.active}.yaml` 导入，故新建 dev 文件即可生效：
 
@@ -528,7 +528,7 @@ aifuli:
       port: 50000
 ```
 
-- [ ] **Step 3: 运行 taobaoflash 组合确认 GREEN**
+- [x] **Step 3: 运行 taobaoflash 组合确认 GREEN**
 
 Run:
 
@@ -539,7 +539,7 @@ mvn -B -ntp -pl aifuli-framework/aifuli-spring-boot-starter-monitor -am test \
 
 Expected: 全部 28 组 PASS，0 failures / 0 errors / 0 skipped。
 
-- [ ] **Step 4: 提交**
+- [x] **Step 4: 提交**
 
 ```bash
 git add aifuli-module-supply-chain/aifuli-channel-taobao-flash-server/src/main/resources/logback-spring.xml \
@@ -554,7 +554,7 @@ git commit -m "为淘宝闪购渠道服务建立根日志配置并接入集中�
 **Files:**
 - 无（仅运行验证）
 
-- [ ] **Step 1: 运行 monitor starter 全量单测**
+- [x] **Step 1: 运行 monitor starter 全量单测**
 
 Run:
 
@@ -564,7 +564,7 @@ mvn -B -ntp -pl aifuli-framework/aifuli-spring-boot-starter-monitor -am test
 
 Expected: BUILD SUCCESS，0 failures / 0 errors / 0 skipped。覆盖 `TraceFilterTest`、`MdcTaskDecoratorTest`、`TracerUtilsTest`、`LoggingElkPropertiesTest`、`TraceRequestInterceptorTest` 等。
 
-- [ ] **Step 2: 运行 rpc starter 回归（TraceRequestInterceptor）**
+- [x] **Step 2: 运行 rpc starter 回归（TraceRequestInterceptor）**
 
 Run:
 
@@ -574,7 +574,7 @@ mvn -B -ntp -pl aifuli-framework/aifuli-spring-boot-starter-rpc -am test
 
 Expected: BUILD SUCCESS，含 `TraceRequestInterceptorTest` 2 项。
 
-- [ ] **Step 3: 运行网关回归**
+- [x] **Step 3: 运行网关回归**
 
 Run:
 
@@ -584,7 +584,7 @@ mvn -B -ntp -pl aifuli-gateway -am test
 
 Expected: BUILD SUCCESS，含 `GatewayTracePropagationTest`、`GatewayReactorMdcLifecycleTest`。
 
-- [ ] **Step 4: 运行供应链模块门禁**
+- [x] **Step 4: 运行供应链模块门禁**
 
 Run:
 
@@ -596,7 +596,7 @@ mvn -B -ntp -pl aifuli-module-supply-chain/aifuli-module-supply-chain-server -am
 
 Expected: BUILD SUCCESS，含 `SupplyChainModuleArchitectureTest` 全部门禁。本轮未改供应链 server 代码，但 `aifuli-channel-taobao-flash-server` 是同 reactor 模块，需确认无回归。
 
-- [ ] **Step 5: 运行淘宝闪购渠道模块测试**
+- [x] **Step 5: 运行淘宝闪购渠道模块测试**
 
 Run:
 
@@ -614,7 +614,7 @@ Expected: BUILD SUCCESS。确认新增 `logback-spring.xml` 未影响该模块�
 - Modify: `docs/superpowers/specs/2026-10-04-logging-standardization-spec.md`
 - Modify: `docs/集成测试.md`
 
-- [ ] **Step 1: 更新规范 §1.3 现状描述**
+- [x] **Step 1: 更新规范 §1.3 现状描述**
 
 将 §1.3 中描述现状的两条替换为：
 
@@ -624,7 +624,7 @@ Expected: BUILD SUCCESS。确认新增 `logback-spring.xml` 未影响该模块�
 - member 的 `platform-api.WUSHENG.inbound/outbound` 于 2026-10-08 决策保持现状：继续 `additivity="false"` 只写本地独立文件，不进入集中式平台。
 ```
 
-- [ ] **Step 2: 在规范 §3.4 补充专用通道决策**
+- [x] **Step 2: 在规范 §3.4 补充专用通道决策**
 
 在该节末尾追加：
 
@@ -632,7 +632,7 @@ Expected: BUILD SUCCESS。确认新增 `logback-spring.xml` 未影响该模块�
 2026-10-08 决策：member 的华昇开放接口专用报文通道保持现有实现（`additivity="false"`、独立滚动文件、30 天历史），**不接入集中式日志平台**。理由：其报文为完整请求/响应，超出本规范的常规事件字段范围。后续若需集中检索，应另行设计脱敏与体积口径，不得在本次接入中顺带开启。
 ```
 
-- [ ] **Step 3: 在 §10.1 记录 movie-server 例外**
+- [x] **Step 3: 在 §10.1 记录 movie-server 例外**
 
 在 §10.1 段末追加：
 
@@ -640,7 +640,7 @@ Expected: BUILD SUCCESS。确认新增 `logback-spring.xml` 未影响该模块�
 2026-10-08 决策：`movie-server` 暂不纳入本轮接入。理由：该模块使用基础 Spring Boot 组件、pom 未声明 monitor starter，接入会引入新依赖并需评估安全、数据源与任务执行语义影响。其接入按同一 §10.1 流程单独执行。
 ```
 
-- [ ] **Step 4: 在集成测试文档 §8.12 追加执行记录**
+- [x] **Step 4: 在集成测试文档 §8.12 追加执行记录**
 
 在 §8.12 末尾追加以下小节（数值按实际执行结果填写，不得预填）：
 
@@ -656,7 +656,7 @@ Expected: BUILD SUCCESS。确认新增 `logback-spring.xml` 未影响该模块�
 5. 未覆盖：test/prod 端点配置、真实 Logstash/ES 写入、Kibana 检索、前端响应头可见性；均属阶段三。
 ```
 
-- [ ] **Step 5: 提交文档**
+- [x] **Step 5: 提交文档**
 
 ```bash
 git add docs/superpowers/specs/2026-10-04-logging-standardization-spec.md 'docs/集成测试.md'
@@ -667,11 +667,11 @@ git commit -m "记录七进程日志配置接入现状、movie 例外与华昇�
 
 ## 完成定义
 
-- [ ] `LogbackElkAppenderConfigurationTest` 28 组全部通过，且探针证据落盘于 `aifuli-framework/aifuli-spring-boot-starter-monitor/target/elk-probe-results/`。
-- [ ] 7 个进程的 `logback-spring.xml` 均含 `%X{traceId}`、共享片段 include 与 `springProfile` 条件挂载。
-- [ ] 7 个进程的 dev 配置均含与既有试点一致的 `aifuli.logging.elk` 端点。
-- [ ] monitor、rpc、gateway、供应链、淘宝闪购模块回归全部 BUILD SUCCESS。
-- [ ] 规范与集成测试文档已记录现状、例外与决策，未把未验证内容写成已通过。
+- [x] `LogbackElkAppenderConfigurationTest` 28 组全部通过，且探针证据落盘于 `aifuli-framework/aifuli-spring-boot-starter-monitor/target/elk-probe-results/`。
+- [x] 7 个进程的 `logback-spring.xml` 均含 `%X{traceId}`、共享片段 include 与 `springProfile` 条件挂载。
+- [x] 7 个进程的 dev 配置均含与既有试点一致的 `aifuli.logging.elk` 端点。
+- [x] monitor、rpc、gateway、供应链、淘宝闪购模块回归全部 BUILD SUCCESS。
+- [x] 规范与集成测试文档已记录现状、例外与决策，未把未验证内容写成已通过。
 
 ## 回滚
 
