@@ -148,6 +148,12 @@ wx: # 参见 https://github.com/Wechat-Group/WxJava/blob/develop/spring-boot-sta
 
 # 芋道配置项，设置当前项目所有自定义的配置
 aifuli:
+  # 集中式日志开关与端点：仅 dev 环境开启；test/prod 由部署配置（Nacos 或环境变量）提供，不在仓库内写死端点。
+  logging:
+    elk:
+      enabled: true
+      host: 172.19.64.105
+      port: 50000
   pay:
     order-notify-url: http://yunai.natapp1.cc/admin-api/pay/notify/order # 支付渠道的【支付】回调地址
     refund-notify-url: http://yunai.natapp1.cc/admin-api/pay/notify/refund # 支付渠道的【退款】回调地址
