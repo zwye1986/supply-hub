@@ -4,13 +4,14 @@
 > 状态：阶段一至阶段三已实施完成 / 验证通过
 > 依赖前置：`docs/superpowers/specs/2026-10-01-pro143-elk-docker-compose-deployment-design.md`
 > 目标环境：`pro143` 测试集群（`8.133.164.143` / `172.19.64.105`）及后续生产环境
+> 2026-10-08 校准：本文描述既有集成实现；全系统统一准则以 `docs/superpowers/specs/2026-10-04-logging-standardization-spec.md` 为准。既有验证主要覆盖框架及试点，不表示八个独立进程全部接入、生产部署或新增字段契约已完成。
 
 ---
 
 ## 1. 背景与核心决策 (ADR)
 
 ### 1.1 背景
-当前平台已按微服务架构解耦为 8 个独立服务进程（`gateway`、`supply-chain-server`、`member-server`、`system-server`、`infra-server`、`movie-server`、`taobao-flash-server`、`aifuli-server`）。在多进程分布式拓扑下，排查跨服务请求、排查异步事件与定位线上偶发异常亟需统一的集中式日志检索平台。
+当前平台已按微服务架构解耦为 8 个独立服务进程（应用名为 `gateway-server`、`supply-chain-server`、`member-server`、`system-server`、`infra-server`、`movie-server`、`taobao-flash-channel`、`aifuli-server`）。在多进程分布式拓扑下，排查跨服务请求、排查异步事件与定位线上偶发异常亟需统一的集中式日志检索平台。
 `pro143` 测试环境已于 2026-10-01 完成 ELK 8.17.0 基础环境搭建（ES 监听 9201，Kibana 监听 5601，Logstash 监听 5044 及 50000），现需制定应用日志与 ELK 栈对接的完整技术标准与集成规范。
 
 ### 1.2 核心决策矩阵
@@ -21,10 +22,10 @@
 | :--- | :--- | :--- | :--- |
 | **d1** | **日志采集架构** | **Logback TCP 异步直连 Logstash (50000 端口)** | 采用 `logstash-logback-encoder`。免除在每台宿主机部署维护 Filebeat 代理的运维成本，轻量高效，满足当前演进阶段的快速集中化需求。 |
 | **d2** | **组件沉淀与配置** | **框架层统一沉淀至 `aifuli-spring-boot-starter-monitor`** | 在通用监控 Starter 中统一定义依赖与共享 Logback 模版。通过 `application.yaml` / 环境变量控制开关与连接端点，所有微服务独立进程一致复用。 |
-| **d3** | **链路追踪与 MDC 治理** | **增强型 MDC 注入 (SkyWalking 优先 + 兜底生成 + Feign 透传)** | 优先读取 SkyWalking Agent 的 TraceId；在无 Agent 环境自动生成全局唯一 ID 写入 MDC；通过 Feign 拦截器和网关响应头透明传递 `trace-id`，确保离线开发/单机测试与线上均具备端到端追踪能力。 |
-| **d4** | **背压保护与容灾策略** | **非阻塞丢弃 + 本地文件双写 + 本地测试默认静默** | TCP 采用有界 RingBuffer 异步环形队列。在 ELK 宕机或网络中断时**坚决直接丢弃，严禁阻塞业务主线程**；本地磁盘保留 `RollingFileAppender` 双写作为最终排障防线；本地与单元测试环境默认关闭 TCP 发送。 |
+| **d3** | **链路追踪与 MDC 治理** | **既有入站继承、Agent/UUID 兜底与 Feign 透传；目标统一平台编号** | 当前 Servlet 入站优先 Header，`TracerUtils` 则优先 Agent，encoder 从 MDC 读取；不能据此保证启用 Agent 时三者始终一致。目标由平台入口编号贯穿 Header/MDC/ELK，Agent 编号不同时单独关联，见全系统规范第 5 章；该修正尚待实施验证。 |
+| **d4** | **背压保护与容灾策略** | **TCP 满队列非等待丢弃 + 本地文件双写 + 本地测试默认静默** | TCP 使用有界 RingBuffer、固定 `appendTimeout=0`，只保障满队列入队不等待，不保障整个日志调用零耗时；本地文件保留为排障兜底，但异步队列、关闭和磁盘故障下不承诺无损。本地与单元测试环境默认关闭 TCP 发送。 |
 | **d5** | **ES 索引组织规则** | **按应用维度分流 (`app-logs-%{[app_name]}-%{+YYYY.MM.dd}`)** | Logstash 根据元数据 `app_name` 动态分流。Kibana 中支持以 `app-logs-*` 宽索引通配检索全链路，也支持按单一微服务隔离生命周期（如高频网关 vs 核心供链）。 |
-| **d6** | **敏感数据脱敏约定** | **依赖业务层现有脱敏，传输层保持高吞吐** | 遵循既有 API 日志脱敏与敏感凭证防护规范，不在 Logback 传输层加装全局正则过滤，避免高频日志序列化阶段产生额外 CPU 开销。 |
+| **d6** | **既有敏感数据保护边界（本次不设计）** | **保持已有业务规则** | 2026-10-08 全系统规范修订明确不设计或调整敏感信息策略；本次日志规范与集成校准不增加新保护组件，也不放宽现有保护规则。 |
 
 ---
 
@@ -165,7 +166,7 @@ public class LoggingElkProperties {
 
 ### 4.1 TraceFilter 改造与 MDC 注入规范
 
-当前 `TraceFilter`（位于 `aifuli-framework/aifuli-spring-boot-starter-monitor`）仅向响应头添加了 SkyWalking 的 `traceId`，没有写入 MDC，且无 JavaAgent 时为空。改造如下：
+集成前的 `TraceFilter`（位于 `aifuli-framework/aifuli-spring-boot-starter-monitor`）仅向响应头添加 SkyWalking 的 `traceId`，未写入 MDC，且无 JavaAgent 时为空。以下为 2026-10-04 集成示例，不替代当前源码；本次全系统规范确认的平台编号统一与入口原上下文恢复仍须后续实施。
 
 ```java
 package com.aifuli.framework.tracer.core.filter;
@@ -433,12 +434,12 @@ output {
 
 ## 7. 容灾、性能与防风暴规范
 
-1. **绝对零阻塞原则（Never Block）**：
-   `LogstashTcpSocketAppender` 在配置模版中显式固定 `<appendTimeout>0</appendTimeout>`（`logstash-logback-encoder` 原生非阻塞入队配置，0ms 超时丢弃，不对外提供运行时放大配置，坚决杜绝因排队超时阻塞业务线程）。当网络断开、ELK 实例重启或突发流量冲垮 RingBuffer 时，超出的日志事件直接就地丢弃，绝对不允许向调用方线程施加背压或反向卡死接口。
+1. **TCP 满队列非等待契约**：
+   `LogstashTcpSocketAppender` 在配置模板中固定 `<appendTimeout>0</appendTimeout>`，不提供可放大的等待配置；网络中断、实例重启或突发流量导致 RingBuffer 满时，新事件不等待队列空位而直接丢弃。此约束不等于整个日志调用零耗时，不覆盖序列化、控制台与本地文件队列/磁盘的等待和故障边界。
 2. **磁盘文件双写防线**：
-   本地磁盘保留 `RollingFileAppender`（10MB 切分、保留 30 天）。即使整个网络或 ELK 基础设施全量宕机，服务器本地日志仍然完备无损。
+   本地保留 `RollingFileAppender`（10MB 切分、30 天历史基线）作为独立排障兜底。当前文件 AsyncAppender 队列为 512、discardingThreshold 为 0，队列满可能等待，强制退出、关闭未完成或磁盘故障可能丢失日志，不能承诺完备无损。目标容量上限和实际保留期按全系统规范 §6.1 及部署预算落实。
 3. **环境物理隔离与本地静默**：
-   `local` profile 与未开启环境（`aifuli.logging.elk.enabled=false`）通过 `<if condition='property("ELK_ENABLED").equalsIgnoreCase("true")'>` 阻断 TCP Appender 的实例化与启动，杜绝在禁用时向目标端点尝试 TCP 连接与重连。Maven Surefire 单测运行环境默认禁用 ELK TCP 推送。避免开发人员断网离线编码或自动化测试执行时持续向 50000 端口重连报错。
+   `aifuli.logging.elk.enabled=false` 时共享片段条件阻断 TCP Appender 声明；local 与单测默认关闭。local/true 是不同边界：根配置不挂载引用，在受测版本跳过未引用 Appender 的初始化，不能推断为所有版本的保证。完整配置测试与有限 socket 观察窗口无连接只证明受测组合和窗口内静默，不宣称一切后台开销为零。
 4. **日志防风暴机制**：
    高频路径（如定时任务轮询、消息消费重试）遵循工程规范第 6 条，采用按错误码聚合与抽样打印策略，避免大批量无意义刷屏造成 TCP 缓冲积压。
 
@@ -479,3 +480,13 @@ output {
 
 ### 阶段五：文档归档
 1. 同步更新 `docs/集成测试.md` 第 8 章节，追加端到端联调测试用例、ILM 运维命令与验证证据。
+
+### 2026-10-08 全系统规范的后续落地边界
+
+以上阶段保留既有试点实施路径；后续按 `docs/superpowers/specs/2026-10-04-logging-standardization-spec.md#10-分阶段落地与验收门禁` 推进，不能以既有阶段完成状态覆盖新增事项：
+
+- 八个独立进程逐个验证根配置、依赖、真实启动和专用 logger 路由；现有配置接入主要覆盖 gateway、system、supply-chain。
+- 新增结构化字段、显式 mapping、平台/Agent 编号分离、后台执行/来源关联及防风暴均待实施；当前 message 内键值不是可聚合的顶层字段。
+- 当前按日索引加 30d ILM 删除，不是 rollover 或归档；ILM 年龄基于索引且后台执行，零副本仅用于单节点测试。Logstash 日期按 UTC 切分，本地显示时区不决定索引日期。
+- 真实浏览器的 `trace-id` 可见性、环境隔离、生产容量与副本预算须按部署条件验证和批准，不在本次文档修订中部署或作通过声明。
+- 新验收清单维护于 `docs/集成测试.md` §8.12；历史结果与待实施场景分别记录。
