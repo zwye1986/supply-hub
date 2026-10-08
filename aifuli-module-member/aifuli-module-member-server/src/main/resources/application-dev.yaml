@@ -14,3 +14,14 @@ spring:
       config: # 【配置中心】配置项
         namespace: aifuli-mall-dev # 命名空间 ID：aifuli-mall-dev
         group: DEFAULT_GROUP # 使用的 Nacos 配置分组，默认为 DEFAULT_GROUP
+
+--- #################### 日志与 ELK 集成配置 ####################
+
+# 集中式日志开关与端点：仅 dev 环境开启；test/prod 由部署配置（Nacos 或环境变量）提供，不在仓库内写死端点。
+aifuli:
+  logging:
+    elk:
+      enabled: true
+      host: 172.19.64.105
+      port: 50000
+
