@@ -41,10 +41,15 @@ class LogbackElkAppenderConfigurationTest {
     @TempDir
     Path temporary;
 
+    // movie-server 2026-10-08 决定暂不接入，故不在本参数化列表中；接入时另起用例并同步设计文档。
     @ParameterizedTest(name = "{0}/{1}/enabled={2}")
     @CsvSource({"gateway,dev,true", "gateway,dev,false", "gateway,local,false", "gateway,local,true",
             "system,dev,true", "system,dev,false", "system,local,false", "system,local,true",
-            "supplychain,dev,true", "supplychain,dev,false", "supplychain,local,false", "supplychain,local,true"})
+            "supplychain,dev,true", "supplychain,dev,false", "supplychain,local,false", "supplychain,local,true",
+            "infra,dev,true", "infra,dev,false", "infra,local,false", "infra,local,true",
+            "member,dev,true", "member,dev,false", "member,local,false", "member,local,true",
+            "aifuli,dev,true", "aifuli,dev,false", "aifuli,local,false", "aifuli,local,true",
+            "taobaoflash,dev,true", "taobaoflash,dev,false", "taobaoflash,local,false", "taobaoflash,local,true"})
     void shouldLoadCompleteBootConfiguration(String service, String profile, boolean enabled) throws Exception {
         Path repository = Path.of(System.getProperty("user.dir")).toAbsolutePath();
         while (!Files.exists(repository.resolve("AGENTS.md"))) {
@@ -56,7 +61,12 @@ class LogbackElkAppenderConfigurationTest {
         String module = switch (service) {
             case "gateway" -> "aifuli-gateway";
             case "system" -> "aifuli-module-system/aifuli-module-system-server";
-            default -> "aifuli-module-supply-chain/aifuli-module-supply-chain-server";
+            case "supplychain" -> "aifuli-module-supply-chain/aifuli-module-supply-chain-server";
+            case "infra" -> "aifuli-module-infra/aifuli-module-infra-server";
+            case "member" -> "aifuli-module-member/aifuli-module-member-server";
+            case "aifuli" -> "aifuli-server";
+            case "taobaoflash" -> "aifuli-module-supply-chain/aifuli-channel-taobao-flash-server";
+            default -> throw new IllegalArgumentException("未知服务标识: " + service);
         };
         Path result = temporary.resolve("result.json");
         Path output = temporary.resolve("child.log");
