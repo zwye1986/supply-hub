@@ -1,8 +1,8 @@
 # 微服务日志与 ELK 集成详细设计
 
-> 日期：2026-10-04  
-> 状态：设计完成 / 待实施  
-> 依赖前置：`docs/superpowers/specs/2026-10-01-pro143-elk-docker-compose-deployment-design.md`  
+> 日期：2026-10-04
+> 状态：阶段一至阶段三已实施完成 / 验证通过
+> 依赖前置：`docs/superpowers/specs/2026-10-01-pro143-elk-docker-compose-deployment-design.md`
 > 目标环境：`pro143` 测试集群（`8.133.164.143` / `172.19.64.105`）及后续生产环境
 
 ---
@@ -10,7 +10,7 @@
 ## 1. 背景与核心决策 (ADR)
 
 ### 1.1 背景
-当前平台已按微服务架构解耦为 8 个独立服务进程（`gateway`、`supply-chain-server`、`member-server`、`system-server`、`infra-server`、`movie-server`、`taobao-flash-server`、`aifuli-server`）。在多进程分布式拓扑下，排查跨服务请求、排查异步事件与定位线上偶发异常亟需统一的集中式日志检索平台。  
+当前平台已按微服务架构解耦为 8 个独立服务进程（`gateway`、`supply-chain-server`、`member-server`、`system-server`、`infra-server`、`movie-server`、`taobao-flash-server`、`aifuli-server`）。在多进程分布式拓扑下，排查跨服务请求、排查异步事件与定位线上偶发异常亟需统一的集中式日志检索平台。
 `pro143` 测试环境已于 2026-10-01 完成 ELK 8.17.0 基础环境搭建（ES 监听 9201，Kibana 监听 5601，Logstash 监听 5044 及 50000），现需制定应用日志与 ELK 栈对接的完整技术标准与集成规范。
 
 ### 1.2 核心决策矩阵
@@ -45,7 +45,7 @@
          ▼
 ┌──────────────────────────────┐
 │ aifuli-module-supply-chain   │ (TraceFilter / Feign 拦截器继承 traceId)
-│ (及其他 7 个微服务进程)       │ 
+│ (及其他 7 个微服务进程)       │
 └────────┬─────────────────────┘
          │
          ├─────────────────────────────────────────┐
@@ -115,7 +115,7 @@ sequenceDiagram
 </dependency>
 ```
 
-> **版本兼容性说明**：  
+> **版本兼容性说明**：
 > 本工程基于 JDK 21 和 Spring Boot 3.5.x，Logback 版本为 1.5.x。`logstash-logback-encoder` 8.0 官方原生支持 Logback 1.5.x 与 Jackson 2.17+，无兼容性冲突。
 
 ### 3.2 配置属性定义 (`LoggingElkProperties`)
@@ -243,6 +243,20 @@ public class TraceRequestInterceptor implements RequestInterceptor {
 }
 ```
 
+### 4.3 S3：网关 WebFlux TraceId 所有权与 Reactor MDC 作用域
+
+**问题与边界**：网关运行 WebFlux，§4.1 的 Servlet `TraceFilter` 不在网关请求链中。原 `AccessLogFilter` 仅把编号写进 Header 和访问日志 DTO/message；ELK encoder 从 `%mdc{traceId}` 取顶层字段，因此 message 内含编号不能证明顶层字段非空。本节只修网关的 Reactor 传播，不调整 CORS、ELK 配置或其它服务。
+
+**入口所有权**：新增 Spring 管理、`Ordered.HIGHEST_PRECEDENCE` 的 `TraceWebFilter`，覆盖路由前的 WebFilter 链。每次请求优先复用非空请求 `trace-id`，否则生成无横线 UUID；同一编号存入 exchange attribute、请求单值 Header 与专用 Reactor Context key `aifuli.gateway.traceId`。`AccessLogFilter` 复用该编号；直接调用访问过滤器的单测兼容通过同一入口工具取得编号，但真实请求的 MDC 传播必须经过 WebFilter。网关响应 `trace-id` 由 WebFilter 所有，入口先 `set`，`beforeCommit` 再 `set`：即使下游追加相同或不同编号，提交时也只保留网关请求的一个值；禁止用第一项截断掩盖冲突。Spring 的 `ExceptionHandlingWebHandler` 位于 WebFilter 链之外，异常兜底不能从已退出的内层 Context 自动获得编号；`GlobalExceptionHandler` 使用共享 exchange attribute 重新进入同一 Context 作用域后再执行原处理逻辑，保持异常分类、正文保护与响应语义不变。
+
+**桥接选型**：先核验本地 Maven 实际依赖与 Reactor 源码/API。受测基线为 Reactor 3.7.18 / Spring WebFlux 6.2.18；当前依赖树没有 Micrometer `context-propagation`。自动传播方案需要新增 ThreadLocalAccessor 依赖与全局自动传播开关，生命周期不能按命名 Hook 独立撤销；本次选择命名 `Hooks.onEachOperator` + `Operators.lift`，只管理网关自己的 Hook，不清空其它 Hook。仅包装 `onNext` 不够：必须覆盖 `onSubscribe`、`onNext`、`onError`、`onComplete` 和 Subscription 的 `request/cancel`。另外对普通 Mono/Flux 的订阅执行建立作用域，覆盖 scheduler 上的 `defer`/`fromCallable` 与过滤器链构造日志；不能假设信号回调自动包住订阅 Supplier。保留 ConnectableFlux/ParallelFlux 的 Reactor 类型，普通 Mono/Flux 采用非融合边界以保证 MDC 回调不被 fusion 的 `poll` 绕过；测试同时验证标量、范围、filter 与 scheduler 操作符不会破坏信号语义。该方案增加逐操作符包装开销，不承诺未经压测的吞吐指标。
+
+**作用域不变量**：仅从当前 Subscriber Context 读取网关 key，不从工作线程的旧 MDC 推断 traceId。进入订阅、信号或控制回调时保存执行线程完整 MDC 快照，有 key 时覆盖 `traceId`，无 key 时移除 `traceId`（其它字段保留）；所有退出路径均在 `finally` 恢复完整原快照，原为空才 clear。这样嵌套请求、取消、异常与线程复用不会污染调用者或其它请求。Spring 初始化注册命名 Hook，销毁只撤销这个名字；已组装 Publisher 内的 wrapper 生命周期遵循 Reactor 装配语义，关闭后新装配链不再桥接。
+
+**访问日志与敏感正文**：敏感正文保护分支仍直接透传原请求/响应流，不读取、缓存或重编码正文，不记录原始 query/body 或异常消息。真实访问日志在成功、异常、取消收尾都必须通过 Context 作用域获得顶层 traceId；普通正文分支也统一终止收尾，不能只在 `.then` 成功路径打印。不得借修追踪改动敏感路径范围或脱敏规则。
+
+**验收与证据**：先用现有生产实现取得行为 RED（不是编译/fixture 错误），再最小修复 GREEN。测试调用真实 WebFilter/AccessLogFilter，通过真实 `LoggingEventCompositeJsonEncoder` 和 `%mdc{traceId}` 编码生产日志事件并解析顶层 JSON；覆盖成功、异步异常、取消、`publishOn/subscribeOn`、并发编号隔离、完整 MDC 恢复、onSubscribe/request/cancel、单值响应头最终提交及 Hook 独立生命周期。敏感路径保持现有凭据测试，并增加取消场景。Maven 使用固定 SHA archive 的 scratch 无旧 target 独占副本、`-pl aifuli-gateway -am`，归档命令、原始 RED/GREEN XML 与受测文件 SHA-256。此证据只证明本地网关行为和编码，不声称真实 Gateway→微服务→Logstash/ES 联调。
+
 ---
 
 ## 5. Logback 配置模板与 Appender 规格
@@ -258,43 +272,58 @@ public class TraceRequestInterceptor implements RequestInterceptor {
     <springProperty scope="context" name="ELK_ENABLED" source="aifuli.logging.elk.enabled" defaultValue="false"/>
     <springProperty scope="context" name="ELK_HOST" source="aifuli.logging.elk.host" defaultValue="127.0.0.1"/>
     <springProperty scope="context" name="ELK_PORT" source="aifuli.logging.elk.port" defaultValue="50000"/>
+    <springProperty scope="context" name="ELK_RING_BUFFER_SIZE" source="aifuli.logging.elk.ring-buffer-size" defaultValue="8192"/>
+    <springProperty scope="context" name="ELK_RECONNECTION_DELAY" source="aifuli.logging.elk.reconnection-delay" defaultValue="5000"/>
 
-    <appender name="LOGSTASH_TCP" class="net.logstash.logback.appender.LogstashTcpSocketAppender">
-        <destination>${ELK_HOST}:${ELK_PORT}</destination>
-        
-        <!-- 有界队列与背压保护 -->
-        <ringBufferSize>8192</ringBufferSize>
-        <writeBufferSize>16384</writeBufferSize>
-        <reconnectionDelay>5000</reconnectionDelay>
-        
-        <!-- 异步非阻塞：队列满时丢弃而不是阻塞主线程 -->
-        <neverBlock>true</neverBlock>
-        
-        <encoder class="net.logstash.logback.encoder.LoggingEventCompositeJsonEncoder">
-            <providers>
-                <timestamp>
-                    <timeZone>Asia/Shanghai</timeZone>
-                </timestamp>
-                <pattern>
-                    <pattern>
-                        {
-                            "app_name": "${APP_NAME}",
-                            "env": "${ACTIVE_PROFILE}",
-                            "level": "%level",
-                            "thread": "%thread",
-                            "logger": "%logger{40}",
-                            "line": "%line",
-                            "traceId": "%mdc{traceId}",
-                            "message": "%msg",
-                            "stack_trace": "%throwable"
-                        }
-                    </pattern>
-                </pattern>
-            </providers>
-        </encoder>
-    </appender>
+    <!-- 仅在显式开启 ELK 时定义并启动 Logstash TCP Appender，实现本地与未开启环境的物理静默 -->
+    <if condition='property("ELK_ENABLED").equalsIgnoreCase("true")'>
+        <then>
+            <appender name="LOGSTASH_TCP" class="net.logstash.logback.appender.LogstashTcpSocketAppender">
+                <destination>${ELK_HOST}:${ELK_PORT}</destination>
+
+                <!-- 有界队列与背压保护 -->
+                <ringBufferSize>${ELK_RING_BUFFER_SIZE}</ringBufferSize>
+                <writeBufferSize>16384</writeBufferSize>
+                <reconnectionDelay>${ELK_RECONNECTION_DELAY}</reconnectionDelay>
+
+                <!-- 异步非阻塞：0ms 超时即队列满时直接丢弃，坚决不阻塞业务主线程 -->
+                <appendTimeout>0</appendTimeout>
+
+                <encoder class="net.logstash.logback.encoder.LoggingEventCompositeJsonEncoder">
+                    <providers>
+                        <timestamp>
+                            <timeZone>Asia/Shanghai</timeZone>
+                        </timestamp>
+                        <pattern>
+                            <pattern>
+                                {
+                                    "app_name": "${APP_NAME}",
+                                    "env": "${ACTIVE_PROFILE}",
+                                    "level": "%level",
+                                    "thread": "%thread",
+                                    "logger": "%logger{50}",
+                                    "line": "%line",
+                                    "traceId": "%mdc{traceId}",
+                                    "message": "%msg",
+                                    "stack_trace": "%throwable"
+                                }
+                            </pattern>
+                        </pattern>
+                    </providers>
+                </encoder>
+            </appender>
+        </then>
+    </if>
 </included>
 ```
+
+### 5.1.1 固定非等待契约与验证边界（评审修正）
+
+- XML 的 `<appendTimeout>0</appendTimeout>` 固定为 0ms，不提供 `LoggingElkProperties.appendTimeout` 可调字段；该约束只保障 TCP 队列满时不等待，不保证整个日志调用零耗时或本地文件零阻塞。
+- 使用实际 BOM 依赖，通过 Spring Boot `LogbackLoggingSystem.initialize` 加载 gateway/system/supply-chain 完整根配置；每个组合在独立 JVM 内运行，不污染 Surefire 全局 LoggerContext/System properties。真实 loopback 随机端口监听，覆盖 dev/true、dev/false、local/false、local/true，验证真实日志顶层 JSON 与本地文件 traceId，finally 关闭 context/socket/线程。
+- 有限观察期内无连接，只证明该窗口没有连接，不能推出所有后台开销为零。local/true 在受测实际版本下，未被 root 引用的 Appender 被跳过；不将这一行为推断为所有版本保证，也不以 root 引用为空证明未实例化。
+- 保留 `<if condition>` 弃用告警，暂不猜测替代 API；本轮只消除嵌套条件与 TCP Appender 未知 `neverBlock` 属性告警。
+- 新完整配置测试直接 GREEN 属于补回归覆盖；RED 仅在独占验证副本将共享片段替换为 HEAD 基线的无条件定义后取得，并保留真实失败 XML。构建超时、编译失败或部分 XML 不得报告完整门禁全绿。
 
 ### 5.2 微服务根 Logback 整合 (`logback-spring.xml`)
 
@@ -302,8 +331,8 @@ public class TraceRequestInterceptor implements RequestInterceptor {
 
 ```xml
 <configuration>
-    <!-- 控制台与文件基础定义 -->
-    <property name="CONSOLE_LOG_PATTERN" value="%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %highlight(%-5level) %cyan(%logger{50}:%L) - %msg%n"/>
+    <!-- 控制台与文件基础定义（均包含链路追踪标识 traceId） -->
+    <property name="CONSOLE_LOG_PATTERN" value="%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %highlight(%-5level) %cyan(%logger{50}:%L) - [%X{traceId}] %msg%n"/>
     <property name="FILE_LOG_PATTERN" value="%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{50}:%L - [%X{traceId}] %msg%n"/>
 
     <!-- 本地控制台与滚动文件 Appender -->
@@ -312,16 +341,19 @@ public class TraceRequestInterceptor implements RequestInterceptor {
 
     <root level="INFO">
         <appender-ref ref="STDOUT"/>
-        <appender-ref ref="ASYNC_FILE"/>
-        <!-- 仅在非本地环境且显式开启时加载 TCP Appender -->
-        <springProfile name="dev,test,prod">
-            <if condition='property("ELK_ENABLED").equalsIgnoreCase("true")'>
-                <then>
-                    <appender-ref ref="LOGSTASH_TCP"/>
-                </then>
-            </if>
-        </springProfile>
+        <appender-ref ref="ASYNC"/>
     </root>
+
+    <!-- 仅在非本地环境且显式开启时挂载 TCP Appender（顶层条件避免 root 嵌套标签警告） -->
+    <springProfile name="dev,test,prod">
+        <if condition='property("ELK_ENABLED").equalsIgnoreCase("true")'>
+            <then>
+                <root level="INFO">
+                    <appender-ref ref="LOGSTASH_TCP"/>
+                </root>
+            </then>
+        </if>
+    </springProfile>
 </configuration>
 ```
 
@@ -353,9 +385,20 @@ filter {
 
   # 兜底默认 app_name，防止字段缺失导致索引语法错误
   if ![app_name] {
-    mutate {
-      add_field => { "app_name" => "default" }
+    if [@metadata][beat] {
+      mutate {
+        add_field => { "app_name" => "%{[@metadata][beat]}" }
+      }
+    } else {
+      mutate {
+        add_field => { "app_name" => "default" }
+      }
     }
+  }
+
+  # 强制转换为小写，确保符合 Elasticsearch 索引命名规范
+  mutate {
+    lowercase => [ "app_name" ]
   }
 }
 
@@ -369,14 +412,33 @@ output {
 
 ---
 
+## 6.1 Elasticsearch 索引生命周期 (ILM) 与模板设计
+
+为防止测试机 `pro143` 磁盘被持续生成的按天索引写满，在 Elasticsearch 中配置专用 ILM 策略与全局 Composable 模板：
+
+1. **生命周期策略 (`app-logs-ilm-policy`)**：
+   - **Hot 阶段**：`min_age: 0ms`，设置主分片调度优先级 `priority: 100`；
+   - **Delete 阶段**：`min_age: 30d`，超过 30 天的历史日志索引自动触发物理删除，释放磁盘；
+2. **索引模版 (`app-logs-template`)**：
+   - 匹配模式：`app-logs-*`，优先级：`200`；
+   - 参数配置：
+     - `number_of_shards: 1`（单主分片）；
+     - `number_of_replicas: 0`（单节点测试环境禁用副本，索引健康度由 Yellow 优化为 Green）；
+     - `index.lifecycle.name: "app-logs-ilm-policy"`（新建索引自动挂载生命周期策略）。
+3. **运维脚本**：
+   - 配置文件沉淀于 `script/deploy/elk/elasticsearch/ilm/`；
+   - 一键初始化脚本：`script/deploy/elk/init-elk-ilm.sh`。
+
+---
+
 ## 7. 容灾、性能与防风暴规范
 
 1. **绝对零阻塞原则（Never Block）**：
-   `LogstashTcpSocketAppender` 设置 `<neverBlock>true</neverBlock>`。当网络断开、ELK 实例重启或突发流量冲垮 RingBuffer 时，超出的日志事件直接就地丢弃，绝对不允许向调用方线程施加背压或反向卡死接口。
+   `LogstashTcpSocketAppender` 在配置模版中显式固定 `<appendTimeout>0</appendTimeout>`（`logstash-logback-encoder` 原生非阻塞入队配置，0ms 超时丢弃，不对外提供运行时放大配置，坚决杜绝因排队超时阻塞业务线程）。当网络断开、ELK 实例重启或突发流量冲垮 RingBuffer 时，超出的日志事件直接就地丢弃，绝对不允许向调用方线程施加背压或反向卡死接口。
 2. **磁盘文件双写防线**：
    本地磁盘保留 `RollingFileAppender`（10MB 切分、保留 30 天）。即使整个网络或 ELK 基础设施全量宕机，服务器本地日志仍然完备无损。
 3. **环境物理隔离与本地静默**：
-   `local` profile 与 Maven Surefire 单测运行环境默认禁用 ELK TCP 推送。避免开发人员断网离线编码或自动化测试执行时持续向 50000 端口重连报错。
+   `local` profile 与未开启环境（`aifuli.logging.elk.enabled=false`）通过 `<if condition='property("ELK_ENABLED").equalsIgnoreCase("true")'>` 阻断 TCP Appender 的实例化与启动，杜绝在禁用时向目标端点尝试 TCP 连接与重连。Maven Surefire 单测运行环境默认禁用 ELK TCP 推送。避免开发人员断网离线编码或自动化测试执行时持续向 50000 端口重连报错。
 4. **日志防风暴机制**：
    高频路径（如定时任务轮询、消息消费重试）遵循工程规范第 6 条，采用按错误码聚合与抽样打印策略，避免大批量无意义刷屏造成 TCP 缓冲积压。
 
@@ -409,5 +471,11 @@ output {
 3. 发起端到端跨服务请求，在 Kibana (`http://8.133.164.143:5601`) 建立 `app-logs-*` 索引模式；
 4. 检索特定 `traceId`，验证网关和供应链服务的日志能在同一时间线完整呈现。
 
-### 阶段四：文档归档
-1. 同步更新 `docs/集成测试.md` 第 8 章节，追加端到端联调测试用例与验证命令。
+### 阶段四：Elasticsearch 索引生命周期 (ILM) 策略上线与防爆盘保护
+1. 在 ES 创建 `app-logs-ilm-policy`（30 天自动删除）；
+2. 创建 `app-logs-template` 索引模版（单分片、零副本、自动挂载 ILM）；
+3. 存量索引追溯绑定并验证健康度恢复为 Green；
+4. 验证新建索引自动挂载 ILM 策略。
+
+### 阶段五：文档归档
+1. 同步更新 `docs/集成测试.md` 第 8 章节，追加端到端联调测试用例、ILM 运维命令与验证证据。

@@ -1,0 +1,52 @@
+<included>
+    <!-- 从 Spring 环境读取元数据与 ELK 属性，提供默认值 -->
+    <springProperty scope="context" name="APP_NAME" source="spring.application.name" defaultValue="unknown-service"/>
+    <springProperty scope="context" name="ACTIVE_PROFILE" source="spring.profiles.active" defaultValue="default"/>
+    <springProperty scope="context" name="ELK_ENABLED" source="aifuli.logging.elk.enabled" defaultValue="false"/>
+    <springProperty scope="context" name="ELK_HOST" source="aifuli.logging.elk.host" defaultValue="127.0.0.1"/>
+    <springProperty scope="context" name="ELK_PORT" source="aifuli.logging.elk.port" defaultValue="50000"/>
+    <springProperty scope="context" name="ELK_RING_BUFFER_SIZE" source="aifuli.logging.elk.ring-buffer-size" defaultValue="8192"/>
+    <springProperty scope="context" name="ELK_RECONNECTION_DELAY" source="aifuli.logging.elk.reconnection-delay" defaultValue="5000"/>
+
+    <!-- 仅在显式开启 ELK 时定义并启动 Logstash TCP Appender，实现本地与未开启环境的物理静默 -->
+    <if condition='property("ELK_ENABLED").equalsIgnoreCase("true")'>
+        <then>
+            <!-- Logstash TCP 异步直连 Appender -->
+            <!-- 设计见 docs/superpowers/specs/2026-10-04-elk-logging-integration-design.md#51-可复用-logback-片段设计-logback-elk-appenderxml -->
+            <appender name="LOGSTASH_TCP" class="net.logstash.logback.appender.LogstashTcpSocketAppender">
+                <destination>${ELK_HOST}:${ELK_PORT}</destination>
+
+                <!-- 有界队列与背压保护 -->
+                <ringBufferSize>${ELK_RING_BUFFER_SIZE}</ringBufferSize>
+                <writeBufferSize>16384</writeBufferSize>
+                <reconnectionDelay>${ELK_RECONNECTION_DELAY}</reconnectionDelay>
+
+                <!-- 异步非阻塞：0ms 超时即队列满时直接丢弃，坚决不阻塞业务主线程 -->
+                <appendTimeout>0</appendTimeout>
+
+                <encoder class="net.logstash.logback.encoder.LoggingEventCompositeJsonEncoder">
+                    <providers>
+                        <timestamp>
+                            <timeZone>Asia/Shanghai</timeZone>
+                        </timestamp>
+                        <pattern>
+                            <pattern>
+                                {
+                                    "app_name": "${APP_NAME}",
+                                    "env": "${ACTIVE_PROFILE}",
+                                    "level": "%level",
+                                    "thread": "%thread",
+                                    "logger": "%logger{50}",
+                                    "line": "%line",
+                                    "traceId": "%mdc{traceId}",
+                                    "message": "%msg",
+                                    "stack_trace": "%throwable"
+                                }
+                            </pattern>
+                        </pattern>
+                    </providers>
+                </encoder>
+            </appender>
+        </then>
+    </if>
+</included>

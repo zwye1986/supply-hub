@@ -2,6 +2,7 @@ package com.aifuli.gateway.filter.logging;
 
 import cn.hutool.core.date.LocalDateTimeUtil;
 import cn.hutool.core.map.MapUtil;
+import com.aifuli.gateway.filter.tracing.TraceWebFilter;
 import com.aifuli.framework.common.util.json.JsonUtils;
 import com.aifuli.gateway.util.SecurityFrameworkUtils;
 import com.aifuli.gateway.util.WebFrameworkUtils;
@@ -58,6 +59,11 @@ import static cn.hutool.core.date.DatePattern.NORM_DATETIME_MS_FORMATTER;
 @Component
 public class AccessLogFilter implements GlobalFilter, Ordered {
 
+    /**
+     * Header 名 - 链路追踪编号
+     */
+    public static final String HEADER_NAME_TRACE_ID = "trace-id";
+
     @Resource
     private CodecConfigurer codecConfigurer;
 
@@ -80,7 +86,8 @@ public class AccessLogFilter implements GlobalFilter, Ordered {
         try {
             boolean openMallPath = AccessLogSanitizeUtils.isOpenMallPath(gatewayLog.getRequestUrl());
             boolean omitBody = openMallPath || AccessLogSanitizeUtils.isProtectedBodyPath(gatewayLog.getRequestUrl());
-            Map<String, Object> values = MapUtil.newHashMap(15, true); // 手工拼接，保证排序；15 保证不用扩容
+            Map<String, Object> values = MapUtil.newHashMap(16, true); // 手工拼接，保证排序；16 保证不用扩容
+            values.put("traceId", gatewayLog.getTraceId());
             values.put("userId", gatewayLog.getUserId());
             values.put("userType", gatewayLog.getUserType());
             values.put("routeId", gatewayLog.getRoute() != null ? gatewayLog.getRoute().getId() : null);
@@ -119,32 +126,39 @@ public class AccessLogFilter implements GlobalFilter, Ordered {
 
     @Override
     public Mono<Void> filter(ServerWebExchange exchange, GatewayFilterChain chain) {
-        // 标准订单及凭据写入路径直接透传原流，不读取或缓存正文，不装饰响应缓冲卡密
+        // 追踪号由最外层 WebFilter 所有，访问日志复用；响应单值头也由该入口在提交前收敛。
+        // 设计见 docs/superpowers/specs/2026-10-04-elk-logging-integration-design.md#43-s3网关-webflux-traceid-所有权与-reactor-mdc-作用域。
         ServerHttpRequest request = exchange.getRequest();
-        String rawPath = request.getURI().getRawPath();
+        String traceId = TraceWebFilter.getOrCreateTraceId(exchange);
+        ServerHttpRequest mutatedRequest = request.mutate()
+                .headers(headers -> headers.set(HEADER_NAME_TRACE_ID, traceId)).build();
+        ServerWebExchange mutatedExchange = exchange.mutate().request(mutatedRequest).build();
+
+        // 标准订单及凭据写入路径直接透传原流，不读取或缓存正文，不装饰响应缓冲卡密
+        String rawPath = mutatedRequest.getURI().getRawPath();
         if (AccessLogSanitizeUtils.isProtectedBodyPath(rawPath)) {
-            return filterProtectedBody(exchange, chain);
+            return filterProtectedBody(mutatedExchange, chain, traceId);
         }
 
         // 将 Request 中可以直接获取到的参数，设置到网关日志
-        // TODO traceId
         AccessLog gatewayLog = new AccessLog();
-        gatewayLog.setRoute(WebFrameworkUtils.getGatewayRoute(exchange));
-        gatewayLog.setSchema(request.getURI().getScheme());
-        gatewayLog.setRequestMethod(request.getMethod().name());
-        gatewayLog.setRequestUrl(request.getURI().getRawPath());
-        gatewayLog.setQueryParams(request.getQueryParams());
-        gatewayLog.setRequestHeaders(request.getHeaders());
+        gatewayLog.setTraceId(traceId);
+        gatewayLog.setRoute(WebFrameworkUtils.getGatewayRoute(mutatedExchange));
+        gatewayLog.setSchema(mutatedRequest.getURI().getScheme());
+        gatewayLog.setRequestMethod(mutatedRequest.getMethod().name());
+        gatewayLog.setRequestUrl(mutatedRequest.getURI().getRawPath());
+        gatewayLog.setQueryParams(mutatedRequest.getQueryParams());
+        gatewayLog.setRequestHeaders(mutatedRequest.getHeaders());
         gatewayLog.setStartTime(LocalDateTime.now());
-        gatewayLog.setUserIp(WebFrameworkUtils.getClientIP(exchange));
+        gatewayLog.setUserIp(WebFrameworkUtils.getClientIP(mutatedExchange));
 
         // 继续 filter 过滤
-        MediaType mediaType = request.getHeaders().getContentType();
+        MediaType mediaType = mutatedRequest.getHeaders().getContentType();
         if (MediaType.APPLICATION_FORM_URLENCODED.isCompatibleWith(mediaType)
                 || MediaType.APPLICATION_JSON.isCompatibleWith(mediaType)) { // 适合 JSON 和 Form 提交的请求
-            return filterWithRequestBody(exchange, chain, gatewayLog);
+            return filterWithRequestBody(mutatedExchange, chain, gatewayLog);
         }
-        return filterWithoutRequestBody(exchange, chain, gatewayLog);
+        return filterWithoutRequestBody(mutatedExchange, chain, gatewayLog);
     }
 
     /**
@@ -154,9 +168,10 @@ public class AccessLogFilter implements GlobalFilter, Ordered {
      * 设计见 {@code docs/superpowers/specs/2026-10-02-standard-project-http-transport-design.md#3-gateway精确路由与不消费正文}
      * 及 {@code docs/superpowers/specs/2026-10-03-supplier-offer-publication-admin-design.md#151-凭据写入日志保护}。
      */
-    private Mono<Void> filterProtectedBody(ServerWebExchange exchange, GatewayFilterChain chain) {
+    private Mono<Void> filterProtectedBody(ServerWebExchange exchange, GatewayFilterChain chain, String traceId) {
         ServerHttpRequest request = exchange.getRequest();
         AccessLog gatewayLog = new AccessLog();
+        gatewayLog.setTraceId(traceId);
         gatewayLog.setRoute(WebFrameworkUtils.getGatewayRoute(exchange));
         gatewayLog.setSchema(request.getURI().getScheme());
         gatewayLog.setRequestMethod(request.getMethod().name());
@@ -168,12 +183,15 @@ public class AccessLogFilter implements GlobalFilter, Ordered {
         gatewayLog.setRequestBody(AccessLogSanitizeUtils.BODY_OMITTED);
         gatewayLog.setResponseBody(AccessLogSanitizeUtils.BODY_OMITTED);
 
-        return chain.filter(exchange)
-                .doFinally(signal -> finishProtectedBodyLog(exchange, gatewayLog, signal));
+        return Mono.defer(() -> chain.filter(exchange))
+                .doFinally(signal -> finishAccessLog(exchange, gatewayLog, signal));
     }
 
-    /** 敏感正文透传分支的统一收尾：补齐耗时与状态后写安全访问日志，成功与异常共用同一逻辑。 */
-    private void finishProtectedBodyLog(ServerWebExchange exchange, AccessLog gatewayLog, SignalType signal) {
+    /**
+     * 三种终止信号共用安全收尾，不打印下游异常消息，MDC 由 Reactor Context 作用域桥接。
+     * 设计见 docs/superpowers/specs/2026-10-04-elk-logging-integration-design.md#43-s3网关-webflux-traceid-所有权与-reactor-mdc-作用域。
+     */
+    private void finishAccessLog(ServerWebExchange exchange, AccessLog gatewayLog, SignalType signal) {
         gatewayLog.setEndTime(LocalDateTime.now());
         gatewayLog.setDuration((int) java.time.Duration.between(gatewayLog.getStartTime(), gatewayLog.getEndTime()).toMillis());
         HttpStatus fallback = signal == SignalType.ON_ERROR ? HttpStatus.INTERNAL_SERVER_ERROR : HttpStatus.OK;
@@ -185,8 +203,8 @@ public class AccessLogFilter implements GlobalFilter, Ordered {
     private Mono<Void> filterWithoutRequestBody(ServerWebExchange exchange, GatewayFilterChain chain, AccessLog accessLog) {
         // 包装 Response，用于记录 Response Body
         ServerHttpResponseDecorator decoratedResponse = recordResponseLog(exchange, accessLog);
-        return chain.filter(exchange.mutate().response(decoratedResponse).build())
-                .then(Mono.fromRunnable(() -> writeAccessLog(accessLog))); // 打印日志
+        return Mono.defer(() -> chain.filter(exchange.mutate().response(decoratedResponse).build()))
+                .doFinally(signal -> finishAccessLog(exchange, accessLog, signal));
     }
 
     /**
@@ -223,10 +241,8 @@ public class AccessLogFilter implements GlobalFilter, Ordered {
             // 包装 Response，用于记录 Response Body
             ServerHttpResponseDecorator decoratedResponse = recordResponseLog(exchange, gatewayLog);
             // 记录普通的
-            return chain.filter(exchange.mutate().request(decoratedRequest).response(decoratedResponse).build())
-                    .then(Mono.fromRunnable(() -> writeAccessLog(gatewayLog))); // 打印日志
-
-        }));
+            return chain.filter(exchange.mutate().request(decoratedRequest).response(decoratedResponse).build());
+        })).doFinally(signal -> finishAccessLog(exchange, gatewayLog, signal));
     }
 
     /**
@@ -249,7 +265,8 @@ public class AccessLogFilter implements GlobalFilter, Ordered {
                     gatewayLog.setUserId(SecurityFrameworkUtils.getLoginUserId(exchange));
                     gatewayLog.setUserType(SecurityFrameworkUtils.getLoginUserType(exchange));
                     gatewayLog.setResponseHeaders(response.getHeaders());
-                    gatewayLog.setHttpStatus((HttpStatus) response.getStatusCode());
+                    gatewayLog.setHttpStatus(response.getStatusCode() != null
+                            ? HttpStatus.resolve(response.getStatusCode().value()) : null);
 
                     // 获取响应类型，如果是 json 就打印（开放接口路径不把原始响应体写入日志对象）
                     boolean openMallPath = AccessLogSanitizeUtils.isOpenMallPath(gatewayLog.getRequestUrl());
