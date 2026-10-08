@@ -42,9 +42,9 @@
 
 在上述基线核对到：
 
-- gateway、system、supply-chain 根 Logback 配置已引用共享 ELK 片段，本地 pattern 已包含 MDC `traceId`。配置接入不等于所有运行环境均已开启或实机验收。
-- member、infra、aifuli-server 根配置尚未引用共享 ELK 片段，本地通用 pattern 尚未带 `traceId`。
-- taobao-flash-channel 已直接依赖 monitor starter，但未提供同等根 Logback 接入配置；movie-server 未直接声明 monitor starter，亦未提供同等根配置。后续应核验实际依赖及启动行为，不能据声明推断已自动接入。
+- 七进程（除 `movie-server`）根 Logback 配置均已引用共享 ELK 片段，本地 pattern 均包含 MDC `traceId`；`movie-server` 于 2026-10-08 决定暂不接入，接入时须先评审其依赖与安全/数据源影响。
+- gateway、system、supply-chain、infra、member、aifuli、taobao-flash 的 `application-dev.yaml` 已声明 `aifuli.logging.elk`；test/prod 端点由部署配置提供，不在仓库内写死。
+- member 的 `platform-api.WUSHENG.inbound/outbound` 于 2026-10-08 决策保持现状：继续 `additivity="false"` 只写本地独立文件，不进入集中式平台。
 - Servlet `TraceFilter`、Feign `TraceRequestInterceptor`、网关 `TraceWebFilter` 与 Reactor MDC 桥接、Spring 异步 MDC/TTL 组合已具备基础能力。原生执行器和全部 Job/MQ 入口不在自动覆盖范围内。
 - 当前 encoder 输出固定 JSON 字段。订单号、耗时等写在 `message` 中不等于已经成为可聚合的 ES 字段。
 - 当前 Logstash 按应用与日期分流；ILM 配置为 30 天删除、单主分片、零副本，零副本是单节点测试环境选择。
@@ -161,6 +161,8 @@ SYSTEM 用于启动、关闭、配置装载结果及框架设施故障；启动�
 业务审计继续使用所属模块已有权威存储。普通日志写入失败不得改变业务响应；审计持久化失败是否回滚由已有业务设计决定，不能用普通日志容灾规则覆盖。
 
 member 的 `platform-api.WUSHENG.inbound/outbound` 使用 `additivity=false`，不会自动经 root 进入 ELK。各进程须清点专用 logger、独立文件和其它采集通道，显式记录其是否进入集中式平台、由哪个 appender 承担，禁止漏采或同时父子重复采集；不改变现有专用报文契约。
+
+2026-10-08 决策：member 的华昇开放接口专用报文通道保持现有实现（`additivity="false"`、独立滚动文件、30 天历史），**不接入集中式日志平台**。理由：其报文为完整请求/响应，超出本规范的常规事件字段范围。后续若需集中检索，应另行设计脱敏与体积口径，不得在本次接入中顺带开启。
 
 ## 4. 结构化字段契约
 
@@ -314,6 +316,8 @@ ERROR 行数不是请求失败率；不能只依赖允许丢弃的日志作为�
 完成本规范及 ELK 设计的保障边界修订；逐个补齐五个尚未同等接入的进程；核验依赖、独立启动、应用/实例元数据、本地编号、关闭推送静默、专用通道路由。现有三个试点也须运行完整配置回归。
 
 阶段一不宣称所有历史消息已满足新字段契约，不以更改文档代替 Agent 优先级修复或后台推广。
+
+2026-10-08 决策：`movie-server` 暂不纳入本轮接入。理由：该模块使用基础 Spring Boot 组件、pom 未声明 monitor starter，接入会引入新依赖并需评估安全、数据源与任务执行语义影响。其接入按同一 §10.1 流程单独执行。
 
 ### 10.2 阶段二：字段、编号与关键事件
 
