@@ -2,8 +2,9 @@
     <!-- 参考 org/springframework/boot/logging/logback/defaults.xml 配置，优化 CONSOLE_LOG_PATTERN、FILE_LOG_PATTERN -->
     <!-- 格式化输出：%d 表示日期，%thread 表示线程名，%-5level：级别从左显示 5 个字符宽度，%msg：日志消息，%n是换行符 -->
     <!-- CONSOLE_LOG_PATTERN 相比 FILE_LOG_PATTERN 多了 highlight、cyan 等高亮 -->
-    <property name="CONSOLE_LOG_PATTERN" value="%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %highlight(%-5level) %cyan(%logger{50}:%L) - %msg%n"/>
-    <property name="FILE_LOG_PATTERN" value="%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{50}:%L - %msg%n"/>
+    <!-- [%X{traceId}] 为日志关联编号，ELK 不可用时本地文件仍可按编号排障；规范见 docs/superpowers/specs/2026-10-04-logging-standardization-spec.md -->
+    <property name="CONSOLE_LOG_PATTERN" value="%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %highlight(%-5level) %cyan(%logger{50}:%L) - [%X{traceId}] %msg%n"/>
+    <property name="FILE_LOG_PATTERN" value="%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{50}:%L - [%X{traceId}] %msg%n"/>
 
     <!-- 控制台 Appender -->
     <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">　　　　　
@@ -34,6 +35,9 @@
         <appender-ref ref="FILE"/>
     </appender>
 
+    <!-- 引入共享 ELK Logstash TCP Appender 配置 -->
+    <include resource="logback-elk-appender.xml"/>
+
     <!-- SkyWalking Appender：GRPC 日志收集，实现日志中心 -->
     <!--
     <appender name="SKYWALKING" class="org.apache.skywalking.apm.toolkit.log.logback.v1.x.log.GRPCLogClientAppender">
@@ -49,8 +53,17 @@
         <appender-ref ref="STDOUT"/>
         <!-- 本地环境下，如果不想【FILE】打印日志，可以注释掉本行 -->
         <appender-ref ref="ASYNC"/>
-        <!-- 如果想接入【SkyWalking 日志服务】，可以取消注释掉本行 -->
-        <!-- <appender-ref ref="SKYWALKING"/> -->
     </root>
+
+    <!-- 仅在非本地环境且显式开启时挂载 TCP Appender -->
+    <springProfile name="dev,test,prod">
+        <if condition='property("ELK_ENABLED").equalsIgnoreCase("true")'>
+            <then>
+                <root level="INFO">
+                    <appender-ref ref="LOGSTASH_TCP"/>
+                </root>
+            </then>
+        </if>
+    </springProfile>
 
 </configuration>
