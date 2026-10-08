@@ -913,3 +913,14 @@ A4 片（真实本地 HTTPS 传输）已完成全部规范实现、4 轮垂直 T
    - Gate 1 定向纯测（既有 15 类 + A5 4 类新纯单测）；
    - Gate 2 全供应链纯测与架构测试；
    - Gate 3 Failsafe 契约测试（既有 3 类 + `HuashengCommunicationFacadeContractTest`）。
+
+### 18.6 A5 片有限最终验收与 Task3-A 通信组件闭环（2026-10-08，父验收完成）
+
+A5 片（Token / 缓存 / Facade / 安全日志全链编排）已完成全部规范实现、5 轮垂直 TDD（同测试字节 RED->GREEN）、三门禁全绿（20 类 253 项、203 类 1,946 项、Failsafe 4 类 74 项，联合全验 226 类 2,123 项全部 0 失败/错误/跳过，双 exit 0），以及全链独立双审：
+1. **独立实现规格审查** `deleg_5bba38f1` review_status=PASSED：17 个目标文件（12 新 main + 5 新 test，0 重开文件）逐条比对 §18 及关联章节全部合规，AD-4 依赖反转边界（应用层绝不 import infrastructure 实现，基础设施绝不反向依赖）、复合身份与进程内 HMAC-SHA256 长度分帧材料指纹、双时钟过期校验与 7200 秒上限、单飞锁与 CAS generation 代次防护、1024 键上限容量与超额过期淘汰/满额安全失败/锁安全退休、HuashengCommunicationFacade 有界 61 重试（至多 2 业务 + 2 TOKEN）与密封对外结果 HuashengCallResult（零 Throwable 穿透）、HuashengSafeLog 分钟桶聚合限频日志均完备达标，中文契约注释完整覆盖。
+2. **独立质量与安全审查** `deleg_5bba38f1` passed=true：security_concerns 与 logic_errors 为空，敏感对象严格脱敏且类级标注拒绝 Jackson 序列化，单飞锁并发只发生 1 次网络外呼，HMAC-SHA256 随机密钥仅保存在内存，有界 61 严格受控且二次 61 立即返回 BusinessError，非 2xx/超时绝不重发。
+3. **父最终核验**：17 个候选文件当前工作区哈希与清单 100% 吻合，HEAD 0c444690 未变，暂存区 index 为空，三门禁原 XML 聚合 0 错误，两份复审报告哈希一致，父最终验收成立（见仓外 `parent-a5-final-acceptance.json`）。
+
+**Task3-A 通信组件全切片（A1～A5）闭环定义达成：**
+- A1（金额与安全诊断）、A2（严格响应与卡片解析）、A3（请求构造与独立 JCA）、A4（真实本地 HTTPS 传输）、A5（Token / 缓存 / Facade / 安全日志）全部切片均已按设计先行、垂直 TDD、双独立审查与父最终验收标准闭环交付。
+- **范围界限与后续阻断**：本验收仅关闭 Task3-A 隔离通信组件，不注册生产 `AdapterMetadata` 或 `OperationExecutorPort`；主链买家目录商业发布（Task B1）仍被 Task B0 前置与 R3-04 暂停阻断；不进行未授权的 Git 提交/推送/部署，无真实外部供应商调用。
