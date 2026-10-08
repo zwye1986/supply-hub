@@ -8,6 +8,9 @@
 
 **Tech Stack:** Java 21、Spring Boot 3.5.x、Logback 1.5.x、logstash-logback-encoder 8.0、JUnit 5 + AssertJ
 
+**环境前置条件（重要）：**
+本机默认环境可能是 JDK 17，构建与测试前必须确保使用 JDK 21，执行命令前加 `export JAVA_HOME=$(/usr/libexec/java_home -v 21)`，否则 Maven 编译会直接抛出 `Fatal error compiling: 错误: 不支持发行版本 21`。
+
 **依据规范:** `docs/superpowers/specs/2026-10-04-logging-standardization-spec.md` §6.1、§10.1；`AGENTS.md` 第 6 条
 
 ---
@@ -59,20 +62,34 @@
 Run:
 
 ```bash
-mvn -B -ntp -q -pl aifuli-server dependency:tree -Dincludes=com.aifuli:aifuli-spring-boot-starter-monitor,net.logstash.logback:logstash-logback-encoder
+export JAVA_HOME=$(/usr/libexec/java_home -v 21)
+mvn -B -ntp -pl aifuli-server -am dependency:tree -Dincludes=com.aifuli:aifuli-spring-boot-starter-monitor,net.logstash.logback:logstash-logback-encoder
 ```
 
-Expected: 输出同时包含 `aifuli-spring-boot-starter-monitor` 与 `logstash-logback-encoder`。若 monitor 缺失，停止本任务并报告——`logback-elk-appender.xml` 与 `LoggingElkProperties` 都来自该 starter，缺失时 `<include>` 会解析失败。
+Expected: 在 `[INFO] --- dependency:3.7.0:tree ... @ aifuli-server ---` 段落下，输出包含：
+```
+com.aifuli:aifuli-server:jar:...
+\- com.aifuli:aifuli-module-system-server:jar:...:compile
+   \- com.aifuli:aifuli-spring-boot-starter-monitor:jar:...:compile
+      \- net.logstash.logback:logstash-logback-encoder:jar:...:compile
+```
+确认 monitor starter 与 encoder 均通过 `system-server` 传递依赖进入。注：不能加 `-q`，否则 dependency:tree 的 INFO 输出会被完全屏蔽。
 
 - [ ] **Step 2: 确认 taobao-flash-channel 直接声明 monitor starter**
 
 Run:
 
 ```bash
-mvn -B -ntp -q -pl aifuli-module-supply-chain/aifuli-channel-taobao-flash-server dependency:tree -Dincludes=com.aifuli:aifuli-spring-boot-starter-monitor,net.logstash.logback:logstash-logback-encoder
+export JAVA_HOME=$(/usr/libexec/java_home -v 21)
+mvn -B -ntp -pl aifuli-module-supply-chain/aifuli-channel-taobao-flash-server -am dependency:tree -Dincludes=com.aifuli:aifuli-spring-boot-starter-monitor,net.logstash.logback:logstash-logback-encoder
 ```
 
-Expected: 同样输出两个 artifact（该模块 pom 已直接声明 monitor starter）。
+Expected: 在 `aifuli-channel-taobao-flash-server` 段落下，输出包含：
+```
+com.aifuli:aifuli-channel-taobao-flash-server:jar:...
+\- com.aifuli:aifuli-spring-boot-starter-monitor:jar:...:compile
+   \- net.logstash.logback:logstash-logback-encoder:jar:...:compile
+```
 
 - [ ] **Step 3: 确认现有 dev 配置基线，供新增配置对齐**
 
