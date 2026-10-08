@@ -215,3 +215,9 @@ LX 只接受 HTTP 2xx、`code=200` 且 `data` 非 null 的响应，不要求不�
 影院排期、同场次、城市在映影片三个查询统一使用 `showTime > now + 当前提前量`（严格大于，临界点停售），保留账号、配置版本、schemaVersion 隔离和 `supplyEnabled != false` 条件（兼容原版本无此字段的已入库可售数据）。返回排期时按同一次查询的提前量计算 `stopSellTime`，不信任旧文档中的停售值，不回写数据库。
 
 停止按停售时间物理删除排期，不新增未经确认的历史保留期限。新增显式 Mongo 迁移 `002-query-time-sale-policy.js`：移除单字段 stopSellTime TTL，添加基于 showTime 的三类账号查询索引；旧普通索引保留以避免不必要变更。应用采集前只读检查旧 TTL 是否已移除，不执行 DDL。新建环境先执行 001 再执行 002，已有环境停止旧实例后执行 002；历史已被 TTL 删除的场次需首次重新拉取恢复，之后动态阈值变更无需重采。新写入不保存 stopSellTime，并在 upsert 中 unset 遗留字段；仍沿用完整供应商快照的撤场清理，不承诺永久历史归档。
+
+### 电影密钥读取局部调整（2026-10-08）
+
+本次仅修改 MovieSupplierConfigService 的密钥读取：依据当前已发布版本的 credential_set_id 读取既有凭据集与项，校验供应商归属、启用状态、唯一 ENVELOPE appSecret 项及 credential_item_snapshot，再复用 CredentialSetResolver 解密；返回材料用毕擦除。电影不保留 ENV 分支，其余账号 JSON、渠道选择和 RPC 契约保持原样。
+
+配置录入、校验、发布、公共元数据、公共解析器、数据库结构和部署 SQL 均不在此次修改范围。读取前提是数据库已有正确的加密凭据集及版本绑定；此代码不能将当前槽中的值自动转为可用凭据。当前开发库是否满足前提尚未重新验证，本次不改库或部署。
