@@ -7,6 +7,7 @@ import org.mockito.ArgumentCaptor;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Savepoint;
 import java.sql.Statement;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
@@ -80,7 +81,11 @@ class StandardBudgetConnectionWrapperTest {
     @Test
     void closeRestoresSessionAndNetworkTimeoutHealthyReturn() throws SQLException {
         Statement rawStatement = mock(Statement.class);
+        ResultSet rs = mock(ResultSet.class);
         when(delegate.createStatement()).thenReturn(rawStatement);
+        when(rawStatement.executeQuery("SELECT @@SESSION.innodb_lock_wait_timeout")).thenReturn(rs);
+        when(rs.next()).thenReturn(true);
+        when(rs.getInt(1)).thenReturn(50);
         when(delegate.isClosed()).thenReturn(false);
 
         StandardBudgetConnectionWrapper wrapper = newWrapper();
@@ -141,5 +146,41 @@ class StandardBudgetConnectionWrapperTest {
         assertThat(wrapper.isCleanupMode()).isTrue();
         // cleanup 模式下 Statement 创建不再被 E 守卫拒绝
         assertThat(wrapper.createStatement()).isNotNull();
+    }
+
+    @Test
+    void rollbackToSavepointKeepsBudgetGuard() throws SQLException {
+        StandardBudgetConnectionWrapper wrapper =
+                new StandardBudgetConnectionWrapper(delegate, context, System.nanoTime() - 1000, evictor);
+
+        wrapper.rollback(mock(Savepoint.class));
+
+        verify(delegate).rollback(any(Savepoint.class));
+        assertThat(wrapper.isCleanupMode()).isFalse();
+        // 回滚到保存点后事务继续执行，预算守卫必须保持有效
+        assertThatThrownBy(wrapper::createStatement).isInstanceOf(BudgetTimeoutException.class);
+    }
+
+    @Test
+    void closeEvictorFailureStillClosesDelegate() throws SQLException {
+        when(delegate.isClosed()).thenReturn(false);
+        doThrow(new SQLException("network down")).when(delegate).setNetworkTimeout(any(), anyInt());
+        doThrow(new RuntimeException("evict boom")).when(evictor).accept(any());
+
+        StandardBudgetConnectionWrapper wrapper = newWrapper();
+        wrapper.close();
+
+        assertThat(context.isCleanupFailed()).isTrue();
+        verify(delegate).close();
+    }
+
+    @Test
+    void closeHealthyPathCloseFailureMarksCleanupFailed() throws SQLException {
+        when(delegate.isClosed()).thenReturn(false);
+        doThrow(new SQLException("close fail")).when(delegate).close();
+
+        StandardBudgetConnectionWrapper wrapper = newWrapper();
+        assertThatThrownBy(wrapper::close).isInstanceOf(SQLException.class);
+        assertThat(context.isCleanupFailed()).isTrue();
     }
 }

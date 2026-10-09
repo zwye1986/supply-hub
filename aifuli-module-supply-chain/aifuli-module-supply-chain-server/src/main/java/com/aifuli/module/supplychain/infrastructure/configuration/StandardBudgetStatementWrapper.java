@@ -1,8 +1,6 @@
 package com.aifuli.module.supplychain.infrastructure.configuration;
 
-import java.sql.CallableStatement;
 import java.sql.Connection;
-import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.SQLWarning;
@@ -52,6 +50,7 @@ public class StandardBudgetStatementWrapper implements Statement {
         }
 
         // 安装 SESSION innodb_lock_wait_timeout
+        // SESSION 锁等待取 min(2, q) 秒（R01.4）
         connectionWrapper.ensureSessionLockWaitTimeout(Math.min(2, q));
 
         int effectiveTimeout = observedMinPositive > 0 ? Math.min(observedMinPositive, q) : q;

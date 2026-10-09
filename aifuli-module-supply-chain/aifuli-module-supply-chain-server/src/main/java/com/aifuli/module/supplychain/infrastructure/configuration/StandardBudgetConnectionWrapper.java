@@ -44,6 +44,7 @@ public class StandardBudgetConnectionWrapper implements Connection {
     private final int originalNetworkTimeout;
 
     private volatile boolean sessionTimeoutInstalled = false;
+    // MySQL 默认 innodb_lock_wait_timeout 50 秒（设计 §4.3）
     private int originalSessionTimeout = 50;
     private volatile boolean cleanupMode = false;
 
@@ -60,17 +61,18 @@ public class StandardBudgetConnectionWrapper implements Connection {
         try {
             origTimeout = delegate.getNetworkTimeout();
         } catch (Throwable e) {
-            log.warn("读取原始 networkTimeout 失败，按 0 处理: {}", e.getMessage());
+            log.warn("[预算连接][原始 networkTimeout 读取失败] message={}", e.getMessage(), e);
         }
         this.originalNetworkTimeout = origTimeout;
 
         try {
             long remaining = Math.min(executionDeadlineE - System.nanoTime(),
                     context.getCommandDeadline() - BudgetContext.CLEANUP_RESERVE_NANOS - System.nanoTime());
+            // 连接局部 socket 限制上限 7000ms（R01.5）
             int socketTimeoutMs = (int) Math.min(7000L, Math.max(1L, remaining / 1_000_000L));
             delegate.setNetworkTimeout(Runnable::run, socketTimeoutMs);
         } catch (Throwable e) {
-            log.warn("无法安装初始 socket timeout: {}", e.getMessage());
+            log.warn("[预算连接][初始 socket timeout 安装失败] message={}", e.getMessage(), e);
         }
     }
 
@@ -88,14 +90,16 @@ public class StandardBudgetConnectionWrapper implements Connection {
         }
         try (Statement s = delegate.createStatement()) {
             try (ResultSet rs = s.executeQuery("SELECT @@SESSION.innodb_lock_wait_timeout")) {
-                if (rs != null && rs.next()) {
-                    originalSessionTimeout = rs.getInt(1);
+                if (rs == null || !rs.next()) {
+                    log.warn("[预算连接][SESSION 原值读取失败] 保持默认 50 秒");
+                    return;
                 }
+                originalSessionTimeout = rs.getInt(1);
             }
             s.execute("SET SESSION innodb_lock_wait_timeout = " + targetSec);
             sessionTimeoutInstalled = true;
         } catch (SQLException e) {
-            log.warn("设置 SESSION innodb_lock_wait_timeout 失败: {}", e.getMessage());
+            log.warn("[预算连接][SESSION 锁等待安装失败] message={}", e.getMessage(), e);
         }
     }
 
@@ -241,7 +245,8 @@ public class StandardBudgetConnectionWrapper implements Connection {
 
     @Override
     public void rollback(Savepoint savepoint) throws SQLException {
-        cleanupMode = true;
+        // 回滚到保存点并不终结事务：事务后续仍继续执行，
+        // 预算守卫必须保持有效，不得进入 cleanup 模式（设计 §4.3 仅终结事务的无参 rollback()/close() 进入 cleanup）
         delegate.rollback(savepoint);
     }
 
@@ -277,12 +282,12 @@ public class StandardBudgetConnectionWrapper implements Connection {
             try {
                 evictor.accept(delegate);
             } catch (Throwable t) {
-                log.warn("[预算连接关闭] 物理淘汰异常: {}", t.getMessage());
+                log.warn("[预算连接关闭] 物理淘汰异常 message={}", t.getMessage(), t);
             } finally {
                 try {
                     delegate.close();
                 } catch (Throwable t) {
-                    log.warn("[预算连接关闭] 淘汰后代理 close 异常: {}", t.getMessage());
+                    log.warn("[预算连接关闭] 淘汰后代理 close 异常 message={}", t.getMessage(), t);
                 }
             }
             return;
