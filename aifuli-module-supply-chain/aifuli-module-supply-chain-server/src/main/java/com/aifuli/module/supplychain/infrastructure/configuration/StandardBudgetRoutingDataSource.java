@@ -34,7 +34,7 @@ public class StandardBudgetRoutingDataSource implements DataSource, DisposableBe
     }
 
     /**
-     * 返回底层裸池，仅限诊断与初始化（Liquibase/监控）使用；业务代码严禁经此借连接绕过预算守卫。
+     * 返回底层裸池，仅限诊断与初始化（监控/诊断）使用；业务代码严禁经此借连接绕过预算守卫。
      */
     public HikariDataSource getRawDataSource() {
         return rawDataSource;

@@ -2,6 +2,7 @@ package com.aifuli.module.supplychain.infrastructure.configuration;
 
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
+import com.zaxxer.hikari.HikariPoolMXBean;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -119,6 +120,24 @@ class StandardBudgetRoutingDataSourceTest {
              var rs = stmt.executeQuery("SELECT CONNECTION_ID()")) {
             assertThat(rs.next()).isTrue();
             assertThat(rs.getString(1)).isNotEqualTo(evictedThreadId);
+        }
+    }
+
+    @Test
+    void evictionRecoversPoolCapacity() throws Exception {
+        BudgetContext.clear();
+        HikariPoolMXBean poolMx = rawHikari.getHikariPoolMXBean();
+        try (Connection conn = routingDataSource.getConnection()) {
+            assertThat(poolMx.getActiveConnections()).isGreaterThanOrEqualTo(1);
+            routingDataSource.evictAndAbort(conn);
+        }
+        // 淘汰后活跃连接数正确减少：被淘汰的物理连接已销毁且未回池，证明无池泄漏（设计 §6.3.2）
+        assertThat(poolMx.getActiveConnections()).isZero();
+        // 淘汰后继续借用仍可正常获取连接，池容量自动补充（设计 §6.3.2）
+        try (Connection conn = routingDataSource.getConnection()) {
+            assertThat(conn).isNotNull();
+            assertThat(poolMx.getActiveConnections()).isGreaterThanOrEqualTo(1);
+            assertThat(poolMx.getTotalConnections()).isGreaterThanOrEqualTo(1);
         }
     }
 }

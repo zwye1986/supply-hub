@@ -48,7 +48,7 @@ public class SupplyChainDataSourceConfiguration {
                 .type(HikariDataSource.class)
                 .build();
         // 显式命名连接池：日志隔离与池身份识别（B03 解阻验证见
-        // docs/superpowers/specs/2026-10-09-druid-to-hikari-migration-design.md#adr-5b03异步建连日志解阻定位客观声明）
+        // docs/superpowers/specs/2026-10-09-druid-to-hikari-migration-design.md#adr-5b03-异步建连日志解阻定位客观声明）
         dataSource.setPoolName("supply-chain-pool");
         // 驱动级物理 TCP 建连超时：经 Connector/J connectTimeout 属性注入（R02 获审 1500ms）
         dataSource.addDataSourceProperty("connectTimeout", String.valueOf(properties.getConnectTimeoutMillis()));
