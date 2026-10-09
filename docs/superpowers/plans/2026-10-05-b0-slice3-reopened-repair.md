@@ -175,6 +175,8 @@ RED→GREEN分别验嵌套提前flush、最后行最终版本、大小写／组�
 
 ### R3-04：强制旧Timer迁移／启动切换检查
 
+**2026-10-08最新授权：** 用户仅恢复只读分析与设计修订，状态 `READ_ONLY_DESIGN_REOPENED_IMPLEMENTATION_PAUSED`。当前源码/本地依赖核对结果见 [R3-04只读解阻分析](../specs/2026-10-08-r3-04-readonly-deblocking-analysis.md)，B03仍无已证完整方案；编码、测试/微probe、共享配置、部署与真实库操作继续暂停。原所有约束及历史预审失败保留，不重复推进被拒绝的风险豁免/跨池日志方案，不自动扩原factory或候选路径。下方“不继续研究”仅代表此前暂停，不覆盖本次明确只读授权；R3-03最新验收不重做，依赖后片与商业启用不放行。
+
 **最新用户停止点：PAUSED_BY_USER_BOUNDARY_UNRESOLVED。** 用户不接受B03风险分离A或跨池诊断变更B，保持全部现约束并暂停实施；未另行指示前不续派研究／编码／测试。仅授权未来候选新增server `src/main/resources/META-INF/spring.factories` 注册R3 Boot报告器；资源尚未创建，此单项授权不解除暂停或预审failed。原研究／实验／报告保留，无新生产字节／提交／部署。
 
 **二次补核重开：REOPENED_ACCEPTANCE_NOT_VALID；本轮优先。** 下列已勾选条目为历史记录，原完整验收失效但原XML保留。修正须复制真实payloadVersion，核验比较协议、双向完整映射（含孤儿BOUND）、身份逐字一致性及全部合法状态；补全源字段快照。真实Spring启动必须证明核验完成前零扫描、失败不启用；ApplicationRunner排序不是生命周期屏障。维护切换前旧writer停止、在途排尽和同版本启用条件不可省略或以本机状态冒称集群确认。
