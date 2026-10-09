@@ -875,6 +875,7 @@ class FulfillmentAcceptanceIntegrationTest {
             ProductCatalogCommandService.class, ProductCenterTestConfiguration.class, BuyerListingPublicationService.class,
             BuyerAccountOpeningService.class, FundReservationService.class, AccountLedgerWriter.class,
             RoutingPolicyPublicationService.class, SupplierRoutingApplicationService.class,
+            com.aifuli.module.supplychain.tradecore.catalog.application.CurrentSupplyEligibilityReader.class,
             ClosedJsonSchemaValidator.class, FulfillmentTargetSchemaRegistry.class,
             AesGcmEnvelopeCrypto.class, SkuPurchaseLimitService.class, FulfillmentAcceptanceLifecycle.class,
             com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyLifecycle.class,

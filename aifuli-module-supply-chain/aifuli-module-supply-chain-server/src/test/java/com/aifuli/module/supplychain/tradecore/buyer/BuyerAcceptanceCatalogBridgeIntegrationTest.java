@@ -612,7 +612,10 @@ class BuyerAcceptanceCatalogBridgeIntegrationTest {
     }
     @Configuration(proxyBeanMethods = false)
     @Import({BuyerAdminIntegrationTest.TestConfiguration.class, BuyerAdminController.class,
-            M1MasterDataAdminController.class, BuyerCommandService.class, BuyerListingPublicationService.class, OutboxEventRepository.class})
+            M1MasterDataAdminController.class, BuyerCommandService.class, BuyerListingPublicationService.class,
+            OutboxEventRepository.class,
+            com.aifuli.module.supplychain.routing.application.SupplierRoutingApplicationService.class,
+            com.aifuli.module.supplychain.tradecore.catalog.application.CurrentSupplyEligibilityReader.class})
     static class Config { }
     private static void seedCatalog(ProductCatalogCommandService catalog) {
         catalog.createBrand(new ProductCatalogCommandService.CreateBrandCommand(

@@ -89,14 +89,14 @@ assertThat(result.reasonCodes()).containsExactly(reason);
 
 ## Task 3：单 LST 自动刷新及人工恢复（设计 §3～§4）
 
-**Files:** Create `J/tradecore/catalog/application/BuyerSelectionCatalogRefreshService.java`、`BuyerSelectionCatalogRefreshTransactionalWorker.java`、`BuyerSelectionCatalogRefreshResult.java`、`J/tradecore/catalog/domain/BuyerCatalogRefreshOutcome.java`；Modify `J/tradecore/catalog/application/BuyerListingPublicationService.java`、`J/tradecore/catalog/dal/mysql/BuyerListingVersionMapper.java`、`BuyerListingAvailabilityMapper.java`；Test `T/tradecore/catalog/application/BuyerSelectionCatalogRefreshIntegrationTest.java`、`BuyerSelectionCatalogRefreshTransactionTest.java`。
+**Files:** Create `J/tradecore/catalog/application/BuyerSelectionCatalogRefreshService.java`、`BuyerSelectionCatalogRefreshTransactionalWorker.java`、`BuyerSelectionCatalogRefreshResult.java`、`BuyerPricingReadiness.java`（共享价格链口径）、`BuyerCatalogProperties.java`（系统操作人）、`J/tradecore/catalog/domain/BuyerCatalogRefreshOutcome.java`；Modify `J/tradecore/catalog/application/BuyerListingPublicationService.java`、`J/tradecore/catalog/dal/mysql/BuyerListingVersionMapper.java`、`BuyerListingAvailabilityMapper.java`；Test `T/tradecore/catalog/application/BuyerSelectionCatalogRefreshIntegrationTest.java`、`BuyerSelectionCatalogRefreshTransactionTest.java`。精确接口、价格依赖口径与决定表见设计 §4.3「Task 3 实施接口与事务边界」。
 
-- [ ] RED：同来源重复/并发不新增版本/游标，迟到读当前；版本/current CAS/availability/本地change任一步失败全回滚。
-- [ ] RED：MANUAL零写、RETIRED终态、SUSPENDED不发布/恢复、DRAFT缺条件等待、PUBLISHED失效保留历史，BPD移除/复活身份不变，PLT移除仅影响其项目。
-- [ ] RED：READY标记但依赖失效不发布，重算退出LST事务后委派已有定价并确认提交再刷；缺合法系统operator不填0/冒充源发布人；人工expectedVersion恢复在同一LST锁内核价和资格。
-- [ ] GREEN：NEVER门面→独立REQUIRED worker，LST→BPD→BuyerPricing→availability锁序，不锁SKU/PLT/project/供给。商业价来自真实READY分销价CNY非负，稳定摘要含来源/商业字段/冻结有效期，不含刷新时间。
-- [ ] GREEN：AUTO只同事务追加本地目录游标，无fanout；无变化可更新评估期限不新增游标；技术失败不延期旧AVAILABLE，旧MANUAL保持。
-- [ ] `ITS=BuyerSelectionCatalogRefreshIntegrationTest`＋现有发布回归＋架构；SQL/锁序用真实MySQL证明。
+- [x] RED：同来源重复/并发不新增版本/游标，迟到读当前；版本/current CAS/availability/本地change任一步失败全回滚。骨架首跑为方法未实现错误；朴素首切后取得行为RED（集成12 failure／2 error），修复夹具根因（`createSku` 第五参为 faceValue、`reason_code` 非空列）后逐项GREEN。
+- [x] RED：MANUAL零写、RETIRED终态、SUSPENDED不发布/恢复、DRAFT缺条件等待、PUBLISHED失效保留历史，BPD移除/复活身份不变，PLT移除仅影响其项目。集成逐项真实MySQL覆盖。
+- [x] RED：READY标记但依赖失效不发布，重算退出LST事务后委派已有定价并确认提交再刷；缺合法系统operator不填0/冒充源发布人；人工expectedVersion恢复在同一LST锁内核价和资格。重算顺序断言首跑因availability表名误匹配一度误报，修正为带尾空格匹配后GREEN。
+- [x] GREEN：NEVER门面→独立REQUIRED worker，LST→BPD→BuyerPricing→availability锁序，不锁SKU/PLT/project/供给。商业价来自真实READY分销价CNY非负，稳定摘要含来源/商业字段/冻结有效期，不含刷新时间。真实SQL记录断言FOR UPDATE仅限四个目录表。
+- [x] GREEN：AUTO只同事务追加本地目录游标，无fanout；无变化可更新评估期限不新增游标；技术失败不延期旧AVAILABLE，旧MANUAL保持。四写入步骤注入失败全部回滚。
+- [x] `ITS=BuyerSelectionCatalogRefreshIntegrationTest`＋现有发布回归＋架构；SQL/锁序用真实MySQL证明。集成回归84项全绿（refresh17＋桥接18＋Reader17＋原路由1＋架构31），受影响验收35项全绿，默认单元范围API123＋server1947全绿；命令与证据见 `docs/集成测试.md` Task3记录。
 
 ## Task 4：AUTO 陈旧投影读侧（设计 §6.4）
 
@@ -184,3 +184,6 @@ assertThat(result.reasonCodes()).containsExactly(reason);
 - Task1纯映射已实现并通过本机TDD及直接回归；新资格测试26项、定向74项，供应链默认单元/架构命名范围共2043项，0失败/错误/跳过。当前未做独立代码审查，不将内联自审称为独立审查。
 - Task2已实现独立新RR资格Reader及封闭缺条件／损坏引用分类，并完成本机真实事务门禁。扩大回归默认单元／架构命名范围API123＋server1940，共2063项；该轮集成Reader14＋原路由1。随后补充3项技术异常集成保护，最终补核和收尾复验均分类20＋架构31、Reader17＋原路由1全绿；命令、RED归因及XML归档见 `docs/集成测试.md` 的Task2记录。仅内联自审，没有独立审查结论。
 - 下一检查点Task3：单LST自动刷新及人工恢复。Task3～12均NOT_RUN，Reader尚未接入商业刷新、扫描或HTTP新准入；旧Lifecycle宽泛路由catch仍属于Task10范围。不宣称整体业务链完成，未提交、推送或部署。
+- Task3已实现单LST自动刷新门面／独立worker、封闭结果与状态决定表、价格链共享口径、系统操作人配置及AUTO人工恢复同锁校验，并完成本机真实MySQL门禁。有效RED为单元4 failure／1 error＋集成12 failure／2 error；GREEN后集成回归84项、受影响验收35项、默认单元范围2070项全绿。命令、RED归因与XML归档见 `docs/集成测试.md` Task3记录。仅内联自审，没有独立审查结论。
+- 修复轮（两次评审问题闭环）：设计 §4.3 先补恢复同步写安全投影与锁序、未配置系统操作人不重算、已指向版本归属校验、Mapper 增量签名对齐；实现共享 basis 口径 `BuyerAvailabilityBasis`、`AUTO_LISTING_QUANTITY` 常量、RETIRED 判断提前、AUTO 无版本恢复业务拒绝、门面提交后 `[refreshListing]` 日志。新增行为测试 RED 先行后 GREEN，门禁回归与受影响验收复跑见 `docs/集成测试.md` Task3 修复轮记录。
+- 下一检查点Task4：AUTO陈旧投影读侧。Task4～12均NOT_RUN，刷新尚未接入管理保存编排、后台扫描或下单准备；整链、前端与供应商联调未验收。未提交、推送或部署。

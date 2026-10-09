@@ -9,4 +9,11 @@ public interface BuyerListingAvailabilityMapper extends BaseMapperX<BuyerListing
     default BuyerListingAvailabilityDO selectByListingId(Long listingId) {
         return selectOne(BuyerListingAvailabilityDO::getListingId, listingId);
     }
+
+    /**
+     * LST当前锁取得后锁定供给投影行，供同事务CAS写入；见设计 §4.3。
+     */
+    default BuyerListingAvailabilityDO selectByListingIdForUpdate(Long listingId) {
+        return selectOneForUpdate(BuyerListingAvailabilityDO::getListingId, listingId);
+    }
 }
