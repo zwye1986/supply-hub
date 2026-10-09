@@ -1,5 +1,9 @@
 # B0切片3重开：精确修复实施计划
 
+> **最新裁定（2026-10-09）：** 用户明确本阶段B0剩余整组为过度设计，退出当前业务贯通任务；下方和上一轮页首Hikari预算→worker→执行器/Inbox→心跳/页轮次计划不执行、不阻断B1/C。R3-04不适用，其它后置不是验收通过。已推送 `feat/remove-druid-hikari / adac935` 保留复用，不再按旧快照派发预算补强，也不未授权剥离现有代码。当前业务路线见 [业务优先路线](2026-10-09-greenfield-business-closure-roadmap.md) 与 [范围设计](../specs/2026-10-09-hikari-merge-business-first-design.md)。
+
+> **2026-10-09 最新适用范围：** 用户已确认新项目无旧 Timer。F02/R3-04 为 `CANCELLED_NOT_APPLICABLE`；R3-08A/08B/09 删除仅由迁移产生的依赖，不再要求恢复 R3-04。下方回填必需、混 writer 切换及暂停后片等文字保留历史，遇冲突以本补充为准。R3-05/06/07 中 Druid 私有连接/holder/socket/discard、checker allowlist、idle 特例与池缓存细节不再作为新实现路线；标准 JDBC/Hikari 下的预算、SESSION/网络状态恢复、脏连接隔离、提交守卫等运行时不变量仍需验证。旧通过不当新实现验收；R3-01/02O/02T、R3-03 最新有限成果复用。新剩余链为基线/迁移入口清理→Hikari预算与资源→完整本地worker→事务型执行/Inbox→心跳容量/页轮次→B0适用完整门禁，详见 [新路线](2026-10-09-greenfield-business-closure-roadmap.md)。本次只规划，不实施。
+
 日期：2026-10-05。状态：**补核失败／REOPENED_ACCEPTANCE_NOT_VALID；本文件是待父复核的实施分片候选，不是实施完成或最终验收。**
 
 原计划：[页面选品与受理目录桥接实施计划，Task B/B0](2026-10-04-buyer-catalog-bridge.md)。规范：[B0设计](../specs/2026-10-05-catalog-reliable-consumption-prerequisite-design.md)完整§6.1、§7.2、§7.2.1（V4A/R01/R02）、§8、§9；本计划仅拆执行顺序，**不删减、放宽或重新批准获审协议**。原设计中的“预审候选／待实施”措辞保留为历史设计阶段记录，当前交付状态以重开记录为准。
@@ -174,6 +178,8 @@ RED先测真实源缺失／伪造映射；再源聚合unique、eventId unique／
 RED→GREEN分别验嵌套提前flush、最后行最终版本、大小写／组合字符同collation等价合并与异载荷拒绝、反序并发排序、第二槽/源/绑定失败整批回滚、flush后新增锁/意图拒绝及RESERVED guard。fixture真实SQL记录/锁证据，mock顺序不足。真实商业链门禁明确留后续，不减原获审要求。修正实施顺序、垂直RED→GREEN清单与完整条款矩阵以专用计划 `docs/superpowers/plans/2026-10-06-r3-03-reopened-repair.md` 为准。
 
 ### R3-04：强制旧Timer迁移／启动切换检查
+
+> **当前状态：`CANCELLED_NOT_APPLICABLE`（2026-10-09）。** 无旧存量，以下全部为历史记录，不进入新主链验收，不重新派发研究/实现。现存 Runner 自动回填路径的退出另列有限清理片，不等于修完旧迁移。
 
 **2026-10-08最新授权：** 用户仅恢复只读分析与设计修订，状态 `READ_ONLY_DESIGN_REOPENED_IMPLEMENTATION_PAUSED`。当前源码/本地依赖核对结果见 [R3-04只读解阻分析](../specs/2026-10-08-r3-04-readonly-deblocking-analysis.md)，B03仍无已证完整方案；编码、测试/微probe、共享配置、部署与真实库操作继续暂停。原所有约束及历史预审失败保留，不重复推进被拒绝的风险豁免/跨池日志方案，不自动扩原factory或候选路径。下方“不继续研究”仅代表此前暂停，不覆盖本次明确只读授权；R3-03最新验收不重做，依赖后片与商业启用不放行。
 
