@@ -114,8 +114,21 @@ class StandardBudgetRoutingDataSourceEvictionTest {
         Connection conn = mock(Connection.class);
         doThrow(new IllegalStateException("pool shutdown")).when(raw).evictConnection(conn);
 
-        routing.evictAndAbort(conn);
+        assertThatThrownBy(() -> routing.evictAndAbort(conn)).isInstanceOf(IllegalStateException.class);
 
         verify(conn).abort(any());
+    }
+
+    @Test
+    void driverIsCapturedBeforeEvictionAndAlwaysClosed() throws SQLException {
+        Connection proxy = mock(Connection.class);
+        Connection physical = mock(Connection.class);
+        when(proxy.unwrap(Connection.class)).thenReturn(physical);
+        routing.evictAndAbort(proxy);
+        var order = org.mockito.Mockito.inOrder(proxy, raw, physical);
+        order.verify(proxy).unwrap(Connection.class);
+        order.verify(raw).evictConnection(proxy);
+        order.verify(physical).abort(any());
+        order.verify(proxy).close();
     }
 }

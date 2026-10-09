@@ -1,6 +1,6 @@
 # 平台全面去 Druid 换装 Hikari 详细设计规范
 
-- **编制日期**：2026-10-09（修订版）
+- **编制日期**：2026-10-09（修订版；增加代码评审修复协议）
 - **设计状态**：`DESIGN_PENDING_REVIEW`（修订后待评审）
 - **关联规范**：
   - `docs/superpowers/specs/2026-10-05-catalog-reliable-consumption-prerequisite-design.md`（§7.2.1 R01 预算契约与 R02 数据源包装规范，§8.2.3 B03 异步日志边界）
@@ -227,6 +227,14 @@ public class StandardBudgetRoutingDataSource implements DataSource, DisposableBe
 
 ### 4.3 预算控制连接包装器（`StandardBudgetConnectionWrapper`）
 
+#### 2026-10-09 代码评审修复协议（优先于下文早期示意代码）
+
+- **失败关闭**：原 networkTimeout 读取失败、预算网络限制安装失败、SESSION 原值读取失败或 SET 失败，必须终止当前操作；禁止猜测原值。借出包装器构造失败必须隔离并关闭原代理，不得交付 manager。SET 发出前即记录可能变更，响应失败也尝试恢复；无法恢复则淘汰。原异常为主因，清理异常放入 suppressed，不在继续上抛的中间层重复打堆栈。
+- **统一守卫**：所有可能发包的 setup/getter、server prepare、metadata 调用、isValid、保存点和 commit 在委派前收紧 networkTimeout 并检查取消、E 与 commandDeadline-C，返回后再次检查。networkTimeout 取预算值、原正值及此前观察到的正值的最小值；普通 setter 不得安装 0 或更大值。prepare 超期返回的 Statement 必须先关闭，不向调用者泄漏。
+- **封闭 control 通道**：仅固定 SELECT 原 SESSION 值及固定正整数 SET，使用同一连接，不借新连接、不递归触发 SESSION 安装。Statement 创建、原值读取（含 ResultSet 读取）、每次 SET 均有前后检查、网络收紧及正 floor queryTimeout。SESSION 目标取原正值、此前目标与 min(2,q) 的最小值；后续业务执行继续收紧。control 返回后重新计算业务 q，禁止沿用旧预算。
+- **清理独占**：无参 rollback、成功 commit 后以及 manager cleanup 明确进入 cleanup 模式；commit 驱动成功返回后仍进行预算后检，即使后检抛出取消/超期也必须进入 cleanup，允许 Spring 恢复状态。rollback/savepoint 回滚失败、autoCommit/readOnly/isolation 等恢复失败，以及 control Statement/ResultSet 关闭失败，在连接层即时保存异常并永久 markCleanupFailed，即使 Spring 捕获异常且代理 close 成功也不能 retry。cleanup 不受业务 E 阻断，保留最后正网络限制；仅恢复用 control SQL 可以执行，不允许新业务 SQL。Spring 先执行 manager 连接状态恢复，连接 close 再关闭并恢复存活 Statement、恢复 SESSION，最后恢复原网络限制。任一恢复/关闭失败收集因果、隔离淘汰并抛出；close 幂等。
+- **禁止解包旁路**：Connection/Statement/metadata/ResultSet 只允许解包为自身支持的 JDBC 接口，不暴露驱动对象。metadata.getConnection、业务 ResultSet.getStatement 必须返回预算包装对象；metadata 返回的 ResultSet 同样受控，其 getStatement 返回 null（没有受控 Statement 身份），不能泄漏原 Statement。ResultSet 读操作前后守卫，防止通过其 Statement/Connection 间接取得底层对象。
+
 #### 完整对齐原 R01/R02 契约不变量
 1. **网络超时注入与原值保存**：
    - 连接初次借出时，保存底层驱动的原始 `networkTimeout`；
@@ -310,6 +318,8 @@ public void close() throws SQLException {
 - `StandardBudgetPreparedStatementWrapper`
 - `StandardBudgetCallableStatementWrapper`
 
+**评审修复补充**：构造时读取并保存原 queryTimeout，以原正值初始化最小限制；读取失败拒绝交付并关闭 Statement。所有 setter（包括 Spring/MyBatis 的 0/ceil/更大值）只能保持或收紧当前正限制。每次业务执行在 SESSION control 后重新计算 q、收紧网络及 queryTimeout，委派返回后再检查预算。关闭前恢复原 queryTimeout，避免 server-prepared 缓存污染；连接关闭时负责关闭尚未关闭的包装 Statement。恢复失败永久标记 cleanupFailed 并交由连接淘汰。覆盖全部 executeLargeUpdate 重载（Prepared/Callable 无参入口也包括在内）。
+
 **统一执行前守卫规则（`beforeExecute()`）**：
 1. 从 `context` 和 `executionDeadlineE` 计算可用执行秒数：
    $$q = \left\lfloor \frac{\min(5\text{s}, E - \text{now}, \text{commandDeadline} - C - \text{now})}{1\text{s}} \right\rfloor$$
@@ -331,7 +341,8 @@ public void close() throws SQLException {
    - 彻底移除 `druid-spring-boot-3-starter`；
    - 显式引入 `org.springframework.boot:spring-boot-starter-jdbc`（引入 HikariCP）；
 3. **`aifuli-framework/aifuli-spring-boot-starter-test/pom.xml`**：
-   - 移除测试对 `DruidDataSourceAutoConfigure.class` 的引用。
+    - 移除测试对 `DruidDataSourceAutoConfigure.class` 的引用。
+4. **八进程 Nacos Config 入口**：在每个 `spring-cloud-starter-alibaba-nacos-config` 依赖处排除 `com.alibaba:druid-spring-boot-starter`、`druid-spring-boot-3-starter` 和 `druid`，保留配置中心功能。不能只排除直接 MyBatis 依赖；用 `-Dincludes=com.alibaba:druid*` 核验所有模块。dynamic-datasource 的每个 master/slave 显式声明 `type: com.zaxxer.hikari.HikariDataSource`，不把 `dynamic.hikari.*` 当作选池证据。
 
 ### 5.2 多进程连接池配置迁移映射矩阵
 全仓 8 个独立进程的连接池配置按实际形态精准迁移，严禁机械全局替换：
@@ -373,6 +384,8 @@ public void close() throws SQLException {
 1. **物理会话不可复用断言**：在测试中模拟连接清理失败，触发 `evictAndAbort()`，获取 MySQL 连接的底层 thread_id；断言后续多次从连接池借出的新连接中，**绝对不会再次出现已被淘汰的 thread_id**；
 2. **连接池容量恢复断言**：断言淘汰发生后，HikariCP 的活跃连接数（activeConnections）正确减少，且在继续借用时能够创建新连接并使总连接数恢复至配置值，证明不存在连接池泄漏；
 3. **迟到连接截断测试**：模拟获取连接耗时超过可用预算，断言抛出 `BudgetTimeoutException`，且迟到的物理连接被立即销毁淘汰，不进入事务。
+4. **完整故障链路**：通过真实 Hikari 连接注入 network/SESSION 或 manager 状态恢复故障，由包装器 cleanup 自动触发淘汰，不直接调用淘汰代替验证；以独立观察连接查询原 CONNECTION_ID() 的 processlist 消失，并覆盖多轮借用和同时占满 maximumPoolSize，等待 active=0、total=minimumIdle 的精确容量恢复。真实 Spring JdbcTransactionManager 捕获恢复异常后，协调器执行次数必须仍为 1。
+5. **控制与缓存负例**：原网络/SESSION/Statement 更短正限制保持；control SELECT/SET 半成功、慢 control/prepare/metadata/isValid 返回超期、恢复失败 suppressed 因果、manager cleanup、prepared 缓存归还恢复以及 executeLargeUpdate 全入口，均要求可重复回归测试。真实 MySQL 测试以 `*IntegrationTest` 进入 `supply-chain-integration` profile，纯逻辑及架构测试仍在默认单测门禁。
 
 ### 6.4 超时语义分离测试
 1. 验证 MySQL Connector/J 能够正确读取 `connectTimeout=1500`；构造黑洞 IP 测试物理建连在 1500ms 左右产生网络超时；

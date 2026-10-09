@@ -10,7 +10,7 @@ import java.sql.Statement;
  * 预算感知 Statement 包装器（Hikari + 标准 JDBC 链路）。
  * 依据 {@code docs/superpowers/specs/2026-10-09-druid-to-hikari-migration-design.md#44-全新statement包装器体系}：
  * 执行前守卫 queryTimeout = floor(min(5s, E-now, commandDeadline-C-now)/1s)，
- * 保留观察到的最小正限制，不足 1 秒拒绝执行；cleanup 模式跳过预算守卫。
+ * 保存原值、保留观察到的最小正限制，不足 1 秒拒绝执行；cleanup 仅恢复状态，不发新业务 SQL。
  */
 public class StandardBudgetStatementWrapper implements Statement {
 
@@ -19,22 +19,48 @@ public class StandardBudgetStatementWrapper implements Statement {
     protected final BudgetContext context;
     protected final long executionDeadlineE;
     private int observedMinPositive = 0;
+    private final int originalQueryTimeout;
+    private boolean closed;
 
     public StandardBudgetStatementWrapper(Statement delegate,
                                   StandardBudgetConnectionWrapper connectionWrapper,
                                   BudgetContext context,
-                                  long executionDeadlineE) {
+                                  long executionDeadlineE) throws SQLException {
         this.delegate = delegate;
         this.connectionWrapper = connectionWrapper;
         this.context = context;
         this.executionDeadlineE = executionDeadlineE;
+        try {
+            connectionWrapper.beforeOperation();
+            this.originalQueryTimeout = delegate.getQueryTimeout();
+            connectionWrapper.afterOperation();
+            this.observedMinPositive = originalQueryTimeout;
+            connectionWrapper.register(this);
+        } catch (SQLException | RuntimeException failure) {
+            try { delegate.close(); }
+            catch (SQLException | RuntimeException closeFailure) {
+                connectionWrapper.recordCleanupFailure(closeFailure);
+                failure.addSuppressed(closeFailure);
+            }
+            throw failure;
+        }
     }
 
     protected void beforeExecute() throws SQLException {
-        // cleanup 模式（回滚/恢复阶段）跳过预算守卫（R01.5 双模式分离）
-        if (connectionWrapper.isCleanupMode()) {
-            return;
-        }
+        connectionWrapper.requireBusinessMode();
+        int q = queryBudgetSeconds();
+        connectionWrapper.ensureSessionLockWaitTimeout(Math.min(2, q));
+        // control 可以消耗预算，安装之后必须重新计算 q，不能沿用旧值。
+        connectionWrapper.beforeOperation();
+        q = queryBudgetSeconds();
+        int effectiveTimeout = observedMinPositive > 0 ? Math.min(observedMinPositive, q) : q;
+        delegate.setQueryTimeout(effectiveTimeout);
+        observedMinPositive = effectiveTimeout;
+        connectionWrapper.beforeOperation();
+        queryBudgetSeconds();
+    }
+
+    private int queryBudgetSeconds() {
         if (context.isCancelled()) {
             throw new BudgetTimeoutException("语句执行前检测到已取消或中断");
         }
@@ -49,22 +75,40 @@ public class StandardBudgetStatementWrapper implements Statement {
             throw new BudgetTimeoutException("语句执行前可用 queryTimeout 预算不足 1 秒");
         }
 
-        // 安装 SESSION innodb_lock_wait_timeout
-        // SESSION 锁等待取 min(2, q) 秒（R01.4）
-        connectionWrapper.ensureSessionLockWaitTimeout(Math.min(2, q));
+        return q;
+    }
 
-        int effectiveTimeout = observedMinPositive > 0 ? Math.min(observedMinPositive, q) : q;
-        delegate.setQueryTimeout(effectiveTimeout);
+    /** 所有执行重载共享此入口：返回后检查，迟到 ResultSet 不泄漏。 */
+    protected <T> T executeGuarded(StandardBudgetConnectionWrapper.SqlSupplier<T> action) throws SQLException {
+        beforeExecute();
+        T value = action.get();
+        try {
+            connectionWrapper.afterOperation();
+            if (value instanceof ResultSet result) {
+                @SuppressWarnings("unchecked") T wrapped = (T) StandardBudgetJdbcViews.resultSet(result, connectionWrapper, this);
+                return wrapped;
+            }
+            return value;
+        } catch (RuntimeException failure) {
+            if (value instanceof ResultSet result) {
+                try { result.close(); } catch (SQLException closeFailure) {
+                    connectionWrapper.recordCleanupFailure(closeFailure);
+                    failure.addSuppressed(closeFailure);
+                }
+            }
+            throw failure;
+        }
     }
 
     @Override
     public void setQueryTimeout(int seconds) throws SQLException {
+        if (seconds < 0) throw new SQLException("queryTimeout 不能为负数");
         if (seconds > 0) {
             if (observedMinPositive <= 0 || seconds < observedMinPositive) {
                 observedMinPositive = seconds;
             }
         }
-        delegate.setQueryTimeout(seconds);
+        delegate.setQueryTimeout(observedMinPositive > 0 ? observedMinPositive : seconds);
     }
 
     @Override
@@ -74,73 +118,88 @@ public class StandardBudgetStatementWrapper implements Statement {
 
     @Override
     public ResultSet executeQuery(String sql) throws SQLException {
-        beforeExecute();
-        return delegate.executeQuery(sql);
+        return executeGuarded(() -> delegate.executeQuery(sql));
     }
 
     @Override
     public int executeUpdate(String sql) throws SQLException {
-        beforeExecute();
-        return delegate.executeUpdate(sql);
+        return executeGuarded(() -> delegate.executeUpdate(sql));
     }
 
     @Override
     public boolean execute(String sql) throws SQLException {
-        beforeExecute();
-        return delegate.execute(sql);
+        return executeGuarded(() -> delegate.execute(sql));
     }
 
     @Override
     public int[] executeBatch() throws SQLException {
-        beforeExecute();
-        return delegate.executeBatch();
+        return executeGuarded(delegate::executeBatch);
     }
 
     @Override
     public long[] executeLargeBatch() throws SQLException {
-        beforeExecute();
-        return delegate.executeLargeBatch();
+        return executeGuarded(delegate::executeLargeBatch);
     }
 
     @Override
     public int executeUpdate(String sql, int autoGeneratedKeys) throws SQLException {
-        beforeExecute();
-        return delegate.executeUpdate(sql, autoGeneratedKeys);
+        return executeGuarded(() -> delegate.executeUpdate(sql, autoGeneratedKeys));
     }
 
     @Override
     public int executeUpdate(String sql, int[] columnIndexes) throws SQLException {
-        beforeExecute();
-        return delegate.executeUpdate(sql, columnIndexes);
+        return executeGuarded(() -> delegate.executeUpdate(sql, columnIndexes));
     }
 
     @Override
     public int executeUpdate(String sql, String[] columnNames) throws SQLException {
-        beforeExecute();
-        return delegate.executeUpdate(sql, columnNames);
+        return executeGuarded(() -> delegate.executeUpdate(sql, columnNames));
     }
 
     @Override
     public boolean execute(String sql, int autoGeneratedKeys) throws SQLException {
-        beforeExecute();
-        return delegate.execute(sql, autoGeneratedKeys);
+        return executeGuarded(() -> delegate.execute(sql, autoGeneratedKeys));
     }
 
     @Override
     public boolean execute(String sql, int[] columnIndexes) throws SQLException {
-        beforeExecute();
-        return delegate.execute(sql, columnIndexes);
+        return executeGuarded(() -> delegate.execute(sql, columnIndexes));
     }
 
     @Override
     public boolean execute(String sql, String[] columnNames) throws SQLException {
-        beforeExecute();
-        return delegate.execute(sql, columnNames);
+        return executeGuarded(() -> delegate.execute(sql, columnNames));
     }
 
     @Override
+    public long executeLargeUpdate(String sql) throws SQLException { return executeGuarded(() -> delegate.executeLargeUpdate(sql)); }
+
+    @Override
+    public long executeLargeUpdate(String sql, int keys) throws SQLException { return executeGuarded(() -> delegate.executeLargeUpdate(sql, keys)); }
+
+    @Override
+    public long executeLargeUpdate(String sql, int[] indexes) throws SQLException { return executeGuarded(() -> delegate.executeLargeUpdate(sql, indexes)); }
+
+    @Override
+    public long executeLargeUpdate(String sql, String[] names) throws SQLException { return executeGuarded(() -> delegate.executeLargeUpdate(sql, names)); }
+
+    @Override
     public void close() throws SQLException {
-        delegate.close();
+        if (closed) return;
+        closed = true;
+        Throwable failure = null;
+        try { delegate.setQueryTimeout(originalQueryTimeout); }
+        catch (SQLException | RuntimeException restoreFailure) { failure = restoreFailure; }
+        try { delegate.close(); }
+        catch (SQLException | RuntimeException closeFailure) {
+            if (failure == null) failure = closeFailure;
+            else if (failure != closeFailure) failure.addSuppressed(closeFailure);
+        } finally { connectionWrapper.unregister(this); }
+        if (failure != null) {
+            connectionWrapper.recordCleanupFailure(failure);
+            if (failure instanceof SQLException sql) throw sql;
+            throw new SQLException("Statement 超时恢复或关闭失败", failure);
+        }
     }
 
     @Override
@@ -190,7 +249,7 @@ public class StandardBudgetStatementWrapper implements Statement {
 
     @Override
     public ResultSet getResultSet() throws SQLException {
-        return delegate.getResultSet();
+        return StandardBudgetJdbcViews.resultSet(connectionWrapper.guarded(delegate::getResultSet), connectionWrapper, this);
     }
 
     @Override
@@ -200,7 +259,7 @@ public class StandardBudgetStatementWrapper implements Statement {
 
     @Override
     public boolean getMoreResults() throws SQLException {
-        return delegate.getMoreResults();
+        return connectionWrapper.guarded(delegate::getMoreResults);
     }
 
     @Override
@@ -250,12 +309,12 @@ public class StandardBudgetStatementWrapper implements Statement {
 
     @Override
     public boolean getMoreResults(int current) throws SQLException {
-        return delegate.getMoreResults(current);
+        return connectionWrapper.guarded(() -> delegate.getMoreResults(current));
     }
 
     @Override
     public ResultSet getGeneratedKeys() throws SQLException {
-        return delegate.getGeneratedKeys();
+        return StandardBudgetJdbcViews.resultSet(connectionWrapper.guarded(delegate::getGeneratedKeys), connectionWrapper, this);
     }
 
     @Override
@@ -293,7 +352,7 @@ public class StandardBudgetStatementWrapper implements Statement {
         if (iface.isInstance(this)) {
             return iface.cast(this);
         }
-        return delegate.unwrap(iface);
+        throw new SQLException("预算语句禁止解包到底层驱动: " + iface.getName());
     }
 
     @Override
@@ -301,6 +360,6 @@ public class StandardBudgetStatementWrapper implements Statement {
         if (iface.isInstance(this)) {
             return true;
         }
-        return delegate.isWrapperFor(iface);
+        return false;
     }
 }

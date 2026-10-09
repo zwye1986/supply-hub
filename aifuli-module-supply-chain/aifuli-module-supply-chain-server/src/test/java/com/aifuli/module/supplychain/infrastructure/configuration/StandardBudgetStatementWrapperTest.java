@@ -38,7 +38,7 @@ class StandardBudgetStatementWrapperTest {
         executionDeadlineE = now + TimeUnit.SECONDS.toNanos(6);
     }
 
-    private StandardBudgetStatementWrapper newWrapper() {
+    private StandardBudgetStatementWrapper newWrapper() throws SQLException {
         return new StandardBudgetStatementWrapper(delegate, connectionWrapper, context, executionDeadlineE);
     }
 
@@ -76,14 +76,13 @@ class StandardBudgetStatementWrapperTest {
     }
 
     @Test
-    void cleanupModeSkipsBudgetGuard() throws SQLException {
-        when(connectionWrapper.isCleanupMode()).thenReturn(true);
+    void cleanupModeRejectsNewBusinessSql() throws SQLException {
+        org.mockito.Mockito.doThrow(new SQLException("清理阶段禁止执行业务 SQL")).when(connectionWrapper).requireBusinessMode();
         StandardBudgetStatementWrapper wrapper =
                 new StandardBudgetStatementWrapper(delegate, connectionWrapper, context, System.nanoTime() - 1000);
 
-        wrapper.execute("SELECT 1");
-
-        verify(delegate).execute("SELECT 1");
+        assertThatThrownBy(() -> wrapper.execute("SELECT 1")).isInstanceOf(SQLException.class);
+        verify(delegate, never()).execute("SELECT 1");
         verify(delegate, never()).setQueryTimeout(anyInt());
     }
 

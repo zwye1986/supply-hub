@@ -46,7 +46,7 @@ class StandardBudgetConnectionWrapperTest {
         executionDeadlineE = now + TimeUnit.SECONDS.toNanos(6);
     }
 
-    private StandardBudgetConnectionWrapper newWrapper() {
+    private StandardBudgetConnectionWrapper newWrapper() throws SQLException {
         return new StandardBudgetConnectionWrapper(delegate, context, executionDeadlineE, evictor);
     }
 
@@ -75,7 +75,8 @@ class StandardBudgetConnectionWrapperTest {
         verify(rawStatement).execute("SET SESSION innodb_lock_wait_timeout = 2");
         // 二次调用不重复安装
         wrapper.ensureSessionLockWaitTimeout(2);
-        verify(delegate, times(1)).createStatement();
+        // 读取与 SET 各自创建封闭 control 语句；二次相同目标不再发 SQL。
+        verify(delegate, times(2)).createStatement();
     }
 
     @Test
@@ -103,11 +104,9 @@ class StandardBudgetConnectionWrapperTest {
         Statement rawStatement = mock(Statement.class);
         when(delegate.createStatement()).thenReturn(rawStatement);
         when(delegate.isClosed()).thenReturn(false);
-        doThrow(new SQLException("network down")).when(delegate).setNetworkTimeout(any(), anyInt());
-
         StandardBudgetConnectionWrapper wrapper = newWrapper();
-        wrapper.ensureSessionLockWaitTimeout(2);
-        wrapper.close();
+        doThrow(new SQLException("network down")).when(delegate).setNetworkTimeout(any(), eq(30000));
+        assertThatThrownBy(wrapper::close).isInstanceOf(SQLException.class);
 
         assertThat(context.isCleanupFailed()).isTrue();
         verify(evictor).accept(delegate);
@@ -119,7 +118,7 @@ class StandardBudgetConnectionWrapperTest {
         when(delegate.isClosed()).thenThrow(new SQLException("connection lost"));
 
         StandardBudgetConnectionWrapper wrapper = newWrapper();
-        wrapper.close();
+        assertThatThrownBy(wrapper::close).isInstanceOf(SQLException.class);
 
         assertThat(context.isCleanupFailed()).isTrue();
         verify(evictor).accept(delegate);
@@ -128,8 +127,8 @@ class StandardBudgetConnectionWrapperTest {
 
     @Test
     void commitGuardRejectsExpiredBudget() throws SQLException {
-        StandardBudgetConnectionWrapper wrapper =
-                new StandardBudgetConnectionWrapper(delegate, context, System.nanoTime() - 1000, evictor);
+        StandardBudgetConnectionWrapper wrapper = newWrapper();
+        context.cancel();
 
         assertThatThrownBy(wrapper::commit).isInstanceOf(BudgetTimeoutException.class);
         verify(delegate, never()).commit();
@@ -137,26 +136,27 @@ class StandardBudgetConnectionWrapperTest {
 
     @Test
     void rollbackEntersCleanupModeAndBypassesGuard() throws SQLException {
-        StandardBudgetConnectionWrapper wrapper =
-                new StandardBudgetConnectionWrapper(delegate, context, System.nanoTime() - 1000, evictor);
+        StandardBudgetConnectionWrapper wrapper = newWrapper();
+        context.cancel();
 
         wrapper.rollback();
 
         verify(delegate).rollback();
         assertThat(wrapper.isCleanupMode()).isTrue();
-        // cleanup 模式下 Statement 创建不再被 E 守卫拒绝
-        assertThat(wrapper.createStatement()).isNotNull();
+        // cleanup 不发新业务 SQL；manager 状态恢复仍不受取消阻断。
+        wrapper.setAutoCommit(true);
+        verify(delegate).setAutoCommit(true);
     }
 
     @Test
     void rollbackToSavepointKeepsBudgetGuard() throws SQLException {
-        StandardBudgetConnectionWrapper wrapper =
-                new StandardBudgetConnectionWrapper(delegate, context, System.nanoTime() - 1000, evictor);
+        StandardBudgetConnectionWrapper wrapper = newWrapper();
 
         wrapper.rollback(mock(Savepoint.class));
 
         verify(delegate).rollback(any(Savepoint.class));
         assertThat(wrapper.isCleanupMode()).isFalse();
+        context.cancel();
         // 回滚到保存点后事务继续执行，预算守卫必须保持有效
         assertThatThrownBy(wrapper::createStatement).isInstanceOf(BudgetTimeoutException.class);
     }
@@ -164,11 +164,12 @@ class StandardBudgetConnectionWrapperTest {
     @Test
     void closeEvictorFailureStillClosesDelegate() throws SQLException {
         when(delegate.isClosed()).thenReturn(false);
-        doThrow(new SQLException("network down")).when(delegate).setNetworkTimeout(any(), anyInt());
         doThrow(new RuntimeException("evict boom")).when(evictor).accept(any());
 
         StandardBudgetConnectionWrapper wrapper = newWrapper();
-        wrapper.close();
+        doThrow(new SQLException("network down")).when(delegate).setNetworkTimeout(any(), eq(30000));
+        assertThatThrownBy(wrapper::close).isInstanceOf(SQLException.class).satisfies(failure ->
+                assertThat(failure.getSuppressed()).anyMatch(cause -> cause.getMessage().equals("evict boom")));
 
         assertThat(context.isCleanupFailed()).isTrue();
         verify(delegate).close();

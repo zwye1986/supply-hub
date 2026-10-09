@@ -1,8 +1,6 @@
 package com.aifuli.module.supplychain.infrastructure.configuration;
 
 import com.zaxxer.hikari.HikariDataSource;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.DisposableBean;
 
 import javax.sql.DataSource;
@@ -24,8 +22,6 @@ import java.util.Objects;
  * </ul>
  */
 public class StandardBudgetRoutingDataSource implements DataSource, DisposableBean, AutoCloseable {
-
-    private static final Logger log = LoggerFactory.getLogger(StandardBudgetRoutingDataSource.class);
 
     private final HikariDataSource rawDataSource;
 
@@ -70,9 +66,11 @@ public class StandardBudgetRoutingDataSource implements DataSource, DisposableBe
         long floorSec = (long) Math.floor((remaining - BudgetContext.CLEANUP_RESERVE_NANOS) / 1_000_000_000.0);
         // floor < 1 蕴含 remaining < 2000ms，被上一条件覆盖；保留为 R01.1 契约意图的显式表述
         if (context.isCancelled() || remaining < BudgetContext.ADMISSION_THRESHOLD_NANOS || floorSec < 1) {
-            evictAndAbort(rawConn);
-            throw new BudgetTimeoutException("借连接返回后检测到已超期或取消，拒绝暴露给事务管理器: remainingMs="
+            BudgetTimeoutException failure = new BudgetTimeoutException("借连接返回后检测到已超期或取消，拒绝暴露给事务管理器: remainingMs="
                     + (remaining / 1_000_000L));
+            try { evictAndAbort(rawConn); }
+            catch (RuntimeException cleanupFailure) { context.markCleanupFailed(); failure.addSuppressed(cleanupFailure); }
+            throw failure;
         }
 
         // 4. 首检通过：计算执行期限 E = min(commandDeadline - C, acquiredNano + 6s)
@@ -91,17 +89,33 @@ public class StandardBudgetRoutingDataSource implements DataSource, DisposableBe
         if (conn == null) {
             return;
         }
+        Throwable failure = null;
+        Connection physical = conn;
+        // 必须在 Hikari 淘汰前通过 JDBC 公开接口捕获驱动；淘汰后代理可能已换为 CLOSED_CONNECTION。
         try {
-            rawDataSource.evictConnection(conn);
-        } catch (Throwable t) {
-            log.warn("[连接池淘汰] Hikari evictConnection 失败 message={}", t.getMessage(), t);
-        } finally {
-            try {
-                conn.abort(Runnable::run);
-            } catch (Throwable t) {
-                log.error("[连接池淘汰] 物理连接 abort 异常", t);
-            }
+            Connection unwrapped = conn.unwrap(Connection.class);
+            if (unwrapped != null) physical = unwrapped;
+        } catch (SQLException | RuntimeException captureFailure) { failure = captureFailure; }
+        try { rawDataSource.evictConnection(conn); }
+        catch (RuntimeException evictionFailure) { failure = appendFailure(failure, evictionFailure); }
+        try { physical.abort(Runnable::run); }
+        catch (SQLException | RuntimeException abortFailure) { failure = appendFailure(failure, abortFailure); }
+        finally {
+            try { conn.close(); }
+            catch (SQLException | RuntimeException closeFailure) { failure = appendFailure(failure, closeFailure); }
         }
+        if (failure != null) {
+            BudgetContext context = BudgetContext.current();
+            if (context != null) context.markCleanupFailed();
+            if (failure instanceof RuntimeException runtime) throw runtime;
+            throw new IllegalStateException("预算连接淘汰失败", failure);
+        }
+    }
+
+    private static Throwable appendFailure(Throwable current, Throwable next) {
+        if (current == null) return next;
+        if (current != next) current.addSuppressed(next);
+        return current;
     }
 
     @Override

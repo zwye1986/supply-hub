@@ -34,7 +34,7 @@ public class StandardBudgetCallableStatementWrapper extends StandardBudgetPrepar
     public StandardBudgetCallableStatementWrapper(CallableStatement delegate,
                                                   StandardBudgetConnectionWrapper connectionWrapper,
                                                   BudgetContext context,
-                                                  long executionDeadlineE) {
+                                           long executionDeadlineE) throws SQLException {
         super(delegate, connectionWrapper, context, executionDeadlineE);
         this.callableDelegate = delegate;
     }

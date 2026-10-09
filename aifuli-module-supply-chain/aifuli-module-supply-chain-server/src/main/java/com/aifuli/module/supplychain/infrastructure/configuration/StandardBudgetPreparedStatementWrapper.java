@@ -32,28 +32,28 @@ public class StandardBudgetPreparedStatementWrapper extends StandardBudgetStatem
     public StandardBudgetPreparedStatementWrapper(PreparedStatement delegate,
                                           StandardBudgetConnectionWrapper connectionWrapper,
                                           BudgetContext context,
-                                          long executionDeadlineE) {
+                                          long executionDeadlineE) throws SQLException {
         super(delegate, connectionWrapper, context, executionDeadlineE);
         this.preparedDelegate = delegate;
     }
 
     @Override
     public ResultSet executeQuery() throws SQLException {
-        beforeExecute();
-        return preparedDelegate.executeQuery();
+        return executeGuarded(preparedDelegate::executeQuery);
     }
 
     @Override
     public int executeUpdate() throws SQLException {
-        beforeExecute();
-        return preparedDelegate.executeUpdate();
+        return executeGuarded(preparedDelegate::executeUpdate);
     }
 
     @Override
     public boolean execute() throws SQLException {
-        beforeExecute();
-        return preparedDelegate.execute();
+        return executeGuarded(preparedDelegate::execute);
     }
+
+    @Override
+    public long executeLargeUpdate() throws SQLException { return executeGuarded(preparedDelegate::executeLargeUpdate); }
 
     @Override
     public void setNull(int parameterIndex, int sqlType) throws SQLException {
