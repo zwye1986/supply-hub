@@ -25,6 +25,7 @@ import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerProject
 import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerMapper;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerProjectMapper;
 import com.aifuli.module.supplychain.tradecore.buyer.domain.BuyerStatus;
+import com.aifuli.module.supplychain.tradecore.buyer.domain.BuyerProjectStatus;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSpuDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
@@ -50,6 +51,10 @@ import com.aifuli.module.supplychain.tradecore.supply.domain.ConnectorVersionSta
 import com.aifuli.module.supplychain.tradecore.supply.domain.InventorySourceStatus;
 import com.aifuli.module.supplychain.tradecore.supply.domain.OfferStatus;
 import com.aifuli.module.supplychain.tradecore.supply.domain.SupplierStatus;
+import com.aifuli.module.supplychain.tradecore.account.domain.Money;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -92,6 +97,12 @@ public class SupplierRoutingApplicationService {
     private static final String ROUTE_MODE_FIXED = "FIXED";
     private static final String ROUTE_MODE_AUTO = "AUTO";
     private static final String CHECK_MODE_UNSUPPORTED = "UNSUPPORTED";
+    private static final String CHECK_MODE_REQUIRED = "REQUIRED";
+    private static final String CHECK_MODE_OPTIONAL = "OPTIONAL";
+    private static final String INVENTORY_REMOTE_ON_DEMAND = "REMOTE_ON_DEMAND";
+    private static final short CONNECTOR_ACTIVE = 10;
+    private static final ObjectMapper CONFIG_JSON = new ObjectMapper()
+            .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
     /** 候选淘汰原因：供货价高于规则配置的最高可接受供货价。 */
     public static final String REJECT_PRICE_OVER_THRESHOLD = "PRICE_OVER_THRESHOLD";
     /** 候选淘汰原因：供应商与平台 SKU 的自然日累计供货配额已耗尽。 */
@@ -118,27 +129,50 @@ public class SupplierRoutingApplicationService {
     private final SupplierConnectorVersionMapper connectorVersionMapper;
     private final InventorySourceMapper inventorySourceMapper;
 
-    @Transactional(transactionManager = TRANSACTION_MANAGER, readOnly = true)
+    @Transactional(transactionManager = TRANSACTION_MANAGER, readOnly = true,
+            noRollbackFor = SupplyQualificationUnavailableException.class)
     public RoutingSnapshot route(RoutingInput input) {
-        log.debug("标准商品路由入口 buyerId={} projectId={} platformSkuId={} quantity={} businessTime={}",
+        log.debug("[routeEvaluate][标准商品路由入口] buyerId={}, projectId={}, platformSkuId={}, quantity={}, businessTime={}",
                 input.buyerId(), input.projectId(), input.platformSkuId(), input.quantity(), input.businessTime());
         if (input.quantity() != 1) {
             throw new IllegalArgumentException("M1 standard-product routing only accepts quantity one");
         }
         requireActiveSubject(input);
         SupplierRoutingPolicyDO policy = requireOnly(
-                policyMapper.selectActiveByType(ROUTING_TYPE), "active standard-product routing policy");
-        SupplierRoutingPolicyVersionDO version = requireOnly(
-                versionMapper.selectEffective(policy.getId(), input.businessTime()),
-                "effective published routing policy version");
-        MatchedRule matched = matchRule(version.getId(), input);
+                policyMapper.selectActiveByType(ROUTING_TYPE), "active standard-product routing policy",
+                SupplyQualificationUnavailableException.Reason.NO_ACTIVE_POLICY);
+        FactBoundary boundary = new FactBoundary(input.businessTime());
+        for (SupplierRoutingPolicyVersionDO published : versionMapper.selectPublished(policy.getId())) {
+            boundary.include(published.getValidFrom());
+            boundary.include(published.getValidTo());
+        }
+        SupplierRoutingPolicyVersionDO version;
+        MatchedRule matched;
+        try {
+            version = requireOnly(versionMapper.selectEffective(policy.getId(), input.businessTime()),
+                    "effective published routing policy version",
+                    SupplyQualificationUnavailableException.Reason.NO_EFFECTIVE_POLICY_VERSION);
+            if (!Objects.equals(version.getPolicyId(), policy.getId())) {
+                throw new IllegalStateException("Published routing version references a foreign policy");
+            }
+            boundary.include(version.getValidTo());
+            matched = matchRule(version.getId(), input);
+        } catch (SupplyQualificationUnavailableException missing) {
+            throw new SupplyQualificationUnavailableException(missing.reason(), missing.getMessage(), boundary.next);
+        }
         List<CandidateSpec> specs = candidateSpecs(matched.rule(), input);
         if (specs.isEmpty()) {
+            if (ROUTE_MODE_AUTO.equals(matched.rule().getRouteMode())
+                    && SCOPE_ALL.equals(matched.rule().getSupplierMode())) {
+                throw new SupplyQualificationUnavailableException(
+                        SupplyQualificationUnavailableException.Reason.NO_DYNAMIC_CANDIDATE,
+                        "Matched routing rule has no dynamic candidates", boundary.next);
+            }
             throw new IllegalStateException("Matched routing rule has no candidates: "
                     + matched.rule().getRuleCode());
         }
         List<RoutingCandidate> candidates = specs.stream()
-                .map(spec -> resolveCandidate(spec, input, matched.rule().getMaxSupplyPriceCents()))
+                .map(spec -> resolveCandidate(spec, input, matched.rule().getMaxSupplyPriceCents(), boundary))
                 .toList();
         RoutingSortConfig sortConfig = new RoutingSortConfig(
                 strategy(matched.rule().getStrategyPriority1()),
@@ -152,7 +186,8 @@ public class SupplierRoutingApplicationService {
                         : policy.getTimelinessWeight());
         RoutingDecision decision = new SupplierRoutingEngine().decide(input, candidates, sortConfig);
         return new RoutingSnapshot(policy.getId(), version.getId(), version.getVersionNo(),
-                version.getConfigDigest(), matched.rule().getId(), matched.rule().getRuleCode(), decision);
+                version.getConfigDigest(), matched.rule().getId(), matched.rule().getRuleCode(), decision,
+                boundary.next);
     }
 
     private static RoutingStrategy strategy(String name) {
@@ -167,7 +202,12 @@ public class SupplierRoutingApplicationService {
     private MatchedRule matchRule(Long policyVersionId, RoutingInput input) {
         List<StdRoutingRuleDO> rules = ruleMapper.selectByPolicyVersionId(policyVersionId);
         if (rules.isEmpty()) {
-            throw new IllegalStateException("Routing requires at least one published rule, but found 0");
+            throw new SupplyQualificationUnavailableException(
+                    SupplyQualificationUnavailableException.Reason.NO_PUBLISHED_RULE,
+                    "Routing requires at least one published rule, but found 0");
+        }
+        if (rules.stream().anyMatch(rule -> !Objects.equals(rule.getPolicyVersionId(), policyVersionId))) {
+            throw new IllegalStateException("Published routing rule references a foreign policy version");
         }
         BuyerDO buyer = buyerMapper.selectById(input.buyerId());
         String buyerCode = buyer == null ? null : buyer.getBuyerCode();
@@ -224,7 +264,9 @@ public class SupplierRoutingApplicationService {
             matched.add(new RankedRule(rule, tier));
         }
         if (matched.isEmpty()) {
-            throw new IllegalStateException("Routing requires a matched enabled rule or the global default rule");
+            throw new SupplyQualificationUnavailableException(
+                    SupplyQualificationUnavailableException.Reason.NO_MATCHED_RULE,
+                    "Routing requires a matched enabled rule or the global default rule");
         }
         matched.sort(Comparator
                 .comparingInt((RankedRule item) -> item.tier().ordinal())
@@ -267,10 +309,13 @@ public class SupplierRoutingApplicationService {
     private String resolveProductTypeCode(Long platformSkuId) {
         PlatformSkuDO sku = skuMapper.selectById(platformSkuId);
         if (sku == null || sku.getSpuId() == null) {
-            return null;
+            throw new IllegalStateException("Routing SKU references a missing SPU identity");
         }
         PlatformSpuDO spu = spuMapper.selectById(sku.getSpuId());
-        return spu == null ? null : spu.getProductType();
+        if (spu == null) {
+            throw new IllegalStateException("Routing SKU references a missing SPU");
+        }
+        return spu.getProductType();
     }
 
     /** 候选来源：FIXED 主供应商 / AUTO+SPECIFIED 保序候选 / AUTO+ALL 按 SKU 有效 offer 动态解析。 */
@@ -281,6 +326,9 @@ public class SupplierRoutingApplicationService {
             }
             return List.of(new CandidateSpec(rule.getPrimarySupplierId(), 0,
                     CHECK_MODE_UNSUPPORTED, null, CHECK_MODE_UNSUPPORTED, null, CHECK_MODE_UNSUPPORTED, null));
+        }
+        if (!ROUTE_MODE_AUTO.equals(rule.getRouteMode())) {
+            throw new IllegalStateException("Published routing rule has unsupported route mode");
         }
         if (SCOPE_ALL.equals(rule.getSupplierMode())) {
             Set<Long> supplierIds = new LinkedHashSet<>();
@@ -309,7 +357,7 @@ public class SupplierRoutingApplicationService {
     }
 
     private RoutingCandidate resolveCandidate(CandidateSpec configured, RoutingInput input,
-                                              Long maxSupplyPriceCents) {
+                                               Long maxSupplyPriceCents, FactBoundary boundary) {
         SupplierDO supplier = supplierMapper.selectById(configured.supplierId());
         if (supplier == null) {
             throw new IllegalStateException("Published routing candidate references a missing supplier");
@@ -320,7 +368,7 @@ public class SupplierRoutingApplicationService {
         }
         List<ResolvedOffer> effectiveOffers = offerMapper
                 .selectPublishedBySupplierAndSku(supplier.getId(), input.platformSkuId()).stream()
-                .map(offer -> resolveOffer(offer, supplier, input))
+                .map(offer -> resolveOffer(offer, supplier, input, boundary))
                 .filter(item -> item != null)
                 .toList();
         if (effectiveOffers.isEmpty()) {
@@ -329,7 +377,7 @@ public class SupplierRoutingApplicationService {
             structuralReasons.add("AMBIGUOUS_EFFECTIVE_OFFER");
         }
         ResolvedOffer resolved = effectiveOffers.size() == 1 ? effectiveOffers.getFirst() : null;
-        if (structuralReasons.isEmpty() && exceedsDailyQuota(supplier.getId(), input)) {
+        if (exceedsDailyQuota(supplier.getId(), input, boundary) && structuralReasons.isEmpty()) {
             structuralReasons.add(REJECT_DAILY_QUOTA_EXCEEDED);
         }
         if (input.deliveryAdcode() != null && !SupplierDeliveryRegionCoverage.covers(
@@ -340,6 +388,10 @@ public class SupplierRoutingApplicationService {
         Eligibility eligibility = evaluateEligibility(configured, input, supplier.getSupplierCode(),
                 resolved == null ? null : resolved.version().getSupplierSettlementUnitPrice(),
                 maxSupplyPriceCents, structuralReasons);
+        RoutingInput.CandidateFacts facts = input.factsFor(supplier.getSupplierCode());
+        boundary.includeFact(configured.inventoryCheckMode(), configured.inventoryMaxAgeSeconds(), facts.inventory());
+        boundary.includeFact(configured.balanceCheckMode(), configured.balanceMaxAgeSeconds(), facts.balance());
+        boundary.includeFact(configured.healthCheckMode(), configured.healthMaxAgeSeconds(), facts.health());
         return new RoutingCandidate(configured.candidatePriority(), supplier.getId(),
                 supplier.getSupplierCode(), supplier.getSupplierName(),
                 resolved == null ? null : resolved.offer().getId(),
@@ -360,13 +412,14 @@ public class SupplierRoutingApplicationService {
      * 失败/取消的订单退出统计，重试可重新使用释放的额度。
      * 设计见 {@code docs/superpowers/specs/2026-09-24-standard-order-routing-execution-design.md#4-每日累计配额与并发}。
      */
-    private boolean exceedsDailyQuota(Long supplierId, RoutingInput input) {
+    private boolean exceedsDailyQuota(Long supplierId, RoutingInput input, FactBoundary boundary) {
         SupplierSkuDailyQuotaDO quota = dailyQuotaMapper.selectBySupplierAndSku(
                 supplierId, input.platformSkuId());
         if (quota == null) {
             return false;
         }
         LocalDateTime start = input.businessTime().toLocalDate().atStartOfDay();
+        boundary.include(start.plusDays(1));
         Long reserved = orderMapper.sumReservedSupplierSkuQuantity(
                 SupplyChainOrderTypes.ORDER_TYPE_CARD, supplierId, input.platformSkuId(),
                 start, start.plusDays(1), SupplyChainOrderStatus.FAILED.getCode(),
@@ -374,25 +427,27 @@ public class SupplierRoutingApplicationService {
         long used = reserved == null ? 0L : reserved;
         boolean exceeded = used > quota.getDailyLimit() - input.quantity();
         if (exceeded) {
-            log.debug("供应商SKU自然日配额不足 supplierId={} platformSkuId={} day={} used={} quantity={} dailyLimit={}",
+            log.debug("[routeQuota][供应商SKU自然日配额不足] supplierId={}, platformSkuId={}, day={}, used={}, quantity={}, dailyLimit={}",
                     supplierId, input.platformSkuId(), start.toLocalDate(), used,
                     input.quantity(), quota.getDailyLimit());
         }
         return exceeded;
     }
 
-    private ResolvedOffer resolveOffer(SupplierOfferDO offer, SupplierDO supplier, RoutingInput input) {
-        if (offer.getStatus() != OfferStatus.PUBLISHED.getCode() || offer.getCurrentVersionId() == null) {
+    /** 已发布指针先验真，正常停用／过期才过滤；不能把配置损坏伪装成缺供给。见设计 §7.1。 */
+    private ResolvedOffer resolveOffer(SupplierOfferDO offer, SupplierDO supplier, RoutingInput input,
+                                       FactBoundary boundary) {
+        if (offer.getStatus() != OfferStatus.PUBLISHED.getCode()) {
             return null;
         }
+        if (!Objects.equals(offer.getSupplierId(), supplier.getId())
+                || !Objects.equals(offer.getPlatformSkuId(), input.platformSkuId())
+                || offer.getCurrentVersionId() == null) {
+            throw new IllegalStateException("Published offer has broken ownership or version pointer");
+        }
         SupplierOfferVersionDO version = offerVersionMapper.selectById(offer.getCurrentVersionId());
-        if (version == null || !offer.getId().equals(version.getOfferId())
-                || !effectiveAt(version.getValidFrom(), version.getValidTo(), input.businessTime())
-                || input.quantity() < version.getMinQuantity()
-                || input.quantity() > version.getMaxQuantity()
-                || (input.quantity() - version.getMinQuantity()) % version.getQuantityStep() != 0
-                || !"CNY".equals(version.getCurrency())) {
-            return null;
+        if (version == null || !offer.getId().equals(version.getOfferId())) {
+            throw new IllegalStateException("Published offer references a missing or foreign version");
         }
         SupplierConnectorVersionDO connectorVersion =
                 connectorVersionMapper.selectById(version.getConnectorVersionId());
@@ -400,17 +455,46 @@ public class SupplierRoutingApplicationService {
                 ? null : connectorMapper.selectById(connectorVersion.getConnectorId());
         InventorySourceDO inventory = inventorySourceMapper.selectById(version.getInventorySourceId());
         if (connectorVersion == null || connector == null || inventory == null
+                || !Objects.equals(connector.getSupplierId(), supplier.getId())
+                || !Objects.equals(inventory.getSupplierId(), supplier.getId())
+                || !Objects.equals(inventory.getPlatformSkuId(), input.platformSkuId())) {
+            throw new IllegalStateException("Published offer references missing or foreign supply dependencies");
+        }
+        requireObjectJson(version.getFulfillmentConfigJson(), "offer fulfillment");
+        requireObjectJson(connectorVersion.getAdapterConfigJson(), "connector adapter");
+        if (connector.getStatus() == CONNECTOR_ACTIVE) {
+            SupplierConnectorVersionDO current = connector.getCurrentVersionId() == null ? null
+                    : connectorVersionMapper.selectById(connector.getCurrentVersionId());
+            if (current == null || !Objects.equals(current.getConnectorId(), connector.getId())) {
+                throw new IllegalStateException("Active connector references a missing or foreign current version");
+            }
+        }
+        boundary.include(version.getValidFrom());
+        boundary.include(version.getValidTo());
+        if (!effectiveAt(version.getValidFrom(), version.getValidTo(), input.businessTime())
+                || input.quantity() < version.getMinQuantity()
+                || input.quantity() > version.getMaxQuantity()
+                || (input.quantity() - version.getMinQuantity()) % version.getQuantityStep() != 0
+                || !Money.CURRENCY_CNY.equals(version.getCurrency())
                 || connectorVersion.getStatus() != ConnectorVersionStatus.PUBLISHED.getCode()
-                || connector.getStatus() != 10
+                || connector.getStatus() != CONNECTOR_ACTIVE
                 || !connectorVersion.getId().equals(connector.getCurrentVersionId())
-                || !connector.getSupplierId().equals(supplier.getId())
                 || inventory.getStatus() != InventorySourceStatus.ACTIVE.getCode()
-                || !inventory.getSupplierId().equals(supplier.getId())
-                || !inventory.getPlatformSkuId().equals(input.platformSkuId())
-                || !"REMOTE_ON_DEMAND".equals(inventory.getSourceType())) {
+                || !INVENTORY_REMOTE_ON_DEMAND.equals(inventory.getSourceType())) {
             return null;
         }
         return new ResolvedOffer(offer, version);
+    }
+
+    private static void requireObjectJson(String json, String description) {
+        try {
+            var node = json == null ? null : CONFIG_JSON.readTree(json);
+            if (node == null || !node.isObject()) {
+                throw new IllegalStateException("Published " + description + " configuration is not a JSON object");
+            }
+        } catch (JsonProcessingException failure) {
+            throw new IllegalStateException("Published " + description + " configuration JSON is invalid", failure);
+        }
     }
 
     private static Eligibility evaluateEligibility(CandidateSpec configured,
@@ -444,9 +528,16 @@ public class SupplierRoutingApplicationService {
                                             RoutingInput.Fact fact, LocalDateTime businessTime,
                                             Long requiredAmount) {
         if (CHECK_MODE_UNSUPPORTED.equals(mode)) {
+            if (maxAgeSeconds != null) {
+                throw new IllegalStateException("Published unsupported fact check has a maximum age");
+            }
             return new CheckResult("NOT_CHECKED", null, false);
         }
-        boolean required = "REQUIRED".equals(mode);
+        if ((!CHECK_MODE_REQUIRED.equals(mode) && !CHECK_MODE_OPTIONAL.equals(mode))
+                || maxAgeSeconds == null || maxAgeSeconds <= 0) {
+            throw new IllegalStateException("Published routing candidate has invalid fact check mode");
+        }
+        boolean required = CHECK_MODE_REQUIRED.equals(mode);
         if (fact == null) {
             return new CheckResult("NOT_CAPTURED",
                     required ? factName + "_FACT_REQUIRED" : null, !required);
@@ -475,7 +566,20 @@ public class SupplierRoutingApplicationService {
         if (buyer == null || buyer.getStatus() != BuyerStatus.ACTIVE.getCode()
                 || sku == null || sku.getStatus() != CatalogEntityStatus.ACTIVE.getCode()
                 || !input.fulfillmentType().equals(sku.getFulfillmentType())) {
-            throw new IllegalArgumentException("Routing buyer or platform SKU is not active and exact");
+            throw new SupplyQualificationUnavailableException(
+                    SupplyQualificationUnavailableException.Reason.SUBJECT_NOT_ACTIVE_OR_EXACT,
+                    "Routing buyer or platform SKU is not active and exact");
+        }
+        if (input.projectId() != null) {
+            BuyerProjectDO project = projectMapper.selectById(input.projectId());
+            if (project == null || !Objects.equals(project.getBuyerId(), input.buyerId())) {
+                throw new IllegalStateException("Routing project is missing or belongs to another buyer");
+            }
+            if (project.getStatus() != BuyerProjectStatus.ACTIVE.getCode()) {
+                throw new SupplyQualificationUnavailableException(
+                        SupplyQualificationUnavailableException.Reason.SUBJECT_NOT_ACTIVE_OR_EXACT,
+                        "Routing project is not active");
+            }
         }
     }
 
@@ -483,7 +587,12 @@ public class SupplierRoutingApplicationService {
         return !from.isAfter(at) && (to == null || to.isAfter(at));
     }
 
-    private static <T> T requireOnly(List<T> values, String description) {
+    private static <T> T requireOnly(List<T> values, String description,
+                                     SupplyQualificationUnavailableException.Reason missingReason) {
+        if (values.isEmpty()) {
+            throw new SupplyQualificationUnavailableException(missingReason,
+                    "Routing requires exactly one " + description + ", but found 0");
+        }
         if (values.size() != 1) {
             throw new IllegalStateException("Routing requires exactly one " + description
                     + ", but found " + values.size());
@@ -499,8 +608,12 @@ public class SupplierRoutingApplicationService {
     }
 
     public record RoutingSnapshot(Long policyId, Long policyVersionId, int policyVersionNo,
-                                  byte[] configDigest, Long ruleId, String ruleCode,
-                                  RoutingDecision decision) {
+                                   byte[] configDigest, Long ruleId, String ruleCode,
+                                   RoutingDecision decision, LocalDateTime nextFactBoundary) {
+        public RoutingSnapshot(Long policyId, Long policyVersionId, int policyVersionNo,
+                               byte[] configDigest, Long ruleId, String ruleCode, RoutingDecision decision) {
+            this(policyId, policyVersionId, policyVersionNo, configDigest, ruleId, ruleCode, decision, null);
+        }
         public RoutingSnapshot {
             configDigest = Arrays.copyOf(configDigest, configDigest.length);
         }
@@ -532,5 +645,27 @@ public class SupplierRoutingApplicationService {
     }
 
     private record CheckResult(String snapshotStatus, String rejectionReason, boolean unknown) {
+    }
+
+    /** 每次路由独占的未来事实边界收集器，包含未选中候选，避免状态改变前投影误续期。 */
+    private static final class FactBoundary {
+        private final LocalDateTime at;
+        private LocalDateTime next;
+
+        private FactBoundary(LocalDateTime at) { this.at = at; }
+
+        private void include(LocalDateTime value) {
+            if (value != null && value.isAfter(at) && (next == null || value.isBefore(next))) {
+                next = value;
+            }
+        }
+
+        private void includeFact(String mode, Integer maxAge, RoutingInput.Fact fact) {
+            if (!CHECK_MODE_UNSUPPORTED.equals(mode) && fact != null) {
+                include(fact.validUntil());
+                include(fact.observedAt().plusSeconds(maxAge));
+                include(fact.observedAt());
+            }
+        }
     }
 }
