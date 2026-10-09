@@ -129,8 +129,8 @@ byte[] aad = aadText.getBytes(StandardCharsets.UTF_8);
 - Modify: `J/border/fulfillment/domain/OperationAssetFact.java`、`J/border/fulfillment/application/SupplierOrderLifecycle.java`（仅persistAssets封闭payload支持）。
 - Test: `T/border/fulfillment/application/huashengflow/HuashengType201AssetCodecTest.java`、`HuashengAssetPersistenceIntegrationTest.java`。
 
-- [ ] 使用A parser产生卡片，不反射构造协议DTO；写四种validTime（ABSENT/null/空串/中文）及首尾空白的测试，code/pass逐字不变。
-- [ ] RED运行`HuashengType201AssetCodecTest`；新增封闭payload，按规格§7逐字段处理三态，id只写protectedPayload，externalAssetId为null。核心编码必须保留null而非Optional丢弃：
+- [x] 使用A parser产生卡片，不反射构造协议DTO；写四种validTime（ABSENT/null/空串/中文）及首尾空白的测试，code/pass逐字不变。
+- [x] RED运行`HuashengType201AssetCodecTest`；新增封闭payload，按规格§7逐字段处理三态，id只写protectedPayload，externalAssetId为null。核心编码必须保留null而非Optional丢弃：
 
 ```java
 if (field instanceof HuashengField.Null<?>) node.putNull(name);
@@ -143,9 +143,11 @@ else if (field instanceof HuashengField.Value<?> value) {
 
 此片codec内部局部变量field/name/node来自对应协议字段与固定白名单；不能接收调用者任意Map。type固定201；其它六型/新增非空载荷拒绝。
 
-- [ ] OperationAssetFact增可选protectedPayload、防御复制和安全toString；华昇专用工厂跳过trim，旧构造入口不统一改造。持久层验证标准字段与supplierPayload相等后全量加密；两套身份不得不同。
-- [ ] 写IT并先RED：真实encrypt→insert→decrypt逐字一致；跨AAD搬移失败；重复相同整套幂等；跨单同凭证指纹冲突；相同卡片id但不同卡密不错误冲突；冒号分隔碰撞负例。指纹固定JSON顺序supplierId/type/code/pass，使用HmacFingerprintPort，不裸SHA哈希卡密。
-- [ ] 定向GREEN纯测和`HuashengAssetPersistenceIntegrationTest`；assert数据库没有明文卡密，validFrom/Until都NULL，不提交资金。
+- [x] OperationAssetFact增可选protectedPayload、防御复制和安全toString；华昇专用工厂跳过trim，旧构造入口不统一改造。持久层验证标准字段与supplierPayload相等后全量加密；两套身份不得不同。
+- [x] 写IT并先RED：真实encrypt→insert→decrypt逐字一致；跨AAD搬移失败；重复相同整套幂等；跨单同凭证指纹冲突；相同卡片id但不同卡密不错误冲突；冒号分隔碰撞负例。指纹固定JSON顺序supplierId/type/code/pass，使用HmacFingerprintPort，不裸SHA哈希卡密。
+- [x] 定向GREEN纯测和`HuashengAssetPersistenceIntegrationTest`；assert数据库没有明文卡密，validFrom/Until都NULL，不提交资金。
+
+Task2最终本地证据：`huasheng-task2-regression-final-evidence.log`退出0/BUILD SUCCESS，Surefire API123＋server1921（含codec10），Failsafe资产8＋Operation1＋Liquibase3，均零失败/错误/跳过。保持原架构规则、历史DDL、A1～A5、QNM源码和资金算法不变；自审builder脱敏另有RED→GREEN，事务成功日志只afterCommit、回滚/幂等无新增成功日志，临时加密/HMAC输入擦除已测。真实命令/XML与范围见`docs/集成测试.md`§7.90.5；资产基础不等同生产资金/查询闭环，Task3～8待实施，本轮未自动提交/推送/部署或真实外呼。
 
 ## 4. Task 3：冻结配置投影、metadata与生产executor
 

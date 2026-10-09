@@ -218,6 +218,20 @@ OperationAssetFact增加可选不可变`protectedPayload`字节值，用于这�
 
 同BOrder／sequence重复事实：完整payload的三态/原值相同是幂等；卡密或其它已保存字段不同开冲突case，不能覆盖。跨单唯一键冲突须整个资产/资金事务回滚，再以独立受控事务开case；不能catch异常继续提交一半资产。
 
+### 7.1 Task2桥接与持久基础边界
+
+`HuashengType201AssetCodec.toFact(card)`仅接受A parser产生的T201卡，生成sequence=1的CARD_CODE_SECRET事实；crc/url/urlPass如为VALUE只能空白，不接受其它型非空载荷，仍完整保留ABSENT/NULL/空串/空白。id遵循A实际接受范围（非负Long），仅在加密payload保存。codec使用固定白名单/顺序写根schema/标准字段/supplierPayload，不序列化协议对象；不调用A内部结果载体。`validate(fact)`对受保护payload做1MiB/深度32/字符串16384限制、重复键/尾随/未知字段/严格整数校验，核标准code/pass与协议字段逐字相等，并核sequence=1、externalAssetId与日期均NULL；返回固定顺序规范化字节，字段三态不变。`fingerprintInput(supplierId,fact)`只输出固定顺序UTF-8 JSON `supplierId/type/code/pass`，不含id/有效期/订单盐，交由现有HmacFingerprintPort的FULFILLMENT_ASSET purpose生成指纹。
+
+OperationAssetFact保留现有7参数构造和builder默认行为；仅携带非空protectedPayload的专用工厂路径保留code/pass原值，其数组双向复制，并固定安全toString/禁止意外通用序列化。通用builder即便传入protectedPayload也不能绕过持久入口的封闭schema核验；这不是生产履约授权，Task4另以permit封闭终结入口。
+
+事实本体及Lombok builder的toString均固定脱敏，禁止builder默认诊断输出卡号/卡密/数组；序列化拒绝器由OperationAssetFact自有纯序列化类型提供，不让通用领域事实依赖华昇协议failure包。华昇资产maskedValue固定为`****`，不复用QNM展示工具，不泄漏短卡号，也不更改旧展示分支。
+
+SupplierOrderLifecycle仅在persistAssets对protectedPayload分支执行以上校验/指纹/整体加密；旧无payload分支不更改指纹或trim规则。华昇分支先查同BOrder/sequence现有资产（调用者已持有聚合锁），核原归属/type/外部id/日期和解密完整规范化payload：相同则跳过insert，不同固定安全抛出冲突；不得按同卡号忽略有效期或NULL/ABSENT差异。跨单重复由既有supplierId/fingerprint唯一键拒绝，异常不在资产方法中吞掉，整笔外层事务回滚。Task2只验证持久基础与原事务回滚；人工case/未知资产隔离/资金收敛仍由Task4受控入口实现，不增加无permit公共存储或终结接口。成功资产日志仅在本事务afterCommit写安全身份；加密/指纹与比较临时明文finally擦除。
+
+已有密文比较使用`validateStoredPayload(expectedFact,decryptedPayload)`校验并规范化；入参不修改，方法内部临时拷贝finally擦除，外层持久方法擦除原解密数组。不能为一次比较构造另一个长期持有payload副本的临时OperationAssetFact；JSON树及String由JVM回收，不承诺不可变字符串原地擦除。
+
+Task2真实MySQL测试在独占空库全量Liquibase下，通过测试反射调用真实private persistAssets，使用真实Mapper/TransactionTemplate/AES-GCM/HMAC/业务编号；不经旧通用SUCCEEDED入口、不伪造生产资金成功。隔离测试只提供资产所需关联身份（无物理外键），不构建可售配置或订单闭环，资金表保持无流水；此证据不等同Task8生产链联调。
+
 ProjectStandardAssetPayloadDecoder识别新增schema，验证supplierPayload与标准字段；旧标准载荷读取不在本期重构。项目ProjectStandardOrderAssetRespDTO和管理CardInfo增加可选`validTimeRaw`及`validTimeState`（ABSENT／NULL／VALUE），原始含义为“供应商批次有效期原文，不保证日期格式”；字段来自加密payload，无新增日期DDL语义。内部BuyerFulfillmentQueryService原解密payload接口保持完整返回。
 
 真实前端 `src/api/order/types.ts`／`index.ts`／`src/views/supplier/order/components/ExclusiveOrderInfo.vue`展示规则：VALUE且原文非空优先原样显示，空串或ABSENT／NULL显示“供应商未提供”；没有新增state的既有响应仍用原validFrom／validUntil格式化。不可把中文/非ISO原文丢给Date解析，也不trim或改变卡号／密码。继续原归属校验、权限与敏感访问审计；不在列表／日志新增卡密。

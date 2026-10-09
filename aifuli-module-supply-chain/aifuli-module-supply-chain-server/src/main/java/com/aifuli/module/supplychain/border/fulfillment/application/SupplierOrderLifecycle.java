@@ -43,6 +43,7 @@ import com.aifuli.module.supplychain.infrastructure.security.EnvelopeCryptoPort;
 import com.aifuli.module.supplychain.infrastructure.security.HmacFingerprintPort;
 import com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock;
 import com.aifuli.module.supplychain.supplieradapter.qnm.QnmMaskingUtils;
+import com.aifuli.module.supplychain.border.fulfillment.application.huashengflow.HuashengType201AssetCodec;
 import com.aifuli.module.supplychain.tradecore.account.application.FundReservationService;
 import com.aifuli.module.supplychain.tradecore.account.domain.FundReferenceType;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
@@ -54,8 +55,12 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.util.Arrays;
 import java.time.LocalDateTime;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
@@ -726,6 +731,10 @@ public class SupplierOrderLifecycle {
             return;
         }
         for (OperationAssetFact assetFact : outcome.assets()) {
+            if (assetFact.hasProtectedPayload()) {
+                persistHuashengAsset(bOrder, operation, request, assetFact, now);
+                continue;
+            }
             String assetNo = businessNoGenerator.next(BusinessNoPrefixes.FA);
             Map<String, String> payloadMap = new LinkedHashMap<>();
             payloadMap.put("assetType", assetFact.assetType());
@@ -789,6 +798,77 @@ public class SupplierOrderLifecycle {
             assetMapper.insert(assetDO);
             log.info("[供应商订单][lifecycle] 资产持久化成功 assetNo={}, bOrderNo={}, sequenceNo={}",
                     assetNo, bOrder.getBOrderNo(), assetFact.sequenceNo());
+        }
+    }
+
+    /**
+     * 华昇封闭payload持久基础；调用者已持有BOrder聚合锁，本方法不自行授予资金或状态推进资格。
+     * 同顺序号须完整事实相等才能幂等；跨单凭证冲突由唯一键抛出，外层整笔事务回滚，不吞异常。
+     * 设计：docs/superpowers/specs/2026-10-09-huasheng-type201-production-closure-design.md#71-task2桥接与持久基础边界。
+     */
+    private void persistHuashengAsset(BOrderDO bOrder, FulfillmentOperationDO operation,
+                                     FulfillmentRequestDO request, OperationAssetFact fact, LocalDateTime now) {
+        if (!TransactionSynchronizationManager.isActualTransactionActive()
+                || !TransactionSynchronizationManager.isSynchronizationActive()) {
+            throw new IllegalStateException("华昇资产持久化必须处于聚合事务内");
+        }
+        HuashengType201AssetCodec codec = new HuashengType201AssetCodec();
+        byte[] plaintext = codec.validate(fact);
+        byte[] fingerprintInput = null;
+        byte[] previousPlaintext = null;
+        byte[] previousCanonical = null;
+        try {
+            fingerprintInput = codec.fingerprintInput(bOrder.getSupplierId(), fact);
+            byte[] fingerprint = hmacFingerprint.fingerprint(HuashengType201AssetCodec.FINGERPRINT_PURPOSE, fingerprintInput);
+            byte[] aad = (bOrder.getId() + "|" + fact.sequenceNo() + "|" + fact.assetType()).getBytes(StandardCharsets.UTF_8);
+            FulfillmentAssetDO previous = assetMapper.selectOne(new LambdaQueryWrapper<FulfillmentAssetDO>()
+                    .eq(FulfillmentAssetDO::getBOrderId, bOrder.getId())
+                    .eq(FulfillmentAssetDO::getSequenceNo, fact.sequenceNo()));
+            if (previous != null) {
+                boolean sameIdentity = Objects.equals(previous.getOperationId(), operation.getId())
+                        && Objects.equals(previous.getFulfillmentRequestId(), request.getId())
+                        && Objects.equals(previous.getSupplierId(), bOrder.getSupplierId())
+                        && Objects.equals(previous.getBuyerId(), request.getBuyerId())
+                        && Objects.equals(previous.getAssetType(), fact.assetType())
+                        && Objects.equals(previous.getUnitQuantity(), 1L)
+                        && previous.getExternalAssetId() == null && previous.getExternalProductId() == null
+                        && previous.getValidFrom() == null && previous.getValidUntil() == null
+                        && Arrays.equals(previous.getFingerprint(), fingerprint);
+                if (!sameIdentity) throw new IllegalStateException("华昇type201资产事实冲突");
+                previousPlaintext = envelopeCrypto.decrypt(previous.getEncryptedPayload(), previous.getKeyVersion(), aad);
+                try {
+                    previousCanonical = codec.validateStoredPayload(fact, previousPlaintext);
+                } catch (IllegalArgumentException invalidStoredFact) {
+                    // codec异常为固定安全拒绝；对外统一为事实冲突，不附带敏感JSON解析原因。
+                    throw new IllegalStateException("华昇type201资产事实冲突");
+                }
+                if (!MessageDigest.isEqual(plaintext, previousCanonical)) {
+                    throw new IllegalStateException("华昇type201资产事实冲突");
+                }
+                return;
+            }
+            EnvelopeCryptoPort.EncryptedPayload encrypted = envelopeCrypto.encrypt(plaintext, aad);
+            String assetNo = businessNoGenerator.next(BusinessNoPrefixes.FA);
+            assetMapper.insert(FulfillmentAssetDO.builder()
+                    .assetNo(assetNo).fulfillmentRequestId(request.getId()).bOrderId(bOrder.getId())
+                    .operationId(operation.getId()).supplierId(bOrder.getSupplierId()).buyerId(request.getBuyerId())
+                    .sequenceNo(fact.sequenceNo()).unitQuantity(1L).assetType(fact.assetType())
+                    .encryptedPayload(encrypted.ciphertext()).maskedValue("****").fingerprint(fingerprint)
+                    .keyVersion(encrypted.keyVersion()).lifecycleStatus(FulfillmentAssetStatus.AVAILABLE.getCode())
+                    .version(0L).createdAt(now).updatedAt(now).build());
+            String bOrderNo = bOrder.getBOrderNo();
+            int sequenceNo = fact.sequenceNo();
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    log.info("[华昇资产持久化][事务提交确认] assetNo={}, bOrderNo={}, sequenceNo={}", assetNo, bOrderNo, sequenceNo);
+                }
+            });
+        } finally {
+            Arrays.fill(plaintext, (byte) 0);
+            if (fingerprintInput != null) Arrays.fill(fingerprintInput, (byte) 0);
+            if (previousPlaintext != null) Arrays.fill(previousPlaintext, (byte) 0);
+            if (previousCanonical != null) Arrays.fill(previousCanonical, (byte) 0);
         }
     }
 
