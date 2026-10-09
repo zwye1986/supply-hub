@@ -290,6 +290,11 @@ Outbox新增appendLocalIdempotent只服务显式保留的B消费流聚合命名�
 
 #### R02：唯一Druid池的稳定预算包装与connect1500（本次冻结规范，待实施验证）
 
+> **2026-10-09 状态更新**：底层连接池已裁定由 Druid 迁移至 HikariCP，R02 的预算契约不变量
+> （3500ms 准入、q 守卫、SESSION 隔离、双模式、恢复失败禁重跑）在 Hikari 链路上按等价语义重新落地；
+> 基础设施淘汰协议由 Druid discard 改为 Hikari evictConnection + 驱动 abort。
+> 详见 `docs/superpowers/specs/2026-10-09-druid-to-hikari-migration-design.md`。本节原文保留为冻结历史。
+
 1. 目标真实依赖路径为Druid1.2.28、Spring6.2.18、MyBatis-Spring3.0.5、生产Connector/J9.7.0；run-04的DriverManagerDataSource/Connector9.1.0不是此路径证明。保留原`supplyChainDataSource` bean名，暴露一个稳定budget路由DataSource实例；raw仅为现有唯一Druid池，不新增池。`supplyChainTransactionManager`、生产SqlSessionFactory/MyBatis、DataSourceUtils与clock全部注入并绑定同一wrapper resource key，不得分别绕过raw。wrapper不能实现会被Spring剥离的InfrastructureProxy，也不是TransactionAwareDataSourceProxy；显式unwrap仅供受控诊断/丢弃，不成为借连接旁路。无预算上下文时透明委派现有池，非预算事务保持原语义。
 2. 无事务编排设置可清理的预算上下文，wrapper仅在预算借用路径调用raw.getConnection(1500L)；raw返回后先检查cancel/deadline，late连接清理且不得暴露manager/启动worker，通过后才包实际连接/Statement。禁止Future或额外借连接线程伪造硬截止。预算专用JdbcTransactionManager在借连接后以R01重新收紧determineTimeout/ConnectionHolder TTL（不能沿用借前6s或Spring ceil）；普通路径不附预算。代理worker用该manager的REQUIRED，MyBatis会话/clock读共享其连接；ThreadLocal在每个退出路径恢复/清空，不影响非预算HTTP/Liquibase/六旧Handler、不把它们接retry。
 3. **预算借用允许配置集合（每次预算入口核有效值，不写共享池属性）：** raw已init；`notFullTimeoutRetryCount == 0`；`createScheduler == null`；实际proxyFilters为空且无动态filter注入；`testOnBorrow == false`、`testWhileIdle == true`、`testOnReturn == false`；`defaultAutoCommit == true`、`removeAbandoned == false`；checker只能是**精确**`MySqlValidConnectionChecker`（不接受子类/替换），保留`usePingMethod == true`、`validationQuery == null`、`validationQueryTimeout == -1`默认验证组合。**true及该checker/validation旧路径明确允许，不再因idle验证存在而拒绝预算入口**；不关闭idle验证、不替换checker、不修改global validation。保留既有UTC+8 connectionInitSqls唯一初始化SQL；不新加初始化语句/外部钩子。物理驱动为单host直接Connector9.7 ConnectionImpl、默认StandardSocketFactory，不接受多host代理/自定义socketFactory/propertiesTransform；其它形式仅预算接入失败关闭，不反射修改池/驱动、不改变非预算现有行为。maxWait/maxActive/global socket等原共享值不变，connect仅R02.4获准的1500。入口无法锁定配置生命周期或发现运行期变更同样拒绝，不用校验后的共享setter竞争规避；实际运行有效配置及supported transport仍待验，默认匹配不等于生产可启用。
@@ -727,6 +732,11 @@ scheduleOnce采用§7.2独立Timer账本协议：同type/key首次账本与新�
 用户单独允许精确新增server资源 `src/main/resources/META-INF/spring.factories`，**仅注册R3专属Boot启动异常报告器**，不改共享日志XML、池参数或其它模块。此为路径范围授权，不代表B03技术阻断已解决或恢复实施；当前不创建该资源，未来恢复时仍须独立设计预审。
 
 **B03异步日志边界待裁决：** 仓外 `rev2-research/b03-druid-boundary-report.md`／JSON查明Druid1.2.28建连错误采用类级private static logger，事件不含池对象／R3归属，未发现能完整区分原供应链池与本R3调用的公开API。仅同步作用域不能覆盖后台创建／重连；Liquibase可早于R3核验触发建连，不能假定热池。离线probe的特定classpath选择SLF4JImpl→Logback，缺provider／显式JUL负控制选JUL；这不是生产有效backend或真实连接故障验证。保持B03 blocked，不扩大现授权。
+
+> **2026-10-09 状态更新**：因底层连接池由 Druid 迁移至 HikariCP（见
+> `docs/superpowers/specs/2026-10-09-druid-to-hikari-migration-design.md`），Druid 1.2.28 类级私有静态
+> Logger 的硬阻断已随组件移除而消除；B03 状态调整为 `PENDING_VERIFICATION`，待按该设计 §6.5
+> 在 Hikari 环境下完成实机验证后再申请正式解阻。本节原文保留为冻结历史。
 
 待用户选择A或B：A明确将原池自主init／create／reconnect及Liquibase连接诊断列为独立安全风险，R3安全呈现承诺限定同步核验／维护数据、语句／事务与框架／CLI，风险仍记录且不代表部署批准；B若要求该连接日志也安全，需明确授权指定Druid类logger调用点的诊断呈现变化，承认影响其它池及非R3同调用点，不称池级隔离、不能全logger静默或自动扩至Abstract/JdbcUtils。严格同时要求仅本池／仅R3／其它池原日志完全不变时，目前无已证可实施路线。两项均须修订设计并独立预审，不能把选项当已实现安全机制；候选Boot reporter的 `src/main/resources/META-INF/spring.factories` 新资源亦需精确范围确认。
 

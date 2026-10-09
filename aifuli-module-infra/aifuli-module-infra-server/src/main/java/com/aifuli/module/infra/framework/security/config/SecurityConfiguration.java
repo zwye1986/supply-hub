@@ -27,8 +27,6 @@ public class SecurityConfiguration {
                 // Spring Boot Actuator 的安全配置
                 registry.requestMatchers("/actuator").permitAll()
                         .requestMatchers("/actuator/**").permitAll();
-                // Druid 监控
-                registry.requestMatchers("/druid/**").permitAll();
                 // 文件读取
                 registry.requestMatchers(buildAdminApi("/infra/file/*/get/**")).permitAll();
 

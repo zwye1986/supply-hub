@@ -91,6 +91,11 @@
         <dependency>
             <groupId>com.alibaba.cloud</groupId>
             <artifactId>spring-cloud-starter-alibaba-nacos-config</artifactId>
+            <exclusions>
+                <exclusion><groupId>com.alibaba</groupId><artifactId>druid-spring-boot-starter</artifactId></exclusion>
+                <exclusion><groupId>com.alibaba</groupId><artifactId>druid-spring-boot-3-starter</artifactId></exclusion>
+                <exclusion><groupId>com.alibaba</groupId><artifactId>druid</artifactId></exclusion>
+            </exclusions>
         </dependency>
     </dependencies>
 

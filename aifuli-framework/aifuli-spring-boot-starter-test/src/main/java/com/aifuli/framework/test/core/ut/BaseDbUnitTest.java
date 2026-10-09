@@ -4,7 +4,6 @@ import cn.hutool.extra.spring.SpringUtil;
 import com.aifuli.framework.datasource.config.AifuliDataSourceAutoConfiguration;
 import com.aifuli.framework.mybatis.config.AifuliMybatisAutoConfiguration;
 import com.aifuli.framework.test.config.SqlInitializationTestConfiguration;
-import com.alibaba.druid.spring.boot3.autoconfigure.DruidDataSourceAutoConfigure;
 import com.baomidou.mybatisplus.autoconfigure.MybatisPlusAutoConfiguration;
 import com.github.yulichang.autoconfigure.MybatisPlusJoinAutoConfiguration;
 import org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration;
@@ -31,7 +30,6 @@ public class BaseDbUnitTest {
             AifuliDataSourceAutoConfiguration.class, // 自己的 DB 配置类
             DataSourceAutoConfiguration.class, // Spring DB 自动配置类
             DataSourceTransactionManagerAutoConfiguration.class, // Spring 事务自动配置类
-            DruidDataSourceAutoConfigure.class, // Druid 自动配置类
             SqlInitializationTestConfiguration.class, // SQL 初始化
             // MyBatis 配置类
             AifuliMybatisAutoConfiguration.class, // 自己的 MyBatis 配置类

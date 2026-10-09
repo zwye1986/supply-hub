@@ -56,6 +56,12 @@
         <dependency>
             <groupId>com.alibaba.cloud</groupId>
             <artifactId>spring-cloud-starter-alibaba-nacos-config</artifactId>
+            <!-- 排除 Nacos Config 传递引入的旧池，见迁移设计 §5.1。 -->
+            <exclusions>
+                <exclusion><groupId>com.alibaba</groupId><artifactId>druid-spring-boot-starter</artifactId></exclusion>
+                <exclusion><groupId>com.alibaba</groupId><artifactId>druid-spring-boot-3-starter</artifactId></exclusion>
+                <exclusion><groupId>com.alibaba</groupId><artifactId>druid</artifactId></exclusion>
+            </exclusions>
         </dependency>
 
         <!-- 监控相关 -->
