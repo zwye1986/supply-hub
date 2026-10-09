@@ -179,9 +179,9 @@ class SupplyChainLiquibaseIntegrationTest {
                 "expire_at:DATETIME:-:3:NO");
         assertThat(firstStartup.projectAuthNoncePrimaryKeyColumns())
                 .containsExactly("app_id", "nonce");
-        // 061 身份账本后真实模式为 63 个变更集，启动重放不可重复执行。
-        // 设计见 docs/superpowers/specs/2026-10-05-catalog-reliable-consumption-prerequisite-design.md#72-独立不可变身份账本确定消除重复追加等待源行。
-        assertThat(firstStartup.changeSetCount()).isEqualTo(63L);
+        // 062 华昇恢复字段后真实模式为 64 个变更集，启动重放不可重复执行。
+        // 设计见 docs/superpowers/specs/2026-10-09-huasheng-type201-production-closure-design.md#41-追加迁移。
+        assertThat(firstStartup.changeSetCount()).isEqualTo(64L);
         assertThat(firstStartup.uniqueIndexes())
                 .contains("sc_instore_payment_flow.uk_sc_instore_flow_order",
                         "sc_instore_channel_user_binding.uk_sc_instore_user_binding_project",
@@ -254,14 +254,14 @@ class SupplyChainLiquibaseIntegrationTest {
                         WHERE TABLE_SCHEMA = DATABASE()
                           AND TABLE_NAME LIKE 'sc\\_%'
                         """)).isEqualTo(125L);
-                // 060 为可用性投影增加 valid_until，061 增加两张身份账本（各 2 个 DATETIME(3)），真实模式共 300 个 Asia/Shanghai DATETIME(3)。
+                // 062 追加 lease/deadline/send 三个 DATETIME(3)，真实模式共 303 个 Asia/Shanghai DATETIME(3)。
                 assertThat(queryLong(connection, """
                         SELECT COUNT(*)
                         FROM information_schema.COLUMNS
                         WHERE TABLE_SCHEMA = DATABASE()
                           AND TABLE_NAME LIKE 'sc\\_%'
                           AND DATA_TYPE = 'datetime'
-                        """)).isEqualTo(300L);
+                        """)).isEqualTo(303L);
                 assertThat(queryLong(connection, """
                         SELECT COUNT(*)
                         FROM information_schema.COLUMNS

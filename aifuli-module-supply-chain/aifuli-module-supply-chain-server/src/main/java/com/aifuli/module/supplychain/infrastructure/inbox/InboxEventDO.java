@@ -17,6 +17,7 @@ public class InboxEventDO {
     private Long id;
     private String consumerName;
     private String eventId;
+    /** 收到的事件载荷SHA-256族摘要，华昇使用HMAC-SHA256。 */
     private byte[] payloadDigest;
     private Short status;
     private String traceId;

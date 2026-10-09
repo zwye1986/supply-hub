@@ -1,5 +1,7 @@
 # HUA_SHENG 卡券业务闭环实施计划
 
+> **2026-10-09生产闭环当前计划：** `docs/superpowers/plans/2026-10-09-huasheng-type201-production-closure.md` 已按用户同意的最小方案细化。单实例优先、先不考虑QNM；不执行本文旧QNM专项回归或通用分布式平台候选，既有代码不删除。本文件保留历史切片记录，不将历史未完成项或旧授权自动带入新片。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: 使用 subagent-driven-development 逐任务实施；每项先规格审查再质量审查。只并行只读分析，实施者每次一个。用户明确要求在当前仓库分支开发。
 
 **目标：** 从商品、供应商、分销商、项目与路由配置出发，使 HUA_SHENG 一张卡券订单完成受理、履约、资产交付和资金收敛。
