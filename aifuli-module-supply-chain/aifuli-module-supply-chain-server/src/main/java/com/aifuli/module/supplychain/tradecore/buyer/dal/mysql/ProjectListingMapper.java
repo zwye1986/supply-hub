@@ -44,9 +44,15 @@ public interface ProjectListingMapper extends BaseMapperX<ProjectListingDO> {
                 ProjectListingDO::getBuyerProductId, buyerProductId);
     }
 
+    /**
+     * 普通一致性读返回按项目／身份排序的有效 PLT，不加行锁；Reader 在同一独立新 RR 中核验归属与版本。
+     * 见 docs/superpowers/specs/2026-10-09-saleable-catalog-order-acceptance-design.md#71-资格语义不变。
+     */
     default List<ProjectListingDO> selectAvailableByBuyerProductId(Long buyerProductId) {
         return selectList(new LambdaQueryWrapper<ProjectListingDO>()
                 .eq(ProjectListingDO::getBuyerProductId, buyerProductId)
-                .eq(ProjectListingDO::getStatus, ProjectListingStatus.AVAILABLE.getCode()));
+                .eq(ProjectListingDO::getStatus, ProjectListingStatus.AVAILABLE.getCode())
+                .orderByAsc(ProjectListingDO::getProjectId)
+                .orderByAsc(ProjectListingDO::getId));
     }
 }

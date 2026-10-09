@@ -78,14 +78,14 @@ assertThat(result.reasonCodes()).containsExactly(reason);
 
 ## Task 2：独立新 RR 资格 Reader（设计 §3、§7.1）
 
-**Files:** Create `J/tradecore/catalog/application/CurrentSupplyEligibilityReader.java`、`J/routing/application/SupplyQualificationUnavailableException.java`；Modify `J/routing/application/SupplierRoutingApplicationService.java`、`J/tradecore/catalog/dal/mysql/ProjectListingMapper.java`；Test `T/tradecore/catalog/application/CurrentSupplyEligibilityReaderIntegrationTest.java`、`T/routing/application/SupplierRoutingQualificationFailureTest.java`。
+**Files:** Create `J/tradecore/catalog/application/CurrentSupplyEligibilityReader.java`、`J/routing/application/SupplyQualificationUnavailableException.java`；Modify `J/routing/application/SupplierRoutingApplicationService.java`、`J/tradecore/buyer/dal/mysql/ProjectListingMapper.java`；Test `T/tradecore/catalog/application/CurrentSupplyEligibilityReaderIntegrationTest.java`、`T/routing/application/SupplierRoutingQualificationFailureTest.java`。精确接口与封闭异常分类见设计 §7.1「Task 2 实施接口与异常边界」。
 
-- [ ] RED：真实代理REQUIRES_NEW/readOnly/REPEATABLE_READ；外层先建旧RR视图，独立连接提交停用，用latch固定顺序，Reader看到停用；无写入/锁供给/外呼/等待外层LST/BPD/PLT锁。
-- [ ] RED：OPTIONAL首选UNKNOWN、REQUIRED全缺失及固定UNSUPPORTED+REMOTE_ON_DEMAND真实资格；另项目通过不授权本项目。
-- [ ] RED：无配置的可恢复缺条件用专用异常；已有指针损坏/重复生效策略/跨归属/坏JSON技术失败，不能泛catch IllegalStateException。
-- [ ] GREEN：首个业务实体读建立新视图并读取库时钟，真实route加入该只读事务；结果包含完整RoutingSnapshot/真实原因/来源/下一事实边界，包括策略、Offer、事实期限和配额自然日边界。
-- [ ] GREEN：聚合ACTIVE且有效PLT项目的真实首选，任一CONFIRMED可买家AVAILABLE；没有项目按projectId=null默认规则，不伪造项目身份。
-- [ ] `ITS=CurrentSupplyEligibilityReaderIntegrationTest,SupplierRoutingApplicationServiceIntegrationTest`；真实门禁与架构通过才推进Task3。
+- [x] RED：真实代理REQUIRES_NEW/readOnly/REPEATABLE_READ；外层先建旧RR视图，独立连接提交停用，用latch固定顺序，Reader看到停用；无写入/锁供给/外呼/等待外层LST/BPD/PLT锁。Reader首轮有效RED为10 failure、0 error；后补视图建立后停用的线性化保护直接GREEN。
+- [x] RED：OPTIONAL首选UNKNOWN、REQUIRED全缺失及固定UNSUPPORTED+REMOTE_ON_DEMAND真实资格；另项目通过不授权本项目。
+- [x] RED：无配置的可恢复缺条件用专用异常；已有指针损坏/重复生效策略/跨归属/坏JSON技术失败，不能泛catch IllegalStateException。分类测试两轮有效RED分别13和2 failure、0 error；最后新增重复生效版本／真实SQL／非对象JSON集成保护直接GREEN，不伪称新增RED。
+- [x] GREEN：首个业务实体读建立新视图并读取库时钟，真实route加入该只读事务；结果包含完整RoutingSnapshot/真实原因/来源/下一事实边界，包括策略、Offer、事实期限和配额自然日边界。无快照也保留已知策略边界；仅专用缺条件异常豁免参与事务回滚。
+- [x] GREEN：聚合ACTIVE且有效PLT项目的真实首选，任一CONFIRMED可买家AVAILABLE；没有项目按projectId=null默认规则，不伪造项目身份。
+- [x] `ITS=CurrentSupplyEligibilityReaderIntegrationTest,SupplierRoutingApplicationServiceIntegrationTest`；真实门禁与架构通过才推进Task3。最终补核及收尾复验均为分类20＋架构31、Reader17＋原路由1，0失败/错误/跳过，BUILD SUCCESS；本轮不实施Task3。
 
 ## Task 3：单 LST 自动刷新及人工恢复（设计 §3～§4）
 
@@ -182,4 +182,5 @@ assertThat(result.reasonCodes()).containsExactly(reason);
 
 - 初始相关基线：JDK21，`SupplierRoutingEngineTest,SupplierRoutingRuleMatchingTest,SupplyChainModuleArchitectureTest` 共48项、0失败/错误/跳过，BUILD SUCCESS；不是全量门禁。
 - Task1纯映射已实现并通过本机TDD及直接回归；新资格测试26项、定向74项，供应链默认单元/架构命名范围共2043项，0失败/错误/跳过。当前未做独立代码审查，不将内联自审称为独立审查。
-- 下一检查点Task2：真实代理新RR资格Reader及缺配置/损坏引用分类；Task2～12均NOT_RUN，Reader、商业刷新、扫描和HTTP新准入尚未装配。不宣称整体业务链完成。
+- Task2已实现独立新RR资格Reader及封闭缺条件／损坏引用分类，并完成本机真实事务门禁。扩大回归默认单元／架构命名范围API123＋server1940，共2063项；该轮集成Reader14＋原路由1。随后补充3项技术异常集成保护，最终补核和收尾复验均分类20＋架构31、Reader17＋原路由1全绿；命令、RED归因及XML归档见 `docs/集成测试.md` 的Task2记录。仅内联自审，没有独立审查结论。
+- 下一检查点Task3：单LST自动刷新及人工恢复。Task3～12均NOT_RUN，Reader尚未接入商业刷新、扫描或HTTP新准入；旧Lifecycle宽泛路由catch仍属于Task10范围。不宣称整体业务链完成，未提交、推送或部署。

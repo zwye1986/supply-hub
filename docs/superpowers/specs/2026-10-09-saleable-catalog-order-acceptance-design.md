@@ -145,6 +145,16 @@ Reader复用既有三策略排序及真实首选，不重排 CONFIRMED优先：�
 
 买家级目录聚合每个 ACTIVE／有效 PLT项目的真实首选；任一项目 CONFIRMED可 AVAILABLE，但最终只认证项目本次 CONFIRMED授权。无可用项目时按真实 projectId=null默认规则评估，不假造项目身份。
 
+#### Task 2 实施接口与异常边界
+
+- `CurrentSupplyEligibilityReader.readProject(RoutingInput)` 是独立 Spring 代理入口；调用者传入的 businessTime 不用于当前授权，Reader 首先普通读取买家实体建立新的 RR 视图，然后一次读取 `SupplyChainDatabaseClock`，以该库时钟重建路由输入。facts／配送地区保留原输入，不外呼补事实。返回不可变 `ProjectEligibility`，包含 projectId、资格、完整 RoutingSnapshot（未形成路由时为空）、原因、evaluatedAt、来源摘要及 nextFactBoundary。
+- `readBuyer(Long buyerProductId)` 在同一个独立新 RR 内读取 BPD／买家／SKU和 AVAILABLE PLT，核对 PLT 当前版本引用及项目归属，只聚合 ACTIVE 项目；项目停用或 PLT REMOVED 是正常不可用。AVAILABLE PLT 的空／损坏版本引用、缺失项目或跨买家归属为技术失败。没有有效项目时仅评估 projectId=null 默认规则。聚合优先 CONFIRMED，其次 UNKNOWN，否则 UNAVAILABLE；保留全部项目结果，不能作为单项目授权凭据。Mapper 实际路径为 `tradecore/buyer/dal/mysql/ProjectListingMapper.java`。
+- 来源摘要保留策略／版本／规则及原有完整候选快照；`RoutingSnapshot.nextFactBoundary` 收集未来的已发布策略切换／结束、当前 Offer 的开始／结束、参与检查事实的 validUntil 与 observedAt+maxAgeSeconds，以及存在配额的下一自然日边界。跨项目取最早未来边界，不加入每次滚动的投影 TTL，后续 Task 4 再加最大评估有效期。
+- 未形成 RoutingSnapshot 的可恢复结果也保留已读取的未来策略边界：封闭缺条件异常携带可空 nextFactBoundary，Reader 原样带回；计划版本尚未生效或动态候选池为空时，不因提前返回丢掉已知恢复／失效时刻。
+- 可恢复的缺条件仅由封闭 `SupplyQualificationUnavailableException.Reason` 表达：无活动策略、无生效版本、无已发布规则、无匹配启用规则、无动态候选，以及主体不活动／商品不匹配。Reader 只捕获这个异常并返回 UNAVAILABLE；它不是 UNKNOWN，也不捕获任意 IllegalStateException。已发布 FIXED／SPECIFIED 规则的空候选或缺供应商是损坏配置，而 AUTO+ALL 无 Offer 是正常缺供给。
+- 路由只读 REQUIRED 参与 Reader 事务时，`noRollbackFor` 仅豁免 `SupplyQualificationUnavailableException`，避免已捕获的正常缺条件把聚合事务标为 rollback-only；所有技术异常维持原回滚规则。真实代理测试必须覆盖同一聚合中一个项目无匹配而另一个项目 CONFIRMED 的正常返回，不调整共享事务管理器。
+- 已存在指针必须核对实体存在及归属：Offer→版本、版本→连接器版本→连接器、版本→库存来源、SKU→SPU、项目→买家；重复活动策略／重复生效版本、非法检查模式／范围、非对象或无法解析的连接器／履约 JSON 一律技术失败。连接器／库存／供应商停用、Offer过期／数量不匹配维持正常结构拒绝。不记录配置原文，不改发布事务／供应商外呼／旧RPC准入。本片只影响供应链进程路由读取与新增 Reader，不调整共享事务管理器、缓存、RPC 或八进程装配。
+
 ### 7.2 下单顺序
 
 1. 验签及现有 buyer/project ACTIVE前置门禁保持。
