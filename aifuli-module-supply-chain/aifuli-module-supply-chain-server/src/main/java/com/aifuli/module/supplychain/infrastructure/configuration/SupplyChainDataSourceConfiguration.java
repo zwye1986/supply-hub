@@ -1,6 +1,6 @@
 package com.aifuli.module.supplychain.infrastructure.configuration;
 
-import com.alibaba.druid.pool.DruidDataSource;
+import com.zaxxer.hikari.HikariDataSource;
 import com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock;
 import com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService;
 import com.aifuli.module.supplychain.infrastructure.identity.dal.mysql.BusinessCodeScopeMapper;
@@ -26,7 +26,6 @@ import org.springframework.jdbc.support.JdbcTransactionManager;
 import org.springframework.transaction.annotation.EnableTransactionManagement;
 
 import javax.sql.DataSource;
-import java.util.List;
 import java.util.Objects;
 
 /**
@@ -45,15 +44,21 @@ public class SupplyChainDataSourceConfiguration {
 
     @Bean("supplyChainDataSource")
     DataSource supplyChainDataSource(SupplyChainDataSourceProperties properties) {
-        DruidDataSource dataSource = properties.initializeDataSourceBuilder()
-                .type(DruidDataSource.class)
+        HikariDataSource dataSource = properties.initializeDataSourceBuilder()
+                .type(HikariDataSource.class)
                 .build();
-        // 设置 R02 获审物理建连超时 1500ms
-        dataSource.setConnectTimeout(properties.getConnectTimeoutMillis());
+        // 显式命名连接池：日志隔离与池身份识别（B03 解阻验证见
+        // docs/superpowers/specs/2026-10-09-druid-to-hikari-migration-design.md#adr-5b03异步建连日志解阻定位客观声明）
+        dataSource.setPoolName("supply-chain-pool");
+        // 驱动级物理 TCP 建连超时：经 Connector/J connectTimeout 属性注入（R02 获审 1500ms）
+        dataSource.addDataSourceProperty("connectTimeout", String.valueOf(properties.getConnectTimeoutMillis()));
+        // 池借用等待超时：常规健康值，预算链路借前/借后单独截断
+        dataSource.setConnectionTimeout(3000L);
         // 每个物理连接都固定 UTC+8，CURRENT_TIMESTAMP(3) 才能稳定表示上海本地时间。
         // 设计见 docs/superpowers/specs/2026-09-04-supply-chain-database-local-time-design.md#21-存储类型与时区。
-        dataSource.setConnectionInitSqls(List.of("SET time_zone = '+08:00'"));
-        return new BudgetRoutingDataSource(dataSource);
+        dataSource.setConnectionInitSql("SET time_zone = '+08:00'");
+        dataSource.setValidationTimeout(1000L);
+        return new StandardBudgetRoutingDataSource(dataSource);
     }
 
     @Bean

@@ -12,10 +12,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -99,5 +101,21 @@ class StandardBudgetRoutingDataSourceEvictionTest {
         routing.destroy();
 
         verify(raw, times(1)).close();
+    }
+
+    @Test
+    void evictAndAbortShortCircuitsOnNull() {
+        routing.evictAndAbort(null);
+        verifyNoInteractions(raw);
+    }
+
+    @Test
+    void evictConnectionFailureStillAborts() throws SQLException {
+        Connection conn = mock(Connection.class);
+        doThrow(new IllegalStateException("pool shutdown")).when(raw).evictConnection(conn);
+
+        routing.evictAndAbort(conn);
+
+        verify(conn).abort(any());
     }
 }

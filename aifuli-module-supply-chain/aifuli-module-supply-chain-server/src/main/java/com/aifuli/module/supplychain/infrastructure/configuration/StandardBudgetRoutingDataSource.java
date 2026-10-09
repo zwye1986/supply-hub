@@ -33,6 +33,9 @@ public class StandardBudgetRoutingDataSource implements DataSource, DisposableBe
         this.rawDataSource = Objects.requireNonNull(rawDataSource, "rawDataSource must not be null");
     }
 
+    /**
+     * 返回底层裸池，仅限诊断与初始化（Liquibase/监控）使用；业务代码严禁经此借连接绕过预算守卫。
+     */
     public HikariDataSource getRawDataSource() {
         return rawDataSource;
     }
@@ -65,6 +68,7 @@ public class StandardBudgetRoutingDataSource implements DataSource, DisposableBe
         // 3. 借后首检（防迟到连接）：取消、超期、floor 不足 1 秒均判定迟到，触发淘汰协议
         long remaining = context.remainingNanos();
         long floorSec = (long) Math.floor((remaining - BudgetContext.CLEANUP_RESERVE_NANOS) / 1_000_000_000.0);
+        // floor < 1 蕴含 remaining < 2000ms，被上一条件覆盖；保留为 R01.1 契约意图的显式表述
         if (context.isCancelled() || remaining < BudgetContext.ADMISSION_THRESHOLD_NANOS || floorSec < 1) {
             evictAndAbort(rawConn);
             throw new BudgetTimeoutException("借连接返回后检测到已超期或取消，拒绝暴露给事务管理器: remainingMs="
