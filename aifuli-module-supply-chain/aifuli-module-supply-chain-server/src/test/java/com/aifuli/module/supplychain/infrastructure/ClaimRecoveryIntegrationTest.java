@@ -9,6 +9,7 @@ import com.aifuli.module.supplychain.infrastructure.outbox.OutboxEventMapper;
 import com.aifuli.module.supplychain.infrastructure.timer.TimerClaimService;
 import com.aifuli.module.supplychain.infrastructure.timer.dal.mysql.TimerTaskMapper;
 import com.aifuli.module.supplychain.testsupport.DeterministicSqlInterceptor;
+import com.zaxxer.hikari.HikariDataSource;
 import org.apache.ibatis.session.SqlSessionFactory;
 import org.junit.jupiter.api.*;
 import org.springframework.aop.support.AopUtils;
@@ -80,7 +81,7 @@ class ClaimRecoveryIntegrationTest {
         try (var c = dataSource.getConnection()) {
             var meta = c.getMetaData();
             var connectionProperties = c.unwrap(com.mysql.cj.jdbc.JdbcConnection.class).getPropertySet();
-            var pool = dataSource.unwrap(com.alibaba.druid.pool.DruidDataSource.class);
+            var pool = dataSource.unwrap(HikariDataSource.class);
             System.out.println("B0_MYSQL_EVIDENCE image=" + MYSQL.getDockerImageName()
                     + " server=" + meta.getDatabaseProductVersion() + " driver=" + meta.getDriverVersion()
                     + " isolation=" + c.getTransactionIsolation()
@@ -88,7 +89,9 @@ class ClaimRecoveryIntegrationTest {
                     + " connectionTimeZone=" + connectionProperties.getStringProperty(com.mysql.cj.conf.PropertyKey.connectionTimeZone).getValue()
                     + " connectTimeoutMs=" + connectionProperties.getIntegerProperty(com.mysql.cj.conf.PropertyKey.connectTimeout).getValue()
                     + " socketTimeoutMs=" + connectionProperties.getIntegerProperty(com.mysql.cj.conf.PropertyKey.socketTimeout).getValue()
-                    + " druidMaxActive=" + pool.getMaxActive() + " druidMaxWaitMs=" + pool.getMaxWait()
+                    + " hikariPoolName=" + pool.getPoolName()
+                    + " hikariMaxPoolSize=" + pool.getMaximumPoolSize()
+                    + " hikariConnectionTimeoutMs=" + pool.getConnectionTimeout()
                     + " session=" + jdbc.queryForMap("SELECT @@transaction_isolation AS isolation_level, "
                     + "@@session.time_zone AS time_zone, @@innodb_lock_wait_timeout AS lock_wait_seconds"));
         }

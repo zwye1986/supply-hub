@@ -6,7 +6,6 @@ import com.aifuli.framework.mybatis.config.AifuliMybatisAutoConfiguration;
 import com.aifuli.framework.redis.config.AifuliRedisAutoConfiguration;
 import com.aifuli.framework.test.config.RedisTestConfiguration;
 import com.aifuli.framework.test.config.SqlInitializationTestConfiguration;
-import com.alibaba.druid.spring.boot3.autoconfigure.DruidDataSourceAutoConfigure;
 import com.baomidou.mybatisplus.autoconfigure.MybatisPlusAutoConfiguration;
 import org.redisson.spring.starter.RedissonAutoConfiguration;
 import org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration;
@@ -34,7 +33,6 @@ public class BaseDbAndRedisUnitTest {
             AifuliDataSourceAutoConfiguration.class, // 自己的 DB 配置类
             DataSourceAutoConfiguration.class, // Spring DB 自动配置类
             DataSourceTransactionManagerAutoConfiguration.class, // Spring 事务自动配置类
-            DruidDataSourceAutoConfigure.class, // Druid 自动配置类
             SqlInitializationTestConfiguration.class, // SQL 初始化
             // MyBatis 配置类
             AifuliMybatisAutoConfiguration.class, // 自己的 MyBatis 配置类

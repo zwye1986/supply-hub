@@ -13,9 +13,8 @@ spring:
     driver-class-name: org.h2.Driver
     username: sa
     password:
-    druid:
-      async-init: true # 单元测试，异步初始化 Druid 连接池，提升启动速度
-      initial-size: 1 # 单元测试，配置为 1，提升启动速度
+    hikari:
+      minimum-idle: 1 # 单元测试，配置为 1，提升启动速度
   sql:
     init:
       schema-locations: classpath:/sql/create_tables.sql

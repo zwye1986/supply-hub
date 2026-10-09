@@ -13,6 +13,7 @@ import com.tngtech.archunit.lang.ConditionEvents;
 import com.tngtech.archunit.lang.SimpleConditionEvent;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.springframework.context.annotation.Bean;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -21,9 +22,12 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 
+import java.util.List;
+
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.methods;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noFields;
+import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noMethods;
 
 class SupplyChainModuleArchitectureTest {
 
@@ -223,6 +227,33 @@ class SupplyChainModuleArchitectureTest {
             .haveSimpleName("MenuApplicationCodeConstants");
 
     /**
+     * 去 Druid 迁移门禁：供应链全模块禁止引用 com.alibaba.druid。
+     * 设计见 {@code docs/superpowers/specs/2026-10-09-druid-to-hikari-migration-design.md#62-架构约束门禁archunit规则升级}。
+     */
+    static final ArchRule no_druid_references = noClasses()
+            .should().dependOnClassesThat().resideInAPackage("com.alibaba.druid..");
+
+    /** 旧 Druid 深绑定类已原位桩化作废：除桩类自身外，任何类不得引用。 */
+    static final ArchRule deprecated_druid_stubs_are_never_referenced = noClasses()
+            .that().doNotHaveSimpleName("BudgetRoutingDataSource")
+            .and().doNotHaveSimpleName("BudgetConnectionWrapper")
+            .and().doNotHaveSimpleName("BudgetStatementWrapper")
+            .and().doNotHaveSimpleName("BudgetPreparedStatementWrapper")
+            .and().doNotHaveSimpleName("MySqlSocketExtractor")
+            .should().dependOnClassesThat(DescribedPredicate.describe("已作废 Druid 深绑定桩类",
+                    clazz -> List.of("BudgetRoutingDataSource", "BudgetConnectionWrapper",
+                            "BudgetStatementWrapper", "BudgetPreparedStatementWrapper",
+                            "MySqlSocketExtractor").contains(clazz.getSimpleName())));
+
+    /** 已作废桩类严禁通过 @Bean 装配进 Spring 容器。 */
+    static final ArchRule deprecated_druid_stubs_are_never_assembled_as_beans = noMethods()
+            .that().areAnnotatedWith(Bean.class)
+            .should().haveRawReturnType(DescribedPredicate.describe("已作废 Druid 桩类",
+                    clazz -> List.of("BudgetRoutingDataSource", "BudgetConnectionWrapper",
+                            "BudgetStatementWrapper", "BudgetPreparedStatementWrapper",
+                            "MySqlSocketExtractor").contains(clazz.getSimpleName())));
+
+    /**
      * 目录与定价编排不得写采购商账本或账户 DAL；期初只允许 buyer 应用层调开户服务。
      * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#13-模块边界}。
      */
@@ -396,6 +427,21 @@ class SupplyChainModuleArchitectureTest {
     @Test
     void adminApiDoesNotDependOnMenuApplicationCode() {
         admin_api_does_not_depend_on_menu_application_code.check(importedClasses);
+    }
+
+    @Test
+    void noDruidReferences() {
+        no_druid_references.check(importedClasses);
+    }
+
+    @Test
+    void deprecatedDruidStubsAreNeverReferenced() {
+        deprecated_druid_stubs_are_never_referenced.check(importedClasses);
+    }
+
+    @Test
+    void deprecatedDruidStubsAreNeverAssembledAsBeans() {
+        deprecated_druid_stubs_are_never_assembled_as_beans.check(importedClasses);
     }
 
     private static ArchCondition<JavaMethod> havePreAuthorizeIfHttpMapping() {
