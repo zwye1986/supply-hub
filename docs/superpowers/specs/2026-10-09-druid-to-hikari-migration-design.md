@@ -339,7 +339,7 @@ public void close() throws SQLException {
 | 进程名称 | 架构形态 | 数据库依赖 | 连接池配置迁移目标与配置键前缀 | 备注说明 |
 | :--- | :--- | :--- | :--- | :--- |
 | `SupplyChainServerApplication` | 独立微服务 | 独立库（`sc_*`） | `SupplyChainDataSourceConfiguration` 独立装配 HikariDataSource；YAML 前缀 `spring.datasource.*` | 独立连接池，显式 `supply-chain-pool`，受 R01/R02 预算控制 |
-| `SystemServerApplication` | 独立微服务 | System 库 | 迁移为 `spring.datasource.dynamic.hikari.*`（如 `connection-timeout: 30000`, `max-pool-size: 20`, `min-idle: 5`） | 使用 Dynamic DataSource，删除旧 `druid` 配置段 |
+| `SystemServerApplication` | 独立微服务 | System 库 | 迁移为 `spring.datasource.dynamic.hikari.*`（如 `connection-timeout: 60000`, `max-pool-size: 20`, `minimum-idle: 1 或 10`） | 使用 Dynamic DataSource，删除旧 `druid` 配置段 |
 | `InfraServerApplication` | 独立微服务 | Infra 库 | 迁移为 `spring.datasource.dynamic.hikari.*` | 同上，删除旧 `druid` 监控配置段 |
 | `MemberServerApplication` | 独立微服务 | Member 库 | 迁移为 `spring.datasource.dynamic.hikari.*` | 同上 |
 | `AifuliServerApplication` | 聚合进程 | System+Infra | 迁移为 `spring.datasource.dynamic.hikari.*` | 同上 |
