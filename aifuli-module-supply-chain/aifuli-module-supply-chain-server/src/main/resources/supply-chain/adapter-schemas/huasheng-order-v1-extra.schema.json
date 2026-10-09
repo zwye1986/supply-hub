@@ -1,0 +1,1 @@
+{"type":"object","properties":{"expireTime":{"type":"integer"},"outMobile":{"type":"string"}},"additionalProperties":false}

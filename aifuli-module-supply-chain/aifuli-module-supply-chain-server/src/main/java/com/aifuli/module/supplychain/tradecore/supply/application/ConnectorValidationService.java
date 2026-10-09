@@ -113,6 +113,10 @@ public class ConnectorValidationService {
             throw new IllegalArgumentException("Capability declaration must exactly match the validated adapter contract");
         }
         validateMappings(version.getId());
+        if (metadata instanceof com.aifuli.module.supplychain.supplieradapter.metadata.HuashengOrderV1Metadata huasheng) {
+            huasheng.validateMappings(statusMappingMapper.selectByConnectorVersionId(version.getId()),
+                    errorCodeMapMapper.selectByConnectorVersionId(version.getId()));
+        }
 
         LocalDateTime validatedAt = databaseClock.now();
         ConnectorValidationRecordService.RecordValidationCommand recordCommand =

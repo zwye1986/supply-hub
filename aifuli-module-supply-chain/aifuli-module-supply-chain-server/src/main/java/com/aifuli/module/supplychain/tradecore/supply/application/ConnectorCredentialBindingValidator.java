@@ -56,6 +56,7 @@ public class ConnectorCredentialBindingValidator {
      * 设计见 docs/superpowers/specs/2026-10-02-huasheng-fulfillment-adapter-design.md#123-第二切片显式凭据集绑定与运行时配置。
      */
     public void verify(AdapterMetadata metadata, Long supplierId, SupplierConnectorVersionDO version, boolean currentRead) {
+        metadata.validateMerchantAccount(version.getMerchantAccount());
         log.debug("[verifyCredentialBinding] supplierId={} connectorVersionId={} bindingMode={} slotId={} setId={} currentRead={}",
                 supplierId,version.getId(),metadata.credentialBindingMode(),version.getCredentialSlotId(),version.getCredentialSetId(),currentRead);
         boolean slot=version.getCredentialSlotId()!=null,set=version.getCredentialSetId()!=null;
@@ -101,10 +102,29 @@ public class ConnectorCredentialBindingValidator {
         return snapshot.toString();
     }
 
+    /** 只从版本快照投影非秘密身份，不读取当前项来拼替代版本；设计见华昇生产闭环§3.3。 */
+    public List<com.aifuli.module.supplychain.border.fulfillment.domain.FrozenCredentialItemIdentity> frozenItems(SupplierConnectorVersionDO version) {
+        if (version.getCredentialSetId() == null) return List.of();
+        var node = parse(version.getCredentialItemSnapshot());
+        if (node == null || !node.isArray() || node.isEmpty()) throw new IllegalStateException("冻结凭据快照不完整");
+        var result = new ArrayList<com.aifuli.module.supplychain.border.fulfillment.domain.FrozenCredentialItemIdentity>();
+        for (var item : node) {
+            if (!item.isObject() || item.size() != 4 || !item.path("itemId").isIntegralNumber() || !item.path("itemId").canConvertToLong()
+                    || !item.path("itemKey").isTextual() || !item.path("providerType").isTextual()
+                    || !item.path("activeSecretVersion").isIntegralNumber() || !item.path("activeSecretVersion").canConvertToInt()) {
+                throw new IllegalStateException("冻结凭据快照不完整");
+            }
+            result.add(new com.aifuli.module.supplychain.border.fulfillment.domain.FrozenCredentialItemIdentity(item.get("itemId").longValue(),
+                    item.get("itemKey").textValue(), item.get("providerType").textValue(), item.get("activeSecretVersion").intValue()));
+        }
+        return List.copyOf(result);
+    }
+
     /** 封闭 Schema 之后只投影非秘密标量；嵌套 JSON 或秘密键不能变成运行时任意参数。 */
     public Map<String,String> extraParameters(AdapterMetadata metadata,String config) {
         JsonNode node=parse(config==null?"{}":config);
         schema.validate(metadata.extraConfigSchemaResource(),node);
+        metadata.validateExtraConfig(node);
         Map<String,String> result=new TreeMap<>();
         node.fields().forEachRemaining(entry->{
             String key=entry.getKey().toLowerCase(Locale.ROOT); JsonNode value=entry.getValue();

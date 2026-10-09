@@ -13,3 +13,8 @@ ALTER TABLE sc_fulfillment_operation
 -- 只扩展摘要注释，既有 consumer 的算法与 BINARY(32) 存储契约保持不变。
 ALTER TABLE sc_inbox_event MODIFY COLUMN payload_digest BINARY(32) NOT NULL
   COMMENT '收到的事件载荷SHA-256族摘要，华昇使用HMAC-SHA256';
+
+-- 调整状态映射唯一键，纳入 business_phase 以支持华昇等适配器在不同协议阶段共用外部状态键。
+ALTER TABLE sc_status_mapping_definition
+  DROP INDEX uk_sc_status_mapping,
+  ADD UNIQUE KEY uk_sc_status_mapping (connector_version_id, mapping_version, business_phase, external_status, external_sub_status);

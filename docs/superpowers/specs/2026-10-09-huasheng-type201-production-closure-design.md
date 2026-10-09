@@ -56,6 +56,12 @@ Runner 先尝试获取互斥锁，再进入 claim；等待中不拿数据库锁�
 
 ### 3.3 冻结投影与首单 checkpoint
 
+Task3 接口落点：`AdapterMetadata` 增加默认空实现的商户身份／extraConfig 校验钩子，旧适配器行为不变；华昇实现严格16字节 appId、expireTime 60～1800、outMobile 非空白且UTF-8最多64字节／无控制字符。华昇封闭映射校验在 validate、publish 与 published resolver 三处调用，必须恰为§3.2十行模板且错误模板为空，避免验证后修改映射绕过发布守卫；发布供给同时校验 Offer 身份价模式FIXED、SKU CARD_CODE_SECRET、数量三值均1及默认执行画像不变。Task3类本体无自动注册注解，Task5才统一条件装配。
+
+`OperationTicket` 新增 credentialSetId、不可变 frozenCredentialItems、executionGeneration，保留24/27字段构造入口及builder；checkpointPayload仍为已解密的封闭JSON字节（由Task4 TicketFactory提供），executor以封闭codec解码入口读取并逐项核Ticket已有身份／billno／externalSkuCode，不能将密文当JSON或从最新配置补参数。恢复Ticket有效step可为QUERY，持久checkpoint绑定仍为原step。Ticket、材料、builder、protocolFact及Outcome拒绝意外JSON序列化并固定脱敏诊断；新增领域自有拒绝器，不依赖A内部failure对象。
+
+`HuashengStepFact` 用本地封闭枚举表达endpoint/result/status与字段三态，订单原金额及分值可缺省，TAKE不补金额；每次物理attempt完整投影安全字段（含TOKEN与61第二次），不携带A5结果、Throwable或原始消息。TAKE受保护资产字节由Task2 codec生成，其它卡型／不完整资产转RESULT_UNKNOWN并保留attempts，终结仍由Task4判定。FrozenCredentialSetResolver短独立事务用REQUIRES_NEW，先集再按项主键升序当前读，核全部ACTIVE身份且无重复后仅解析requestedKeys；解析失败擦除包括空材料在内的已取得数组，调用者用毕finally擦除返回数组。并发测试以真实MySQL证明解析期间版本更新阻塞，提交后漂移失败关闭，不宣称历史材料可恢复。
+
 PublishedConnectorConfiguration 增加不可变凭据项身份列表，由**该版本 credential_item_snapshot**解析 itemId／itemKey／providerType／activeSecretVersion；先按现有绑定守卫核对，不能拿当前项版本组装代替。Ticket 承载通用冻结身份值，应用 context factory 仅选 appSecret／privateKey 两项构造 A5 HuashengCredentialIdentity；回调公钥不进出站材料／缓存。
 
 现有`CredentialSetResolver.resolveSet(setId)`只读取当前项，不能独自证明材料属于冻结身份。新增窄`FrozenCredentialSetResolver.resolve(setId, expectedItems, requestedKeys)`，内部短独立事务先锁凭据集、按主键升序当前读项，核全部冻结身份与ACTIVE，再经已有CredentialItemResolver解析所需项；解析失败擦除已取材料，返回后事务已结束。出站请求两项，回调请求appSecret／callbackPublicKey，不改变旧resolveSet行为。TicketFactory和回调均使用此入口，不先verify再另一次无守卫resolve。此能力不保存历史secretRef：轮换新建凭据集与连接器版本，旧集与ENV引用的实际材料保留到在途结束；原地改版本／删除／停用导致旧单失败关闭并保留，不声称仍可自动解出旧密钥。ENV变量不在同版本下热替换；配置投影不是历史秘密仓库。
@@ -86,6 +92,13 @@ ALTER TABLE sc_fulfillment_operation
   ADD COLUMN business_send_possible_at DATETIME(3) NULL COMMENT '本操作首次可能发送业务请求的时间，Asia/Shanghai',
   ADD CONSTRAINT ck_sc_operation_huasheng_recovery
     CHECK (execution_generation >= 0 AND recovery_count >= 0);
+```
+
+为支持多阶段相同外部状态键映射（如华昇 CREATE/QUERY/CALLBACK 共用 `status=WAIT/SUCCESS` 等），062 同时调整状态映射唯一键，纳入 `business_phase`：
+```sql
+ALTER TABLE sc_status_mapping_definition
+  DROP INDEX uk_sc_status_mapping,
+  ADD UNIQUE KEY uk_sc_status_mapping (connector_version_id, mapping_version, business_phase, external_status, external_sub_status);
 ```
 
 这些列是技术事实，不改变 operation_kind CHECK。新增 PLACE_ORDER／CONFIRM_ORDER／TAKE_CARD／QUERY_ORDER step；FULFILL 用于前三者，QUERY_ORDER kind用于恢复外呼 Ticket。恢复消费同一原 Operation，不创建新的 BOrder、不重新路由／预占。

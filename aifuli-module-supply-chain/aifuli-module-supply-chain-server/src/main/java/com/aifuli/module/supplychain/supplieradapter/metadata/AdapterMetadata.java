@@ -32,6 +32,12 @@ public interface AdapterMetadata {
 
     void validateOfferConfig(int schemaVersion, JsonNode config);
 
+    /** 特定协议的商户身份约束，旧适配器不增加限制；见华昇生产闭环设计§3.2。 */
+    default void validateMerchantAccount(String merchantAccount) {}
+
+    /** 有限Schema以外的显式范围约束，不能假设Schema支持minimum/maxLength；见华昇生产闭环设计§3.2。 */
+    default void validateExtraConfig(JsonNode config) {}
+
     /**
      * 该适配器默认的封闭执行画像，服务端在上架发布时注入 offer 版本，前端只读（d2）。
      * 返回组合须自洽并通过 {@code requireExecutionCapabilities}（所需能力落在 {@link #capabilities()} 内）。
