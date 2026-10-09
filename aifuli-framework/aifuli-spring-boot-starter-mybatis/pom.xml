@@ -68,13 +68,6 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-jdbc</artifactId>
         </dependency>
-        <!-- TODO(2026-10-09)：druid-spring-boot-3-starter 为迁移过渡期临时保留，
-             将在后续任务与 aifuli-dependencies 中的依赖管理一并彻底移除。
-             详见 docs/superpowers/plans/2026-10-09-druid-to-hikari-migration.md -->
-        <dependency>
-            <groupId>com.alibaba</groupId>
-            <artifactId>druid-spring-boot-3-starter</artifactId>
-        </dependency>
         <dependency>
             <groupId>com.baomidou</groupId>
             <artifactId>mybatis-plus-spring-boot3-starter</artifactId>
