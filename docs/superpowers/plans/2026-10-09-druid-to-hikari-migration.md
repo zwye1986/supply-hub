@@ -2759,19 +2759,26 @@ git commit -m "配置: 八进程数据源配置迁移至 Hikari 并移除 Druid 
 ```sql
 -- 2026-10-09 去 Druid 迁移：MySQL 监控菜单（Druid 控制台）整体下线。
 -- 设计见 docs/superpowers/specs/2026-10-09-druid-to-hikari-migration-design.md#53-监控端点广告过滤器与前端页面退出
--- 仅停用菜单与配置项，不删除历史数据；前端配套改动在 supplychainhubweb 仓库执行。
+-- 目标库：system 数据源（supplyhub-test 栈的 system 服务），菜单 id=111（path=druid，component_name=InfraDruid）。
+-- supplyhub-test 为三服务（system/infra/member）共用单库，infra_config 属 infra 模块表，在本栈单库执行。
+-- 下线方式：菜单停用（status=1，本仓 CommonStatusEnum 语义 0=开启/1=关闭，MenuServiceImpl 过滤 isDisable 节点）；
+-- url.druid 配置项以物理删除下线（infra_config 无 status 列，该行为配置项而非监控历史数据，本脚本不删除任何监控历史数据）。
+-- 前端配套改动在 supplychainhubweb 仓库执行。
 UPDATE system_menu
-SET status = 0
+SET status = 1
 WHERE path = 'druid'
-  AND component_name = 'InfraDruid';
+  AND component_name = 'InfraDruid'
+  AND deleted = b'0';
 
--- 监控地址配置项下线（前端 druid 页面读取该 key）
-DELETE FROM system_dict_data
-WHERE dict_type = 'infra_config'
-  AND value = 'url.druid';
+-- 监控地址配置项下线（前端 druid 页面读取该 key，实际存储于 infra_config.config_key，见 sql/mysql/ruoyi-vue-pro.sql）
+DELETE FROM infra_config
+WHERE config_key = 'url.druid';
 ```
 
-> 注意：`system_dict_data` 表名与列名请以 system 库实际 DDL 为准（本仓库 `sql/mysql/ruoyi-vue-pro.sql` 中配置字典类型为 `infra_config`）。若部署目标字典类型不同，先 `SELECT` 确认再执行 DELETE。
+> 修正依据（2026-10-09 评审）：本仓 `CommonStatusEnum` 为 ENABLE(0)/DISABLE(1)，`MenuServiceImpl.filterDisableMenus`
+> 过滤 `isDisable` 节点，菜单下线必须 `status = 1`（`status = 0` 是无操作）；监控地址配置实际存储在
+> `infra_config` 表（`config_key = 'url.druid'`，`sql/mysql/ruoyi-vue-pro.sql` 中 id=7），不存在于 `system_dict_data`
+>（该表仅有 `dict_type = 'infra_config_type'` 的字典类型定义），故 DELETE 目标为 `infra_config`。
 
 - [ ] **Step 2: 前端仓库配套改动（supplychainhubweb，独立仓库，另行提交）**
 

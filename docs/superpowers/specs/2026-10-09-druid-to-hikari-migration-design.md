@@ -353,7 +353,7 @@ public void close() throws SQLException {
 3. **各微服务 `SecurityConfiguration`**：彻底删除所有 `registry.requestMatchers("/druid/**").permitAll();` 白名单配置；
 4. **前端管理端（`supplychainhubweb`）下线与重定向**：
    - 标记下线 `src/views/infra/druid/index.vue`；
-   - 针对部署 SQL 中的菜单和数据字典项 `url.druid`，在 `script/deploy` 中提供迁移与禁用 SQL；若用户访问原监控入口，重定向至通用系统监控仪表盘或提示功能已下线。
+   - 针对部署 SQL 中的菜单与 infra_config 配置项 `url.druid`，在 `script/deploy` 中提供迁移与禁用 SQL；若用户访问原监控入口，重定向至通用系统监控仪表盘或提示功能已下线。
 
 ---
 
