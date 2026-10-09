@@ -1,5 +1,7 @@
 # 页面选品与订单受理目录衔接详细设计
 
+> **2026-10-09 本期 B/C 替代设计（用户已确认方向，详细契约待书面复核）：** 首个业务交付合并 B/C，采用保存事务提交后单 LST 幂等刷新＋后台周期扫描自动恢复＋下单首冻前准备＋最终当前项目资格。规范性入口为 [真实选品可售与签名下单受理](2026-10-09-saleable-catalog-order-acceptance-design.md)。下方 §5～§7、§9 的通用执行器、账本 flush、ROOT/PAGE/LEAF、持久页轮次／心跳及 §10 的管理重算接口、§13 的对应机制门禁、§14 的旧 B/C 技术拆分退出本期，不执行、不阻断业务。前端只改保存／发布结果提示，不新增编码／状态列、重算操作或项目编码展示。A 已有成果及真实价格、MANUAL、暂停／退役、项目首选 UNKNOWN 拒绝、冻结回放语义保留。后台自动恢复已纳入，不能仅靠用户操作／下单补偿。当前仅文档修订，无新增实现／验收结论。后续页首说明与正文冲突时以本条及新设计为准。
+
 > **最新业务优先修订（2026-10-09）：** 用户明确本阶段B0剩余全部为过度设计，不再作为B/C设计、编码或商业链路前置。§5～§7/§9依赖通用B0事务型执行器、账本flush、ROOT/PAGE/LEAF、页桶/心跳容量整体验收的方案暂停适用，后续实施必须先定案最小业务替代，不能原样调用尚未开放的BCS通道。推荐原选品/定价事务提交后由事务外业务编排做单LST幂等刷新，并与首冻前按需准备及最终当前资格核对组合；管理返回/补偿契约尚属候选，不能承诺全部后台投影实时收敛。已确认BPD身份、READY真实价格、MANUAL兼容、人工暂停/退役、当前项目首选资格、冻结回放等语义保持。最新 `feat/remove-druid-hikari / adac935` 已修复旧快照预算缺口，不新增加固待办；五阶段含B0首阶段的旧路线被业务优先路线替代。详细适用边界见 [合入与业务优先修订](2026-10-09-hikari-merge-business-first-design.md)，未合并、未实施候选。
 
 > **2026-10-09 新项目事实与路线纠偏（优先于下方旧检查点）：** 用户已确认不存在旧 Timer 存量，R3-04 旧迁移及其专属启动全量核验/双向扫描/有界读取取消且不适用，不再阻断 B0/B1/C。取消迁移不取消新任务/事件的事务一致性、运行时 JSON 资源限制、租约恢复或新单当前准入。采用 Hikari 依赖路线，复用 Task A、R3-03、华昇 A1～A5 最新有限成果；正常启动仍装配的旧迁移入口需要独立清理，不重启旧复杂候选。五阶段顺序和通知/售后后置保持，前加基线与无效迁移退出检查点。路线候选见 `docs/superpowers/plans/2026-10-09-greenfield-business-closure-roadmap.md`；本次不放行生产实现、分支整合或启用。
@@ -156,6 +158,8 @@ MANUAL继续原商业价/生命周期契约。AUTO_SELECTION的内部`publishAut
 
 ## 5. 可复用基础设施及新增接口
 
+**历史架构（本期不执行）：** 以下基础设施前置和接口改由新设计 §3 替代；保留文字用于追溯，不要求整体 B0 放行。
+
 **B0技术前置单列设计：** `docs/superpowers/specs/2026-10-05-catalog-reliable-consumption-prerequisite-design.md`明确领取恢复/耗尽、转换资格、心跳、事务型Handler分派、源行提交栅栏、Inbox及稳定页/轮次。历史10/`deleg_08c77a41`批准与01/06原报告保留；既有切片1/2运行状态见集成文档，不在本轮重新验收。V4A切片3因真实空表三事务反例撤回“排他upsert创建者回滚后无死锁”保证，修订为仅纯本地完整worker首次加最多一次重跑（总≤2），精确本地账本锁标记+同一SQLException1213/40001+afterCompletion明确ROLLED_BACK+事务资源清理后才事务外重跑。技术领域fixture的run-04原XML12项全0不是生产代理+Druid或全部门禁通过；第二attempt再次真实死锁、提交不确定/rollback失败等门禁未证。本次按用户批准补正原预审deleg_bbb25a07的R01/R02，仅修订并送新独立预审，不批准实施或参数生效。共享nano起点15s不reset、C1000ms仅清理预留、统一R≥3500ms准入/退避前R-b≥3500及后重检；raw.getConnection(1500L)仅有限排队，借后重算E=min(commandDeadline-C,acquiredNano+6s)，事务/每Statement按floor及已有正限制收紧，不足1秒拒绝，MyBatis flush后与commit前guard、rollback不省略。唯一现有Druid池由原bean名稳定budget DataSource包装，manager/SqlSessionFactory/clock同wrapper key、非InfrastructureProxy/TransactionAware代理；非预算透明委派。唯一全局增量是独立int配置aifuli.supply-chain.datasource.connect-timeout-millis默认且仅1500，build后init前setConnectTimeout，用户接受HTTP/Liquibase/clock/六旧Handler新建连接及冷启动影响但它们不接retry。其它maxWait/maxActive/global socket不改、不另建池；真实Driver.connect/HostInfo优先级与冲突形式拒绝、Druid前提校验与恢复失败disable+discard、缓存/资源清理按B0§7.2.1冻结，不承诺TCP以外或15s硬结束。不可变账本/完整载荷/同事务源写绑定/提交guard/真实collation排序/旧Timer回填与维护窗口同版本切换保留，本轮仅本地文档及冻结输入、未实施重跑或自行批准。A选品/定价RPC、六旧Handler、引擎及实际B消费者均隔离，旧scheduleOnce参加更大业务事务只能向事务所有者传播异常、不得局部重跑，外呼Handler不包retry；新增业务语义不私设。B启用新生产者前必须先验收B0；源Outbox/Timer锁前缀仍按§4、追加/调度按§7.2/§7.2.1，不重复锁被消费的源行。
 
 **V4A最新idle例外设计修订（用户批准仅设计修订/预审；未独立预审、未实施）：** R02-ALLOWLIST、R01-PREPARATION、R02-DISCARD-FAILURE的来源仅为父任务提供的完整三项摘要，不冒称归档审查原JSON。B0§7.2.1列可编码有效值集合：retryCount=0、createScheduler=null、空filter、borrow=false/idle=true/return=false及原验证设置、精确默认MySQL checker/validation组合、defaultAutoCommit=true/removeAbandoned=false、单host直接Connector9.7标准socket；配置不符在预算入口失败关闭、不改共享属性。用户批准保留共享testWhileIdle=true，精确默认MySqlValidConnectionChecker及usePingMethod=true/validationQuery=null/validationQueryTimeout=-1旧路径明确允许，不因idle验证存在而拒绝；其它允许集合不放宽，不关闭idle验证、不改checker/global validation。实际运行配置及传输范围仍待验，默认匹配不等于生产可启用。默认checker实际发`/* ping */ SELECT 1`，默认validation timeout=-1；原idle验证失败discard/continue重借是获准非硬截止例外，raw.getConnection(1500L)仅每轮正数队列等待，累计borrow无有限上界，可超过15s或不能及时返回；不重置nano15s。raw返回后第一步检查cancel/deadline并清理late连接，不得暴露manager/启动worker，禁止Future借线程。原pool内部discard无强关闭证明例外只限既有验证路径，不扩成新预算污染/恢复失败/late连接清理宽松；后者继续严格R02.6协议。raw返回后manager看见连接前保存并安装network/socket，覆盖事务prepare/autoCommit、server prepare返回前网络、metadata/session/setup及封闭非递归SESSION control，委派前后重检；Statement记忆最小正timeout、缓存归还恢复，MyBatis flush后及commit前双guard保持。提前保存holder/physical/实际socket→disable阻止recycle→直接捕获Socket.close异常→同步abortInternal→仅一次discard(savedHolder)，禁止用Druid计数/emptySignal/driver isClosed证明物理关闭；源码中discard与abort链都吞close异常，直接标准socket关闭只证明本地传输资源，不保证服务端立即断线。恢复失败即清理失败禁retry，随后丢弃成功也不解禁；Connector/J9.7默认sslMode=PREFERRED，标准socketFactory不等于非TLS；不关闭TLS、不改现非预算行为。未知socket/未审TLS资源覆盖无法证明时该预算实现不得启用；下一独立预审可按明确受控supported transport范围评价，运行未知与TLS支持仍待验，不假实现TLS支持、不声称生产可上线；需改池/驱动内部或扩大支持时另审另授权。三阻断必需负例按B0§9逐项执行，不替代成TODO、不冒称已验证。新冻结`retry-idle-exception-design-review-input.json`及`retry-idle-exception-parent-design-audit.json`在仓外task-b0-ledger-evidence；原retry-resource输入SHA256 `c6bf3832cb77265e71ebd32c6e97afdb8d5d501194bf9d8b034e04edc7cd15c5`及历史retry-budget输入SHA256 `28e380ba361e9afd948337f461c94d1119f5af9b8f91e9883ef06c45eb2607e2`逐字保留。本轮仅四文档patch与证据冻结，生产Java/XML/DDL/测试未改，未构建/测试/DB或网络，未批准实施。
@@ -180,6 +184,8 @@ MANUAL继续原商业价/生命周期契约。AUTO_SELECTION的内部`publishAut
 业务状态、targetName、taskType、事件类型及原因码集中枚举/常量，不能散落字符串。重要方法用中文注释链接本文章节；日志记录BPD/LST/SKU/来源版本/事件ID/耗时/闭合结果，不记录凭据和完整目标。重试失败debug/错误码聚合，死信单次warn。
 
 ## 6. 全部生产者与可靠触发
+
+**历史架构（本期不执行）：** 本期只接选品／定价事务外编排，其余变化由业务扫描读取当前事实，不接下方全生产者事件平台。
 
 统一LOCAL target：`buyer-selection-catalog-refresh`；事件 `BUYER_SELECTION_CATALOG_REFRESH_REQUESTED`。载荷版本1，字段为scopeType、scopeIdentity、sourceType/sourceIdentity/sourceVersion、cause、operatorId、traceId和可选分页afterListingId。不把事件中旧价格或AVAILABLE当授权。**本节所有新增生产者只在B真实Handler/消费者与Timer一起交付时开启；A完全不发这些事件。** 不以默认开启而消费端未上线的feature flag造成可持续死信。
 
@@ -214,6 +220,8 @@ MANUAL继续原商业价/生命周期契约。AUTO_SELECTION的内部`publishAut
 B复用发布代码若仍追加该target，则必须同时提供明确的本地消费Handler：真实payload为latestCursor、listingNo、listingVersion、availabilityVersion、changeType、occurredAt，不含changeId/buyerId/listingId。以latestCursor定位真实BuyerCatalogChange，再核验buyer/LST/version归属与载荷一致，并以Inbox成功记录“目录游标已可拉取”，不执行尚未接入的外部HTTP/消息推送。用户可观察结果是原RPC增量目录游标可读，不承诺外部平台已收到通知。主动通知/外部fanout为未来边界，其实现需另设实际订阅契约和独立投递结果；本地Handler成功不可冒充主动通知已完成。Handler不把该商业变更再转成自动刷新，避免发布→刷新→发布循环。
 
 ## 7. 自动发布、短事务和失败重试
+
+**历史事务实现（本期已替代）：** 单目录事务、幂等及锁序以新设计 §3～§4 为准；以下涉及源锁、Inbox、续页与Timer的实现不执行。
 
 `refreshListing` 事务顺序：
 
@@ -289,6 +297,8 @@ RPC的原`accept`模式仍保留旧AVAILABLE投影前置检查和原行为，不
 
 ## 9. 到期、巡检与可恢复补偿
 
+**历史补偿实现（本期不执行）：** 下方持久Timer轮次与播种由新设计 §6 的有界周期扫描替代，不恢复页轮次／心跳容量工程。
+
 `nextBoundary`取所有已引用的未来validFrom/validTo、事实validUntil、路由生效/失效时刻、次日配额边界、投影最大评估间隔的最小值。默认最大间隔30秒、单页100为可配置技术参数；无实际未来依赖也有巡检边界。valid_until用于读侧防陈旧，不是实际订单资格证明。
 
 每次成功refresh同事务安排 `BUYER_SELECTION_CATALOG_REEVALUATE`，幂等键以listingId+basisDigest+已冻结boundary时间的版本化身份摘要生成，符合实际128长度；相同已完成task不能承担新的未来轮次。处理器调Lifecycle，返回UPDATED/DEFERRED/TERMINAL等封闭码；B0事务型Timer执行器使业务/续页/下一轮/任务完成及成功审计同提交，不在finally另行完成。抛异常按合法claim重试和死信，禁止在Handler直接改领域表。
@@ -304,6 +314,8 @@ RPC的原`accept`模式仍保留旧AVAILABLE投影前置检查和原行为，不
 旧RPC目录读侧对自动行过期/来源不匹配投影返回UNKNOWN，availableOnly过滤必须同时考虑valid_until和自动来源健康；不继续返回expired AVAILABLE。最终HTTP事实检查始终执行，不因投影刷新频繁而省略。
 
 ## 10. DRAFT稳定响应与管理端可见结果
+
+本期准备、保存／发布响应与后台补偿以新设计 §5～§7 为准；原 A 的NULL版本／CAS事实保留。下方新增管理读列、`/recalculate`动作及可靠“重算已受理”响应不实施，不是验收前置。
 
 052已允许受理回执listing_version_no为NULL (`052-standard-order-project-key.sql:39–40`)。将Lifecycle.resolveAttemptListingVersionNo返回Integer：没有真实当前发布版本返回NULL；非空currentVersion指向不存在/错误归属版本继续抛系统异常。不能补1。`FulfillmentAcceptanceReceiptMapper.reopenRetryable`的listingVersionNo参数也必须为Integer，CAS重开显式保留真实NULL，禁止自动拆箱或默认1；同号首次拒绝、正确CAS重开、再次拒绝及修复后续跑都遵守原版本/CAS契约，错误CAS不得重开。
 
@@ -360,6 +372,8 @@ RPC的原`accept`模式仍保留旧AVAILABLE投影前置检查和原行为，不
 
 ## 13. 自动化测试与实际管理链路门禁
 
+本期矩阵由新设计 §10替代本章的事件接线／Outbox/Inbox/Timer专项；原A回归及金额、幂等、隔离、真实资格、并发／事务门禁不豁免。华昇资产交付属后续，不混作本期受理完成条件。
+
 仅跳过供应链以外模块单测。门禁按`docs/superpowers/specs/2026-08-07-supply-chain-phase1-detailed-design.md#17-测试与发版门禁`执行；人工联调文档不能替代自动化。实现时同步维护`docs/集成测试.md`；本轮技术规格补正仅记审计与待实施矩阵，不冒称运行。
 
 ### 13.1 纯逻辑与契约
@@ -401,6 +415,8 @@ HUA_SHENG外部响应可在自动化里使用协议真实的隔离HTTP stub；�
 测试至少对金额、唯一订单/报价、回执状态、实际LST版本引用、项目定价引用、真实选中HUA_SHENG供应商、履约操作唯一、资产及资金不变量作数据库断言；不能仅断言Controller返回200。
 
 ## 14. 实施拆分与交付判定
+
+**历史拆分：** 下方A成果保留；B/C已合并为新设计 §10首个业务交付，不按旧consumer/producer/Timer前置串联执行。
 
 按以下依赖顺序编排后续实施，文档批准不等于已实现。每项是可单独审查和验证的切片，不合并为一次庞大提交：
 
