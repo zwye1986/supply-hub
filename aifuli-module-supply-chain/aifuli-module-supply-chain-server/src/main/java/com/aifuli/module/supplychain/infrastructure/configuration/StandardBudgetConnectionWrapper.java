@@ -30,7 +30,7 @@ import java.util.function.Consumer;
  * <ul>
  *   <li>借用即保存驱动原始 networkTimeout 并安装预算限制 min(7000ms, 剩余预算)；</li>
  *   <li>SESSION innodb_lock_wait_timeout 的读取与 SET 走同一物理连接的封闭非递归 control 通道，不触发外层包装器；</li>
- *   <li>rollback 进入独占 cleanup 模式，回滚与状态恢复不再被业务 E 守卫拒绝（R01.5）；</li>
+ *   <li>终结事务的无参 rollback() 与 close() 进入独占 cleanup 模式，回滚与状态恢复不再被业务 E 守卫拒绝（R01.5）；</li>
  *   <li>退出恢复 SESSION 与 networkTimeout，任一恢复失败即 markCleanupFailed 并触发基础设施淘汰协议（evictConnection + abort），严禁重跑。</li>
  * </ul>
  */
@@ -91,7 +91,7 @@ public class StandardBudgetConnectionWrapper implements Connection {
         try (Statement s = delegate.createStatement()) {
             try (ResultSet rs = s.executeQuery("SELECT @@SESSION.innodb_lock_wait_timeout")) {
                 if (rs == null || !rs.next()) {
-                    log.warn("[预算连接][SESSION 原值读取失败] 保持默认 50 秒");
+                    log.warn("[预算连接][SESSION 原值读取失败] 保持默认 50 秒 targetSec={}", targetSec);
                     return;
                 }
                 originalSessionTimeout = rs.getInt(1);
