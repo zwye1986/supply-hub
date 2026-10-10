@@ -25,7 +25,7 @@
 - `docs/superpowers/specs/2026-08-18-rtmart-instore-channel-design.md`
   - 已明确 1:1 支付身份、`014` 前向迁移、租户独立 `app_key`、多枚并存的一次性凭证、完整请求摘要、真实账户返还与生产测试门禁。
 - `docs/adr/0001`～`0005`：记录独立 INSTORE、单支付身份、`user_code`、租户作用域与凭证分表决策。
-- `docs/供应链中台多场景概要设计.md`：补入独立 INSTORE 时序及退款资金闭环。
+- `docs/architecture/供应链中台多场景概要设计.md`：补入独立 INSTORE 时序及退款资金闭环。
 
 ### 2.2 当前数据库 Schema（Liquibase 变更集 `013`～`018`）
 

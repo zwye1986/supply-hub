@@ -6,7 +6,7 @@
 
 ## 1. 背景与范围
 
-本文档定义供应链中台接入「大润发到店扫码购」渠道的方案。渠道方为旅通（ltsw.cn）支付/POS 聚合中台，门店用户用扫码购 APP 扫实物商品 → 旅通 POS 收单 → 调「商户」（中台+采购商收银台）接口建单/查单/退款。接口契约见 `docs/大润发到店购渠道分销接口.docx`。
+本文档定义供应链中台接入「大润发到店扫码购」渠道的方案。渠道方为旅通（ltsw.cn）支付/POS 聚合中台，门店用户用扫码购 APP 扫实物商品 → 旅通 POS 收单 → 调「商户」（中台+采购商收银台）接口建单/查单/退款。接口契约见 `docs/integration/rtmart/大润发到店购渠道分销接口.docx`。
 
 本设计与既有「淘宝闪购/盒马 O2O」（`orderType=O2O`）**平行、不硬合**：总表独立 `orderType`，独立场景详情模块、OrderSummaryPolicy 与渠道服务。共享 BuyerOrder 总表、trade-core 资金账本与 Outbox/Timer，不共享详情表、状态机、入站契约与渠道服务代码。独立成类的依据是履约完成点、渠道拉状态、取消已支付转退款，**不是**一单多流水。见 ADR-0001。
 
@@ -260,4 +260,4 @@ InstoreBuyerCashierCallbackApi
 - `docs/superpowers/specs/2026-08-04-supply-chain-core-design.md`：`orderType` 含 INSTORE。
 - `docs/superpowers/specs/2026-08-07-supply-chain-phase1-detailed-design.md` 7.1 / `FundReferenceType`。
 - `docs/集成测试.md` 第 3 节：同时记录现状切片和生产门禁，自动化测试结果不能用人工联调替代。
-- `docs/供应链中台多场景概要设计.md`：补充独立 INSTORE 时序、资金返还与一次性凭证边界。
+- `docs/architecture/供应链中台多场景概要设计.md`：补充独立 INSTORE 时序、资金返还与一次性凭证边界。

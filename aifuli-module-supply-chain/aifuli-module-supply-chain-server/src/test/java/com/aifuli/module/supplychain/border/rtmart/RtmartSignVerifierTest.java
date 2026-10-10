@@ -17,7 +17,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 旅通入站 SHA1withRSA 验签器测试；密钥均在测试运行时生成，禁止使用真实渠道秘密。
  *
  * <p>验签与出站 {@code RtmartRequestSigner} 互为逆运算：规范串同为字典序 key+value 拼接。
- * 覆盖范围见 {@code docs/instore-channel-member-resolve-api.html#3-签名规则}。</p>
+ * 覆盖范围见 {@code docs/integration/rtmart/instore-channel-member-resolve-api.html#3-签名规则}。</p>
  */
 class RtmartSignVerifierTest {
 

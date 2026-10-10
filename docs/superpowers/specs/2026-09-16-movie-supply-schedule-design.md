@@ -4,7 +4,7 @@
 
 ## 1. 范围与进程边界
 
-本次补齐独立 `aifuli-module-movie-server` 的主数据持久化、JC/JY 只读供给接口、周期同步和 MongoDB 排期读写；不涉及锁座、出票、报价、商城接口或中台路由。继承 `docs/电影子系统与中台履约详细设计.md` 第 2、3.1、5.1 节。电影进程继续使用自己的 MySQL/MongoDB，不引入其它模块的表、Bean、多租户拦截或隐式 Feign 扫描。
+本次补齐独立 `aifuli-module-movie-server` 的主数据持久化、JC/JY 只读供给接口、周期同步和 MongoDB 排期读写；不涉及锁座、出票、报价、商城接口或中台路由。继承 `docs/business/电影子系统与中台履约详细设计.md` 第 2、3.1、5.1 节。电影进程继续使用自己的 MySQL/MongoDB，不引入其它模块的表、Bean、多租户拦截或隐式 Feign 扫描。
 
 六张平台表复用既有 `sql/mysql/movie/releases/1.0.0`，不修改已发布变更集。数据对象字段注释与原始 DDL 一致，主数据及 Mapping 在单个 MySQL 事务中幂等写入。禁用标准数据不会被同步自动启用，跨渠道更新不得覆盖已有映射关系。供应商缺项不构造虚假的标准编码。
 
@@ -187,7 +187,7 @@ MySQL GET_LOCK 是会话锁，连接池 close 只是归还代理。取得结果�
 
 账号来源说明：下文环境变量配置为现有实现；目标态由中台统一提供应用 ID、密钥及配置版本，见第 2 节。账号来源调整不改变 LX 签名和接口协议。
 
-依据 `docs/影乐星开放平台接口文档.md` 第 1、3 章，在现有五类只读同步流程中增加 `MovieChannel.LX`，持久化编码为 `lx`。锁座、出票、查单、退款、回调尚无现有实现，本次不扩展交易契约。继续只在独立电影进程内访问电影库，不新增 RPC、事务管理器、安全入口或供应链依赖，不触发供应链架构测试变更范围。
+依据 `docs/integration/影乐星开放平台接口文档.md` 第 1、3 章，在现有五类只读同步流程中增加 `MovieChannel.LX`，持久化编码为 `lx`。锁座、出票、查单、退款、回调尚无现有实现，本次不扩展交易契约。继续只在独立电影进程内访问电影库，不新增 RPC、事务管理器、安全入口或供应链依赖，不触发供应链架构测试变更范围。
 
 复用 `movie.supply.accounts`，`app-key-env` 在 LX 表示 `app_id` 的环境变量名，示例使用 `MOVIE_LX_APP_ID`、`MOVIE_LX_APP_SECRET`；地址默认 `https://api.yinglexing.com`，账号默认关闭。POST UTF-8 表单包含 `app_id`、秒级 `time`；排除 `sign` 与 null 值，键名按 ASCII 升序，以未 URL 编码的 `key=value` 用 `&` 拼接，追加 `&app_secret=密钥`，取 UTF-8 MD5 大写；最终传输时才编码表单。所有请求带 `Accept-Encoding: gzip`，复用现有按响应头解压能力、账号限流、超时和脱敏汇总日志。
 

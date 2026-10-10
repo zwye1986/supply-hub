@@ -10,7 +10,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
  *
  * <p>组件扫描仅覆盖当前电影包，不扫描商城或供应链中台的实现，
  * 不共享其它服务的本地事务。平台主数据不使用商城租户拦截。
- * 设计：docs/电影子系统与中台履约详细设计.md#51-工程初始化落地约定2026-09-07</p>
+ * 设计：docs/business/电影子系统与中台履约详细设计.md#51-工程初始化落地约定2026-09-07</p>
  */
 @SpringBootApplication
 public class MovieServerApplication {

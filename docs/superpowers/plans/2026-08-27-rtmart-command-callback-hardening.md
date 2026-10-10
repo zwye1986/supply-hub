@@ -274,7 +274,7 @@ Expected: 两条命令均成功，当前分支与 HEAD 不变。
 
 **Files:**
 - Modify: `docs/superpowers/specs/2026-08-23-instore-payment-refund-api-contract-design.md`
-- Modify: `docs/instore-channel-command-api.html`
+- Modify: `docs/integration/rtmart/instore-channel-command-api.html`
 - Modify: `docs/集成测试.md`
 
 - [ ] **Step 1: 更新 API 契约设计**
@@ -293,7 +293,7 @@ Expected: 两条命令均成功，当前分支与 HEAD 不变。
 
 Run:
 ```bash
-rg -n "暂不返回|五分钟|5分钟|E4005|E4006|E4007|E4008|E5001|E4003 签名" docs/instore-channel-command-api.html docs/集成测试.md docs/superpowers/specs/2026-08-23-instore-payment-refund-api-contract-design.md
+rg -n "暂不返回|五分钟|5分钟|E4005|E4006|E4007|E4008|E5001|E4003 签名" docs/integration/rtmart/instore-channel-command-api.html docs/集成测试.md docs/superpowers/specs/2026-08-23-instore-payment-refund-api-contract-design.md
 ```
 Expected: 无匹配。
 

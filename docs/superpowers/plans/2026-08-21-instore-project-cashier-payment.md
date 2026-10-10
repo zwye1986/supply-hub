@@ -246,7 +246,7 @@ git commit -m "feat(supply-chain): converge instore payment results"
 ### Task 5: 文档、架构门禁与完整验证
 
 **Files:**
-- Modify: `docs/供应链中台INSTORE到店购渠道接入实现总结.md`
+- Modify: `docs/integration/rtmart/供应链中台INSTORE到店购渠道接入实现总结.md`
 - Modify: `docs/集成测试.md`
 - Modify: `aifuli-module-supply-chain/aifuli-module-supply-chain-server/src/test/java/com/aifuli/module/supplychain/architecture/SupplyChainModuleArchitectureTest.java`
 
@@ -288,7 +288,7 @@ Expected: `git diff --check` 无输出；本切片新增代码无裸未完成标
 - [x] **Step 5: 提交门禁记录**
 
 ```bash
-git add docs/供应链中台INSTORE到店购渠道接入实现总结.md docs/集成测试.md \
+git add docs/integration/rtmart/供应链中台INSTORE到店购渠道接入实现总结.md docs/集成测试.md \
   aifuli-module-supply-chain/aifuli-module-supply-chain-server/src/test/java/com/aifuli/module/supplychain/architecture/SupplyChainModuleArchitectureTest.java
 git commit -m "test(supply-chain): verify instore cashier payment gate"
 ```

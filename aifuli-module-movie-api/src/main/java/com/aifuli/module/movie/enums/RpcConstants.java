@@ -4,7 +4,7 @@ package com.aifuli.module.movie.enums;
  * 电影 RPC 的稳定寻址约定，供商城与供应链中台的 Feign 契约引用。
  *
  * <p>电影服务独立注册，不使用商城聚合服务名。
- * 设计：docs/电影子系统与中台履约详细设计.md#51-工程初始化落地约定2026-09-07</p>
+ * 设计：docs/business/电影子系统与中台履约详细设计.md#51-工程初始化落地约定2026-09-07</p>
  */
 public final class RpcConstants {
 

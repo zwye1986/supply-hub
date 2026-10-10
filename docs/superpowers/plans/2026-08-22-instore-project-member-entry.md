@@ -921,7 +921,7 @@ git commit -m "feat(supply-chain): resolve routed instore members"
 - Create: `aifuli-module-supply-chain/aifuli-module-supply-chain-server/src/test/java/com/aifuli/module/supplychain/border/instore/application/InstoreMemberEntryFlowIntegrationTest.java`
 - Modify: `aifuli-module-supply-chain/aifuli-module-supply-chain-server/src/test/java/com/aifuli/module/supplychain/architecture/SupplyChainModuleArchitectureTest.java`
 - Modify: `docs/集成测试.md`
-- Modify: `docs/供应链中台INSTORE到店购渠道接入实现总结.md`
+- Modify: `docs/integration/rtmart/供应链中台INSTORE到店购渠道接入实现总结.md`
 
 - [ ] **Step 1: 写测试 Adapter 驱动的真实 MySQL 纵向测试**
 
@@ -984,7 +984,7 @@ Expected: 所列单元/契约/架构测试全 PASS；四个真实 MySQL 测试�
 
 - [ ] **Step 4: 更新联调与实现总结**
 
-`docs/集成测试.md` 的 INSTORE 章节记录：项目与 MEMBER_PROFILE 前置数据、HOME、DETAIL、接口①、会员超时同 token 重试、URL 超时新 token、跨项目隔离的操作步骤和 SQL 验证点。`docs/供应链中台INSTORE到店购渠道接入实现总结.md` 把 Schema 更新为 013～018，并将真实 SaaS/旅通 Adapter、认证和退款保留在待完成列表。
+`docs/集成测试.md` 的 INSTORE 章节记录：项目与 MEMBER_PROFILE 前置数据、HOME、DETAIL、接口①、会员超时同 token 重试、URL 超时新 token、跨项目隔离的操作步骤和 SQL 验证点。`docs/integration/rtmart/供应链中台INSTORE到店购渠道接入实现总结.md` 把 Schema 更新为 013～018，并将真实 SaaS/旅通 Adapter、认证和退款保留在待完成列表。
 
 - [ ] **Step 5: 运行供应链 API 与 server 全量单测**
 
@@ -1017,7 +1017,7 @@ Expected: `git diff --check` 无输出；第一条搜索只允许 deprecated Map
 ```bash
 git add aifuli-module-supply-chain/aifuli-module-supply-chain-server/src/test \
   docs/集成测试.md \
-  docs/供应链中台INSTORE到店购渠道接入实现总结.md
+  docs/integration/rtmart/供应链中台INSTORE到店购渠道接入实现总结.md
 git commit -m "test(supply-chain): verify instore member entry flow"
 ```
 

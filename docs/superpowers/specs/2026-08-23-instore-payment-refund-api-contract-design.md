@@ -140,7 +140,7 @@ record ProjectContext(Long projectId) { /* 紧凑构造器校验非空 */ }
 - **ArchitectureTest 新增 1 条规则**：Instore 支付/回调两个 ApiImpl 不得注入 DAL 或 Resolver
   （仅 `ProjectCallContextAccessor` + Facade）。
 - 既有全量单测回归 + `SupplyChainModuleArchitectureTest`。
-- 文档：`docs/供应链中台INSTORE到店购渠道接入实现总结.md` §3.2 更新为已实现；
+- 文档：`docs/integration/rtmart/供应链中台INSTORE到店购渠道接入实现总结.md` §3.2 更新为已实现；
   `docs/集成测试.md` 补本切片门禁记录。
 
 ## 8. 完成标准
