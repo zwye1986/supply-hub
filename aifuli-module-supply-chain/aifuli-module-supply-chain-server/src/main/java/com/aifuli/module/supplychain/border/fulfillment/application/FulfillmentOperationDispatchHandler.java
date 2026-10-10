@@ -43,6 +43,10 @@ public class FulfillmentOperationDispatchHandler implements OutboxDispatchHandle
         ObjectNode payload = objectMapper.createObjectNode();
         payload.put("operationNo", operationNo);
         payload.put("bOrderNo", event.getAggregateId());
+        // 保留原受理来源；重试调度线程的 MDC 不是来源（生产闭环设计 §5.2、日志规范 §5.3）。
+        if (event.getTraceId() != null && !event.getTraceId().isBlank()) {
+            payload.put("originTraceId", event.getTraceId());
+        }
         // “立即执行”也以数据库当前时间为准，避免应用节点时钟漂移把任务错误地推迟或提前。
         // 设计见 docs/superpowers/specs/2026-09-04-supply-chain-database-local-time-design.md#22-当前时间来源。
         persistentTimer.scheduleOnce(TASK_TYPE, operationNo, (JsonNode) payload,

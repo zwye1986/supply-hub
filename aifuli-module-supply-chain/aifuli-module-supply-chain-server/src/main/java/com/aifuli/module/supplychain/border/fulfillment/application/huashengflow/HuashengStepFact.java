@@ -21,7 +21,7 @@ import java.util.Objects;
 public final class HuashengStepFact implements FulfillmentProtocolFact {
 
     public enum Endpoint {
-        PLACE, CONFIRM, QUERY, TAKE
+        PLACE, CONFIRM, QUERY, TAKE, CALLBACK
     }
 
     public enum StepResult {

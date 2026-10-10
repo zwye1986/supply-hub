@@ -466,6 +466,7 @@ public final class HuashengHttpExecutor implements HuashengHttpTransportPort {
             case CONFIRM -> "/api/order/confirmOrder";
             case QUERY -> "/api/order/queryOrder";
             case TAKE -> "/api/order/takeCard";
+            case CALLBACK -> throw new UnsupportedOperationException("CALLBACK is inbound only");
         };
         String expectedUrl = base + endpointPath;
 

@@ -115,4 +115,44 @@ class GlobalExceptionHandlerStandardOrderTest {
         assertThat(result.getMsg()).isEqualTo("请求参数缺失:userId");
         assertThat(response.getHeader("Cache-Control")).isNull();
     }
+
+    @Test
+    void huashengCallbackParameterErrorMaskedAndSetsNoStore() {
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/callbacks/suppliers/huasheng/101");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request, response));
+
+        MissingServletRequestParameterException ex = new MissingServletRequestParameterException("rawBody", "String");
+        CommonResult<?> result = exceptionHandler.allExceptionHandler(request, ex);
+
+        assertThat(result.getCode()).isEqualTo(400);
+        assertThat(result.getMsg()).isEqualTo("请求参数不正确");
+        assertThat(response.getHeader("Cache-Control")).isEqualTo("no-store");
+    }
+
+    @Test
+    void huashengCallbackMethodNotAllowedSetsNoStore() {
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/callbacks/suppliers/huasheng/101");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request, response));
+
+        HttpRequestMethodNotSupportedException ex = new HttpRequestMethodNotSupportedException("GET");
+        CommonResult<?> result = exceptionHandler.allExceptionHandler(request, ex);
+
+        assertThat(result.getCode()).isEqualTo(405);
+        assertThat(response.getHeader("Cache-Control")).isEqualTo("no-store");
+    }
+
+    @Test
+    void huashengCallbackServiceExceptionSetsNoStoreAndPreservesCode() {
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/callbacks/suppliers/huasheng/101");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request, response));
+
+        ServiceException ex = new ServiceException(1002003001, "测试业务拒绝");
+        CommonResult<?> result = exceptionHandler.allExceptionHandler(request, ex);
+
+        assertThat(result.getCode()).isEqualTo(1002003001);
+        assertThat(response.getHeader("Cache-Control")).isEqualTo("no-store");
+    }
 }

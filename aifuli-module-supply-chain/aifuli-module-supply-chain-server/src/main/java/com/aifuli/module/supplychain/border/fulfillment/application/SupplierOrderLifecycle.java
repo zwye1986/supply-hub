@@ -46,6 +46,9 @@ import com.aifuli.module.supplychain.supplieradapter.qnm.QnmMaskingUtils;
 import com.aifuli.module.supplychain.border.fulfillment.application.huashengflow.HuashengType201AssetCodec;
 import com.aifuli.module.supplychain.tradecore.account.application.FundReservationService;
 import com.aifuli.module.supplychain.tradecore.account.domain.FundReferenceType;
+import com.aifuli.module.supplychain.border.fulfillment.application.huashengflow.HuashengFlowPolicy;
+import com.aifuli.module.supplychain.border.fulfillment.application.huashengflow.HuashengExecutionPermit;
+import com.aifuli.module.supplychain.border.fulfillment.application.huashengflow.HuashengStepFact;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.aifuli.module.supplychain.api.order.dto.SupplyChainOrderStatus;
@@ -61,6 +64,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.Arrays;
+import java.util.List;
 import java.time.LocalDateTime;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
@@ -142,6 +146,346 @@ public class SupplierOrderLifecycle {
         return transitionInternal(operationNo, outcome, traceId, true, permit, nextOperationNo);
     }
 
+    /**
+     * 华昇受控成功提交入口：仅允许携带有效 permit、完整 type201 资产及与冻结成本一致的金额。
+     */
+    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
+    public TransitionResult commitHuashengSuccess(HuashengExecutionPermit permit, OperationOutcome outcome, String traceId) {
+        Objects.requireNonNull(permit, "permit must not be null");
+        Objects.requireNonNull(outcome, "outcome must not be null");
+        log.info("[供应商订单][lifecycle] 华昇受控成功提交入口 operationNo={}, generation={}, traceId={}",
+                permit.operationNo(), permit.executionGeneration(), traceId);
+
+        var locked = frequencyLifecycle.lockForResult(permit.operationNo());
+        FulfillmentOperationDO operation = locked != null ? locked.operation() : operationMapper.selectOne(
+                new LambdaQueryWrapper<FulfillmentOperationDO>()
+                        .eq(FulfillmentOperationDO::getOperationNo, permit.operationNo()));
+        if (operation == null) {
+            throw new IllegalArgumentException("FulfillmentOperation does not exist: " + permit.operationNo());
+        }
+        BOrderDO bOrder = locked != null ? locked.bOrder() : bOrderMapper.selectById(operation.getBOrderId());
+        if (bOrder == null) {
+            throw new IllegalStateException("BOrder does not exist for operation: " + permit.operationNo());
+        }
+        FulfillmentRequestDO request = locked != null ? locked.request() : requestMapper.selectById(bOrder.getFulfillmentRequestId());
+        if (request == null) {
+            throw new IllegalStateException("FulfillmentRequest does not exist: " + bOrder.getFulfillmentRequestId());
+        }
+        SupplyChainOrderDO order = locked != null ? locked.order() : orderMapper.selectById(bOrder.getOrderId());
+        if (order == null) {
+            throw new IllegalStateException("SupplyChainOrder does not exist: " + bOrder.getOrderId());
+        }
+
+        // Guard 1: permit 身份与代次
+        if (!Objects.equals(permit.operationNo(), operation.getOperationNo())
+                || !Objects.equals(permit.bOrderId(), operation.getBOrderId())) {
+            throw new IllegalStateException("Permit identity mismatch");
+        }
+        if (operation.getExecutionGeneration() == null
+                || !operation.getExecutionGeneration().equals(permit.executionGeneration())) {
+            throw new IllegalStateException("Permit generation mismatch: permit=" + permit.executionGeneration()
+                    + ", current=" + operation.getExecutionGeneration());
+        }
+
+        // Guard 2: 金额一致性
+        if (outcome.reportedSettlementAmount() == null
+                || !outcome.reportedSettlementAmount().equals(bOrder.getExpectedSupplierSettlementAmount())) {
+            throw new IllegalStateException("Reported settlement amount mismatch: expected="
+                    + bOrder.getExpectedSupplierSettlementAmount() + ", reported=" + outcome.reportedSettlementAmount());
+        }
+
+        // Guard 3: 资产载荷与 type201 严格合法性
+        if (outcome.assets() == null || outcome.assets().size() != 1) {
+            throw new IllegalStateException("Huasheng commit requires exactly one asset");
+        }
+        OperationAssetFact assetFact = outcome.assets().get(0);
+        if (assetFact.protectedPayload() == null || !HuashengFlowPolicy.isValidType201Payload(assetFact.protectedPayload())) {
+            throw new IllegalStateException("Huasheng asset payload is not valid type 201");
+        }
+
+        LocalDateTime now = databaseClock.now();
+        persistCallAndObservation(operation, bOrder, outcome, traceId, now);
+
+        // 1. Operation 终态
+        operation.setStatus(SupplierOrderOperationStatus.SUCCEEDED.getCode());
+        operation.setResultClass(outcome.outcomeClass().name());
+        if (outcome.externalOrderNo() != null && !outcome.externalOrderNo().isBlank()) {
+            operation.setExternalOperationNo(outcome.externalOrderNo());
+        }
+        operation.setAttemptCount(operation.getAttemptCount() + 1);
+        operation.setCompletedAt(now);
+        operation.setUpdatedAt(now);
+        if (operationMapper.updateById(operation) != 1) {
+            throw new IllegalStateException("Operation CAS update lost optimistic lock: " + operation.getOperationNo());
+        }
+
+        // 2. BOrder 终态
+        bOrder.setFulfillmentStatus(BOrderFulfillmentStatus.SUCCEEDED.getCode());
+        bOrder.setFulfilledQuantity(bOrder.getRequestedQuantity());
+        bOrder.setActiveFlag(null);
+        bOrder.setReportedSupplierSettlementAmount(outcome.reportedSettlementAmount());
+        bOrder.setConfirmedSupplierSettlementAmount(outcome.reportedSettlementAmount());
+        bOrder.setSettlementStatus(BOrderSettlementStatus.MATCHED.getCode());
+        if (outcome.externalOrderNo() != null && !outcome.externalOrderNo().isBlank()) {
+            bOrder.setExternalOrderNo(outcome.externalOrderNo());
+        }
+        bOrder.setCompletedAt(now);
+        bOrder.setUpdatedAt(now);
+        if (updateBOrderState(bOrder, false) != 1) {
+            throw new IllegalStateException("BOrder CAS update lost optimistic lock: " + bOrder.getBOrderNo());
+        }
+
+        // 3. 持久化资产（调用已有 persistAssets / persistHuashengAsset）
+        persistAssets(bOrder, operation, request, order, outcome, now);
+
+        // 4. FulfillmentRequest 终态
+        request.setFulfilledQuantity(bOrder.getRequestedQuantity());
+        request.setStatus(FulfillmentRequestStatus.SUCCEEDED.getCode());
+        request.setUpdatedAt(now);
+        if (requestMapper.updateById(request) != 1) {
+            throw new IllegalStateException("FulfillmentRequest CAS update lost optimistic lock: " + request.getRequestNo());
+        }
+
+        // 5. 对齐 CardOrderSummaryPolicy 推进总订单
+        OrderSummaryFact fact = new OrderSummaryFact(SupplyChainOrderTypes.ORDER_TYPE_CARD,
+                SupplyChainOrderTypes.DETAIL_TYPE_FULFILLMENT,
+                FulfillmentRequestStatus.SUCCEEDED.getCode(),
+                order.getQuantity(), order.getQuantity(), null);
+        OrderSummaryDecision decision = cardOrderSummaryPolicy.decide(fact);
+        short fromOrderStatus = order.getOrderStatus();
+        order.setOrderStatus(decision.orderStatus());
+        order.setAftersaleStatus(decision.aftersaleStatus());
+        order.setBusinessStage(decision.businessStage());
+        long nextDetailVersion = (order.getDetailVersion() != null ? order.getDetailVersion() : 0L) + 1L;
+        order.setDetailVersion(nextDetailVersion);
+        order.setCompletedAt(now);
+        order.setUpdatedAt(now);
+        if (orderMapper.updateById(order) != 1) {
+            throw new IllegalStateException("SupplyChainOrder CAS update lost optimistic lock: " + order.getOrderNo());
+        }
+
+        // 6. 审计日志
+        statusLogMapper.insert(OrderStatusLogDO.builder()
+                .orderId(order.getId())
+                .detailVersion(nextDetailVersion)
+                .fromOrderStatus(fromOrderStatus)
+                .toOrderStatus(decision.orderStatus())
+                .fromAftersaleStatus((short) 0)
+                .toAftersaleStatus((short) 0)
+                .businessStage(decision.businessStage())
+                .sourceEventType("FULFILLMENT_SUCCEEDED")
+                .sourceEventNo(bOrder.getBOrderNo())
+                .reasonCode("SUPPLIER_SUCCEEDED")
+                .traceId(traceId)
+                .createdAt(now).build());
+
+        // 7. 资金确认闭环：实扣资金
+        fundReservationService.commitByReference(request.getBuyerId(),
+                FundReferenceType.CARD_ORDER.code(), request.getRequestNo(),
+                order.getOrderNo(), traceId, bOrder.getBOrderNo());
+
+        logAfterCommit("[供应商订单][lifecycle] 华昇 commitHuashengSuccess 完成 operationNo={}, bOrderNo={}, orderNo={}",
+                operation.getOperationNo(), bOrder.getBOrderNo(), order.getOrderNo());
+        return new TransitionResult(operation.getOperationNo(), bOrder.getBOrderNo(), order.getOrderNo(),
+                operation.getStatus(), bOrder.getFulfillmentStatus(), order.getOrderStatus(), true);
+    }
+
+    /**
+     * 华昇受控失败释放入口：仅允许携带有效 permit、可信失败且无已交付资产。
+     */
+    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
+    public TransitionResult releaseHuashengRejection(HuashengExecutionPermit permit, OperationOutcome outcome, String traceId) {
+        Objects.requireNonNull(permit, "permit must not be null");
+        Objects.requireNonNull(outcome, "outcome must not be null");
+        log.info("[供应商订单][lifecycle] 华昇受控释放入口 operationNo={}, generation={}, traceId={}",
+                permit.operationNo(), permit.executionGeneration(), traceId);
+
+        var locked = frequencyLifecycle.lockForResult(permit.operationNo());
+        FulfillmentOperationDO operation = locked != null ? locked.operation() : operationMapper.selectOne(
+                new LambdaQueryWrapper<FulfillmentOperationDO>()
+                        .eq(FulfillmentOperationDO::getOperationNo, permit.operationNo()));
+        if (operation == null) {
+            throw new IllegalArgumentException("FulfillmentOperation does not exist: " + permit.operationNo());
+        }
+        BOrderDO bOrder = locked != null ? locked.bOrder() : bOrderMapper.selectById(operation.getBOrderId());
+        if (bOrder == null) {
+            throw new IllegalStateException("BOrder does not exist for operation: " + permit.operationNo());
+        }
+        FulfillmentRequestDO request = locked != null ? locked.request() : requestMapper.selectById(bOrder.getFulfillmentRequestId());
+        if (request == null) {
+            throw new IllegalStateException("FulfillmentRequest does not exist: " + bOrder.getFulfillmentRequestId());
+        }
+        SupplyChainOrderDO order = locked != null ? locked.order() : orderMapper.selectById(bOrder.getOrderId());
+        if (order == null) {
+            throw new IllegalStateException("SupplyChainOrder does not exist: " + bOrder.getOrderId());
+        }
+
+        // Guard 1: permit 身份与代次
+        if (!Objects.equals(permit.operationNo(), operation.getOperationNo())
+                || !Objects.equals(permit.bOrderId(), operation.getBOrderId())) {
+            throw new IllegalStateException("Permit identity mismatch");
+        }
+        if (operation.getExecutionGeneration() == null
+                || !operation.getExecutionGeneration().equals(permit.executionGeneration())) {
+            throw new IllegalStateException("Permit generation mismatch: permit=" + permit.executionGeneration()
+                    + ", current=" + operation.getExecutionGeneration());
+        }
+
+        // Guard 2: 检查不得存在已交付资产
+        List<FulfillmentAssetDO> existingAssets = assetMapper.selectList(new LambdaQueryWrapper<FulfillmentAssetDO>()
+                .eq(FulfillmentAssetDO::getBOrderId, bOrder.getId()));
+        if (!existingAssets.isEmpty()) {
+            throw new IllegalStateException("Delivered assets already exist for BOrder: " + bOrder.getBOrderNo());
+        }
+
+        LocalDateTime now = databaseClock.now();
+        persistCallAndObservation(operation, bOrder, outcome, traceId, now);
+
+        // 1. Operation 终态
+        operation.setStatus(SupplierOrderOperationStatus.FAILED.getCode());
+        operation.setResultClass(outcome.outcomeClass().name());
+        operation.setAttemptCount(operation.getAttemptCount() + 1);
+        operation.setCompletedAt(now);
+        operation.setUpdatedAt(now);
+        if (operationMapper.updateById(operation) != 1) {
+            throw new IllegalStateException("Operation CAS update lost optimistic lock: " + operation.getOperationNo());
+        }
+
+        // 2. BOrder 终态
+        bOrder.setFulfillmentStatus(BOrderFulfillmentStatus.FAILED.getCode());
+        if (outcome.externalOrderNo() != null && !outcome.externalOrderNo().isBlank()) {
+            bOrder.setExternalOrderNo(outcome.externalOrderNo());
+        }
+        bOrder.setFulfilledQuantity(0L);
+        bOrder.setActiveFlag(null);
+        bOrder.setCompletedAt(now);
+        bOrder.setUpdatedAt(now);
+        if (updateBOrderState(bOrder, false) != 1) {
+            throw new IllegalStateException("BOrder CAS update lost optimistic lock: " + bOrder.getBOrderNo());
+        }
+
+        // 3. FulfillmentRequest 终态
+        request.setStatus(FulfillmentRequestStatus.FAILED.getCode());
+        request.setUpdatedAt(now);
+        if (requestMapper.updateById(request) != 1) {
+            throw new IllegalStateException("FulfillmentRequest CAS update lost optimistic lock: " + request.getRequestNo());
+        }
+
+        // 4. 对齐 CardOrderSummaryPolicy 推进总订单
+        OrderSummaryFact fact = new OrderSummaryFact(SupplyChainOrderTypes.ORDER_TYPE_CARD,
+                SupplyChainOrderTypes.DETAIL_TYPE_FULFILLMENT,
+                FulfillmentRequestStatus.FAILED.getCode(),
+                order.getQuantity(), 0L, outcome.externalErrorCode());
+        OrderSummaryDecision decision = cardOrderSummaryPolicy.decide(fact);
+        short fromOrderStatus = order.getOrderStatus();
+        order.setOrderStatus(decision.orderStatus());
+        order.setAftersaleStatus(decision.aftersaleStatus());
+        order.setBusinessStage(decision.businessStage());
+        long nextDetailVersion = (order.getDetailVersion() != null ? order.getDetailVersion() : 0L) + 1L;
+        order.setDetailVersion(nextDetailVersion);
+        order.setCompletedAt(now);
+        order.setUpdatedAt(now);
+        if (orderMapper.updateById(order) != 1) {
+            throw new IllegalStateException("SupplyChainOrder CAS update lost optimistic lock: " + order.getOrderNo());
+        }
+
+        // 5. 审计日志
+        statusLogMapper.insert(OrderStatusLogDO.builder()
+                .orderId(order.getId())
+                .detailVersion(nextDetailVersion)
+                .fromOrderStatus(fromOrderStatus)
+                .toOrderStatus(decision.orderStatus())
+                .fromAftersaleStatus((short) 0)
+                .toAftersaleStatus((short) 0)
+                .businessStage(decision.businessStage())
+                .sourceEventType("FULFILLMENT_FAILED")
+                .sourceEventNo(bOrder.getBOrderNo())
+                .reasonCode(outcome.externalErrorCode() != null ? outcome.externalErrorCode() : "SUPPLIER_REJECTED")
+                .traceId(traceId)
+                .createdAt(now).build());
+
+        // 6. 资金释放闭环：释放预占资金
+        fundReservationService.releaseByReference(request.getBuyerId(),
+                FundReferenceType.CARD_ORDER.code(), request.getRequestNo(),
+                order.getOrderNo(), traceId, bOrder.getBOrderNo());
+
+        logAfterCommit("[供应商订单][lifecycle] 华昇 releaseHuashengRejection 完成 operationNo={}, bOrderNo={}, orderNo={}",
+                operation.getOperationNo(), bOrder.getBOrderNo(), order.getOrderNo());
+        return new TransitionResult(operation.getOperationNo(), bOrder.getBOrderNo(), order.getOrderNo(),
+                operation.getStatus(), bOrder.getFulfillmentStatus(), order.getOrderStatus(), true);
+    }
+
+    /**
+     * 锁后比较已交付华昇完整资产，仅判断幂等，不写资产或资金。
+     * 不只比较凭证指纹：供应商 id、有效期及所有三态字段均参与规范化载荷比较。
+     * 设计见 docs/superpowers/specs/2026-10-09-huasheng-type201-production-closure-design.md#82-持久防重与收敛。
+     */
+    @Transactional(transactionManager = TRANSACTION_MANAGER, propagation = org.springframework.transaction.annotation.Propagation.MANDATORY, rollbackFor = Exception.class)
+    public boolean matchesHuashengDeliveredAsset(String operationNo, List<OperationAssetFact> facts) {
+        var locked = frequencyLifecycle.lockForResult(operationNo);
+        if (locked == null || facts == null || facts.size() != 1) return false;
+        var assets = assetMapper.selectList(new LambdaQueryWrapper<FulfillmentAssetDO>()
+                .eq(FulfillmentAssetDO::getBOrderId, locked.bOrder().getId()));
+        if (assets.size() != 1) return false;
+        var previous = assets.getFirst();
+        var fact = facts.getFirst();
+        if (!Objects.equals(previous.getSequenceNo(), fact.sequenceNo())
+                || !Objects.equals(previous.getAssetType(), fact.assetType())
+                || !Objects.equals(previous.getSupplierId(), locked.bOrder().getSupplierId())
+                || !Objects.equals(previous.getBuyerId(), locked.request().getBuyerId())
+                || !Objects.equals(previous.getFulfillmentRequestId(), locked.request().getId())
+                || !Objects.equals(previous.getOperationId(), locked.operation().getId())
+                || !Objects.equals(previous.getUnitQuantity(), 1L)
+                || previous.getExternalAssetId() != null || previous.getExternalProductId() != null
+                || previous.getValidFrom() != null || previous.getValidUntil() != null) return false;
+        byte[] expected = null;
+        byte[] plaintext = null;
+        byte[] canonical = null;
+        try {
+            var codec = new HuashengType201AssetCodec();
+            expected = codec.validate(fact);
+            byte[] aad = (locked.bOrder().getId() + "|" + fact.sequenceNo() + "|" + fact.assetType()).getBytes(StandardCharsets.UTF_8);
+            plaintext = envelopeCrypto.decrypt(previous.getEncryptedPayload(), previous.getKeyVersion(), aad);
+            canonical = codec.validateStoredPayload(fact, plaintext);
+            return MessageDigest.isEqual(expected, canonical);
+        } catch (IllegalArgumentException invalidFact) {
+            return false;
+        } finally {
+            if (expected != null) Arrays.fill(expected, (byte) 0);
+            if (plaintext != null) Arrays.fill(plaintext, (byte) 0);
+            if (canonical != null) Arrays.fill(canonical, (byte) 0);
+        }
+    }
+
+    /** 提交后才记录华昇资金业务成功；回滚不输出假完成（生产闭环设计 §8.2、日志规范 §3.2）。 */
+    private static void logAfterCommit(String message, Object... arguments) {
+        if (!TransactionSynchronizationManager.isActualTransactionActive() || !TransactionSynchronizationManager.isSynchronizationActive()) {
+            throw new IllegalStateException("Huasheng completion log requires transaction");
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override public void afterCommit() { log.info(message, arguments); }
+        });
+    }
+
+    private boolean isHuasheng(FulfillmentOperationDO operation, OperationOutcome outcome) {
+        if (operation != null) {
+            String step = operation.getAdapterStepCode();
+            if (AdapterStepCode.PLACE_ORDER.name().equals(step)
+                    || AdapterStepCode.CONFIRM_ORDER.name().equals(step)
+                    || AdapterStepCode.TAKE_CARD.name().equals(step)
+                    || AdapterStepCode.QUERY_ORDER.name().equals(step)) {
+                return true;
+            }
+            if (operation.getCheckpointSchemaVersion() != null && operation.getCheckpointSchemaVersion() == 1) {
+                return true;
+            }
+        }
+        if (outcome != null && outcome.protocolFact() instanceof HuashengStepFact) {
+            return true;
+        }
+        return false;
+    }
+
     private TransitionResult transitionInternal(String operationNo, OperationOutcome outcome, String traceId,
                                                boolean trustedRecovery, RechargeFrequencyExecutionPermit permit, String nextOperationNo) {
         log.info("[供应商订单][lifecycle] transition 入口 operationNo={}, outcomeClass={}, traceId={}",
@@ -155,6 +499,9 @@ public class SupplierOrderLifecycle {
                         .eq(FulfillmentOperationDO::getOperationNo, operationNo));
         if (operation == null) {
             throw new IllegalArgumentException("FulfillmentOperation does not exist: " + operationNo);
+        }
+        if (isHuasheng(operation, outcome)) {
+            throw new IllegalStateException("华昇操作必须使用专用受控 permit 入口推进: operationNo=" + operationNo);
         }
         BOrderDO bOrder = locked != null ? locked.bOrder() : bOrderMapper.selectById(operation.getBOrderId());
         if (bOrder == null) {

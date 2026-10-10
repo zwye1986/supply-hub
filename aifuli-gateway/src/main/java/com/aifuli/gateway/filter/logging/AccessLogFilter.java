@@ -177,7 +177,9 @@ public class AccessLogFilter implements GlobalFilter, Ordered {
         gatewayLog.setRequestMethod(request.getMethod().name());
         String rawPath = request.getURI().getRawPath();
         gatewayLog.setRequestUrl(AccessLogSanitizeUtils.isStandardOrdersPath(rawPath)
-                ? AccessLogSanitizeUtils.safeStandardOrderUrl(rawPath) : rawPath);
+                ? AccessLogSanitizeUtils.safeStandardOrderUrl(rawPath)
+                : AccessLogSanitizeUtils.isHuashengCallbackPath(rawPath)
+                ? AccessLogSanitizeUtils.safeHuashengCallbackUrl(rawPath) : rawPath);
         gatewayLog.setStartTime(LocalDateTime.now());
         gatewayLog.setUserIp(WebFrameworkUtils.getClientIP(exchange));
         gatewayLog.setRequestBody(AccessLogSanitizeUtils.BODY_OMITTED);

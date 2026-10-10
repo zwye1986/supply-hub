@@ -152,9 +152,15 @@ apply在同样锁序下检查generation、当前活动尝试、step和lease未�
 
 下一步唯一键继续用 `FulfillmentIdempotencyKeys.operation(bOrderNo, sequence)`。Timer键执行 `HS:EXEC:operationNo`；恢复 `HS:REC:operationNo:generation`；payload仅operationNo／expectedGeneration／trigger／可选originTraceId，不包含checkpoint、卡密或token。新增专用execute Handler注册华昇EXEC taskType，不能调度未注册的taskType；首Operation既有Outbox→通用execute Handler只负责分派，后续华昇步骤走专用Handler。每个下一步同事务注册其5分钟准备watchdog，防止新步骤claim前死信无人收尾。scheduleOnce复用已实现身份建槽／绑定，参与同一供应链事务；失败全部回滚。不要把整段含HTTP的Handler纳入纯本地事务重跑。
 
+首步 Outbox 转 Timer 时使用事件中冻结的 traceId 作为 originTraceId，不用调度线程 MDC／taskId。没有来源的历史事件仍省略该字段。来源字段加入后的部署需确认旧任务身份槽兼容；不得在本次修复中修改已持久任务载荷或绕过 scheduleOnce 内容冲突检查。
+
 ### 5.3 Watchdog与计数
 
 本地策略固定默认：每次facade调用总预算120秒，lease150秒；QUERY间隔30秒；从首业务可能发送起自动恢复30分钟，整笔最多20次QUERY、3次CONFIRM、5次TAKE认领。61的第二次物理请求只由A5预算控制，不生成第二Operation；上述次数是业务认领数，不冒称供应商实际扣款次数。计数和截止写checkpoint并传后续Operation，不能每次新步骤／重启归零。
+
+2026-10-10 P2 修复约束：次数在 claim 内而非 apply 内消耗，首发送／截止同事务建立并镜像至 Operation，后续步骤复制截止。claim 前检查自动资格，最后一次合法认领的结果仍允许应用；到限只拒绝下一次自动外呼，不拦已有可信终态或 CALLBACK。可信回调恢复仅针对 HUASHENG_RECOVERY_LIMIT case；金额／资产／准备异常 case 保留。已认领但未实际发送仍消耗保守业务配额，不把业务认领数宣称为物理 HTTP 次数。
+
+可信回调收敛后，在到限 case 的安全说明中注明原单已核实，保留活动标记与审计记录，待人工按既有处置契约结案。DDL 的结案要求操作人和处置动作，自动回调不得伪造操作人或绕过该约束。
 
 每次claim先落watchdog。即时UNKNOWN则同事务把nextRecoverAt提前到30秒并创建当前代次恢复Timer；watchdog迟后到达先核generation／终态，不能重复推进。若只登记同一个恢复键，必须保持其payload恒定，不能用修改payload偷偷改变身份；即时恢复和租约watchdog使用不同taskType常量而共享generation校验。
 
@@ -165,6 +171,8 @@ RESULT_UNKNOWN或QUERY未知安排新代次恢复。QUERY进程也宕机，由�
 启动只复用持久Timer恢复，不新建全库修复／迁移工程；必须以集成测试证明业务watchdog在Timer返回成功或进程重启后仍可运行。首次claim事务回滚则marker/watchdog都不存在，仍可认领未发送步骤。
 
 达到次数／期限：MANUAL、稳定原因码、唯一异常case；保留活动原BOrder关系、可信checkpoint和资金预占，不设业务完成时间伪装终结。人工权限入口和人工强制释放不在本期；只保留既有case查询和原单核实证据。
+
+准备 watchdog 也复用同一人工保留事务：原因 HUASHENG_PREPARATION_FAILED，写唯一 case 并保持 completedAt 缺省，不能只改 Operation 丢失聚合处置入口。
 
 ## 6. 协议事实推进规则
 
@@ -194,11 +202,17 @@ FAILED的正式语义为未发券且已退款：合法PLACE／CONFIRM可接受�
 
 TAKE没有总价，必须与checkpoint同orderSn对应的可信PLACE／CONFIRM／QUERY金额合并；若没有金额来源，先查单，不用配置成本补实报。
 
+2026-10-10 评审修复（先 P1，后 P2）：executor 保持 ACCEPTED／金额缺省；lifecycle 在聚合锁后通过决策才复制 outcome，将终结分类改为 SUCCEEDED，并仅从已核 checkpoint.observation 合并 TAKE 的实报分值，保留原资产、调用摘要和协议事实。缺来源先 QUERY，已经取得的资产载荷随加密 checkpoint 保留，不能丢卡或从冻结成本兜底。
+
 最终成功须同时满足：订单身份一致、num=1、list恰一完整type201、资产无冲突、累计金额事实一致、实报分值等于冻结供应商成本。一个事务保存加密资产、结束当前Operation／活动BOrder、更新Request／Order、审计、调用commitByReference一次。预占／买家冻结售价不被供应商价格覆盖。
 
 可信失败须无已交付资产、未成功终结、同原单退款规则成立及无冲突，才通过releaseByReference一次。成功／失败相反的迟到事实开冲突case，已终结资金不反向再释放／再扣。
 
+无资产检查同时覆盖 checkpoint.pendingAssetPayload：已提取而待核的卡密不是“未发券”。即使后续 FAILED／CANCEL 回调自身没有 list，也只能留证转人工，不释放预占。
+
 资产已收到但金额不匹配或重复TAKE不同卡：MANUAL保留，必要原始资产以加密checkpoint隔离证据或独立非可交付资产生命周期保存；不得授权查询为成功交付，不覆盖既有卡密。首期选择加密checkpoint保存待核实完整载荷，受1MiB与原协议结构界限约束，case只存安全摘要；成功后清掉待核实分支。
+
+人工保留与唯一活动 case 在同一聚合事务提交，reasonCode 使用稳定常量，不设置 completedAt 伪装业务完成。case 引用当前 operation 的加密 checkpoint，并对事实证据生成 HMAC 摘要。已有待核载荷不得被不同载荷覆盖：首期只有一个证据槽，后续不同证据返回冲突非200并回滚 Inbox，要求人工核实；相同证据可确认而不重复开 case。已存在金额／资产冲突 case 时，新回调不得自动终结。
 
 现有SupplierOrderLifecycle只复用**终结事务能力**：新增受控华昇permit入口，在同一事务先由华昇guard完成完整资产／金额／代次检查，再调用现有状态汇总与资金服务；不得走无permit的通用SUCCEEDED入口、SEND_KM空资产提交分支或缺金额兜底。不复制第二份账户／账本算法。入口不回调HuashengFulfillmentLifecycle（避免Bean循环）；guard为纯规则模块，验证材料由同一事务锁后读取。无permit的旧transition／confirmTrustedOutcome检测华昇step／protocolFact后拒绝推进，只允许专用路径。
 
@@ -235,6 +249,8 @@ OperationAssetFact增加可选不可变`protectedPayload`字节值，用于这�
 
 `HuashengType201AssetCodec.toFact(card)`仅接受A parser产生的T201卡，生成sequence=1的CARD_CODE_SECRET事实；crc/url/urlPass如为VALUE只能空白，不接受其它型非空载荷，仍完整保留ABSENT/NULL/空串/空白。id遵循A实际接受范围（非负Long），仅在加密payload保存。codec使用固定白名单/顺序写根schema/标准字段/supplierPayload，不序列化协议对象；不调用A内部结果载体。`validate(fact)`对受保护payload做1MiB/深度32/字符串16384限制、重复键/尾随/未知字段/严格整数校验，核标准code/pass与协议字段逐字相等，并核sequence=1、externalAssetId与日期均NULL；返回固定顺序规范化字节，字段三态不变。`fingerprintInput(supplierId,fact)`只输出固定顺序UTF-8 JSON `supplierId/type/code/pass`，不含id/有效期/订单盐，交由现有HmacFingerprintPort的FULFILLMENT_ASSET purpose生成指纹。
 
+回调应用层保留 `toFact(card)` 返回的完整 OperationAssetFact，与步骤事实一起传给 lifecycle；不丢弃为仅 payload 后再手工 builder，也不新增不必要的 payload 重解接口。终结前核完整事实与步骤 payload 同源，持久层继续严格校验。
+
 OperationAssetFact保留现有7参数构造和builder默认行为；仅携带非空protectedPayload的专用工厂路径保留code/pass原值，其数组双向复制，并固定安全toString/禁止意外通用序列化。通用builder即便传入protectedPayload也不能绕过持久入口的封闭schema核验；这不是生产履约授权，Task4另以permit封闭终结入口。
 
 事实本体及Lombok builder的toString均固定脱敏，禁止builder默认诊断输出卡号/卡密/数组；序列化拒绝器由OperationAssetFact自有纯序列化类型提供，不让通用领域事实依赖华昇协议failure包。华昇资产maskedValue固定为`****`，不复用QNM展示工具，不泄漏短卡号，也不更改旧展示分支。
@@ -263,7 +279,7 @@ Parser复用A金额／卡片验证规则，不复用普通明文envelope作为�
 
 不使用分布式回调锁。复用sc_inbox_event，增加华昇专用封装而不改变通用InboxService行为。consumer固定华昇回调常量；eventId为固定字段顺序UTF-8 JSON的supplierId／Appid／nonce之SHA-256，不用连接器版本／密钥轮换让同账号同nonce成为新身份；payloadDigest以HmacFingerprintPort固定purpose对规范化完整解密事实及connectorVersionId计算（不存明文）。同nonce不同事实或改投其它版本拒绝；不同nonce同资产走聚合幂等，不重复资金。三态字段和金额原字符串都进入事实摘要，重投要求事实相同，不只比较双单号。HMAC密钥在本期去重存续期间保持不变，不在本片增加摘要密钥轮换工程。
 
-为使DDL与字段语义一致，062追加`ALTER TABLE sc_inbox_event MODIFY COLUMN payload_digest BINARY(32) NOT NULL COMMENT '收到的事件载荷SHA-256族摘要，华昇使用HMAC-SHA256';`，只扩注释，不改其它consumer算法。InboxEventDO对应字段注释同义对齐。
+为使DDL与字段语义一致，062追加`ALTER TABLE sc_inbox_event MODIFY COLUMN event_id VARCHAR(64) NOT NULL COMMENT '被消费的Outbox事件或回调稳定业务编号，华昇使用SHA-256十六进制', MODIFY COLUMN payload_digest BINARY(32) NOT NULL COMMENT '收到的事件载荷SHA-256族摘要，华昇使用HMAC-SHA256';`，只扩容与扩注释，不改其它consumer算法。InboxEventDO对应字段注释同义对齐。
 
 首次回调必须在±300秒内；先认证后查询nonce。已经成功持久处理的同内容重投可超出该窗口仍HTTP200（为已处理消息确认，不重新执行），否则旧timestamp拒绝。首次成功标记、观察、checkpoint／资产／资金／下一步在同一供应链事务；失败回滚Inbox状态，供应商可重投。锁序：Inbox身份 → Request／Order／BOrder／Operation → 资金；其他事实入口不反过来获取Inbox。
 
@@ -271,7 +287,11 @@ Parser复用A金额／卡片验证规则，不复用普通明文envelope作为�
 
 可信回调是独立事实源，不用伪造某个同步permit。同一apply规则在锁后验证当前原单并增加当前generation使在途结果失格：SUCCESS完整资产／金额核对后终结；FAILED满足退款语义且无资产后释放。因自动恢复到限进入MANUAL的原单仍可被可信回调核实终结，次数上限只停止自动外呼，不删除事实入口；金额/资产冲突人工单不能被新回调静默覆盖旧冲突。冲突仍开case、保留资金／原终态，完成冲突登记后可200确认；无条件将回调交给旧SUCCEEDED入口禁止。
 
+回调预读仅定位锁；取得 Request→Order→BOrder→Operation 聚合锁后，从已锁行重新选原 BOrder 的最新步骤并核首 PLACE marker。判定订单终态以 BOrder/Request 业务终态为准，不把中间 Operation 的 SUCCEEDED/ACCEPTED 当订单交付成功。同向成功须双号、数量、实报金额与已存完整规范化 payload（三态、有效期等全部字段）相同才幂等；失败须同原单且无资产。同向异卡或相反终态开唯一冲突 case、保存加密待核证据，绝不反向扣款／释放或覆盖订单终态。
+
 HTTP200固定正文`success`表示处理事务已提交或已处理同内容，不代表订单必成功；认证／格式／时间非法400，未找到可处理原单404，nonce异参409，数据库／内部失败500，进程执行锁忙503。这些是本地响应选择；正式文档只保证HTTP200确认、非200/超时重投，不臆造重投次数或供应商解析正文规则。
+
+事实摘要使用固定顺序 JSON encoder，timestamp、双号、nonce、金额原文/分值、状态以及 card 的全部三态字段均参与 HMAC；eventId 使用 JSON encoder 转义 Appid/nonce，不用无转义拼接或 `&` 分隔。解析拒绝及 HTTP 拒绝只输出固定安全信息，禁止解密原值穿透异常 message；受保护原始原因不能作为普通 WARN/ERROR 堆栈。回调/资金“完成”日志在事务提交确认后记录；后续 checkpoint/Timer 沿用初始 originTraceId，不以 taskId 或本次后台 traceId 替换。
 
 ### 8.3 安全与日志影响
 

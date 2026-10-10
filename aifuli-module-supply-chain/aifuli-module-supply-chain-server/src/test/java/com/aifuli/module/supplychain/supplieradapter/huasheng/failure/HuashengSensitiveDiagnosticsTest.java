@@ -28,7 +28,7 @@ class HuashengSensitiveDiagnosticsTest {
             assertEquals(8,tree.size()); assertTrue(tree.get("httpStatus").isNull()); assertTrue(tree.get("rawBusinessCode").isNull());
             assertEquals(0,tree.get("physicalSendCount").intValue()); assertFalse(tree.get("wasBusinessCallStarted").booleanValue());
         }
-        assertEquals(List.of("TOKEN","PLACE","CONFIRM","QUERY","TAKE"),Arrays.stream(HuashengEndpoint.values()).map(Enum::name).toList());
+        assertEquals(List.of("TOKEN","PLACE","CONFIRM","QUERY","TAKE","CALLBACK"),Arrays.stream(HuashengEndpoint.values()).map(Enum::name).toList());
     }
     @Test void factoriesRejectNullReferencesAndEvidenceRejectsNegativeMetrics() {
         assertThrows(RuntimeException.class, () -> HuashengInternalAttempt.parsed(null));

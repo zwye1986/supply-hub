@@ -29,9 +29,12 @@ import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferVer
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
+import com.aifuli.module.supplychain.border.fulfillment.application.huashengflow.HuashengFulfillmentRunner;
+import com.aifuli.module.supplychain.supplieradapter.metadata.HuashengOrderV1Metadata;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import java.nio.charset.StandardCharsets;
 
@@ -44,7 +47,6 @@ import java.nio.charset.StandardCharsets;
  */
 @Slf4j
 @Component
-@RequiredArgsConstructor
 public class FulfillmentOperationExecuteHandler implements PersistentTimerHandler {
 
     public static final String TASK_TYPE = FulfillmentTimerTaskTypes.OPERATION_EXECUTE;
@@ -62,6 +64,58 @@ public class FulfillmentOperationExecuteHandler implements PersistentTimerHandle
     private final ObjectMapper objectMapper;
     private final FulfillmentOperationTicketFactory ticketFactory;
     private final RechargeFrequencyLifecycle frequencyLifecycle;
+    private final ObjectProvider<HuashengFulfillmentRunner> huashengRunnerProvider;
+
+    @Autowired
+    public FulfillmentOperationExecuteHandler(
+            FulfillmentOperationMapper operationMapper,
+            BOrderMapper bOrderMapper,
+            FulfillmentRequestMapper requestMapper,
+            SupplyChainOrderMapper orderMapper,
+            SupplierMapper supplierMapper,
+            SupplierOfferVersionMapper offerVersionMapper,
+            PublishedConnectorConfigurationResolver connectorResolver,
+            EnvelopeCryptoPort envelopeCrypto,
+            OperationExecutorPort operationExecutorPort,
+            SupplierOrderLifecycle supplierOrderLifecycle,
+            ObjectMapper objectMapper,
+            FulfillmentOperationTicketFactory ticketFactory,
+            RechargeFrequencyLifecycle frequencyLifecycle,
+            ObjectProvider<HuashengFulfillmentRunner> huashengRunnerProvider) {
+        this.operationMapper = operationMapper;
+        this.bOrderMapper = bOrderMapper;
+        this.requestMapper = requestMapper;
+        this.orderMapper = orderMapper;
+        this.supplierMapper = supplierMapper;
+        this.offerVersionMapper = offerVersionMapper;
+        this.connectorResolver = connectorResolver;
+        this.envelopeCrypto = envelopeCrypto;
+        this.operationExecutorPort = operationExecutorPort;
+        this.supplierOrderLifecycle = supplierOrderLifecycle;
+        this.objectMapper = objectMapper;
+        this.ticketFactory = ticketFactory;
+        this.frequencyLifecycle = frequencyLifecycle;
+        this.huashengRunnerProvider = huashengRunnerProvider;
+    }
+
+    public FulfillmentOperationExecuteHandler(
+            FulfillmentOperationMapper operationMapper,
+            BOrderMapper bOrderMapper,
+            FulfillmentRequestMapper requestMapper,
+            SupplyChainOrderMapper orderMapper,
+            SupplierMapper supplierMapper,
+            SupplierOfferVersionMapper offerVersionMapper,
+            PublishedConnectorConfigurationResolver connectorResolver,
+            EnvelopeCryptoPort envelopeCrypto,
+            OperationExecutorPort operationExecutorPort,
+            SupplierOrderLifecycle supplierOrderLifecycle,
+            ObjectMapper objectMapper,
+            FulfillmentOperationTicketFactory ticketFactory,
+            RechargeFrequencyLifecycle frequencyLifecycle) {
+        this(operationMapper, bOrderMapper, requestMapper, orderMapper, supplierMapper,
+                offerVersionMapper, connectorResolver, envelopeCrypto, operationExecutorPort,
+                supplierOrderLifecycle, objectMapper, ticketFactory, frequencyLifecycle, null);
+    }
 
     @Override
     public String taskType() {
@@ -91,6 +145,21 @@ public class FulfillmentOperationExecuteHandler implements PersistentTimerHandle
             log.info("[履约执行] Operation 已处于终态 operationNo={}, status={}", operationNo, operation.getStatus());
             return "ALREADY_COMPLETED";
         }
+
+        // 华昇分派：必须在旧 EXECUTING/UNKNOWN 提前跳过与普通 claim 之前
+        BOrderDO bOrder = bOrderMapper.selectById(operation.getBOrderId());
+        if (bOrder != null) {
+            PublishedConnectorConfiguration connectorConfig = connectorResolver.resolve(bOrder.getConnectorVersionId());
+            if (connectorConfig != null && HuashengOrderV1Metadata.TYPE.equals(connectorConfig.adapterType())) {
+                HuashengFulfillmentRunner huashengRunner = huashengRunnerProvider != null ? huashengRunnerProvider.getIfAvailable() : null;
+                if (huashengRunner == null) {
+                    throw new IllegalStateException("华昇履约执行器未启用: " + operationNo);
+                }
+                String originTraceId = payload.path("originTraceId").asText(null);
+                return huashengRunner.runExecute(operationNo, originTraceId);
+            }
+        }
+
         if (operation.getStatus() != null
                 && (operation.getStatus() == SupplierOrderOperationStatus.RESULT_UNKNOWN.getCode()
                 || operation.getStatus() == SupplierOrderOperationStatus.EXECUTING.getCode())) {
@@ -101,7 +170,6 @@ public class FulfillmentOperationExecuteHandler implements PersistentTimerHandle
                     : "ALREADY_EXECUTING";
         }
 
-        BOrderDO bOrder = bOrderMapper.selectById(operation.getBOrderId());
         if (bOrder == null) {
             throw new IllegalStateException("BOrder 不存在 bOrderId=" + operation.getBOrderId());
         }

@@ -11,10 +11,17 @@ public final class HuashengFlowCodes {
     public static final int CHECKPOINT_MAX_DEPTH = 32;
     public static final int CHECKPOINT_MAX_STRING_LENGTH = 16_384;
     public static final int DIGEST_BYTES = 32;
+    /** 待核 case 摘要用途，不能复用资产指纹或回调身份用途。 */
+    public static final String EXCEPTION_EVIDENCE_PURPOSE = "HUASHENG_EXCEPTION_EVIDENCE";
     public static final int TYPE201_ORDER_QUANTITY = 1;
     public static final int EXPIRE_TIME_MIN_SECONDS = 60;
     public static final int EXPIRE_TIME_MAX_SECONDS = 1800;
     static final String INVALID_CHECKPOINT = "华昇恢复检查点无效";
+
+    public static final String EXECUTE_TASK = com.aifuli.module.supplychain.border.fulfillment.domain.FulfillmentTimerTaskTypes.HUASHENG_EXECUTE;
+    public static final String LEASE_WATCHDOG_TASK = com.aifuli.module.supplychain.border.fulfillment.domain.FulfillmentTimerTaskTypes.HUASHENG_LEASE_WATCHDOG;
+    public static final String PREPARATION_WATCHDOG_TASK = com.aifuli.module.supplychain.border.fulfillment.domain.FulfillmentTimerTaskTypes.HUASHENG_PREPARATION_WATCHDOG;
+    public static final String RECOVERY_TASK = com.aifuli.module.supplychain.border.fulfillment.domain.FulfillmentTimerTaskTypes.HUASHENG_RECOVERY;
 
     private HuashengFlowCodes() { }
 }
