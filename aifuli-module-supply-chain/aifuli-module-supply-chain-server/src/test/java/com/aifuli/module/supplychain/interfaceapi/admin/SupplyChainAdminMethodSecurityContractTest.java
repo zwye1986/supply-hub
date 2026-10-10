@@ -94,11 +94,33 @@ class SupplyChainAdminMethodSecurityContractTest {
     @Resource
     private PlatformSkuAdminController platformSkuController;
     @Resource
+    private OrderViewController orderViewController;
+    @Resource
+    private com.aifuli.module.supplychain.border.order.application.OrderViewQueryService orderViewQueries;
+    @Resource
     private OrderAdminController orderController;
     @Resource
     private SupplierOrderAdminController supplierOrderController;
     @Resource
     private RoutingRuleAdminController routingRuleController;
+
+    @Test
+    void plaintextOrderViewRequiresOrderQueryPermissionBeforeServiceAccess() {
+        org.mockito.Mockito.clearInvocations(orderViewQueries);
+        grant();
+        assertThatThrownBy(() -> orderViewController.get("SC_1", "PLATFORM"))
+                .isInstanceOf(AccessDeniedException.class);
+        org.mockito.Mockito.verifyNoInteractions(orderViewQueries);
+    }
+
+    @Test
+    void authorizedPlaintextOrderViewDelegatesWithActualAdminIdentity() {
+        org.mockito.Mockito.clearInvocations(orderViewQueries);
+        grant(ORDER_QUERY);
+        orderViewController.get("SC_1", "PLATFORM");
+        org.mockito.Mockito.verify(orderViewQueries).get(
+                org.mockito.ArgumentMatchers.eq("SC_1"), org.mockito.ArgumentMatchers.eq("PLATFORM"), anyLong());
+    }
 
     @BeforeEach
     void setUp() {
@@ -507,6 +529,16 @@ class SupplyChainAdminMethodSecurityContractTest {
             return new PlatformSkuAdminController(
                     mock(PlatformSkuQueryService.class),
                     mock(com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericBatchPricingService.class));
+        }
+
+        @Bean
+        com.aifuli.module.supplychain.border.order.application.OrderViewQueryService orderViewQueries() {
+            return mock(com.aifuli.module.supplychain.border.order.application.OrderViewQueryService.class);
+        }
+
+        @Bean
+        OrderViewController orderViewController(com.aifuli.module.supplychain.border.order.application.OrderViewQueryService queries) {
+            return new OrderViewController(queries);
         }
 
         @Bean

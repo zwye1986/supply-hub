@@ -12,6 +12,8 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import java.io.IOException;
 import java.util.Arrays;
+import java.time.LocalDateTime;
+import com.aifuli.module.supplychain.api.fulfillment.dto.SupplierValidTimeState;
 import java.util.Set;
 
 /**
@@ -66,6 +68,39 @@ public final class HuashengType201AssetCodec {
         try {
             check(fact != null && fact.sequenceNo() == 1 && ASSET_TYPE.equals(fact.assetType())
                     && fact.externalAssetId() == null && fact.validFrom() == null && fact.validUntil() == null);
+            ObjectNode parsed = canonicalPayload(payload);
+            check(text(parsed, "cardCode").equals(fact.cardNo()) && text(parsed, "cardSecret").equals(fact.cardSecret()));
+            return bytes(parsed);
+        } catch (RuntimeException invalid) {
+            throw new IllegalArgumentException(INVALID);
+        } finally { if (payload != null) Arrays.fill(payload, (byte) 0); }
+    }
+
+    /**
+     * 授权查询共享严格校验，不构造另一个持有敏感payload副本的事实对象；调用者擦除明文。
+     * 设计：docs/superpowers/specs/2026-10-09-huasheng-type201-production-closure-design.md#72-task7授权查询与有效期展示契约。
+     */
+    public StoredCard readStoredPayload(byte[] plaintext, int sequenceNo, String assetType,
+            String externalAssetId, LocalDateTime validFrom, LocalDateTime validUntil) {
+        check(sequenceNo == 1 && ASSET_TYPE.equals(assetType) && externalAssetId == null
+                && validFrom == null && validUntil == null);
+        ObjectNode parsed = canonicalPayload(plaintext);
+        JsonNode value = parsed.get("supplierPayload").get("validTime");
+        SupplierValidTimeState state = value == null ? SupplierValidTimeState.ABSENT
+                : value.isNull() ? SupplierValidTimeState.NULL : SupplierValidTimeState.VALUE;
+        return new StoredCard(text(parsed, "cardCode"), text(parsed, "cardSecret"),
+                state == SupplierValidTimeState.VALUE ? value.textValue() : null, state);
+    }
+
+    /** 内部授权投影值；诊断输出不得携带卡号、卡密或供应商原文。设计同 §7.2。 */
+    public record StoredCard(String cardCode, String cardSecret, String validTimeRaw,
+            SupplierValidTimeState validTimeState) {
+        @Override public String toString() { return "StoredCard[redacted]"; }
+    }
+
+    /** 持久与查询共享同一封闭schema校验，固定异常不携带JSON解析原值。 */
+    private ObjectNode canonicalPayload(byte[] payload) {
+        try {
             check(payload != null && payload.length > 0 && payload.length <= 1_048_576);
             ObjectNode parsed;
             try (var parser = JSON.getFactory().createParser(payload)) {
@@ -74,7 +109,7 @@ public final class HuashengType201AssetCodec {
             }
             check(number(parsed, "payloadSchemaVersion") == PAYLOAD_SCHEMA_VERSION && ASSET_TYPE.equals(text(parsed, "assetType")));
             String code = text(parsed, "cardCode"); String pass = text(parsed, "cardSecret");
-            check(!code.isBlank() && !pass.isBlank() && code.equals(fact.cardNo()) && pass.equals(fact.cardSecret()));
+            check(!code.isBlank() && !pass.isBlank());
             ObjectNode source = object(parsed.get("supplierPayload"), SUPPLIER_KEYS);
             check(ADAPTER_TYPE.equals(text(source, "adapterType")) && number(source, "type") == CARD_TYPE);
             check(code.equals(text(source, "code")) && pass.equals(text(source, "pass")));
@@ -93,10 +128,10 @@ public final class HuashengType201AssetCodec {
                     supplier.put(name, v);
                 }
             }
-            return bytes(root(code, pass, supplier));
+            return root(code, pass, supplier);
         } catch (IOException | RuntimeException invalid) {
             throw new IllegalArgumentException(INVALID);
-        } finally { if (payload != null) Arrays.fill(payload, (byte) 0); }
+        }
     }
 
     /** 固定JSON字段顺序避免冒号歧义；只返回HMAC输入，绝不裸SHA哈希卡密。设计同 §7。 */

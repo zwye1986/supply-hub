@@ -257,9 +257,9 @@ mvn -pl "$S" -am test -DskipTests=false \
 - Create Frontend: `F/src/api/order/asset-valid-time.ts`（纯映射函数，由index.ts调用）。
 - Create Frontend Test: `F/tests/huasheng-valid-time.test.mjs`，复用该仓现有node:test／TS直接导入测试模式，不安装第二套工具。
 
-- [ ] 后端测试先RED：四种有效期state原样；两端cardCode/secret逐字一致；NULL/ABSENT不猜日期；schema/字段冲突拒绝；跨项目拒绝且保留敏感审计。
-- [ ] decoder显式读取payloadSchemaVersion=1和supplierPayload；只向授权DTO新增validTimeRaw/validTimeState。字段注释与规格§7一致，不改现有DB日期含义；内部原始payload查询继续完整返回。
-- [ ] 写前端映射测试先RED，page直接使用expireTime展示；原文优先、不Date解析、不trim，三态缺值显示稳定文案，旧响应没有state仍用原格式化范围。纯函数置于asset-valid-time.ts方便node:test导入，index.ts实际调用，不仅测试孤立副本。映射核心是：
+- [x] 后端测试先RED：四种有效期state原样；两端cardCode/secret逐字一致；NULL/ABSENT不猜日期；schema/字段冲突拒绝；跨项目拒绝且保留敏感审计。
+- [x] decoder显式读取payloadSchemaVersion=1和supplierPayload；只向授权DTO新增validTimeRaw/validTimeState。字段注释与规格§7一致，不改现有DB日期含义；内部原始payload查询继续完整返回。
+- [x] 写前端映射测试先RED，page直接使用expireTime展示；原文优先、不Date解析、不trim，三态缺值显示稳定文案，旧响应没有state仍用原格式化范围。纯函数置于asset-valid-time.ts方便node:test导入，index.ts实际调用，不仅测试孤立副本。映射核心是：
 
 ```ts
 const expireTime = card.validTimeState === 'VALUE'
@@ -272,7 +272,9 @@ const expireTime = card.validTimeState === 'VALUE'
 
 validTimeState=VALUE却缺raw在后端契约拒绝；TS类型使用判别联合或先验证，不能靠非空断言掩盖坏响应。页面密码/卡号不改变原值。
 
-- [ ] GREEN后端纯测/Failsafe；前端工作目录F运行`node --experimental-strip-types --test tests/huasheng-valid-time.test.mjs`、`pnpm exec eslint src/api/order/index.ts src/api/order/types.ts src/api/order/asset-valid-time.ts src/views/supplier/order/components/ExclusiveOrderInfo.vue`、`pnpm ts:check`和`pnpm build:local`。基线已有失败单独记录，不擅自全仓修复。
+- [x] GREEN后端纯测/Failsafe；前端工作目录F运行`node --experimental-strip-types --test tests/huasheng-valid-time.test.mjs`、`pnpm exec eslint src/api/order/index.ts src/api/order/types.ts src/api/order/asset-valid-time.ts src/views/supplier/order/components/ExclusiveOrderInfo.vue`、`pnpm ts:check`和`pnpm build:local`。基线已有失败单独记录，不擅自全仓修复。
+
+Task7实施与验证记录见 `docs/集成测试.md` §7.90.11。设计先补规格§7.2；新增API枚举及共享codec严格读取，契约测试在application包复用独占MySQL夹具。最终供应链默认门禁2214项、正式Failsafe75项及前端定向15项、lint与构建通过；全局类型检查仍有Task7以外既有诊断，基线对照单列记录，不把“执行检查”表述为类型检查全绿。Task8真实环境全链另行验收，本片未提交／推送／部署或真实外呼。
 
 ## 9. Task 8：从真实配置到生产链完整有限验收
 

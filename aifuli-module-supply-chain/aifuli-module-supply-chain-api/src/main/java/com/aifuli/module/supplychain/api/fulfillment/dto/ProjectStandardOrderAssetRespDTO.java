@@ -46,6 +46,14 @@ public class ProjectStandardOrderAssetRespDTO {
     /** 资产有效期结束时间，Asia/Shanghai */
     private OffsetDateTime validUntil;
 
+    /** 供应商批次有效期原文，不保证日期格式；VALUE保留空字符串，ABSENT/NULL为null。设计见生产闭环设计 §7.2。 */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    private String validTimeRaw;
+
+    /** 供应商有效期字段状态：ABSENT字段缺失，NULL显式null，VALUE字符串（包括空字符串）；旧资产不提供。 */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    private SupplierValidTimeState validTimeState;
+
     /** 资产生命周期的枚举名称投影：AVAILABLE可交付，DELIVERED已交付；对应存储语义10可交付、20已交付 */
     private String lifecycleStatus;
 

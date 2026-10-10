@@ -41,6 +41,8 @@ import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierSupplyScopeMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierSupplyScopeModeMapper;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.aifuli.module.supplychain.api.fulfillment.dto.SupplierValidTimeState;
+import com.aifuli.module.supplychain.border.fulfillment.application.huashengflow.HuashengType201AssetCodec;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -54,6 +56,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -427,13 +430,16 @@ public class OrderViewQueryService {
             if (!isDeliverable(asset.getLifecycleStatus())) {
                 continue;
             }
-            JsonNode payload = decryptAsset(order, asset, userId, now);
+            DecodedAsset decoded = decryptAsset(order, asset, userId, now);
+            JsonNode payload = decoded.payload();
             recordAdminAudit(order, asset, userId, SensitiveAccessAuditResultStatus.SUCCESS.getCode(),
                     "ADMIN_PLAINTEXT_VIEW", now);
             switch (asset.getAssetType() == null ? "" : asset.getAssetType()) {
                 case "CARD_CODE_SECRET" -> cardInfos.add(new CardInfo(
                         text(payload, "cardCode"), text(payload, "cardSecret"),
-                        asset.getValidFrom(), asset.getValidUntil()));
+                        asset.getValidFrom(), asset.getValidUntil(),
+                        decoded.card() == null ? null : decoded.card().validTimeRaw(),
+                        decoded.card() == null ? null : decoded.card().validTimeState()));
                 case "ACCOUNT_BOUND_BENEFIT" -> rechargeInfos.add(new RechargeInfo(
                         order.getFulfillmentAccountValue(),
                         text(payload, "voucherCode"),
@@ -448,8 +454,11 @@ public class OrderViewQueryService {
                 List.copyOf(ticketCodes), List.copyOf(pickupCodes));
     }
 
-    /** 解密单个资产：关联数据与采购商通道保持一致；失败写 FAILED 审计并终止查询。 */
-    private JsonNode decryptAsset(SupplyChainOrderDO order, FulfillmentAssetDO asset, Long userId,
+    /**
+     * 解密边界先校验华昇封闭载荷再返回投影，失败写FAILED审计；finally擦除明文字节。
+     * 设计：docs/superpowers/specs/2026-10-09-huasheng-type201-production-closure-design.md#72-task7授权查询与有效期展示契约。
+     */
+    private DecodedAsset decryptAsset(SupplyChainOrderDO order, FulfillmentAssetDO asset, Long userId,
                                   LocalDateTime now) {
         byte[] associatedData = (asset.getBOrderId() + "|" + asset.getSequenceNo() + "|" + asset.getAssetType())
                 .getBytes(StandardCharsets.UTF_8);
@@ -462,12 +471,31 @@ public class OrderViewQueryService {
             throw new IllegalStateException("管理端资产解密失败: " + asset.getAssetNo(), e);
         }
         try {
-            return objectMapper.readTree(decrypted);
+            JsonNode payload = objectMapper.reader()
+                    .with(com.fasterxml.jackson.core.JsonParser.Feature.STRICT_DUPLICATE_DETECTION)
+                    .with(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
+                    .readTree(decrypted);
+            if (payload == null || !payload.isObject()) throw new IllegalArgumentException("资产载荷须为对象");
+            HuashengType201AssetCodec.StoredCard card = null;
+            if (payload.has("payloadSchemaVersion") || payload.has("supplierPayload")) {
+                card = new HuashengType201AssetCodec().readStoredPayload(decrypted,
+                        asset.getSequenceNo(), asset.getAssetType(), asset.getExternalAssetId(),
+                        asset.getValidFrom(), asset.getValidUntil());
+            }
+            return new DecodedAsset(payload, card);
         } catch (Exception e) {
             recordAdminAudit(order, asset, userId, SensitiveAccessAuditResultStatus.FAILED.getCode(),
                     "PAYLOAD_CORRUPTED", now);
-            throw new IllegalStateException("管理端资产载荷格式异常: " + asset.getAssetNo(), e);
+            throw new IllegalStateException("管理端资产载荷格式异常: " + asset.getAssetNo(),
+                    new IllegalArgumentException("资产载荷校验失败"));
+        } finally {
+            if (decrypted != null) Arrays.fill(decrypted, (byte) 0);
         }
+    }
+
+    /** 严格校验后的内部投影；不允许记录整个载荷。设计见生产闭环设计 §7.2。 */
+    private record DecodedAsset(JsonNode payload, HuashengType201AssetCodec.StoredCard card) {
+        @Override public String toString() { return "DecodedAsset[redacted]"; }
     }
 
     /** 管理端明文查看资产的审计留痕：principal=ADMIN_USER，资源=FULFILLMENT_ASSET。 */
@@ -493,7 +521,6 @@ public class OrderViewQueryService {
         try {
             auditMapper.insert(audit);
         } catch (Exception e) {
-            log.error("管理端敏感访问审计写入失败 orderNo={} assetNo={}", order.getOrderNo(), asset.getAssetNo(), e);
             throw new IllegalStateException("敏感访问审计写入失败，安全拒绝返回: " + order.getOrderNo(), e);
         }
     }
@@ -922,12 +949,19 @@ public class OrderViewQueryService {
             @Schema(description = "券链接资产明文；仅券链接类返回") List<String> pickupCode) {
     }
 
-    /** 卡号卡密资产明文（过渡方案，含审计）。 */
+    /**
+     * 管理端授权卡号卡密投影（含敏感审计），有效期仅来自受保护payload，不推算日期。
+     * 设计：docs/superpowers/specs/2026-10-09-huasheng-type201-production-closure-design.md#72-task7授权查询与有效期展示契约。
+     */
     public record CardInfo(
             @Schema(description = "卡号明文") String cardCode,
             @Schema(description = "卡密明文") String cardSecret,
             @Schema(description = "有效期开始时间") LocalDateTime validFrom,
-            @Schema(description = "有效期结束时间") LocalDateTime validUntil) {
+            @Schema(description = "有效期结束时间") LocalDateTime validUntil,
+            @Schema(description = "供应商批次有效期原文，不保证日期格式") String validTimeRaw,
+            @Schema(description = "供应商有效期字段状态：ABSENT字段缺失，NULL显式null，VALUE字符串（包括空字符串）；旧资产不提供")
+            SupplierValidTimeState validTimeState) {
+        @Override public String toString() { return "CardInfo[sensitive values omitted]"; }
     }
 
     /** 直充/账户权益资产明文。 */

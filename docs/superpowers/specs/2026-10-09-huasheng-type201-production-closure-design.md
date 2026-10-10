@@ -265,6 +265,18 @@ ProjectStandardAssetPayloadDecoder识别新增schema，验证supplierPayload与�
 
 真实前端 `src/api/order/types.ts`／`index.ts`／`src/views/supplier/order/components/ExclusiveOrderInfo.vue`展示规则：VALUE且原文非空优先原样显示，空串或ABSENT／NULL显示“供应商未提供”；没有新增state的既有响应仍用原validFrom／validUntil格式化。不可把中文/非ISO原文丢给Date解析，也不trim或改变卡号／密码。继续原归属校验、权限与敏感访问审计；不在列表／日志新增卡密。
 
+### 7.2 Task7授权查询与有效期展示契约
+
+本片范围为已保存的华昇type201资产查询，不扩展履约与资金流程。两查询出口复用 `HuashengType201AssetCodec` 的封闭V1校验：严格schema、固定白名单、重复键/尾随拒绝、标准cardCode/cardSecret与supplierPayload.code/pass逐字一致；供应商adapter/type必须匹配。出现schema或supplierPayload任一标记就进入新schema分支，缺失另一标记不得降级为旧资产。非文本validTime拒绝，只有JSON null允许作为NULL。
+
+新增API枚举 `SupplierValidTimeState`：ABSENT表示supplierPayload不含validTime，NULL表示JSON null，VALUE表示字符串（包括空串和全空白）。`validTimeRaw`语义统一为“供应商批次有效期原文，不保证日期格式”；VALUE原样返回，ABSENT/NULL为null，state负责区分。旧资产两个新字段均不提供。此为加密payload投影，无对应新DDL字段，不改变现有validFrom/validUntil COMMENT。华昇查询还核资产类型、sequence=1、externalAssetId/日期为null，不推算日期。
+
+管理端在原解密边界内完成严格读取和投影，载荷失败写FAILED/PAYLOAD_CORRUPTED审计，成功后才写SUCCESS；明文byte[]在finally擦除。错误使用固定安全摘要，不保留可能携带卡密的JSON解析cause；审计落库失败继续安全拒绝，不在中间层重复打印堆栈。项目端继续通过可信项目上下文与快照归属验证，审计独立提交；新增字段不绕过权限或审计入口。CardInfo诊断字符串固定脱敏。
+
+前端使用 `OrderCardAssetView` 判别联合及纯映射 `mapCardAsset`；VALUE必须有字符串raw，NULL/ABSENT不得携带非null原文，未知state拒绝，避免坏响应被日期兜底掩盖。VALUE非空原样展示（包括首尾空白、“长期有效”、非ISO文本）；空串/NULL/ABSENT为“供应商未提供”。没有state的旧资产使用已有日期格式化函数。页面用文本插值并保持空白，不解析原文为Date、不trim、卡号卡密不重写。
+
+验证涵盖两出口真实AES-GCM密文解密的一致性、四态与序列化、坏载荷拒绝/缓冲区清理、跨项目拒绝/无解密、审计失败拒绝及真实Spring方法权限；真实MySQL/Liquibase复用项目查询独占库夹具，契约类放application包以复用其包级支持。前端测试执行实际OrderApi映射与SFC渲染，另执行定向lint、全局类型检查与本地构建。自动化结果与未执行实机范围登记 `docs/集成测试.md` §7.90.11，Task8真实配置到资金闭环另行验收。
+
 ## 8. 必需华昇回调
 
 ### 8.1 冻结身份认证

@@ -20,6 +20,109 @@ import java.nio.charset.StandardCharsets;
 import java.util.stream.Stream;
 
 class ProjectStandardAssetPayloadDecoderTest {
+    @ParameterizedTest
+    @MethodSource("huashengValidTimes")
+    void huashengExpiryIsLossless(String fragment, String state, String raw) {
+        var crypto = mock(EnvelopeCryptoPort.class);
+        byte[] plain = huashengPayload(fragment).getBytes(StandardCharsets.UTF_8);
+        when(crypto.decrypt(any(), any(), any())).thenReturn(plain);
+        var result = new ProjectStandardAssetPayloadDecoder(crypto, new ObjectMapper(),
+                mock(SupplyChainDatabaseClock.class)).decode(huashengAsset());
+        var tree = new ObjectMapper().valueToTree(result);
+        assertThat(tree.path("validTimeState").asText()).isEqualTo(state);
+        if (raw == null) assertThat(tree.path("validTimeRaw").isNull() || tree.path("validTimeRaw").isMissingNode()).isTrue();
+        else assertThat(tree.path("validTimeRaw").textValue()).isEqualTo(raw);
+        assertThat(result.getCardCode()).isEqualTo(" CODE ");
+        assertThat(result.getCardSecret()).isEqualTo(" PASS ");
+        assertThat(result.getValidFrom()).isNull();
+        assertThat(result.getValidUntil()).isNull();
+        assertThat(plain).containsOnly((byte) 0);
+    }
+
+    static Stream<Arguments> huashengValidTimes() {
+        return Stream.of(Arguments.of("", "ABSENT", null),
+                Arguments.of(",\"validTime\":null", "NULL", null),
+                Arguments.of(",\"validTime\":\"\"", "VALUE", ""),
+                Arguments.of(",\"validTime\":\" 长期有效 \"", "VALUE", " 长期有效 "),
+                Arguments.of(",\"validTime\":\"  \"", "VALUE", "  "));
+    }
+
+    @Test
+    void rejectsInvalidHuashengSchemaAndConflictsWithoutLeakingPayload() {
+        String valid = huashengPayload(",\"validTime\":\"长期有效\"");
+        for (String bad : new String[] {
+                valid.replace("\"payloadSchemaVersion\":1", "\"payloadSchemaVersion\":2"),
+                valid.replace("\"payloadSchemaVersion\":1,", ""),
+                valid.replace("\"payloadSchemaVersion\":1", "\"payloadSchemaVersion\":1.0"),
+                valid.replace("\"type\":201", "\"type\":202"),
+                valid.replace("HUA_SHENG_ORDER_V1", "OTHER"),
+                valid.replace("\"pass\":\" PASS \"", "\"pass\":\"different\""),
+                valid.replace("\"validTime\":\"长期有效\"", "\"validTime\":{}"),
+                valid.replace("\"validTime\":\"长期有效\"", "\"validTime\":false"),
+                valid.replace("\"validTime\":\"长期有效\"", "\"validTime\":42"),
+                valid.replace("\"validTime\":\"长期有效\"", "\"validTime\":[],\"unknown\":1"),
+                valid.replace("\"validTime\":\"长期有效\"", "\"validTime\":null,\"validTime\":\"长期有效\""),
+                valid + " {}",
+                "{\"payloadSchemaVersion\":1,\"cardCode\":\" CODE \"}",
+                valid.replace("\"supplierPayload\"", "\"unknownPayload\"")
+        }) {
+            var crypto = mock(EnvelopeCryptoPort.class);
+            byte[] plain = bad.getBytes(StandardCharsets.UTF_8);
+            when(crypto.decrypt(any(), any(), any())).thenReturn(plain);
+            var decoder = new ProjectStandardAssetPayloadDecoder(crypto, new ObjectMapper(), mock(SupplyChainDatabaseClock.class));
+            assertThatThrownBy(() -> decoder.decode(huashengAsset()))
+                    .isInstanceOf(ProjectStandardAssetQueryFailure.class);
+            assertThat(plain).containsOnly((byte) 0);
+        }
+    }
+
+    @Test
+    void huashengQueryRejectsIncompatibleStoredIdentityAndNeverLogsCard() {
+        for (int variant = 0; variant < 4; variant++) {
+            var asset = huashengAsset();
+            switch (variant) {
+                case 0 -> asset.setSequenceNo(2);
+                case 1 -> asset.setExternalAssetId("supplier-id");
+                case 2 -> asset.setValidFrom(java.time.LocalDateTime.of(2026, 10, 10, 0, 0));
+                case 3 -> asset.setValidUntil(java.time.LocalDateTime.of(2027, 10, 10, 0, 0));
+            }
+            var crypto = mock(EnvelopeCryptoPort.class);
+            byte[] plain = huashengPayload("").getBytes(StandardCharsets.UTF_8);
+            when(crypto.decrypt(any(), any(), any())).thenReturn(plain);
+            assertThatThrownBy(() -> new ProjectStandardAssetPayloadDecoder(crypto, new ObjectMapper(),
+                    mock(SupplyChainDatabaseClock.class)).decode(asset))
+                    .isInstanceOf(ProjectStandardAssetQueryFailure.class);
+            assertThat(plain).containsOnly((byte) 0);
+        }
+    }
+
+    @Test
+    void parseFailureCauseDoesNotExposeSupplierDeliveryText() {
+        var crypto = mock(EnvelopeCryptoPort.class);
+        byte[] plain = ("{\"cardCode\":\" CODE \",\"delivery-secret\":?}").getBytes(StandardCharsets.UTF_8);
+        when(crypto.decrypt(any(), any(), any())).thenReturn(plain);
+        assertThatThrownBy(() -> new ProjectStandardAssetPayloadDecoder(crypto, new ObjectMapper(),
+                mock(SupplyChainDatabaseClock.class)).decode(huashengAsset()))
+                .isInstanceOfSatisfying(ProjectStandardAssetQueryFailure.class, failure -> {
+                    assertThat(failure.getCause()).isInstanceOf(com.fasterxml.jackson.core.JsonParseException.class);
+                    assertThat(failure.getCause().getMessage()).doesNotContain("delivery-secret", " CODE ");
+                });
+        assertThat(plain).containsOnly((byte) 0);
+    }
+
+    static String huashengPayload(String fragment) {
+        return "{\"payloadSchemaVersion\":1,\"assetType\":\"CARD_CODE_SECRET\","
+                + "\"cardCode\":\" CODE \",\"cardSecret\":\" PASS \",\"supplierPayload\":{"
+                + "\"adapterType\":\"HUA_SHENG_ORDER_V1\",\"type\":201,\"code\":\" CODE \",\"pass\":\" PASS \""
+                + fragment + "}}";
+    }
+
+    static FulfillmentAssetDO huashengAsset() {
+        return FulfillmentAssetDO.builder().id(1L).assetNo("FA_1").bOrderId(1L).sequenceNo(1)
+                .assetType("CARD_CODE_SECRET").keyVersion("k1").encryptedPayload(new byte[] {1})
+                .lifecycleStatus((short) 10).build();
+    }
+
     @Test
     void deliversLegacyVoucherWithoutOtherFieldsAndErasesPlaintext() {
         var crypto = mock(EnvelopeCryptoPort.class);
