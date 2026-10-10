@@ -74,6 +74,7 @@ class BuyerProductQueryServiceTest {
     private final PlatformSkuPricingMapper platformPricingMapper = mock(PlatformSkuPricingMapper.class);
     private final PlatformSkuPricingVersionMapper platformPricingVersionMapper = mock(PlatformSkuPricingVersionMapper.class);
     private BuyerProductQueryService service;
+    private final BuyerAcceptanceCatalogReadService acceptanceCatalog = mock(BuyerAcceptanceCatalogReadService.class);
 
     @BeforeEach
     void setUp() {
@@ -95,7 +96,12 @@ class BuyerProductQueryServiceTest {
                 mock(ProjectListingVersionMapper.class),
                 projectMapper,
                 new SettlementPriceResolver(),
-                new ObjectMapper());
+                new ObjectMapper(), acceptanceCatalog);
+        when(acceptanceCatalog.read(any())).thenAnswer(call -> {
+            BuyerProductDO product = call.getArgument(0);
+            return new BuyerAcceptanceCatalogReadService.CatalogView(product.getBuyerProductCode(), null, null,
+                    null, "UNKNOWN", "NOT_EVALUATED", null, null, null);
+        });
         when(buyerMapper.selectByBuyerCode("BYR_A")).thenReturn(BuyerDO.builder().id(9L).buyerCode("BYR_A").build());
     }
 

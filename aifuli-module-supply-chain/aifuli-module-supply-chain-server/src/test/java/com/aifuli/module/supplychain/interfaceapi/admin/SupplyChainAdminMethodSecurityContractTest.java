@@ -178,6 +178,20 @@ class SupplyChainAdminMethodSecurityContractTest {
     }
 
     @Test
+    void buyerQueryCannotRecalculateAcceptanceCatalog() {
+        grant(BUYER_QUERY);
+        assertThatThrownBy(() -> buyerController.recalculateAcceptanceCatalog("BYR_A", "BPD_A"))
+                .isInstanceOf(AccessDeniedException.class);
+    }
+
+    @Test
+    void buyerUpdateCanRecalculateAcceptanceCatalog() {
+        grant(SupplyChainAdminPermissions.BUYER_UPDATE);
+        assertThatCode(() -> buyerController.recalculateAcceptanceCatalog("BYR_A", "BPD_A"))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
     void supplierQueryCanInvokeSkuQueryForSupplierResource() {
         grant(SUPPLIER_QUERY);
 
@@ -484,7 +498,8 @@ class SupplyChainAdminMethodSecurityContractTest {
                     mock(BuyerProductCommandService.class),
                     mock(BuyerProductQueryService.class),
                     mock(com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericBatchPricingService.class),
-                    mock(BuyerInvoiceService.class));
+                    mock(BuyerInvoiceService.class),
+                    mock(com.aifuli.module.supplychain.tradecore.catalog.application.BuyerCatalogManagementService.class));
         }
 
         @Bean

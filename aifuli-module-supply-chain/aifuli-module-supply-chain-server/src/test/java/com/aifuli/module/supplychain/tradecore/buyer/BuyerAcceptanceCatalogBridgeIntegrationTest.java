@@ -612,8 +612,15 @@ class BuyerAcceptanceCatalogBridgeIntegrationTest {
     }
     @Configuration(proxyBeanMethods = false)
     @Import({BuyerAdminIntegrationTest.TestConfiguration.class, BuyerAdminController.class,
+            com.aifuli.module.supplychain.tradecore.catalog.application.BuyerCatalogManagementService.class,
             M1MasterDataAdminController.class, BuyerCommandService.class, BuyerListingPublicationService.class, OutboxEventRepository.class})
-    static class Config { }
+    static class Config {
+        /** 此历史套件仅验证真实身份/整批竞争协议；新商业刷新真实事务由生命周期集成套件覆盖。 */
+        @org.springframework.context.annotation.Bean
+        com.aifuli.module.supplychain.tradecore.catalog.application.BuyerSelectionCatalogLifecycle catalogLifecycle() {
+            return org.mockito.Mockito.mock(com.aifuli.module.supplychain.tradecore.catalog.application.BuyerSelectionCatalogLifecycle.class);
+        }
+    }
     private static void seedCatalog(ProductCatalogCommandService catalog) {
         catalog.createBrand(new ProductCatalogCommandService.CreateBrandCommand(
                 "BRD_001", "影院品牌", null, null, 0, 1L));

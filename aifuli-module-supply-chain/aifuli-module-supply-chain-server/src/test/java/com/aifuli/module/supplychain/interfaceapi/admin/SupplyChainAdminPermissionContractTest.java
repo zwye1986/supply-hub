@@ -101,6 +101,7 @@ class SupplyChainAdminPermissionContractTest {
                 Map.entry("patchProduct", BUYER_UPDATE_EXPRESSION),
                 Map.entry("previewProductPricing", BUYER_QUERY_EXPRESSION),
                 Map.entry("updateProductPricing", BUYER_UPDATE_EXPRESSION),
+                Map.entry("recalculateAcceptanceCatalog", BUYER_UPDATE_EXPRESSION),
                 Map.entry("retireProduct", BUYER_DELETE_EXPRESSION),
                 Map.entry("getInvoice", BUYER_QUERY_EXPRESSION),
                 Map.entry("saveInvoice", BUYER_UPDATE_EXPRESSION)));

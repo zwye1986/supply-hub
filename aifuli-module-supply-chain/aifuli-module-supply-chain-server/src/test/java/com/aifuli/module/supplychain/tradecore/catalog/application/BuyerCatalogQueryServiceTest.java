@@ -52,9 +52,9 @@ class BuyerCatalogQueryServiceTest {
         BuyerCatalogReadRow unpriced = row(ListingAvailability.AVAILABLE.getCode(), PricingStatus.UNPRICED.name());
         BuyerCatalogReadRow ready = row(ListingAvailability.AVAILABLE.getCode(), PricingStatus.READY.name());
         BuyerCatalogReadRow legacy = row(null, null);
-        when(readMapper.selectPage(eq(9L), any(), any(), eq(false), eq(PricingStatus.READY.name()), anyLong(), anyInt()))
+        when(readMapper.selectPage(eq(9L), any(), any(), eq(false), eq(PricingStatus.READY.name()), any(), anyLong(), anyInt()))
                 .thenReturn(List.of(unpriced, ready, legacy));
-        when(readMapper.countPage(eq(9L), any(), any(), eq(false), eq(PricingStatus.READY.name())))
+        when(readMapper.countPage(eq(9L), any(), any(), eq(false), eq(PricingStatus.READY.name()), any()))
                 .thenReturn(3L);
 
         BuyerCatalogPageReqDTO request = pageRequest(false);
@@ -66,18 +66,75 @@ class BuyerCatalogQueryServiceTest {
     }
 
     @Test
-    void availableOnlyPassesReadyPricingStatusToReadModel() {
+    void autoSelectionExpiredProjectionOverlaysToUnknown() {
+        LocalDateTime now = LocalDateTime.of(2026, 9, 16, 12, 0);
+        BuyerCatalogReadRow expired = row(ListingAvailability.AVAILABLE.getCode(), PricingStatus.READY.name());
+        expired.setManagementMode("AUTO_SELECTION");
+        expired.setSourceBuyerPricingVersionId(101L);
+        expired.setCurrentPricingVersionId(101L);
+        expired.setValidUntil(now.minusMinutes(1)); // 已过期
+
+        when(readMapper.selectPage(eq(9L), any(), any(), eq(false), eq(PricingStatus.READY.name()), eq(now), anyLong(), anyInt()))
+                .thenReturn(List.of(expired));
+        when(readMapper.countPage(eq(9L), any(), any(), eq(false), eq(PricingStatus.READY.name()), eq(now)))
+                .thenReturn(1L);
+
+        List<BuyerCatalogItemRespDTO> items = service.pageCatalog(pageRequest(false)).getList();
+        assertThat(items).extracting(BuyerCatalogItemRespDTO::getAvailabilityStatus)
+                .containsExactly(ListingAvailability.UNKNOWN.name());
+    }
+
+    @Test
+    void autoSelectionMismatchedPricingSourceOverlaysToUnknown() {
+        LocalDateTime now = LocalDateTime.of(2026, 9, 16, 12, 0);
+        BuyerCatalogReadRow mismatched = row(ListingAvailability.AVAILABLE.getCode(), PricingStatus.READY.name());
+        mismatched.setManagementMode("AUTO_SELECTION");
+        mismatched.setSourceBuyerPricingVersionId(101L);
+        mismatched.setCurrentPricingVersionId(102L); // 来源失配
+        mismatched.setValidUntil(now.plusHours(1));
+
+        when(readMapper.selectPage(eq(9L), any(), any(), eq(false), eq(PricingStatus.READY.name()), eq(now), anyLong(), anyInt()))
+                .thenReturn(List.of(mismatched));
+        when(readMapper.countPage(eq(9L), any(), any(), eq(false), eq(PricingStatus.READY.name()), eq(now)))
+                .thenReturn(1L);
+
+        List<BuyerCatalogItemRespDTO> items = service.pageCatalog(pageRequest(false)).getList();
+        assertThat(items).extracting(BuyerCatalogItemRespDTO::getAvailabilityStatus)
+                .containsExactly(ListingAvailability.UNKNOWN.name());
+    }
+
+    @Test
+    void manualModeKeepsAvailableEvenIfValidUntilExpiredOrPricingSourceMissing() {
+        LocalDateTime now = LocalDateTime.of(2026, 9, 16, 12, 0);
+        BuyerCatalogReadRow manual = row(ListingAvailability.AVAILABLE.getCode(), PricingStatus.READY.name());
+        manual.setManagementMode("MANUAL");
+        manual.setSourceBuyerPricingVersionId(null);
+        manual.setValidUntil(now.minusMinutes(1));
+
+        when(readMapper.selectPage(eq(9L), any(), any(), eq(false), eq(PricingStatus.READY.name()), eq(now), anyLong(), anyInt()))
+                .thenReturn(List.of(manual));
+        when(readMapper.countPage(eq(9L), any(), any(), eq(false), eq(PricingStatus.READY.name()), eq(now)))
+                .thenReturn(1L);
+
+        List<BuyerCatalogItemRespDTO> items = service.pageCatalog(pageRequest(false)).getList();
+        assertThat(items).extracting(BuyerCatalogItemRespDTO::getAvailabilityStatus)
+                .containsExactly(ListingAvailability.AVAILABLE.name());
+    }
+
+    @Test
+    void availableOnlyPassesReadyPricingStatusAndNowToReadModel() {
+        LocalDateTime now = LocalDateTime.of(2026, 9, 16, 12, 0);
         BuyerCatalogReadRow ready = row(ListingAvailability.AVAILABLE.getCode(), PricingStatus.READY.name());
-        when(readMapper.selectPage(eq(9L), any(), any(), eq(true), eq(PricingStatus.READY.name()), anyLong(), anyInt()))
+        when(readMapper.selectPage(eq(9L), any(), any(), eq(true), eq(PricingStatus.READY.name()), eq(now), anyLong(), anyInt()))
                 .thenReturn(List.of(ready));
-        when(readMapper.countPage(eq(9L), any(), any(), eq(true), eq(PricingStatus.READY.name())))
+        when(readMapper.countPage(eq(9L), any(), any(), eq(true), eq(PricingStatus.READY.name()), eq(now)))
                 .thenReturn(1L);
 
         assertThat(service.pageCatalog(pageRequest(true)).getList())
                 .extracting(BuyerCatalogItemRespDTO::getAvailabilityStatus)
                 .containsExactly(ListingAvailability.AVAILABLE.name());
-        verify(readMapper).selectPage(eq(9L), any(), any(), eq(true), eq(PricingStatus.READY.name()), anyLong(), anyInt());
-        verify(readMapper).countPage(eq(9L), any(), any(), eq(true), eq(PricingStatus.READY.name()));
+        verify(readMapper).selectPage(eq(9L), any(), any(), eq(true), eq(PricingStatus.READY.name()), eq(now), anyLong(), anyInt());
+        verify(readMapper).countPage(eq(9L), any(), any(), eq(true), eq(PricingStatus.READY.name()), eq(now));
     }
 
     private static BuyerCatalogPageReqDTO pageRequest(boolean availableOnly) {

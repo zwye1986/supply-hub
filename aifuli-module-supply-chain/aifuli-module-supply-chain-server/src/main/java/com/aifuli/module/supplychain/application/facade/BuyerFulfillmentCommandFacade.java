@@ -7,6 +7,8 @@ import com.aifuli.module.supplychain.api.fulfillment.dto.FulfillmentAcceptanceRe
 import com.aifuli.module.supplychain.api.fulfillment.dto.FulfillmentReceiptStatus;
 import com.aifuli.module.supplychain.api.fulfillment.dto.FulfillmentTargetDTO;
 import com.aifuli.module.supplychain.api.order.dto.SupplyChainOrderStatus;
+import com.aifuli.module.supplychain.border.fulfillment.application.FrozenAcceptanceIdentityReader;
+import com.aifuli.module.supplychain.border.fulfillment.application.FrozenAcceptanceIdentityReader.FrozenAcceptanceIdentity;
 import com.aifuli.module.supplychain.border.fulfillment.application.FulfillmentAcceptanceLifecycle;
 import com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyAcceptanceCoordinator;
 import com.aifuli.module.supplychain.border.fulfillment.application.FulfillmentAcceptanceLifecycle.TargetSchemaSnapshot;
@@ -36,6 +38,7 @@ import java.time.LocalDateTime;
 import java.util.HexFormat;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.TreeMap;
 
 import static com.aifuli.framework.common.exception.util.ServiceExceptionUtil.exception;
@@ -58,6 +61,7 @@ public class BuyerFulfillmentCommandFacade {
 
     private final BuyerResolver buyerResolver;
     private final BuyerProjectAccessResolver projectAccessResolver;
+    private final FrozenAcceptanceIdentityReader frozenIdentityReader;
     private final FulfillmentTargetSchemaRegistry targetSchemaRegistry;
     private final EnvelopeCryptoPort envelopeCrypto;
     private final HmacFingerprintPort hmacFingerprint;
@@ -85,11 +89,21 @@ public class BuyerFulfillmentCommandFacade {
         BuyerResolver.BuyerSnapshot buyer = buyerResolver.resolve(
                 request.getSourceSystem(), request.getExternalTenantId(), now);
         ProjectSnapshot project = projectAccessResolver.requireActiveByCode(request.getProjectCode(), buyer.id());
-        TargetSchemaSnapshot targetSchema = lifecycle.resolveTargetSchema(buyer.id(), request.getBuyerSkuCode());
+        Optional<FrozenAcceptanceIdentity> frozenIdentity;
+        try {
+            frozenIdentity = frozenIdentityReader.find(buyer.id(), project.projectId(), request.getBuyerOrderNo());
+        } catch (FulfillmentAcceptanceLifecycle.IdempotencyConflictException untrusted) {
+            log.warn("[履约][facade] 历史回执冻结身份不受信 projectId={}, buyerOrderNo={}",
+                    project.projectId(), request.getBuyerOrderNo());
+            throw exception(IDEMPOTENCY_CONFLICT);
+        }
+        TargetSchemaSnapshot targetSchema = frozenIdentity.map(FrozenAcceptanceIdentity::targetSchema)
+                .orElseGet(() -> lifecycle.resolveTargetSchema(buyer.id(), request.getBuyerSkuCode()));
         // 仅作链路追踪与审计 traceId（outbox/资金/状态日志沿用）；对外稳定回执号见回执快照 receiptNo。
         String traceId = businessNoGenerator.next(BusinessNoPrefixes.REQ);
+        boolean acceptedReplayOnly = frozenIdentity.map(FrozenAcceptanceIdentity::accepted).orElse(false);
         FulfillmentAcceptanceLifecycle.PreparedAcceptance prepared = prepare(
-                request, buyer, project, targetSchema, traceId);
+                request, buyer, project, targetSchema, traceId, acceptedReplayOnly);
         FulfillmentAcceptanceLifecycle.ClaimResult claim;
         try {
             claim = claimWithProjectKeyRaceRetry(prepared);
@@ -101,6 +115,19 @@ public class BuyerFulfillmentCommandFacade {
         if (!claim.executeAcceptance()) {
             log.info("[履约][facade] 抢占后回放 receiptId={}", claim.receiptId());
             return toResponse(lifecycle.replay(claim.receiptId()));
+        }
+        if (frozenIdentity.isPresent()) {
+            TargetSchemaSnapshot currentCatalog = lifecycle.resolveTargetSchema(buyer.id(), request.getBuyerSkuCode());
+            if (!targetSchema.platformSkuId().equals(currentCatalog.platformSkuId())) {
+                log.warn("[履约][facade] 续跑平台SKU与冻结不变量冲突 frozenSkuId={}, currentSkuId={}",
+                        targetSchema.platformSkuId(), currentCatalog.platformSkuId());
+                throw exception(IDEMPOTENCY_CONFLICT);
+            }
+            prepared = prepared.withCatalogIdentity(currentCatalog.catalogIdentity());
+            if (!prepared.targetValid()) {
+                prepared = prepare(request, buyer, project, targetSchema, traceId, false)
+                        .withCatalogIdentity(currentCatalog.catalogIdentity());
+            }
         }
         try {
             FulfillmentAcceptanceReceiptRespDTO response = toResponse(acceptanceCoordinator.accept(claim.receiptId(), prepared));
@@ -150,7 +177,7 @@ public class BuyerFulfillmentCommandFacade {
      */
     private FulfillmentAcceptanceLifecycle.PreparedAcceptance prepare(
             AcceptFulfillmentReqDTO request, BuyerResolver.BuyerSnapshot buyer,
-            ProjectSnapshot project, TargetSchemaSnapshot targetSchema, String traceId) {
+            ProjectSnapshot project, TargetSchemaSnapshot targetSchema, String traceId, boolean acceptedReplayOnly) {
         FulfillmentTargetDTO target = request.getTarget();
         Map<String, String> normalizedTargetValues = new TreeMap<>(target.getValues());
         boolean mobileTarget = FulfillmentTargetFields.ACCOUNT_TYPE_MOBILE.equals(
@@ -163,7 +190,7 @@ public class BuyerFulfillmentCommandFacade {
         }
         byte[] targetCanonical = canonicalTarget(normalizedTargetValues, targetSchema);
         byte[] targetDigest = hmacFingerprint.fingerprint(FulfillmentTargetFields.FINGERPRINT_PURPOSE, targetCanonical);
-        boolean targetValid = targetSchema.available() && (!mobileTarget || normalizedTargetMobile != null);
+        boolean targetValid = !acceptedReplayOnly && targetSchema.available() && (!mobileTarget || normalizedTargetMobile != null);
         if (targetValid) {
             try {
                 targetSchemaRegistry.validate(

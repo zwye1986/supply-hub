@@ -5,6 +5,8 @@ import com.aifuli.module.supplychain.api.auth.ProjectAuthOperations;
 import com.aifuli.module.supplychain.api.fulfillment.dto.FulfillmentReceiptStatus;
 import com.aifuli.module.supplychain.api.fulfillment.dto.ProjectStandardOrderCreateRespDTO;
 import com.aifuli.module.supplychain.api.order.dto.SupplyChainOrderStatus;
+import com.aifuli.module.supplychain.border.fulfillment.application.FrozenAcceptanceIdentityReader;
+import com.aifuli.module.supplychain.border.fulfillment.application.FrozenAcceptanceIdentityReader.FrozenAcceptanceIdentity;
 import com.aifuli.module.supplychain.border.fulfillment.application.FulfillmentAcceptanceLifecycle;
 import com.aifuli.module.supplychain.border.fulfillment.application.FulfillmentAcceptanceLifecycle.AcceptanceSnapshot;
 import com.aifuli.module.supplychain.border.fulfillment.application.FulfillmentAcceptanceLifecycle.BusinessRejection;
@@ -29,6 +31,7 @@ import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerProjectAcc
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerProjectAccessResolver.ProjectSnapshot;
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerResolver;
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerResolver.BuyerSnapshot;
+import com.aifuli.module.supplychain.tradecore.catalog.application.AcceptanceCatalogPreparationService;
 import com.aifuli.module.supplychain.tradecore.catalog.pricing.ProjectQuoteKeyContext;
 import com.aifuli.module.supplychain.tradecore.catalog.pricing.StandardPricingQuoteService;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -44,6 +47,7 @@ import java.security.NoSuchAlgorithmException;
 import java.time.ZoneOffset;
 import java.util.HexFormat;
 import java.util.Map;
+import java.util.Optional;
 import java.util.TreeMap;
 
 import static com.aifuli.framework.common.exception.util.ServiceExceptionUtil.exception;
@@ -66,11 +70,13 @@ public class ProjectStandardOrderCommandFacade {
     private final SupplyChainDatabaseClock databaseClock;
     private final BuyerResolver buyerResolver;
     private final BuyerProjectAccessResolver projectAccessResolver;
+    private final FrozenAcceptanceIdentityReader frozenIdentityReader;
     private final FulfillmentTargetSchemaRegistry targetSchemaRegistry;
     private final EnvelopeCryptoPort envelopeCrypto;
     private final HmacFingerprintPort hmacFingerprint;
     private final FulfillmentAcceptanceLifecycle lifecycle;
     private final RechargeFrequencyAcceptanceCoordinator acceptanceCoordinator;
+    private final AcceptanceCatalogPreparationService catalogPreparationService;
     private final StandardPricingQuoteService pricingQuoteService;
     private final BusinessNoGenerator businessNoGenerator;
     private final ObjectMapper objectMapper;
@@ -93,10 +99,20 @@ public class ProjectStandardOrderCommandFacade {
 
         ProjectSnapshot project = projectAccessResolver.requireActive(context.projectId(), context.buyerId());
         BuyerSnapshot buyer = buyerResolver.requireActiveById(context.buyerId());
-        TargetSchemaSnapshot targetSchema = lifecycle.resolveTargetSchema(buyer.id(), request.getBuyerSkuCode());
+        Optional<FrozenAcceptanceIdentity> frozenIdentity;
+        try {
+            frozenIdentity = frozenIdentityReader.find(buyer.id(), project.projectId(), request.getBuyerOrderNo());
+        } catch (IdempotencyConflictException untrusted) {
+            log.warn("[标准下单][facade] 历史回执冻结身份不受信 projectId={}, buyerOrderNo={}",
+                    project.projectId(), request.getBuyerOrderNo());
+            throw exception(IDEMPOTENCY_CONFLICT);
+        }
+        TargetSchemaSnapshot targetSchema = frozenIdentity.map(FrozenAcceptanceIdentity::targetSchema)
+                .orElseGet(() -> lifecycle.resolveTargetSchema(buyer.id(), request.getBuyerSkuCode()));
 
         String traceId = businessNoGenerator.next(BusinessNoPrefixes.REQ);
-        PreparedAcceptance prepared = prepare(request, buyer, project, targetSchema, traceId);
+        boolean acceptedReplayOnly = frozenIdentity.map(FrozenAcceptanceIdentity::accepted).orElse(false);
+        PreparedAcceptance prepared = prepare(request, buyer, project, targetSchema, traceId, acceptedReplayOnly);
 
         ClaimResult claim;
         try {
@@ -112,9 +128,30 @@ public class ProjectStandardOrderCommandFacade {
             return toResponse(lifecycle.replay(claim.receiptId()));
         }
 
+        if (frozenIdentity.isPresent()) {
+            TargetSchemaSnapshot currentCatalog = lifecycle.resolveTargetSchema(buyer.id(), request.getBuyerSkuCode());
+            if (!targetSchema.platformSkuId().equals(currentCatalog.platformSkuId())) {
+                log.warn("[标准下单][facade] 续跑平台SKU与冻结不变量冲突 frozenSkuId={}, currentSkuId={}",
+                        targetSchema.platformSkuId(), currentCatalog.platformSkuId());
+                throw exception(IDEMPOTENCY_CONFLICT);
+            }
+            prepared = prepared.withCatalogIdentity(currentCatalog.catalogIdentity());
+            if (!prepared.targetValid()) {
+                prepared = prepare(request, buyer, project, targetSchema, traceId, false)
+                        .withCatalogIdentity(currentCatalog.catalogIdentity());
+            }
+        }
+
         // claim已提交且仅本次需要执行受理时首冻；无效目标/数量仍沿原受理顺序保存拒绝回执。
         // 设计见 docs/superpowers/specs/2026-10-03-standard-project-direct-order-price-freeze-design.md#2-http-编排与两段事务。
         if (prepared.quantity() == StandardPricingQuoteService.SUPPORTED_QUANTITY && prepared.targetValid() && targetSchema.available()) {
+            Optional<AcceptanceCatalogPreparationService.PreparationFailure> prepFailure =
+                    catalogPreparationService.prepare(prepared.catalogIdentity(), project.projectId(), claim.receiptId());
+            if (prepFailure.isPresent()) {
+                var failure = prepFailure.get();
+                return toResponse(lifecycle.reject(new BusinessRejection(
+                        failure.receiptId(), failure.listingVersionId(), failure.receiptStatus(), failure.rejectionCode())));
+            }
             pricingQuoteService.freezeForProject(new ProjectQuoteKeyContext(
                     buyer.id(), project.projectId(), targetSchema.platformSkuId(), prepared.buyerOrderNo(), prepared.quantity()));
         }
@@ -152,7 +189,7 @@ public class ProjectStandardOrderCommandFacade {
 
     private PreparedAcceptance prepare(
             ProjectStandardOrderCreateReqDTO request, BuyerSnapshot buyer,
-            ProjectSnapshot project, TargetSchemaSnapshot targetSchema, String traceId) {
+            ProjectSnapshot project, TargetSchemaSnapshot targetSchema, String traceId, boolean acceptedReplayOnly) {
         Map<String, String> targetValues = request.getTarget();
         Map<String, String> normalizedTargetValues = new TreeMap<>(targetValues);
 
@@ -167,7 +204,7 @@ public class ProjectStandardOrderCommandFacade {
 
         byte[] targetCanonical = canonicalTarget(normalizedTargetValues, targetSchema);
         byte[] targetDigest = hmacFingerprint.fingerprint(FulfillmentTargetFields.FINGERPRINT_PURPOSE, targetCanonical);
-        boolean targetValid = targetSchema.available() && (!mobileTarget || normalizedTargetMobile != null);
+        boolean targetValid = !acceptedReplayOnly && targetSchema.available() && (!mobileTarget || normalizedTargetMobile != null);
         if (targetValid) {
             try {
                 targetSchemaRegistry.validate(

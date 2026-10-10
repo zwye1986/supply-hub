@@ -21,6 +21,8 @@ import com.aifuli.module.supplychain.tradecore.catalog.application.BuyerProductC
 import com.aifuli.module.supplychain.tradecore.catalog.application.BuyerProductCommandService.L2PricingPreview;
 import com.aifuli.module.supplychain.tradecore.catalog.application.BuyerProductCommandService.ProductLine;
 import com.aifuli.module.supplychain.tradecore.catalog.application.BuyerProductQueryService;
+import com.aifuli.module.supplychain.tradecore.catalog.application.BuyerCatalogManagementService;
+import com.aifuli.module.supplychain.tradecore.catalog.application.BuyerSelectionCatalogLifecycle.RefreshResult;
 import com.aifuli.module.supplychain.tradecore.catalog.application.BuyerProductQueryService.BuyerProductListItem;
 import com.aifuli.module.supplychain.interfaceapi.admin.pricing.GenericPricingAdminVos.FormulaRuleReqVO;
 import com.aifuli.module.supplychain.interfaceapi.admin.pricing.GenericPricingAdminVos.ServiceFeeRuleReqVO;
@@ -96,6 +98,7 @@ public class BuyerAdminController {
     private final BuyerProductQueryService productQueryService;
     private final GenericBatchPricingService genericPricingService;
     private final BuyerInvoiceService invoiceService;
+    private final BuyerCatalogManagementService catalogManagementService;
 
     @GetMapping
     @PreAuthorize(BUYER_QUERY_EXPRESSION)
@@ -276,7 +279,7 @@ public class BuyerAdminController {
         List<ProductLine> lines = request.getItems().stream()
                 .map(BuyerAdminController::toProductLine)
                 .toList();
-        return success(productCommandService.addProducts(buyerCode, lines, getLoginUserId()));
+        return success(catalogManagementService.addProducts(buyerCode, lines, getLoginUserId()));
     }
 
     @PatchMapping("/{buyerCode}/products/{buyerProductCode}")
@@ -317,9 +320,18 @@ public class BuyerAdminController {
     public CommonResult<Boolean> updateProductPricing(
             @Parameter(description = "采购商永久业务编码") @PathVariable String buyerCode,
             @Valid @RequestBody BuyerProductBatchPricingReqVO request) {
-        genericPricingService.saveBuyer(buyerCode, request.getBuyerProductCodes(),
-                GenericPricingRequestMapper.toBuyerOverrides(request), getLoginUserId());
-        return success(true);
+        return success(catalogManagementService.saveBuyerPricing(buyerCode, request.getBuyerProductCodes(),
+                GenericPricingRequestMapper.toBuyerOverrides(request), getLoginUserId()));
+    }
+
+    /** 同步真实重算，不接收价格或状态；技术失败不伪装为排队成功。见最小业务设计 §7。 */
+    @PostMapping("/{buyerCode}/products/{buyerProductCode}/acceptance-catalog/recalculate")
+    @PreAuthorize(BUYER_UPDATE_EXPRESSION)
+    @Operation(summary = "同步重算分销商品受理目录",
+            description = "校验分销商归属，必要时补身份后独立刷新；返回真实结果，不代表每个项目实时获准下单。")
+    public CommonResult<RefreshResult> recalculateAcceptanceCatalog(@PathVariable String buyerCode,
+                                                                   @PathVariable String buyerProductCode) {
+        return success(catalogManagementService.recalculate(buyerCode, buyerProductCode, getLoginUserId()));
     }
 
     @DeleteMapping("/{buyerCode}/products/{buyerProductCode}")

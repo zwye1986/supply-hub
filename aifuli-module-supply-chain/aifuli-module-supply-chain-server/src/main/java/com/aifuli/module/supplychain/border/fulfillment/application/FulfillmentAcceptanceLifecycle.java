@@ -52,7 +52,9 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerListingMap
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerListingVersionMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.BuyerListingStatus;
+import com.aifuli.module.supplychain.tradecore.catalog.domain.CurrentSupplyEligibility;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.ListingAvailability;
+import com.aifuli.module.supplychain.tradecore.catalog.application.CurrentSupplyEligibilityReader;
 import com.aifuli.module.supplychain.tradecore.catalog.application.ProductSellabilityService;
 import com.aifuli.module.supplychain.tradecore.catalog.application.BuyerAcceptanceCatalogResolver;
 import com.aifuli.module.supplychain.tradecore.catalog.application.BuyerAcceptanceCatalogResolver.CatalogIdentity;
@@ -130,6 +132,8 @@ public class FulfillmentAcceptanceLifecycle {
     private final SkuPurchaseLimitService purchaseLimitService;
     private final StandardPricingQuoteService pricingQuoteService;
     private final SupplierRoutingApplicationService routingService;
+    private final CurrentSupplyEligibilityReader supplyEligibilityReader;
+    private final com.aifuli.module.supplychain.tradecore.catalog.application.BuyerSelectionCatalogLifecycle catalogLifecycle;
     private final FundReservationService fundReservationService;
     private final RechargeFrequencyLifecycle rechargeFrequencyLifecycle;
     private final OutboxEventRepository outboxRepository;
@@ -321,7 +325,7 @@ public class FulfillmentAcceptanceLifecycle {
 
         LocalDateTime now = now();
         LockedListing locked = lockListingAndSku(command);
-        ListingSnapshot listing = requireSaleableListing(command, now, locked);
+        ListingSnapshot listing = requireSaleableListing(command, now, locked, directProjectOrder);
         // 报价消费按项目永久键锁定首次冻结报价，不携带用户、支付时间、报价 token 或调用方商品版本；
         // quoteId/listingId 等真实冻结值经 FrozenQuote 进入本事务持久化（回执级新列见 052 增量）。
         // 设计见 docs/superpowers/specs/2026-10-02-standard-internal-quote-freeze-design.md#3-受理内查取与唯一消费。
@@ -336,6 +340,17 @@ public class FulfillmentAcceptanceLifecycle {
             } catch (ProductNotSaleableException unavailable) {
                 throw new BusinessRejection(receiptId, listing.version().getId(),
                         AcceptanceReceiptStatus.REJECTED_RETRYABLE, AcceptanceRejectionCode.SKU_NOT_SALEABLE, unavailable);
+            }
+            // AUTO价格必须在quote→PLT→BPD当前锁前缀后核验，不能用请求准备替代最终准入。
+            // 见 docs/superpowers/specs/2026-10-09-catalog-business-minimum-design.md#91-2026-10-10-评审修复约束。
+            if (com.aifuli.module.supplychain.tradecore.catalog.domain.BuyerListingManagementMode.AUTO_SELECTION.name()
+                    .equals(listing.listing().getManagementMode())) {
+                try {
+                    catalogLifecycle.requireCurrentAutoAdmission(listing.listing(), listing.version());
+                } catch (ProductNotSaleableException changed) {
+                    throw new BusinessRejection(receiptId, listing.version().getId(),
+                            AcceptanceReceiptStatus.REJECTED_RETRYABLE, AcceptanceRejectionCode.LISTING_VERSION_EXPIRED, changed);
+                }
             }
         }
         // 「每人」限购以实际履约目标为输入（已验证的targetAccountType+规范化MOBILE手机号），
@@ -365,10 +380,23 @@ public class FulfillmentAcceptanceLifecycle {
         String orderRemark = purchaseLimitService.isPersonalLimitSkipped(
                 listing.sku(), command.targetAccountType(), command.fulfillmentAccountValue())
                 ? PURCHASE_LIMIT_SKIP_REMARK : null;
-        SupplierRoutingApplicationService.RoutingSnapshot routing = route(command, listing.sku(), now);
-        if (!routing.decision().selected()) {
-            throw rejection(receiptId, listing.version().getId(), AcceptanceReceiptStatus.REJECTED_RETRYABLE,
-                    AcceptanceRejectionCode.NO_ROUTABLE_SUPPLIER);
+        SupplierRoutingApplicationService.RoutingSnapshot routing;
+        if (directProjectOrder) {
+            CurrentSupplyEligibility eligibility = supplyEligibilityReader.evaluate(
+                    command.buyerId(), command.projectId(), listing.sku().getId());
+            if (!eligibility.confirmed() || eligibility.routingSnapshot() == null) {
+                AcceptanceRejectionCode code = AcceptanceRejectionCode.NO_ROUTABLE_SUPPLIER.name().equals(eligibility.reason())
+                        ? AcceptanceRejectionCode.NO_ROUTABLE_SUPPLIER
+                        : AcceptanceRejectionCode.INVENTORY_INSUFFICIENT;
+                throw rejection(receiptId, listing.version().getId(), AcceptanceReceiptStatus.REJECTED_RETRYABLE, code);
+            }
+            routing = eligibility.routingSnapshot();
+        } else {
+            routing = route(command, listing.sku(), now);
+            if (!routing.decision().selected()) {
+                throw rejection(receiptId, listing.version().getId(), AcceptanceReceiptStatus.REJECTED_RETRYABLE,
+                        AcceptanceRejectionCode.NO_ROUTABLE_SUPPLIER);
+            }
         }
         RoutingCandidate selected = routing.decision().selectedCandidate();
         long buyerAmount = Math.multiplyExact(frozenQuote.distributionUnitPriceCents(), command.quantity());
@@ -544,7 +572,7 @@ public class FulfillmentAcceptanceLifecycle {
     }
 
     private ListingSnapshot requireSaleableListing(PreparedAcceptance command, LocalDateTime now,
-                                                    LockedListing locked) {
+                                                    LockedListing locked, boolean directProjectOrder) {
         BuyerListingDO listing = locked.listing();
         // 业务版本由服务端取得：按 Listing 当前发布版本锁定校验，不再接受调用方提交的商品版本。
         // 设计见 docs/superpowers/specs/2026-10-02-standard-acceptance-project-key-design.md#2-首次身份与重放优先。
@@ -556,10 +584,12 @@ public class FulfillmentAcceptanceLifecycle {
                     AcceptanceReceiptStatus.REJECTED_RETRYABLE,
                     AcceptanceRejectionCode.LISTING_VERSION_EXPIRED);
         }
-        BuyerListingAvailabilityDO availability = listingAvailabilityMapper.selectByListingId(listing.getId());
-        if (availability == null || availability.getAvailability() != ListingAvailability.AVAILABLE.getCode()) {
-            throw rejection(command.receiptIdHint(), version.getId(), AcceptanceReceiptStatus.REJECTED_RETRYABLE,
-                    AcceptanceRejectionCode.INVENTORY_INSUFFICIENT);
+        if (!directProjectOrder) {
+            BuyerListingAvailabilityDO availability = listingAvailabilityMapper.selectByListingId(listing.getId());
+            if (availability == null || availability.getAvailability() != ListingAvailability.AVAILABLE.getCode()) {
+                throw rejection(command.receiptIdHint(), version.getId(), AcceptanceReceiptStatus.REJECTED_RETRYABLE,
+                        AcceptanceRejectionCode.INVENTORY_INSUFFICIENT);
+            }
         }
         PlatformSkuDO sku;
         try {
@@ -972,6 +1002,14 @@ public class FulfillmentAcceptanceLifecycle {
         public CatalogIdentity catalogIdentity() { return catalogIdentity; }
         public long receiptIdHint() { return receiptIdHint; }
         private void receiptIdHint(long value) { this.receiptIdHint = value; }
+
+        public PreparedAcceptance withCatalogIdentity(CatalogIdentity identity) {
+            return new PreparedAcceptance(projectId, projectCode, projectName, buyerId, buyerCode, buyerName,
+                    buyerOrderNo, fulfillmentAccountValue, targetAccountType, buyerSkuCode, quantity,
+                    targetSchemaCode, targetSchemaVersion, targetCiphertext, targetDigest, targetKeyVersion,
+                    targetValid, invariantFingerprint, requestFingerprint, buyerOrderDigest, previousReceiptVersion,
+                    traceId, identity);
+        }
     }
 
     public static final class BusinessRejection extends RuntimeException {
@@ -980,12 +1018,12 @@ public class FulfillmentAcceptanceLifecycle {
         private final AcceptanceReceiptStatus receiptStatus;
         private final AcceptanceRejectionCode rejectionCode;
 
-        BusinessRejection(long receiptId, Long listingVersionId,
+        public BusinessRejection(long receiptId, Long listingVersionId,
                           AcceptanceReceiptStatus receiptStatus, AcceptanceRejectionCode rejectionCode) {
             this(receiptId, listingVersionId, receiptStatus, rejectionCode, null);
         }
 
-        BusinessRejection(long receiptId, Long listingVersionId,
+        public BusinessRejection(long receiptId, Long listingVersionId,
                           AcceptanceReceiptStatus receiptStatus, AcceptanceRejectionCode rejectionCode, Throwable cause) {
             super(rejectionCode.name(), cause, false, false);
             this.receiptId = receiptId;

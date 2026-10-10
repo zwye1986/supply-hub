@@ -25,5 +25,13 @@ public class BuyerCatalogReadRow {
     private Long availabilityVersion;
     /** 分销商SKU定价状态；无身份行时为空，目录保持历史 UNKNOWN */
     private String pricingStatus;
+    /** 目录管理模式：MANUAL 或 AUTO_SELECTION */
+    private String managementMode;
+    /** 目录版本引用的分销商定价版本主键 */
+    private Long sourceBuyerPricingVersionId;
+    /** 当前分销商SKU定价当前版本主键 */
+    private Long currentPricingVersionId;
+    /** 供给可用性投影下次必须重建时间 */
+    private LocalDateTime validUntil;
     private LocalDateTime updatedAt;
 }

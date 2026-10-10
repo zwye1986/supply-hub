@@ -869,7 +869,8 @@ class FulfillmentAcceptanceIntegrationTest {
     }
 
     @Configuration(proxyBeanMethods = false)
-    @Import({SupplyChainDataSourceConfiguration.class, UlidGenerator.class, BusinessNoGenerator.class,
+    @Import({com.aifuli.module.supplychain.testsupport.AcceptanceCatalogTestConfiguration.class,
+            SupplyChainDataSourceConfiguration.class, UlidGenerator.class, BusinessNoGenerator.class,
             OutboxEventRepository.class, BuyerCommandService.class, BuyerResolver.class,
             BuyerProjectAccessResolver.class,
             ProductCatalogCommandService.class, ProductCenterTestConfiguration.class, BuyerListingPublicationService.class,

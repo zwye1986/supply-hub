@@ -93,6 +93,8 @@ class BuyerFulfillmentCommandFacadeTest {
     @Mock
     private BuyerProjectAccessResolver projectAccessResolver;
     @Mock
+    private com.aifuli.module.supplychain.border.fulfillment.application.FrozenAcceptanceIdentityReader frozenIdentityReader;
+    @Mock
     private FulfillmentTargetSchemaRegistry targetSchemaRegistry;
     @Mock
     private EnvelopeCryptoPort envelopeCrypto;
@@ -110,6 +112,7 @@ class BuyerFulfillmentCommandFacadeTest {
     @BeforeEach
     void setUp() {
         facade = new BuyerFulfillmentCommandFacade(databaseClock, buyerResolver, projectAccessResolver,
+                frozenIdentityReader,
                 targetSchemaRegistry, envelopeCrypto, hmacFingerprint, lifecycle, acceptanceCoordinator,
                 businessNoGenerator, TRANSITIONAL_MAPPER);
     }
