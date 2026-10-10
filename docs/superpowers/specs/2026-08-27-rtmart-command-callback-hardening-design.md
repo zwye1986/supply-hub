@@ -107,8 +107,8 @@ Controller → Facade → Lifecycle 幂等摘要 → `BuyerCashierPort` 的敏�
 
 同一实现变更内更新：
 
-- `docs/instore-channel-command-api.html`：移除“暂不返回”，统一三分钟窗口及 `E4004` 签名语义，只列六个确认响应码；接口③ `transaction_id` 与 Word 一致；接口⑤⑥ 成功 `data` 全字段输出；
-- `docs/大润发到店购-旅通调用商户接口说明.md`：接口③ 成功 `data` 全字段输出；`transaction_id` 可为空、支付成功必传；接口⑤⑥ `refund_time`/`refuse_reason` 键始终输出；
+- `docs/integration/rtmart/instore-channel-command-api.html`：移除“暂不返回”，统一三分钟窗口及 `E4004` 签名语义，只列六个确认响应码；接口③ `transaction_id` 与 Word 一致；接口⑤⑥ 成功 `data` 全字段输出；
+- `docs/integration/rtmart/大润发到店购-旅通调用商户接口说明.md`：接口③ 成功 `data` 全字段输出；`transaction_id` 可为空、支付成功必传；接口⑤⑥ `refund_time`/`refuse_reason` 键始终输出；
 - `docs/集成测试.md`：更新接口①～⑥错误码、固定类型 1、nonce 故障、退款幂等冲突和退款实际金额验证步骤；补接口③ 待支付/成功字段核对；补接口⑤申请退款成功 `data` 含 `refund_time` 与空 `refuse_reason`；
 - `docs/superpowers/specs/2026-08-23-instore-payment-refund-api-contract-design.md`：补充供应链中台直接承载旅通入站适配器的当前决策，并同步新增响应字段语义。
 

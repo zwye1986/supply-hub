@@ -2164,7 +2164,7 @@ git commit -m "test(supply-chain): verify instore refund serialization end to en
 ### Task 10: 文档与全量门禁
 
 - [x] 更新 `docs/集成测试.md`：INSTORE 退款串行联调步骤、前置夹具、验证点与排障（含金额不一致 MANUAL 路径、Timer 恢复路径）。
-- [x] 更新 `docs/供应链中台INSTORE到店购渠道接入实现总结.md`：退款串行切片完成记录（受理排队、收敛、账户返还、售后投影、Timer 恢复）。
+- [x] 更新 `docs/integration/rtmart/供应链中台INSTORE到店购渠道接入实现总结.md`：退款串行切片完成记录（受理排队、收敛、账户返还、售后投影、Timer 恢复）。
 - [x] 全量门禁：供应链模块全部单测 + `*IntegrationTest` + `*ContractTest` + `*ArchitectureTest`
   （注意清理 `target/` 下 macOS 同步冲突文件，见项目记忆）。
 - [x] 提交文档与门禁记录。

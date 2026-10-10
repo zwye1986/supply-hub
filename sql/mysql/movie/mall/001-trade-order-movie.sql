@@ -1,5 +1,5 @@
 -- 仅在商城数据库执行；不得由 movie-server 加载。
--- 设计：docs/电影子系统与中台履约详细设计.md 第 2.1 节、第 5.1 节。
+-- 设计：docs/business/电影子系统与中台履约详细设计.md 第 2.1 节、第 5.1 节。
 -- 使用对应 Liquibase 入口执行前向变更；已有表时应停止并核对结构，禁止覆盖或静默跳过。
 
 CREATE TABLE `trade_order_movie` (

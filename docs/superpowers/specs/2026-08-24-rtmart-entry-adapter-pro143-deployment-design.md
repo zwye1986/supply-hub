@@ -7,7 +7,7 @@
 > 前置设计：
 > - `docs/superpowers/specs/2026-08-22-instore-project-member-entry-design.md`
 > - `docs/superpowers/specs/2026-08-23-project-app-auth-design.md`
-> - `docs/大润发到店购渠道分销接口.docx`
+> - `docs/integration/rtmart/大润发到店购渠道分销接口.docx`
 
 ## 1. 背景与决策
 

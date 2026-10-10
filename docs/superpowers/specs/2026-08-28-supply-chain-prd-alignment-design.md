@@ -9,7 +9,7 @@
 - `docs/superpowers/specs/2026-08-04-supply-chain-core-design.md`
 - `docs/superpowers/specs/2026-08-07-supply-chain-phase1-detailed-design.md`
 - `docs/superpowers/specs/2026-08-21-supply-chain-buyer-project-design.md`
-- `docs/供应链中台多场景概要设计.md`
+- `docs/architecture/供应链中台多场景概要设计.md`
 
 不改变的内核：BuyerOrder / SupplierOrder 状态机、资金预留不变量、受理回执永久幂等、Outbox/Timer、项目应用身份、O2O/INSTORE 渠道金额规则、路由纯计算（无数据库/HTTP/时钟）。
 

@@ -32,7 +32,7 @@
 - 修改 `aifuli-module-supply-chain/aifuli-module-supply-chain-server/src/test/java/com/aifuli/module/supplychain/architecture/SupplyChainModuleArchitectureTest.java`：禁止 SaaS 会员 Adapter 调用 Long 字符串解析方法。
 - 修改现有旅通 Adapter、Signer 及其测试：统一 JSON 命名并保留“仅过滤 null”的行为。
 - 修改 Dockerfile、`script/deploy/supply-chain-test/.env.example`：落地已确认的 6 GiB 镜像默认值。
-- 修改 `docs/集成测试.md`、`docs/供应链中台INSTORE到店购渠道接入实现总结.md`：记录可联调现状、验证步骤和排障边界。
+- 修改 `docs/集成测试.md`、`docs/integration/rtmart/供应链中台INSTORE到店购渠道接入实现总结.md`：记录可联调现状、验证步骤和排障边界。
 
 现有未跟踪的两份 HTML 部署报告包含环境信息，不读取内容、不修改、不暂存；任何提交都使用精确路径暂存。当前工作区已有的旅通 JSON、Docker `--create-home`、member 依赖和初版 Adapter 改动属于本次待修正基线，不回退。
 
@@ -822,13 +822,13 @@ git commit -m "build(supply-chain): set production image defaults"
 
 **Files:**
 - Modify: `docs/集成测试.md`
-- Modify: `docs/供应链中台INSTORE到店购渠道接入实现总结.md`
+- Modify: `docs/integration/rtmart/供应链中台INSTORE到店购渠道接入实现总结.md`
 
 - [ ] **Step 1: 运行文档 RED 检查**
 
 ```bash
 rg -n "MemberProfileResolveApi|SAAS_MEMBER_RPC.*真实|buyerUserId.*member-server.*Long|镜像默认使用.*Xms6g" \
-  docs/集成测试.md docs/供应链中台INSTORE到店购渠道接入实现总结.md
+  docs/集成测试.md docs/integration/rtmart/供应链中台INSTORE到店购渠道接入实现总结.md
 ```
 
 Expected: 缺少至少一项新实现或验证说明，不能把旧文档视为已同步。
@@ -867,9 +867,9 @@ Expected: 缺少至少一项新实现或验证说明，不能把旧文档视为�
 
 ```bash
 rg -n "MemberProfileResolveApi|SAAS_MEMBER_RPC|member-server|Xms6g|application/json" \
-  docs/集成测试.md docs/供应链中台INSTORE到店购渠道接入实现总结.md
-git diff --check -- docs/集成测试.md docs/供应链中台INSTORE到店购渠道接入实现总结.md
-git add -- docs/集成测试.md docs/供应链中台INSTORE到店购渠道接入实现总结.md
+  docs/集成测试.md docs/integration/rtmart/供应链中台INSTORE到店购渠道接入实现总结.md
+git diff --check -- docs/集成测试.md docs/integration/rtmart/供应链中台INSTORE到店购渠道接入实现总结.md
+git add -- docs/集成测试.md docs/integration/rtmart/供应链中台INSTORE到店购渠道接入实现总结.md
 git commit -m "docs(supply-chain): document SaaS member resolution"
 ```
 
@@ -877,8 +877,8 @@ git commit -m "docs(supply-chain): document SaaS member resolution"
 
 **Files:**
 - Verify: all files listed above
-- Preserve: `docs/pro143部署验证报告.html`
-- Preserve: `docs/大润发部署检查清单.html`
+- Preserve: `docs/deploy/pro143部署验证报告.html`
+- Preserve: `docs/deploy/大润发部署检查清单.html`
 
 - [ ] **Step 1: 运行 member 定向门禁**
 

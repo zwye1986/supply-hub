@@ -10,7 +10,7 @@ import org.springframework.security.web.SecurityFilterChain;
  * 电影工程骨架的临时访问边界，仅允许读取无详情健康状态。
  *
  * <p>TODO：业务 RPC 开发时补齐系统间鉴权后，再开放明确的接口，不能直接放行 RPC 通配路径。
- * 设计：docs/电影子系统与中台履约详细设计.md#51-工程初始化落地约定2026-09-07</p>
+ * 设计：docs/business/电影子系统与中台履约详细设计.md#51-工程初始化落地约定2026-09-07</p>
  */
 @Configuration(proxyBeanMethods = false)
 public class MovieSecurityConfiguration {

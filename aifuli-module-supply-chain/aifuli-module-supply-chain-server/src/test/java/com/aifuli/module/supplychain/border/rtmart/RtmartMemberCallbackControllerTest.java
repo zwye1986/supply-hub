@@ -29,7 +29,7 @@ import static org.mockito.Mockito.when;
  * 旅通"获取会员信息"入站控制器测试：协议校验编排、SHA1withRSA 验签、CXB_ 前缀剥离与
  * 中台错误码 → 旅通错误码映射。密钥均在测试运行时生成，禁止使用真实渠道秘密。
  *
- * <p>覆盖范围见 {@code docs/instore-channel-member-resolve-api.html#5-错误码}。</p>
+ * <p>覆盖范围见 {@code docs/integration/rtmart/instore-channel-member-resolve-api.html#5-错误码}。</p>
  */
 @ExtendWith(MockitoExtension.class)
 class RtmartMemberCallbackControllerTest {

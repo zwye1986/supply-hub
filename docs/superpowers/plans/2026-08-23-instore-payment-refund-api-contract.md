@@ -2076,7 +2076,7 @@ EOF
 
 **Files:**
 - Modify: `aifuli-module-supply-chain/aifuli-module-supply-chain-server/src/test/java/com/aifuli/module/supplychain/architecture/SupplyChainModuleArchitectureTest.java`
-- Modify: `docs/供应链中台INSTORE到店购渠道接入实现总结.md`
+- Modify: `docs/integration/rtmart/供应链中台INSTORE到店购渠道接入实现总结.md`
 - Modify: `docs/集成测试.md`
 
 - [x] **Step 1: 新增架构规则**
@@ -2132,7 +2132,7 @@ Expected: BUILD SUCCESS，server（含 API 模块）全部单测通过，无回�
 
 - [x] **Step 4: 更新文档**
 
-`docs/供应链中台INSTORE到店购渠道接入实现总结.md` §3.2：
+`docs/integration/rtmart/供应链中台INSTORE到店购渠道接入实现总结.md` §3.2：
 - 标题改为「API 契约层（会员入口与支付/退款 Wire 已实现）」。
 - 「仍缺」两条改为已实现描述：`InstoreChannelCommandApi` 五方法 + `InstoreBuyerCashierCallbackApi` 两方法 + 12 个 DTO，由 `InstoreChannelCommandApiImpl`/`InstoreBuyerCashierCallbackApiImpl` 提供 RPC 实现；命令侧身份来自 `ChannelContext`、回调侧来自新增 `ProjectContext`；Wire 建单经 `InstoreChannelCommandFacade.createPaymentOrder` 编排（稳定绑定 + 当前 CASHIER 档案版本）。契约一致性由 `InstorePaymentCommandApiContractTest` 门禁。
 - 待完成列表保留：真实 SaaS 收银台 Adapter、项目 appId/appKey 统一认证、`aifuli-channel-rtmart-server`。
@@ -2145,7 +2145,7 @@ Expected: BUILD SUCCESS，server（含 API 模块）全部单测通过，无回�
 
 ```bash
 git add aifuli-module-supply-chain/aifuli-module-supply-chain-server/src/test/java/com/aifuli/module/supplychain/architecture \
-        docs/供应链中台INSTORE到店购渠道接入实现总结.md docs/集成测试.md
+        docs/integration/rtmart/供应链中台INSTORE到店购渠道接入实现总结.md docs/集成测试.md
 git commit -m "$(cat <<'EOF'
 test(supply-chain): gate instore rpc thin delegation and update docs
 

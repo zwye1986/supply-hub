@@ -1,93 +1,104 @@
-# supply-hub
+# supply-hub（企业级供应链中台）
 
+`supply-hub` 是一个企业级全场景供应链中台服务平台，旨在为多组织主体、多采购商、多采购项目提供高度标准化、可插拔、可扩展的供应链整合与履约能力。
 
+平台支持多种核心供给场景：
+- **标准虚拟卡券与数字资产**：卡号卡密、兑换码、直冲权益、账户绑定权益等标准供给。
+- **话费 / 流量直充**：高频直冲路由、黑名单与限频防护、多家上游供应商竞价与兜底路由。
+- **电影供给与在线选座**：独立排期同步、在线验座、实时报价、锁座与出票履约。
+- **大润发到店购（INSTORE）**：线下门店扫码购 POS 聚合、会员身份置换与双向交易退款闭环。
+- **淘宝闪购（Taobao Flash）**：渠道端轻量接入与选品投放。
 
-## Getting started
+---
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+## 一、微服务架构与独立进程矩阵
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+系统采用微服务分布式架构，支持以下 **8 个独立启动的微服务进程**：
 
-## Add your files
+| 微服务模块 | 启动类 | 默认端口 | 职责定位与核心特性 |
+| :--- | :--- | :--- | :--- |
+| **aifuli-gateway** | `GatewayServerApplication` | 48080 | 统一 API 网关，路由转发、全局鉴权、限流与 MDC 链路追踪上下文建立。 |
+| **aifuli-module-supply-chain-server** | `SupplyChainServerApplication` | 48083 | **供应链中台核心进程**。拥有独立数据源 `supplyChainDataSource`、独立库（`sc_*` 前缀）、独立事务管理器。严格禁止跨库访问其他业务表。 |
+| **aifuli-module-system-server** | `SystemServerApplication` | 48081 | 平台管理后台服务，提供 RBAC 用户、角色、系统动态菜单、数据字典与参数管理。 |
+| **aifuli-module-infra-server** | `InfraServerApplication` | 48082 | 基础设施服务，提供代码生成、定时任务、配置管理与系统监控。 |
+| **aifuli-module-member-server** | `MemberServerApplication` | 48084 | 会员服务，提供会员主数据管理与凭证置换。 |
+| **aifuli-channel-taobao-flash-server** | `TaobaoFlashChannelApplication` | 48085 | 淘宝闪购独立渠道服务，承接淘系 O2O 选品与交易。 |
+| **aifuli-module-movie-server** | `MovieServerApplication` | 48086 | **电影子系统独立微服务**。拥有独立 MySQL 与 MongoDB 存储，提供影院排期同步、验座报价与出票履约。 |
+| **aifuli-server** | `AifuliServerApplication` | 48080 | 本地开发聚合进程（仅聚合 system + infra，用于轻量级本地快速调试）。 |
 
-- [ ] [Create](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#create-a-file) or [upload](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#upload-a-file) files
-- [ ] [Add files using the command line](https://docs.gitlab.com/ee/gitlab-basics/add-file.html#add-a-file-using-the-command-line) or push an existing Git repository with the following command:
+> [!IMPORTANT]
+> **关于服务形态的重要提示**：
+> 1. 本仓库由历史工程拆分演进而来，已剔除旧商城（`product`、`promotion`、`trade`、`pay`、`erp`）模块，仓库中**不存在** `MallServerApplication`。不要沿用旧聚合单体思维排查问题。
+> 2. `supply-chain-server` 与 `movie-server` 各自拥有独立的数据库与事务上下文，不可合并容器。
+> 3. 供应链出站外部调用必须走显式注册的 Feign 客户端（如 `MemberProfileResolveApi`），严禁依赖隐式包扫描。
 
+---
+
+## 二、架构防腐与设计约束
+
+为保证中台核心领域模型纯粹与高内聚低耦合，项目受到以下门禁与规范的严格保护：
+
+1. **统一语言（Ubiquitous Language）**：
+   - 严格区分 **采购商（Buyer）**、**分销商（Distributor）**、**采购项目（Buyer Project）**、**供应商（Supplier）** 与 **平台商品（Platform Product）**。
+   - 详见 [CONTEXT.md](file:///Users/mac/.gemini/antigravity/worktrees/supply-hub/organize_supply_hub_docs/CONTEXT.md)。
+2. **ArchUnit 架构防腐门禁**：
+   - 由 `SupplyChainModuleArchitectureTest` 强制执行架构依赖规则：
+     - `Facade` 层不得直接依赖 `..dal..`。
+     - `routing.domain` 领域层不得依赖 Spring、MyBatis 等外部框架。
+     - `border` 边界层不得越权访问核心账户与账本 DAL。
+     - 管理端每个 HTTP 映射必须配置 `@PreAuthorize` 权限注解。
+3. **全系统日志与追踪规范**：
+   - 遵循单行结构化语义、规范化 MDC 追踪及 ES 格式，详见 [全系统日志规范](file:///Users/mac/.gemini/antigravity/worktrees/supply-hub/organize_supply_hub_docs/docs/superpowers/specs/2026-10-04-logging-standardization-spec.md)。
+4. **设计先行原则**：
+   - 方案与业务逻辑变更前，必须优先更新 `docs/superpowers/specs/` 详细设计并对齐测试门禁。
+
+---
+
+## 三、前端配套工程
+
+- 供应链管理端 Web 前端项目位于独立的配套仓库：
+  - 本地路径：`/Users/mac/Documents/codeSpace/supplychainhubweb`
+  - 前端基于 Vue3 / Vite / Element Plus 构建，包含分销商管理、采购项目接入、商品选品与发布批次、供应商管理、路由规则编排、订单与售后监控等管理页面。
+  - 在涉及页面展示排查、前端入参契约与动态菜单配置时，应与该前端仓库对齐。
+
+---
+
+## 四、文档导航与知识体系
+
+项目文档均经过系统化归类，详情请查阅 [docs/README.md](file:///Users/mac/.gemini/antigravity/worktrees/supply-hub/organize_supply_hub_docs/docs/README.md)：
+
+- 📘 **规范与规则**：
+  - [AGENTS.md](file:///Users/mac/.gemini/antigravity/worktrees/supply-hub/organize_supply_hub_docs/AGENTS.md) — 团队协作与 AI 辅助开发硬性规范
+  - [CONTEXT.md](file:///Users/mac/.gemini/antigravity/worktrees/supply-hub/organize_supply_hub_docs/CONTEXT.md) — 供应链中台统一语言与领域名词词典
+- 🧭 **开发与测试工作台**：
+  - [docs/集成测试.md](file:///Users/mac/.gemini/antigravity/worktrees/supply-hub/organize_supply_hub_docs/docs/集成测试.md) — 全流程联调步骤、前置数据与实机验证记录
+  - [docs/待办列表.md](file:///Users/mac/.gemini/antigravity/worktrees/supply-hub/organize_supply_hub_docs/docs/待办列表.md) — 任务跟进与未闭环项
+- 🏛️ **架构与业务**：
+  - [docs/architecture/](file:///Users/mac/.gemini/antigravity/worktrees/supply-hub/organize_supply_hub_docs/docs/architecture) — 中台架构总览、多场景方案、采购商项目化设计
+  - [docs/business/](file:///Users/mac/.gemini/antigravity/worktrees/supply-hub/organize_supply_hub_docs/docs/business) — 虚拟卡券商品模型、电影履约设计
+  - [docs/integration/](file:///Users/mac/.gemini/antigravity/worktrees/supply-hub/organize_supply_hub_docs/docs/integration) — 大润发到店购（`rtmart/`）、影乐星、收银台等对接契约
+  - [docs/deploy/](file:///Users/mac/.gemini/antigravity/worktrees/supply-hub/organize_supply_hub_docs/docs/deploy) — 部署清单与环境报告
+  - [docs/adr/](file:///Users/mac/.gemini/antigravity/worktrees/supply-hub/organize_supply_hub_docs/docs/adr) — 架构决策记录 (ADR)
+- 🚀 **工程设计与计划**：
+  - [docs/superpowers/specs/](file:///Users/mac/.gemini/antigravity/worktrees/supply-hub/organize_supply_hub_docs/docs/superpowers/specs) — 详细设计方案库
+  - [docs/superpowers/plans/](file:///Users/mac/.gemini/antigravity/worktrees/supply-hub/organize_supply_hub_docs/docs/superpowers/plans) — 迭代执行切片计划库
+
+---
+
+## 五、快速开始
+
+### 1. 环境依赖
+- JDK 17+
+- Maven 3.8+
+- MySQL 8.0+
+- Redis 6.0+
+- Nacos 2.2+
+
+### 2. 编译构建
+```bash
+# 全工程代码编译与依赖检查
+mvn clean compile -DskipTests
+
+# 运行供应链中台单测与架构测试门禁
+mvn test -pl aifuli-module-supply-chain/aifuli-module-supply-chain-server
 ```
-cd existing_repo
-git remote add origin http://47.117.129.235/jierongjinfu/supply-hub.git
-git branch -M main
-git push -uf origin main
-```
-
-## Integrate with your tools
-
-- [ ] [Set up project integrations](http://47.117.129.235/jierongjinfu/supply-hub/-/settings/integrations)
-
-## Collaborate with your team
-
-- [ ] [Invite team members and collaborators](https://docs.gitlab.com/ee/user/project/members/)
-- [ ] [Create a new merge request](https://docs.gitlab.com/ee/user/project/merge_requests/creating_merge_requests.html)
-- [ ] [Automatically close issues from merge requests](https://docs.gitlab.com/ee/user/project/issues/managing_issues.html#closing-issues-automatically)
-- [ ] [Enable merge request approvals](https://docs.gitlab.com/ee/user/project/merge_requests/approvals/)
-- [ ] [Set auto-merge](https://docs.gitlab.com/ee/user/project/merge_requests/merge_when_pipeline_succeeds.html)
-
-## Test and Deploy
-
-Use the built-in continuous integration in GitLab.
-
-- [ ] [Get started with GitLab CI/CD](https://docs.gitlab.com/ee/ci/quick_start/index.html)
-- [ ] [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/ee/user/application_security/sast/)
-- [ ] [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/ee/topics/autodevops/requirements.html)
-- [ ] [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/ee/user/clusters/agent/)
-- [ ] [Set up protected environments](https://docs.gitlab.com/ee/ci/environments/protected_environments.html)
-
-***
-
-# Editing this README
-
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
-
-## Suggestions for a good README
-
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
-
-## Name
-Choose a self-explaining name for your project.
-
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
-
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
-
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
-
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
-
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
-
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
-
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
-
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
-
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
-
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
-
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
-
-## License
-For open source projects, say how it is licensed.
-
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
