@@ -2,6 +2,7 @@
 
 > 日期：2026-10-09。状态：用户已同意最小方案；Task1持久字段/checkpoint基础已实现并通过本地门禁（证据见`docs/集成测试.md`§7.90.4），Task2～8及生产闭环尚未完成／上线。
 > 用户最新约束：**单实例优先，先不考虑 QNM**。不改造 QNM，不建设通用工作流、分布式 token 或调度平台。
+> 2026-10-10 Task8修订：用户明确使用华晟通官方测试环境，不新建端到端挡板；真实验收范围仍为type201、FIXED、quantity=1、单实例。
 > 基线：当前工作区 HEAD `0be390d`；通信 A1～A5 已存在。历史验收不是本轮重新运行结果。
 > 实施计划：`docs/superpowers/plans/2026-10-09-huasheng-type201-production-closure.md`。
 
@@ -313,14 +314,33 @@ HTTP200固定正文`success`表示处理事务已提交或已处理同内容，�
 
 ## 9. 验收、启用与停止条件
 
-本地自动化使用真实配置服务createDraft→validate→publish、真实MySQL/Liquibase、生产Bean注册/Timer/资产/资金服务和本地HTTPS挡板；不以fake metadata、mock executor、直补已发布行或QNM替代主链。测试本地TLS通过现有test-only装配，不增加生产trust-all。
+### 9.1 官方测试环境与证据边界
+
+Task8端到端验收直接连接华晟通官方测试环境，不新建HTTPS挡板或本地供应商去重账本。2026-10-10重新读取[统一下单详情](https://s.apifox.cn/57114177-5188-44e4-99f8-2a8581e4be12/486554275e0)，“测试环境”显示 `https://coupon-api.yunhuishou.vip`，路径为 `/api/order/placeOrder`。[概述](https://s.apifox.cn/57114177-5188-44e4-99f8-2a8581e4be12/9165626m0)表格中的HTTP地址与其HTTPS要求不一致；本期使用详情列出的HTTPS origin，并从实际部署出口核验DNS、证书及访问权限。继续执行SupplierEndpointPolicy的HTTPS和允许主机校验，不使用trust-all或绕过生产parser；分享访问凭据不写入仓库。
+
+平台侧复用pro143已有测试环境（`docs/集成测试.md` §8.13.5），只运行一个供应链后台实例；不新建MySQL/Redis或启动第二个共库worker。新业务配置经实际管理页面/Controller及真实配置服务createDraft→validate→publish创建，真实目录准入→项目订单→生产Bean/Timer→官方供应商→资产/资金→项目接口/管理端页面走完整链；不以fake metadata、mock executor、直补已发布行或QNM替代。
+
+既有通信、生命周期、并发与真实MySQL/Liquibase自动化继续作为回归门禁，不增加Task8专用供应商挡板。若需编写环境执行/核验脚本，必须显式启用并指定测试环境、订单标识及次数上限，不让默认CI调用外部供应商。环境脚本复用生产HTTP/管理接口，不另写可绕过正式协议和资金收敛的下单实现。
+
+### 9.2 实机步骤与完成标准
+
+1. 发布前核对后端/前端制品版本、正式Liquibase待执行增量、已有订单/Timer/Outbox和在途任务；停旧实例后启动新实例，确认无并行授权进程。不得清库、clearCheckSums、覆盖历史业务数据或为本片批量开启历史Outbox消费。
+2. 安全配置测试appId、appSecret、请求私钥、callbackPublicKey；经凭据集绑定连接器冻结版本，baseUrl使用上述测试origin，允许主机限定 `coupon-api.yunhuishou.vip`。检查公网回调、时钟、`huasheng-fulfillment.enabled`、项目OpenAPI及Timer实际生效值；仓库示例默认关闭不代表远端已经启用。按既有授权执行测试交易，具体SKU、价格和账户资料以测试环境事实核准。
+3. 用官方测试商品查询核实couponId、type201、库存及实际价格；通过真实管理入口创建可识别的新SKU、FIXED Offer、连接器/履约配置、供给、目录、项目路由及账户条件。成本和销售价分别配置，不以面值或未经确认单位的余额接口数值替代结算价。
+4. 从项目接口提交数量1订单，观察生产执行的PLACE→按事实CONFIRM→TAKE/原单QUERY及真实回调；正常链发生哪种分支就记录哪种。不能因完成一笔WAIT分支就宣称已验证PLACE直接SUCCESS。
+5. 核对同一订单的冻结配置、双单号、Operation/checkpoint、Reservation、资产和账户账本：成功资产恰一、本地资金commit恰一；失败仅在明确退款事实后release恰一；未知/人工保持预占且不换单。项目接口与实际管理端页面比对同张卡号/卡密/有效期原文，核跨项目拒绝、管理权限及敏感访问审计。原文仅在授权窗口比对，证据只记录一致性结果及脱敏标识。
+6. 核对官方查单/交付及可取得的供应商扣款或订单记录，结合本地账本证明业务幂等；不能以本地计数单独宣称供应商只扣一次。保存制品/配置版本、时间、traceId/供应商traceID、脱敏订单标识、实际分支、资金前后差额、资产计数和审计结果。
+
+### 9.3 异常覆盖与门禁
 
 必须覆盖：WAIT→CONFIRM→SUCCESS→TAKE；PLACE直接SUCCESS；FAILED／已退款CANCEL释放；退款未完成保留；各外呼响应前／成功后本地事务前宕机；下一步／Timer事务注入失败；QUERY7014／未知；QUERY恢复WAIT／SUCCESS（含Y）；重复／迟到／callback竞态／进程重启；冻结配置轮换；金额与资产冲突；完整三态有效期／首尾空白保真；其它六型拒绝；认领／恢复／取券到限人工。
+
+上述覆盖分别登记既有自动化与官方测试环境结果。先核实供应商测试环境可提供的场景/SKU/回调控制；不为凑分支伪造官方响应、改业务库状态或新增挡板。无法在官方环境触发的分支保留自动化证据并标注实机未验证、原因及后续条件；未验证项不能打勾或据此声明Task8全部完成。宕机、事务故障、凭据轮换和审计故障先在既有隔离自动化中验证；在共享pro143环境演练前核对历史任务影响，不通过破坏共享数据制造故障。
 
 断言不是只看HTTP：一笔Reservation、资产恰一、本地commit或release恰一、未知/人工不终结资金；PLACE业务身份不变且UNKNOWN不重发；CONFIRM／TAKE按原orderSn幂等；无第二BOrder/路由；跨项目资产不可读取。真实多线程MySQL验证围栏与唯一下一步，不能只用Mockito宣称锁正确。
 
 门禁：供应链全量*Test／*ArchitectureTest，适用*ContractTest／*IntegrationTest，Liquibase重放及受影响shared web／gateway保护回归；前端定向测试、修改文件lint和构建。没有QNM专项接线/回归，既有全量测试如实际失败按因果诊断，不借机扩工程。
 
-生产metadata／executor显式启用属性默认false，用同一装配条件避免仅metadata可售而executor缺失；完成全部本地门禁后才允许部署方启用。停止新单使用供给暂停／路由移除；**不要关闭处理在途的Bean／凭据**，回调与恢复仍须运行。首次部署和真实单次供应商调用另获授权，单实例／公网回调／密钥／allowlist／账本核对分开登记。
+生产metadata／executor显式启用属性默认false，用同一装配条件避免仅metadata可售而executor缺失；完成全部本地门禁后才允许部署方启用。停止新单使用供给暂停／路由移除；**不要关闭处理在途的Bean／凭据**，回调与恢复仍须运行。部署和供应商调用沿用会话已有授权，单实例／公网回调／密钥／allowlist／账本核对分开登记；本次验收方案修订本身不表示已经部署或交易成功。
 
 若发现必须更改A1～A5通信语义、需要多实例／账号同时授权、需要扩卡型／改金额容差／强制释放人工单，先停止并更新设计取得确认。本设计不把目录自动发布或旧B0专项重新列为前置；首单真实配置链尚缺其它业务片时如实记录，不SQL补业务状态冒称从零贯通。
