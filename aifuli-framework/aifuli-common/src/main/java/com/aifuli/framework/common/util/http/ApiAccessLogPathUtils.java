@@ -12,13 +12,20 @@ import cn.hutool.core.util.StrUtil;
  */
 public final class ApiAccessLogPathUtils {
 
-    /**
-     * 标准订单开放根路径。与供应链侧 {@code ProjectAuthOperations.STANDARD_ORDERS_PATH} 保持一致；
+    /** 标准订单开放根路径。与供应链侧 {@code ProjectAuthOperations.STANDARD_ORDERS_PATH} 保持一致；
      * common 模块不能依赖供应链模块，故此处以常量固化，修改时必须双侧同步。
      */
     public static final String STANDARD_ORDERS_PATH = "/open-api/supply-chain/project/v1/orders";
 
     private static final String STANDARD_ORDERS_PATH_SLASH = STANDARD_ORDERS_PATH + "/";
+
+    /**
+     * 华昇供应商回调根路径。
+     * 设计见 {@code docs/superpowers/specs/2026-10-09-huasheng-type201-production-closure-design.md#83-安全与日志影响}。
+     */
+    public static final String HUASHENG_CALLBACK_PATH = "/callbacks/suppliers/huasheng";
+
+    private static final String HUASHENG_CALLBACK_PATH_SLASH = HUASHENG_CALLBACK_PATH + "/";
 
     /** 限频管理路径前缀（无 admin-api 前缀）；供敏感平台前缀数组与限频判断方法共用，避免字面量漂移。 */
     private static final String RECHARGE_FREQUENCY_PATH = "/supply-chain/recharge-frequency/";
@@ -107,7 +114,8 @@ public final class ApiAccessLogPathUtils {
         }
         String path = stripLeadingContextPath(requestUri, contextPath);
         // 标准订单路径精确保留根与子路径，排除 orders-other 等相似前缀
-        if (matchesStandardOrdersPath(path) || isSupplierCredentialWritePath(requestUri, contextPath)) {
+        if (matchesStandardOrdersPath(path) || isSupplierCredentialWritePath(requestUri, contextPath)
+                || matchesHuashengCallbackPath(path)) {
             return true;
         }
         for (String prefix : SENSITIVE_PLATFORM_PATH_PREFIXES) {
@@ -140,7 +148,36 @@ public final class ApiAccessLogPathUtils {
         if (requestUri == null) { return false; }
         String path = stripLeadingContextPath(requestUri, contextPath);
         return matchesStandardOrdersPath(path) || matchesRechargeFrequencyAdminPath(path)
-                || isSupplierCredentialWritePath(requestUri, contextPath);
+                || isSupplierCredentialWritePath(requestUri, contextPath)
+                || matchesHuashengCallbackPath(path);
+    }
+
+    /**
+     * 判断是否为华昇供应商回调路径（精确根路径或版本子路径）。
+     * 设计见 {@code docs/superpowers/specs/2026-10-09-huasheng-type201-production-closure-design.md#83-安全与日志影响}。
+     */
+    public static boolean isHuashengCallbackPath(String requestUri, String contextPath) {
+        if (requestUri == null) { return false; }
+        return matchesHuashengCallbackPath(stripLeadingContextPath(requestUri, contextPath));
+    }
+
+    /**
+     * 华昇回调安全URL：避免在未知子路径中泄漏夹带的参数或账号。
+     */
+    public static String safeHuashengCallbackUrl(String requestUri, String contextPath) {
+        if (requestUri == null) { return HUASHENG_CALLBACK_PATH; }
+        String path = stripLeadingContextPath(requestUri, contextPath);
+        if (HUASHENG_CALLBACK_PATH.equals(path)) {
+            return path;
+        }
+        if (path.startsWith(HUASHENG_CALLBACK_PATH_SLASH)) {
+            String subPath = path.substring(HUASHENG_CALLBACK_PATH_SLASH.length());
+            if (!subPath.contains("/") && !subPath.isBlank()) {
+                return path;
+            }
+            return HUASHENG_CALLBACK_PATH + "/[version]";
+        }
+        return HUASHENG_CALLBACK_PATH;
     }
 
     /** 标准订单开放路径：包含原始签名正文、手机号与卡券资产，严禁日志记录正文与响应。
@@ -169,6 +206,11 @@ public final class ApiAccessLogPathUtils {
     private static boolean matchesStandardOrdersPath(String strippedPath) {
         return STANDARD_ORDERS_PATH.equals(strippedPath)
                 || strippedPath.startsWith(STANDARD_ORDERS_PATH_SLASH);
+    }
+
+    private static boolean matchesHuashengCallbackPath(String strippedPath) {
+        return HUASHENG_CALLBACK_PATH.equals(strippedPath)
+                || strippedPath.startsWith(HUASHENG_CALLBACK_PATH_SLASH);
     }
 
     /** 已剥离 context path 后的限频管理路径匹配：复用常量，避免字面量漂移。 */

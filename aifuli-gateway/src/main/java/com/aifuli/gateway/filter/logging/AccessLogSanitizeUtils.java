@@ -41,12 +41,20 @@ public final class AccessLogSanitizeUtils {
     }
 
     /**
-     * 凭据写入与标准订单使用同一不消费正文分支，日志不读取查询参数、请求/响应流。
-     * 设计见 docs/superpowers/specs/2026-10-03-supplier-offer-publication-admin-design.md#151-凭据写入日志保护。
+     * 判断是否为华昇供应商回调路径。
+     */
+    public static boolean isHuashengCallbackPath(String requestUrl) {
+        return ApiAccessLogPathUtils.isHuashengCallbackPath(requestUrl, "");
+    }
+
+    /**
+     * 凭据写入、标准订单与华昇回调使用同一不消费正文分支，日志不读取查询参数、请求/响应流。
+     * 设计见 docs/superpowers/specs/2026-10-09-huasheng-type201-production-closure-design.md#83-安全与日志影响。
      */
     public static boolean isProtectedBodyPath(String requestUrl) {
         return isStandardOrdersPath(requestUrl)
-                || ApiAccessLogPathUtils.isSupplierCredentialWritePath(requestUrl, "");
+                || ApiAccessLogPathUtils.isSupplierCredentialWritePath(requestUrl, "")
+                || isHuashengCallbackPath(requestUrl);
     }
 
     /**
@@ -54,6 +62,13 @@ public final class AccessLogSanitizeUtils {
      */
     public static String safeStandardOrderUrl(String requestUrl) {
         return ApiAccessLogPathUtils.safeStandardOrderUrl(requestUrl, "");
+    }
+
+    /**
+     * 安全的华昇回调请求路径，避免在未知路径中泄漏可能夹带的敏感参数。
+     */
+    public static String safeHuashengCallbackUrl(String requestUrl) {
+        return ApiAccessLogPathUtils.safeHuashengCallbackUrl(requestUrl, "");
     }
 
     /**

@@ -47,7 +47,8 @@ public class GlobalExceptionHandler implements ErrorWebExceptionHandler {
 
         String rawPath = exchange.getRequest().getURI().getRawPath();
         boolean standardOrder = AccessLogSanitizeUtils.isStandardOrdersPath(rawPath);
-        if (standardOrder) {
+        boolean huashengCallback = AccessLogSanitizeUtils.isHuashengCallbackPath(rawPath);
+        if (standardOrder || huashengCallback) {
             response.getHeaders().set("Cache-Control", "no-store");
         }
 
@@ -70,6 +71,12 @@ public class GlobalExceptionHandler implements ErrorWebExceptionHandler {
                                                            ResponseStatusException ex) {
         ServerHttpRequest request = exchange.getRequest();
         String rawPath = request.getURI().getRawPath();
+        if (AccessLogSanitizeUtils.isHuashengCallbackPath(rawPath)) {
+            log.error("[responseStatusExceptionHandler][safeUri({}/{}) status({}) 发生异常]",
+                    AccessLogSanitizeUtils.safeHuashengCallbackUrl(rawPath),
+                    request.getMethod(), ex.getStatusCode());
+            return CommonResult.error(ex.getStatusCode().value(), "请求失败");
+        }
         if (AccessLogSanitizeUtils.isStandardOrdersPath(rawPath)) {
             log.error("[responseStatusExceptionHandler][safeUri({}/{}) status({}) 发生异常]",
                     AccessLogSanitizeUtils.safeStandardOrderUrl(rawPath),
@@ -88,6 +95,12 @@ public class GlobalExceptionHandler implements ErrorWebExceptionHandler {
                                                    Throwable ex) {
         ServerHttpRequest request = exchange.getRequest();
         String rawPath = request.getURI().getRawPath();
+        if (AccessLogSanitizeUtils.isHuashengCallbackPath(rawPath)) {
+            log.error("[defaultExceptionHandler][safeUri({}/{}) 发生异常: {}]",
+                    AccessLogSanitizeUtils.safeHuashengCallbackUrl(rawPath),
+                    request.getMethod(), ex.getClass().getSimpleName());
+            return CommonResult.error(INTERNAL_SERVER_ERROR.getCode(), INTERNAL_SERVER_ERROR.getMsg());
+        }
         if (AccessLogSanitizeUtils.isStandardOrdersPath(rawPath)) {
             log.error("[defaultExceptionHandler][safeUri({}/{}) 发生异常: {}]",
                     AccessLogSanitizeUtils.safeStandardOrderUrl(rawPath),

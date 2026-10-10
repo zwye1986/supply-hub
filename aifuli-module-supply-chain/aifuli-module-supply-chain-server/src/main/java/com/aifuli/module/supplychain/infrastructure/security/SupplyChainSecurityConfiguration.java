@@ -34,6 +34,9 @@ public class SupplyChainSecurityConfiguration {
                             registry) {
                 // 只取消电影配置RPC的登录前置要求，方法上的独立服务令牌鉴权仍失败关闭。
                 registry.requestMatchers(HttpMethod.GET, MovieSupplierConfigApi.PATH).permitAll();
+                // 华昇供应商回调端点免除用户登录token前置要求，但必须通过华昇冻结版本认证，认证失败关闭。
+                // 详见 docs/superpowers/specs/2026-10-09-huasheng-type201-production-closure-design.md#81-冻结身份认证
+                registry.requestMatchers(HttpMethod.POST, "/callbacks/suppliers/huasheng/**").permitAll();
                 registry.requestMatchers("/v3/api-docs/**").permitAll()
                         .requestMatchers("/webjars/**").permitAll()
                         .requestMatchers("/swagger-ui").permitAll()

@@ -94,6 +94,136 @@ class FulfillmentOperationTicketFactoryTest {
         var legacy=OperationTicket.builder().operationNo("OP").billno("BO").adapterType("QNM").timeoutSeconds(7).build();
         assertThat(legacy.connectTimeoutMs()).isEqualTo(7000);assertThat(legacy.readTimeoutMs()).isEqualTo(7000);
     }
+
+    @Test
+    void createForHuashengSuccessfullyBuildsTicketWithPlaintextCheckpointAndPermitGeneration() {
+        var crypto = new com.aifuli.module.supplychain.infrastructure.security.AesGcmEnvelopeCrypto("test-key",
+                Base64.getEncoder().encodeToString(new byte[32]), Base64.getEncoder().encodeToString(new byte[32]));
+        var codec = new com.aifuli.module.supplychain.border.fulfillment.application.huashengflow.HuashengCheckpointCodec(crypto);
+        var factory = new FulfillmentOperationTicketFactory(mock(CredentialSlotMapper.class), List.of(),
+                new FulfillmentCallbackProperties(), List.of(), codec);
+
+        byte[] configDigest = new byte[32];
+        Arrays.fill(configDigest, (byte) 1);
+        var binding = new com.aifuli.module.supplychain.border.fulfillment.application.huashengflow.HuashengCheckpoint.Binding(
+                100L, "BO_100", "OP_100", 1, AdapterStepCode.PLACE_ORDER, 71L, 81L, configDigest);
+        var placeParams = new com.aifuli.module.supplychain.border.fulfillment.application.huashengflow.HuashengCheckpoint.PlaceParameters(
+                "BILL_100", 9999L, 1, 300, "13800138000", "https://api.aifuli.cn/callbacks/suppliers/huasheng/71");
+        var checkpoint = new com.aifuli.module.supplychain.border.fulfillment.application.huashengflow.HuashengCheckpoint(
+                binding, placeParams, null, null,
+                new com.aifuli.module.supplychain.border.fulfillment.application.huashengflow.HuashengCheckpoint.Progress(
+                        0, 0, 0, null, null, "TRACE_ORIGIN"), null);
+        var stored = codec.encrypt(checkpoint);
+
+        var operation = FulfillmentOperationDO.builder()
+                .operationNo("OP_100")
+                .bOrderId(100L)
+                .sequenceNo(1)
+                .adapterStepCode("PLACE_ORDER")
+                .operationKind("FULFILL")
+                .idempotencyKey("OP_KEY_1")
+                .configDigest(configDigest)
+                .executionGeneration(5L)
+                .checkpointSchemaVersion(stored.schemaVersion())
+                .checkpointKeyVersion(stored.keyVersion())
+                .checkpointCiphertext(stored.ciphertext())
+                .build();
+
+        var bOrder = BOrderDO.builder()
+                .id(100L)
+                .bOrderNo("BO_100")
+                .billno("BILL_100")
+                .connectorVersionId(71L)
+                .offerVersionId(81L)
+                .requestedQuantity(1L)
+                .build();
+
+        var request = FulfillmentRequestDO.builder().targetSchemaCode("CARD_CODE_SECRET").build();
+        var supplier = SupplierDO.builder().supplierCode("SUP_HS").build();
+        var offerVersion = SupplierOfferVersionDO.builder().externalSkuCode("9999").build();
+
+        var frozenItem = new FrozenCredentialItemIdentity(1L, "appSecret", "DB_AES_GCM", 1);
+        var config = new PublishedConnectorConfiguration("CON_HS", 71L, 1,
+                com.aifuli.module.supplychain.supplieradapter.metadata.HuashengOrderV1Metadata.TYPE,
+                "https://huasheng.api", "APP_ID_16_BYTES_", null, "/callbacks/suppliers/huasheng",
+                Set.of(), 42L, com.aifuli.module.supplychain.supplieradapter.metadata.CredentialBindingMode.CREDENTIAL_SET,
+                3000, 5000, Map.of("expireTime", "300"), List.of(frozenItem));
+
+        var permit = new com.aifuli.module.supplychain.border.fulfillment.application.huashengflow.HuashengExecutionPermit(
+                "OP_100", 100L, 5L, AdapterStepCode.PLACE_ORDER,
+                com.aifuli.module.supplychain.border.fulfillment.application.huashengflow.HuashengFlowTrigger.EXECUTE,
+                java.time.LocalDateTime.now().plusMinutes(5));
+
+        var credentialMaterial = new OperationTicket.CredentialMaterial("secret-123", "pem-456");
+
+        var ticket = factory.createForHuasheng(operation, bOrder, request, supplier, offerVersion,
+                config, permit, credentialMaterial, "TRACE_CURR");
+
+        assertThat(ticket.operationNo()).isEqualTo("OP_100");
+        assertThat(ticket.bOrderNo()).isEqualTo("BO_100");
+        assertThat(ticket.billno()).isEqualTo("BILL_100");
+        assertThat(ticket.adapterType()).isEqualTo("HUA_SHENG_ORDER_V1");
+        assertThat(ticket.adapterStepCode()).isEqualTo(AdapterStepCode.PLACE_ORDER);
+        assertThat(ticket.operationKind()).isEqualTo(FulfillmentOperationKind.FULFILL);
+        assertThat(ticket.callbackUrl()).isEqualTo("https://api.aifuli.cn/callbacks/suppliers/huasheng/71");
+        assertThat(ticket.executionGeneration()).isEqualTo(5L);
+        assertThat(ticket.credentialSetId()).isEqualTo(42L);
+        assertThat(ticket.frozenCredentialItems()).containsExactly(frozenItem);
+        assertThat(ticket.credentialMaterial()).isEqualTo(credentialMaterial);
+        assertThat(ticket.secretKey()).isNull();
+
+        // Checkpoint payload is plaintext bytes, decodable by codec.decodePlaintext
+        assertThat(ticket.checkpointPayload()).isNotNull();
+        var decodedFromTicket = codec.decodePlaintext(ticket.checkpointPayload());
+        assertThat(decodedFromTicket.binding().bOrderNo()).isEqualTo("BO_100");
+        assertThat(decodedFromTicket.placeParameters().outOrderSn()).isEqualTo("BILL_100");
+    }
+
+    @Test
+    void createForHuashengFailsWhenOutOrderSnDoesNotMatchBOrderBillno() {
+        var crypto = new com.aifuli.module.supplychain.infrastructure.security.AesGcmEnvelopeCrypto("test-key",
+                Base64.getEncoder().encodeToString(new byte[32]), Base64.getEncoder().encodeToString(new byte[32]));
+        var codec = new com.aifuli.module.supplychain.border.fulfillment.application.huashengflow.HuashengCheckpointCodec(crypto);
+        var factory = new FulfillmentOperationTicketFactory(mock(CredentialSlotMapper.class), List.of(),
+                new FulfillmentCallbackProperties(), List.of(), codec);
+
+        byte[] configDigest = new byte[32];
+        var binding = new com.aifuli.module.supplychain.border.fulfillment.application.huashengflow.HuashengCheckpoint.Binding(
+                100L, "BO_100", "OP_100", 1, AdapterStepCode.PLACE_ORDER, 71L, 81L, configDigest);
+        var placeParams = new com.aifuli.module.supplychain.border.fulfillment.application.huashengflow.HuashengCheckpoint.PlaceParameters(
+                "BILL_ORIGINAL", 9999L, 1, 300, null, "https://api.aifuli.cn/callbacks/suppliers/huasheng/71");
+        var checkpoint = new com.aifuli.module.supplychain.border.fulfillment.application.huashengflow.HuashengCheckpoint(
+                binding, placeParams, null, null,
+                new com.aifuli.module.supplychain.border.fulfillment.application.huashengflow.HuashengCheckpoint.Progress(
+                        0, 0, 0, null, null, null), null);
+        var stored = codec.encrypt(checkpoint);
+
+        var operation = FulfillmentOperationDO.builder()
+                .operationNo("OP_100").bOrderId(100L).sequenceNo(1).adapterStepCode("PLACE_ORDER")
+                .configDigest(configDigest).executionGeneration(1L)
+                .checkpointSchemaVersion(stored.schemaVersion()).checkpointKeyVersion(stored.keyVersion())
+                .checkpointCiphertext(stored.ciphertext()).build();
+
+        var bOrder = BOrderDO.builder().id(100L).bOrderNo("BO_100").billno("BILL_TAMPERED")
+                .connectorVersionId(71L).offerVersionId(81L).build();
+
+        var config = new PublishedConnectorConfiguration("CON_HS", 71L, 1,
+                com.aifuli.module.supplychain.supplieradapter.metadata.HuashengOrderV1Metadata.TYPE,
+                "https://huasheng.api", "APP_ID_16_BYTES_", null, "/callbacks/suppliers/huasheng",
+                Set.of(), 42L, com.aifuli.module.supplychain.supplieradapter.metadata.CredentialBindingMode.CREDENTIAL_SET,
+                3000, 5000, Map.of(), List.of());
+
+        var permit = new com.aifuli.module.supplychain.border.fulfillment.application.huashengflow.HuashengExecutionPermit(
+                "OP_100", 100L, 1L, AdapterStepCode.PLACE_ORDER,
+                com.aifuli.module.supplychain.border.fulfillment.application.huashengflow.HuashengFlowTrigger.EXECUTE,
+                java.time.LocalDateTime.now().plusMinutes(5));
+
+        assertThatThrownBy(() -> factory.createForHuasheng(operation, bOrder, FulfillmentRequestDO.builder().build(),
+                SupplierDO.builder().supplierCode("SUP").build(), SupplierOfferVersionDO.builder().build(),
+                config, permit, new OperationTicket.CredentialMaterial("sec", "pem"), "TRACE"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("billno");
+    }
     @Test void missingOutboundMaterialFailsAndStillWipesResolvedArrays() {
         var resolver=mock(com.aifuli.module.supplychain.infrastructure.security.CredentialSetResolver.class);char[] app="sensitive-app".toCharArray();
         when(resolver.resolveSet(42L)).thenReturn(Map.of("appSecret",app));

@@ -34,6 +34,7 @@ import static com.aifuli.module.supplychain.border.fulfillment.application.huash
  * 临时明文 finally 擦除；错误只含固定安全说明，不传播 Jackson 的明文诊断。
  * 设计：docs/superpowers/specs/2026-10-09-huasheng-type201-production-closure-design.md#42-检查点-v1。
  */
+@org.springframework.stereotype.Component
 public final class HuashengCheckpointCodec {
     private static final HexFormat HEX = HexFormat.of();
     private static final DateTimeFormatter TIME = DateTimeFormatter.ISO_LOCAL_DATE_TIME;
@@ -88,6 +89,22 @@ public final class HuashengCheckpointCodec {
             require(ciphertext.length > 0 && ciphertext.length <= HuashengFlowCodes.CHECKPOINT_MAX_BYTES + 1024);
             plaintext = crypto.decrypt(ciphertext, stored.keyVersion(), aad(expectedBinding));
             require(plaintext != null && plaintext.length > 0 && plaintext.length <= HuashengFlowCodes.CHECKPOINT_MAX_BYTES);
+            HuashengCheckpoint checkpoint = decodePlaintext(plaintext);
+            require(sameBinding(checkpoint.binding(), expectedBinding));
+            return checkpoint;
+        } catch (RuntimeException rejected) {
+            throw invalid();
+        } finally {
+            if (plaintext != null) Arrays.fill(plaintext, (byte) 0);
+        }
+    }
+
+    /**
+     * 解码已解密的明文检查点 JSON 字节。
+     */
+    public HuashengCheckpoint decodePlaintext(byte[] plaintext) {
+        try {
+            require(plaintext != null && plaintext.length > 0 && plaintext.length <= HuashengFlowCodes.CHECKPOINT_MAX_BYTES);
             ObjectNode root;
             try (var parser = json.getFactory().createParser(plaintext)) {
                 root = object(json.readTree(parser), ROOT_FIELDS);
@@ -95,7 +112,6 @@ public final class HuashengCheckpointCodec {
             }
             require(integer(root, "schemaVersion") == HuashengFlowCodes.CHECKPOINT_SCHEMA_VERSION);
             var binding = readBinding(root.get("binding"));
-            require(sameBinding(binding, expectedBinding));
             var place = readPlace(root.get("placeParameters"));
             require(placeDigest(place).equals(text(root, "placeParametersDigest")));
             String orderSn = optionalText(root, "orderSn");
@@ -108,10 +124,20 @@ public final class HuashengCheckpointCodec {
             } finally {
                 if (pending != null) Arrays.fill(pending, (byte) 0);
             }
-        } catch (IOException | RuntimeException rejected) {
+        } catch (IOException | RuntimeException e) {
             throw invalid();
-        } finally {
-            if (plaintext != null) Arrays.fill(plaintext, (byte) 0);
+        }
+    }
+
+    /**
+     * 将检查点编码为明文 JSON 字节（由 TicketFactory 传递给执行器）。
+     */
+    public byte[] encodePlaintext(HuashengCheckpoint checkpoint) {
+        try {
+            require(checkpoint != null);
+            return encode(checkpoint);
+        } catch (IOException | RuntimeException e) {
+            throw invalid();
         }
     }
 

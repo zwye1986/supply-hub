@@ -16,6 +16,7 @@ public class InboxEventDO {
     @TableId(type = IdType.AUTO)
     private Long id;
     private String consumerName;
+    /** 被消费的Outbox事件或回调稳定业务编号，华昇使用SHA-256十六进制。 */
     private String eventId;
     /** 收到的事件载荷SHA-256族摘要，华昇使用HMAC-SHA256。 */
     private byte[] payloadDigest;

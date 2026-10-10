@@ -789,129 +789,139 @@ public final class HuashengResponseParser {
 
         // 4. 解析逐张卡片
         java.util.List<HuashengProtocolCard> cards = new java.util.ArrayList<>();
-        java.util.Set<String> knownCardKeys = java.util.Set.of("type", "id", "code", "pass", "crc", "url", "urlPass", "validTime");
-
         for (JsonNode cardNode : listNode) {
-            if (cardNode == null || !cardNode.isObject()) {
-                return failCard("卡片项必须为有效对象");
+            var cardAttempt = parseCard(cardNode);
+            if (cardAttempt instanceof HuashengInternalAttempt.Failed<HuashengProtocolCard> failed) {
+                return HuashengInternalAttempt.failed(failed.failure());
             }
-
-            // 检查未知非空载荷属性
-            var fieldNames = cardNode.fieldNames();
-            while (fieldNames.hasNext()) {
-                String fn = fieldNames.next();
-                if (!knownCardKeys.contains(fn)) {
-                    JsonNode extraVal = cardNode.get(fn);
-                    if (extraVal != null && !extraVal.isNull()) {
-                        if (!extraVal.isTextual() || !extraVal.asText().isBlank()) {
-                            return HuashengInternalAttempt.failed(HuashengProtectedFailure.capture(
-                                    HuashengFailureKind.CARD_PAYLOAD_INVALID,
-                                    new IllegalArgumentException("卡片包含未声明的非空载荷属性: " + fn),
-                                    Optional.empty()));
-                        }
-                    }
-                }
-            }
-
-            // 校验 type
-            JsonNode typeNode = cardNode.get("type");
-            if (typeNode == null || !(typeNode instanceof IntNode || typeNode instanceof LongNode)) {
-                return failCard("卡片缺少整数token type");
-            }
-            if (!typeNode.canConvertToInt()) {
-                return failCard("卡片type超出int范围");
-            }
-            Optional<HuashengCardType> optType = HuashengCardType.fromRawValue(typeNode.intValue());
-            if (optType.isEmpty()) {
-                return failCard("卡片type不支持: " + typeNode.intValue());
-            }
-            HuashengCardType cardType = optType.get();
-
-            // 解析 id
-            HuashengField<Long> idField;
-            if (!cardNode.has("id")) {
-                idField = HuashengField.absent();
-            } else if (cardNode.get("id").isNull()) {
-                idField = HuashengField.ofNull();
-            } else {
-                JsonNode idNode = cardNode.get("id");
-                if (!(idNode instanceof IntNode || idNode instanceof LongNode) || !idNode.canConvertToLong() || idNode.longValue() < 0) {
-                    return failCard("卡片id非法");
-                }
-                idField = HuashengField.ofValue(idNode.longValue());
-            }
-
-            // 解析字符串三态字段
-            HuashengField<String> codeField = parseStringField(cardNode, "code");
-            if (codeField == null) return failCard("code字段类型非法");
-            HuashengField<String> passField = parseStringField(cardNode, "pass");
-            if (passField == null) return failCard("pass字段类型非法");
-            HuashengField<String> crcField = parseStringField(cardNode, "crc");
-            if (crcField == null) return failCard("crc字段类型非法");
-            HuashengField<String> urlField = parseStringField(cardNode, "url");
-            if (urlField == null) return failCard("url字段类型非法");
-            HuashengField<String> urlPassField = parseStringField(cardNode, "urlPass");
-            if (urlPassField == null) return failCard("urlPass字段类型非法");
-            HuashengField<String> validTimeField = parseStringField(cardNode, "validTime");
-            if (validTimeField == null) return failCard("validTime字段类型非法");
-
-            // 按卡型校验 required 字段并构建强类型载荷
-            HuashengCardPayload payload;
-            switch (cardType) {
-                case T201 -> {
-                    if (!isValueNonBlank(codeField) || !isValueNonBlank(passField)) {
-                        return failCard("T201缺少code或pass必填字段");
-                    }
-                    payload = HuashengProtocolCard.createPayload201(((HuashengField.Value<String>) codeField).value(), ((HuashengField.Value<String>) passField).value());
-                }
-                case T202 -> {
-                    boolean hasCode = isValueNonBlank(codeField);
-                    boolean hasPass = isValueNonBlank(passField);
-                    if (!hasCode && !hasPass) {
-                        return failCard("T202至少需要一个有效的code或pass");
-                    }
-                    payload = HuashengProtocolCard.createPayload202(codeField, passField);
-                }
-                case T203 -> {
-                    if (!isValueNonBlank(codeField) || !isValueNonBlank(passField) || !isValueNonBlank(crcField)) {
-                        return failCard("T203缺少code、pass或crc必填字段");
-                    }
-                    payload = HuashengProtocolCard.createPayload203(((HuashengField.Value<String>) codeField).value(), ((HuashengField.Value<String>) passField).value(), ((HuashengField.Value<String>) crcField).value());
-                }
-                case T301 -> {
-                    if (!isValueNonBlank(urlField)) {
-                        return failCard("T301缺少url必填字段");
-                    }
-                    payload = HuashengProtocolCard.createPayload301(((HuashengField.Value<String>) urlField).value());
-                }
-                case T302 -> {
-                    if (!isValueNonBlank(urlField) || !isValueNonBlank(urlPassField)) {
-                        return failCard("T302缺少url或urlPass必填字段");
-                    }
-                    payload = HuashengProtocolCard.createPayload302(((HuashengField.Value<String>) urlField).value(), ((HuashengField.Value<String>) urlPassField).value());
-                }
-                case T303 -> {
-                    if (!isValueNonBlank(codeField) || !isValueNonBlank(urlField) || !isValueNonBlank(urlPassField)) {
-                        return failCard("T303缺少code、url或urlPass必填字段");
-                    }
-                    payload = HuashengProtocolCard.createPayload303(((HuashengField.Value<String>) codeField).value(), ((HuashengField.Value<String>) urlField).value(), ((HuashengField.Value<String>) urlPassField).value());
-                }
-                case T304 -> {
-                    if (!isValueNonBlank(codeField) || !isValueNonBlank(urlField)) {
-                        return failCard("T304缺少code或url必填字段");
-                    }
-                    payload = HuashengProtocolCard.createPayload304(((HuashengField.Value<String>) codeField).value(), ((HuashengField.Value<String>) urlField).value());
-                }
-                default -> {
-                    return failCard("不支持的卡型: " + cardType);
-                }
-            }
-
-            cards.add(new HuashengProtocolCard(idField, cardType, codeField, passField, crcField, urlField, urlPassField, validTimeField, payload));
+            cards.add(((HuashengInternalAttempt.Parsed<HuashengProtocolCard>) cardAttempt).value());
         }
 
         return HuashengInternalAttempt.parsed(new HuashengParseFact.Data<>(
                 new HuashengTakeResponse(orderSn, num, cards)));
+    }
+
+    /**
+     * 严格解析单张卡片节点。
+     */
+    static HuashengInternalAttempt<HuashengProtocolCard> parseCard(JsonNode cardNode) {
+        if (cardNode == null || !cardNode.isObject()) {
+            return failCard("卡片项必须为有效对象");
+        }
+
+        java.util.Set<String> knownCardKeys = java.util.Set.of("type", "id", "code", "pass", "crc", "url", "urlPass", "validTime");
+        // 检查未知非空载荷属性
+        var fieldNames = cardNode.fieldNames();
+        while (fieldNames.hasNext()) {
+            String fn = fieldNames.next();
+            if (!knownCardKeys.contains(fn)) {
+                JsonNode extraVal = cardNode.get(fn);
+                if (extraVal != null && !extraVal.isNull()) {
+                    if (!extraVal.isTextual() || !extraVal.asText().isBlank()) {
+                        return HuashengInternalAttempt.failed(HuashengProtectedFailure.capture(
+                                HuashengFailureKind.CARD_PAYLOAD_INVALID,
+                                new IllegalArgumentException("卡片包含未声明的非空载荷属性: " + fn),
+                                Optional.empty()));
+                    }
+                }
+            }
+        }
+
+        // 校验 type
+        JsonNode typeNode = cardNode.get("type");
+        if (typeNode == null || !(typeNode instanceof IntNode || typeNode instanceof LongNode)) {
+            return failCard("卡片缺少整数token type");
+        }
+        if (!typeNode.canConvertToInt()) {
+            return failCard("卡片type超出int范围");
+        }
+        Optional<HuashengCardType> optType = HuashengCardType.fromRawValue(typeNode.intValue());
+        if (optType.isEmpty()) {
+            return failCard("卡片type不支持: " + typeNode.intValue());
+        }
+        HuashengCardType cardType = optType.get();
+
+        // 解析 id
+        HuashengField<Long> idField;
+        if (!cardNode.has("id")) {
+            idField = HuashengField.absent();
+        } else if (cardNode.get("id").isNull()) {
+            idField = HuashengField.ofNull();
+        } else {
+            JsonNode idNode = cardNode.get("id");
+            if (!(idNode instanceof IntNode || idNode instanceof LongNode) || !idNode.canConvertToLong() || idNode.longValue() < 0) {
+                return failCard("卡片id非法");
+            }
+            idField = HuashengField.ofValue(idNode.longValue());
+        }
+
+        // 解析字符串三态字段
+        HuashengField<String> codeField = parseStringField(cardNode, "code");
+        if (codeField == null) return failCard("code字段类型非法");
+        HuashengField<String> passField = parseStringField(cardNode, "pass");
+        if (passField == null) return failCard("pass字段类型非法");
+        HuashengField<String> crcField = parseStringField(cardNode, "crc");
+        if (crcField == null) return failCard("crc字段类型非法");
+        HuashengField<String> urlField = parseStringField(cardNode, "url");
+        if (urlField == null) return failCard("url字段类型非法");
+        HuashengField<String> urlPassField = parseStringField(cardNode, "urlPass");
+        if (urlPassField == null) return failCard("urlPass字段类型非法");
+        HuashengField<String> validTimeField = parseStringField(cardNode, "validTime");
+        if (validTimeField == null) return failCard("validTime字段类型非法");
+
+        // 按卡型校验 required 字段并构建强类型载荷
+        HuashengCardPayload payload;
+        switch (cardType) {
+            case T201 -> {
+                if (!isValueNonBlank(codeField) || !isValueNonBlank(passField)) {
+                    return failCard("T201缺少code或pass必填字段");
+                }
+                payload = HuashengProtocolCard.createPayload201(((HuashengField.Value<String>) codeField).value(), ((HuashengField.Value<String>) passField).value());
+            }
+            case T202 -> {
+                boolean hasCode = isValueNonBlank(codeField);
+                boolean hasPass = isValueNonBlank(passField);
+                if (!hasCode && !hasPass) {
+                    return failCard("T202至少需要一个有效的code或pass");
+                }
+                payload = HuashengProtocolCard.createPayload202(codeField, passField);
+            }
+            case T203 -> {
+                if (!isValueNonBlank(codeField) || !isValueNonBlank(passField) || !isValueNonBlank(crcField)) {
+                    return failCard("T203缺少code、pass或crc必填字段");
+                }
+                payload = HuashengProtocolCard.createPayload203(((HuashengField.Value<String>) codeField).value(), ((HuashengField.Value<String>) passField).value(), ((HuashengField.Value<String>) crcField).value());
+            }
+            case T301 -> {
+                if (!isValueNonBlank(urlField)) {
+                    return failCard("T301缺少url必填字段");
+                }
+                payload = HuashengProtocolCard.createPayload301(((HuashengField.Value<String>) urlField).value());
+            }
+            case T302 -> {
+                if (!isValueNonBlank(urlField) || !isValueNonBlank(urlPassField)) {
+                    return failCard("T302缺少url或urlPass必填字段");
+                }
+                payload = HuashengProtocolCard.createPayload302(((HuashengField.Value<String>) urlField).value(), ((HuashengField.Value<String>) urlPassField).value());
+            }
+            case T303 -> {
+                if (!isValueNonBlank(codeField) || !isValueNonBlank(urlField) || !isValueNonBlank(urlPassField)) {
+                    return failCard("T303缺少code、url或urlPass必填字段");
+                }
+                payload = HuashengProtocolCard.createPayload303(((HuashengField.Value<String>) codeField).value(), ((HuashengField.Value<String>) urlField).value(), ((HuashengField.Value<String>) urlPassField).value());
+            }
+            case T304 -> {
+                if (!isValueNonBlank(codeField) || !isValueNonBlank(urlField)) {
+                    return failCard("T304缺少code或url必填字段");
+                }
+                payload = HuashengProtocolCard.createPayload304(((HuashengField.Value<String>) codeField).value(), ((HuashengField.Value<String>) urlField).value());
+            }
+            default -> {
+                return failCard("不支持的卡型: " + cardType);
+            }
+        }
+
+        return HuashengInternalAttempt.parsed(new HuashengProtocolCard(idField, cardType, codeField, passField, crcField, urlField, urlPassField, validTimeField, payload));
     }
 
     private static HuashengField<String> parseStringField(JsonNode node, String fieldName) {

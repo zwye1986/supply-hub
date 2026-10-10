@@ -14,6 +14,7 @@ import com.aifuli.module.supplychain.border.fulfillment.domain.OperationOutcome;
 import com.aifuli.module.supplychain.border.fulfillment.domain.OperationOutcomeClass;
 import com.aifuli.module.supplychain.border.fulfillment.domain.OperationTicket;
 import com.aifuli.module.supplychain.border.order.dal.dataobject.SupplyChainOrderDO;
+import com.aifuli.module.supplychain.border.order.domain.SupplierOrderOperationStatus;
 import com.aifuli.module.supplychain.border.order.dal.mysql.SupplyChainOrderMapper;
 import com.aifuli.module.supplychain.infrastructure.security.CredentialProvider;
 import com.aifuli.module.supplychain.infrastructure.security.EnvelopeCryptoPort;
@@ -46,6 +47,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -474,6 +476,26 @@ class FulfillmentOperationExecuteHandlerTest {
         assertThat(result).isEqualTo("ALREADY_EXECUTING");
         verify(operationExecutorPort, never()).execute(any());
         verify(supplierOrderLifecycle, never()).claimForExecution(any());
+    }
+
+    @Test
+    void huashengDispatchUsesPayloadSourceRatherThanTimerTaskId() {
+        var runner = mock(com.aifuli.module.supplychain.border.fulfillment.application.huashengflow.HuashengFulfillmentRunner.class);
+        var provider = mock(org.springframework.beans.factory.ObjectProvider.class);
+        when(provider.getIfAvailable()).thenReturn(runner);
+        var handler = new FulfillmentOperationExecuteHandler(operationMapper, bOrderMapper, requestMapper, orderMapper,
+                supplierMapper, offerVersionMapper, connectorResolver, envelopeCrypto, operationExecutorPort,
+                supplierOrderLifecycle, objectMapper, mock(FulfillmentOperationTicketFactory.class), frequencyLifecycle, provider);
+        when(operationMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(FulfillmentOperationDO.builder()
+                .operationNo("OP_SOURCE").bOrderId(2L).status(SupplierOrderOperationStatus.PENDING.getCode()).build());
+        when(bOrderMapper.selectById(2L)).thenReturn(BOrderDO.builder().id(2L).connectorVersionId(3L).build());
+        when(connectorResolver.resolve(3L)).thenReturn(new PublishedConnectorConfiguration("HS", 3L, 1,
+                com.aifuli.module.supplychain.supplieradapter.metadata.HuashengOrderV1Metadata.TYPE,
+                "https://example.test", "merchant", null, null, Set.of()));
+        when(runner.runExecute("OP_SOURCE", "original-request")).thenReturn("NEXT_CONFIRM");
+        var payload = objectMapper.createObjectNode().put("operationNo", "OP_SOURCE").put("originTraceId", "original-request");
+        assertThat(handler.handle(new TimerTaskContext("TASK_SOURCE", 999L, 1, 1L, "worker"), payload)).isEqualTo("NEXT_CONFIRM");
+        verify(runner).runExecute("OP_SOURCE", "original-request");
     }
 
     @Test

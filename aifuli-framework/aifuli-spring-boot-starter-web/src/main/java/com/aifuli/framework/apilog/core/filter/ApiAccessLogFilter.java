@@ -67,6 +67,14 @@ public class ApiAccessLogFilter extends ApiRequestFilter {
     }
 
     @Override
+    protected boolean shouldNotFilter(HttpServletRequest request) {
+        if (isSensitiveProtectionRequest(request)) {
+            return false;
+        }
+        return super.shouldNotFilter(request);
+    }
+
+    @Override
     @SuppressWarnings("NullableProblems")
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
             throws ServletException, IOException {
@@ -143,14 +151,17 @@ public class ApiAccessLogFilter extends ApiRequestFilter {
         }
         // 设置请求字段
         boolean standardOrder = ApiAccessLogPathUtils.isStandardOrdersPath(request.getRequestURI(), request.getContextPath());
+        boolean huashengCallback = ApiAccessLogPathUtils.isHuashengCallbackPath(request.getRequestURI(), request.getContextPath());
         String safeUrl = standardOrder
                 ? ApiAccessLogPathUtils.safeStandardOrderUrl(request.getRequestURI(), request.getContextPath())
+                : huashengCallback
+                ? ApiAccessLogPathUtils.safeHuashengCallbackUrl(request.getRequestURI(), request.getContextPath())
                 : request.getRequestURI();
         accessLog.setTraceId(TracerUtils.getTraceId()).setApplicationName(applicationName)
                 .setRequestUrl(safeUrl).setRequestMethod(request.getMethod())
                 .setUserAgent(ServletUtils.getUserAgent(request)).setUserIp(ServletUtils.getClientIP(request));
         String[] sanitizeKeys = accessLogAnnotation != null ? accessLogAnnotation.sanitizeKeys() : null;
-        Boolean requestEnable = (standardOrder || ApiAccessLogPathUtils.isSensitivePlatformPath(
+        Boolean requestEnable = (standardOrder || huashengCallback || ApiAccessLogPathUtils.isSensitivePlatformPath(
                 request.getRequestURI(), request.getContextPath())) ? Boolean.FALSE
                 : accessLogAnnotation != null ? accessLogAnnotation.requestEnable() : Boolean.TRUE;
         if (!BooleanUtil.isFalse(requestEnable)) { // 默认记录，所以判断 !false
@@ -161,9 +172,10 @@ public class ApiAccessLogFilter extends ApiRequestFilter {
         }
         // 标准订单强制禁止记录响应正文，杜绝卡密交付明文被访问日志记录
         // 凭据写入成功、绑定错误与系统异常均不允许保存响应正文，避免错误报文夹带拒绝值。
-        // 设计见 docs/superpowers/specs/2026-10-03-supplier-offer-publication-admin-design.md#151-凭据写入日志保护。
+        // 华昇回调响应正文及异常亦禁止记录。
+        // 设计见 docs/superpowers/specs/2026-10-09-huasheng-type201-production-closure-design.md#83-安全与日志影响。
         Boolean responseEnable = (standardOrder || ApiAccessLogPathUtils.isSupplierCredentialWritePath(
-                request.getRequestURI(), request.getContextPath())) ? Boolean.FALSE
+                request.getRequestURI(), request.getContextPath()) || huashengCallback) ? Boolean.FALSE
                 : accessLogAnnotation != null ? accessLogAnnotation.responseEnable() : Boolean.FALSE;
         if (BooleanUtil.isTrue(responseEnable)) { // 默认不记录，默认强制要求 true
             accessLog.setResponseBody(sanitizeJson(result, sanitizeKeys));

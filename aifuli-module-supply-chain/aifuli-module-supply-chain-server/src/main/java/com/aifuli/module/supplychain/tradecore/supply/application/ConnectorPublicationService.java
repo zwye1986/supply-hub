@@ -79,6 +79,12 @@ public class ConnectorPublicationService {
         if (statuses.isEmpty() || statuses.stream().anyMatch(mapping -> mapping.getStatus() != 0)) {
             throw new IllegalStateException("Connector status mappings are not publishable");
         }
+        // 验证后映射仍可编辑，发布必须重复执行封闭安全契约；设计见华昇生产闭环§3.2。
+        if (metadataRegistry.require(connector.getAdapterType()) instanceof
+                com.aifuli.module.supplychain.supplieradapter.metadata.HuashengOrderV1Metadata huasheng) {
+            huasheng.validateMappings(statuses, errorCodeMapMapper.selectByConnectorVersionId(version.getId()));
+            credentialBindingValidator.extraParameters(huasheng, version.getExtraConfig());
+        }
         // D1 供应商级唯一守卫：同供应商已存在其它已发布连接器（current_version_id 非空的其它行）时，
         // 先于 DB 唯一键 uk_sc_connector_supplier_published 抛清晰业务异常，避免裸 DuplicateKeyException。
         // 设计见 docs/superpowers/specs/2026-10-03-supplier-offer-publication-admin-design.md#55-d1-published_flag-唯一键变更集-056。

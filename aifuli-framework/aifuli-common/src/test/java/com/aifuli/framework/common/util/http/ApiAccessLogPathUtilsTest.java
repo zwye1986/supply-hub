@@ -118,4 +118,29 @@ class ApiAccessLogPathUtilsTest {
         }
     }
 
+    @Test
+    void huashengCallbackPathsAreIdentifiedAndSanitized() {
+        String root = ApiAccessLogPathUtils.HUASHENG_CALLBACK_PATH;
+        assertThat(ApiAccessLogPathUtils.isHuashengCallbackPath(root, "")).isTrue();
+        assertThat(ApiAccessLogPathUtils.isHuashengCallbackPath(root + "/101", "")).isTrue();
+        assertThat(ApiAccessLogPathUtils.isHuashengCallbackPath("/sc" + root + "/101", "/sc")).isTrue();
+        assertThat(ApiAccessLogPathUtils.isHuashengCallbackPath(root + "-other", "")).isFalse();
+        assertThat(ApiAccessLogPathUtils.isHuashengCallbackPath(root + "foo", "")).isFalse();
+        assertThat(ApiAccessLogPathUtils.isHuashengCallbackPath(null, "")).isFalse();
+
+        assertThat(ApiAccessLogPathUtils.isSensitivePlatformPath(root)).isTrue();
+        assertThat(ApiAccessLogPathUtils.isSensitivePlatformPath(root + "/101")).isTrue();
+        assertThat(ApiAccessLogPathUtils.isSensitivePlatformPath(root + "-other")).isFalse();
+
+        assertThat(ApiAccessLogPathUtils.isSensitiveProtectionPath(root, "")).isTrue();
+        assertThat(ApiAccessLogPathUtils.isSensitiveProtectionPath(root + "/101", "")).isTrue();
+        assertThat(ApiAccessLogPathUtils.isSensitiveProtectionPath(root + "-other", "")).isFalse();
+
+        assertThat(ApiAccessLogPathUtils.safeHuashengCallbackUrl(root, "")).isEqualTo(root);
+        assertThat(ApiAccessLogPathUtils.safeHuashengCallbackUrl(root + "/101", "")).isEqualTo(root + "/101");
+        assertThat(ApiAccessLogPathUtils.safeHuashengCallbackUrl("/sc" + root + "/101", "/sc")).isEqualTo(root + "/101");
+        assertThat(ApiAccessLogPathUtils.safeHuashengCallbackUrl(root + "/101/extra", "")).isEqualTo(root + "/[version]");
+        assertThat(ApiAccessLogPathUtils.safeHuashengCallbackUrl(null, "")).isEqualTo(root);
+    }
+
 }

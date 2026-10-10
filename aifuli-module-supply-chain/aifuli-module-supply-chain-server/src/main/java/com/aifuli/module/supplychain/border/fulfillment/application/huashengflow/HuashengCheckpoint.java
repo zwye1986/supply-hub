@@ -94,7 +94,7 @@ public final class HuashengCheckpoint {
                               HuashengField<HuashengRefundStatus> refundStatus, HuashengField<HuashengTakeStatus> isTake) {
         public Observation {
             require(endpoint == HuashengEndpoint.PLACE || endpoint == HuashengEndpoint.CONFIRM
-                    || endpoint == HuashengEndpoint.QUERY);
+                    || endpoint == HuashengEndpoint.QUERY || endpoint == HuashengEndpoint.CALLBACK);
             text(orderSn, 128); text(outOrderSn, 32);
             require(num == HuashengFlowCodes.TYPE201_ORDER_QUANTITY && status != null
                     && refundStatus != null && isTake != null);

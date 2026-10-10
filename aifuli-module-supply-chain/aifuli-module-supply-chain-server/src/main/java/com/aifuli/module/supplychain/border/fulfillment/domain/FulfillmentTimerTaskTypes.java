@@ -13,4 +13,16 @@ public final class FulfillmentTimerTaskTypes {
     public static final String RECHARGE_FREQUENCY_WAKE = "RECHARGE_FREQUENCY_WAKE";
 
     public static final String OPERATION_EXECUTE = "FULFILLMENT_OPERATION_EXECUTE";
+
+    /** 华昇唯一下一步与首次执行 Timer 任务类型。 */
+    public static final String HUASHENG_EXECUTE = "HS_FULFILLMENT_EXECUTE";
+
+    /** 华昇租约 watchdog Timer 任务类型。 */
+    public static final String HUASHENG_LEASE_WATCHDOG = "HS_LEASE_WATCHDOG";
+
+    /** 华昇准备阶段 watchdog Timer 任务类型。 */
+    public static final String HUASHENG_PREPARATION_WATCHDOG = "HS_PREPARATION_WATCHDOG";
+
+    /** 华昇即时/定时恢复 Timer 任务类型。 */
+    public static final String HUASHENG_RECOVERY = "HS_RECOVERY";
 }

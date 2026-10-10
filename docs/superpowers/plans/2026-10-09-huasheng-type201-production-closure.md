@@ -157,10 +157,10 @@ Task2最终本地证据：`huasheng-task2-regression-final-evidence.log`退出0/
 - Create: `J/border/fulfillment/domain/FulfillmentProtocolFact.java`、`J/border/fulfillment/domain/FrozenCredentialItemIdentity.java`、`J/infrastructure/security/FrozenCredentialSetResolver.java`；新flow目录的`HuashengStepFact.java`、`HuashengCallContextFactory.java`、`HuashengOperationExecutor.java`。
 - Test: `T/supplieradapter/metadata/HuashengOrderV1MetadataTest.java`、`T/border/fulfillment/application/huashengflow/HuashengFrozenConfigurationIntegrationTest.java`、`HuashengOperationExecutorContractTest.java`。
 
-- [ ] 写metadata纯测：凭据模式/恰三项/能力与画像一致；未知JSON字段、第二appId、非法expireTime拒绝；外部SUCCESS不得terminal。RED运行metadata测试。
-- [ ] connector与offer空对象schema采用`additionalProperties:false`；extra仅expireTime integer/outMobile string，不向有限Schema加不支持关键字。实施规格§3.2显式范围与模板安全检查。
-- [ ] 写冻结投影IT：真实createDraft/validate/publish，resolver返回冻结snapshot，修改当前项身份失败关闭、不被读取代替；出站只两项，callbackPublicKey不进context；merchantAccount为唯一appId。先RED再投影不可变集合。新增FrozenCredentialSetResolver按规格§3.3在独立短事务锁集/项、核身份后调用已有provider，仅解析requestedKeys；测试verify/解析之间竞争改版本不能把新材料配旧身份。材料finally擦除；不修改旧resolveSet行为，不承诺旧集原地变更后仍可执行。
-- [ ] 定义纯领域标记接口与事实carrier，Outcome添加可选protocolFact，保留已有builder。事实不含资金动作；Ticket添加冻结身份/generation，拒绝明文toString和意外序列化。
+- [x] 写metadata纯测：凭据模式/恰三项/能力与画像一致；未知JSON字段、第二appId、非法expireTime拒绝；外部SUCCESS不得terminal。RED运行metadata测试。
+- [x] connector与offer空对象schema采用`additionalProperties:false`；extra仅expireTime integer/outMobile string，不向有限Schema加不支持关键字。实施规格§3.2显式范围与模板安全检查。
+- [x] 写冻结投影IT：真实createDraft/validate/publish，resolver返回冻结snapshot，修改当前项身份失败关闭、不被读取代替；出站只两项，callbackPublicKey不进context；merchantAccount为唯一appId。先RED再投影不可变集合。新增FrozenCredentialSetResolver按规格§3.3在独立短事务锁集/项、核身份后调用已有provider，仅解析requestedKeys；测试verify/解析之间竞争改版本不能把新材料配旧身份。材料finally擦除；不修改旧resolveSet行为，不承诺旧集原地变更后仍可执行。
+- [x] 定义纯领域标记接口与事实carrier，Outcome添加可选protocolFact，保留已有builder。事实不含资金动作；Ticket添加冻结身份/generation，拒绝明文toString和意外序列化。
 
 ```java
 public interface FulfillmentProtocolFact {}
@@ -168,8 +168,8 @@ public interface FulfillmentProtocolFact {}
 // byte[]封闭资产载荷与安全观察，全部防御复制，不携带HuashengCallResult。
 ```
 
-- [ ] 写executor ContractTest并先RED：每次execute只一个PLACE/CONFIRM/TAKE/QUERY facade业务调用；Parsed转纯事实；BusinessError/HttpFailure/TransportFailure/InvalidResponse/LocalFailure与安全HuashengProtocolException皆不伪造REJECTED；TAKE没有自生金额。复用HuashengCommunicationFacade而非手写HTTP/token，保留其完整安全attempts。
-- [ ] GREEN对应纯测与两类Failsafe。此片尚不启用生产可售Bean，未创建真实订单。
+- [x] 写executor ContractTest并先RED：每次execute只一个PLACE/CONFIRM/TAKE/QUERY facade业务调用；Parsed转纯事实；BusinessError/HttpFailure/TransportFailure/InvalidResponse/LocalFailure与安全HuashengProtocolException皆不伪造REJECTED；TAKE没有自生金额。复用HuashengCommunicationFacade而非手写HTTP/token，保留其完整安全attempts。
+- [x] GREEN对应纯测与两类Failsafe。此片尚不启用生产可售Bean，未创建真实订单。
 
 ## 5. Task 4：短事务资格、下一步与资金guard
 
@@ -178,14 +178,14 @@ public interface FulfillmentProtocolFact {}
 - Modify: `J/border/fulfillment/application/FulfillmentAcceptanceLifecycle.java`、`J/border/fulfillment/application/FulfillmentOperationTicketFactory.java`、`J/border/fulfillment/application/SupplierOrderLifecycle.java`、`J/border/fulfillment/domain/FulfillmentTimerTaskTypes.java`。
 - Test: `T/border/fulfillment/application/huashengflow/HuashengFlowPolicyTest.java`、`HuashengContinuationIntegrationTest.java`、`HuashengSettlementIntegrationTest.java`。
 
-- [ ] 先写纯决策表测试：WAIT→CONFIRM；SUCCESS→TAKE而非订单成功；FAILED合法退款→释放候选；CANCEL缺退款→保留；QUERY7014→UNKNOWN；SUCCESS/isTake=Y→TAKE；金额不符/身份冲突/六型→人工。决策枚举NEXT_CONFIRM/NEXT_TAKE/WAIT_QUERY/FINAL_SUCCESS/FINAL_REJECTION/MANUAL，不允许返回“重下PLACE”。
-- [ ] RED后实现纯policy与常量，金额按A解析值核身份、连续原元数值相等、分值等于冻结成本；不double、不容差、不兜底。
-- [ ] 写真实MySQL IT：Request→Order→BOrder→Operation锁后认领generation递增；旧permit/租约过期/非活动尝试结果无副作用；两线程同事实只有sequence+1一个下一步。先RED。
-- [ ] 实施规格§5的claim/apply事务与permit；全部FOR UPDATE重读，不用锁前DO更新。认领提交前创建watchdog/marker；HTTP始终在事务外，lifecycle不持有facade。
-- [ ] 首受理根据冻结adapter显式PLACE_ORDER，准备checkpoint并注册准备watchdog；TicketFactory解密checkpoint，不能继续直传ciphertext。单号/notifyUrl/参数摘要此后不变。
-- [ ] 锁后显式核checkpoint.placeParameters.outOrderSn等于BOrder冻结billno（两者均不可用bOrderNo替代），原单orderSn/配置版本/摘要分别核对；codec不自行从密文定位原单。
-- [ ] 华昇TicketFactory专用入口接收进程锁内、claim事务前通过FrozenCredentialSetResolver核实的材料及permit，不能在持有聚合锁时再锁凭据集；回调同样先准备认证材料。测试当前下一步仍PENDING/marker为空但首PLACE已发送时，可信回调可收敛原单。
-- [ ] 下一步的旧完成/新行/checkpoint/Timer一起提交；注入Timer登记失败，断言全回滚、资金未提交；不能依赖旧Outbox再次消费才能补下一步。
+- [x] 先写纯决策表测试：WAIT→CONFIRM；SUCCESS→TAKE而非订单成功；FAILED合法退款→释放候选；CANCEL缺退款→保留；QUERY7014→UNKNOWN；SUCCESS/isTake=Y→TAKE；金额不符/身份冲突/六型→人工。决策枚举NEXT_CONFIRM/NEXT_TAKE/WAIT_QUERY/FINAL_SUCCESS/FINAL_REJECTION/MANUAL，不允许返回“重下PLACE”。
+- [x] RED后实现纯policy与常量，金额按A解析值核身份、连续原元数值相等、分值等于冻结成本；不double、不容差、不兜底。
+- [x] 写真实MySQL IT：Request→Order→BOrder→Operation锁后认领generation递增；旧permit/租约过期/非活动尝试结果无副作用；两线程同事实只有sequence+1一个下一步。先RED。
+- [x] 实施规格§5的claim/apply事务与permit；全部FOR UPDATE重读，不用锁前DO更新。认领提交前创建watchdog/marker；HTTP始终在事务外，lifecycle不持有facade。
+- [x] 首受理根据冻结adapter显式PLACE_ORDER，准备checkpoint并注册准备watchdog；TicketFactory解密checkpoint，不能继续直传ciphertext。单号/notifyUrl/参数摘要此后不变。
+- [x] 锁后显式核checkpoint.placeParameters.outOrderSn等于BOrder冻结billno（两者均不可用bOrderNo替代），原单orderSn/配置版本/摘要分别核对；codec不自行从密文定位原单。
+- [x] 华昇TicketFactory专用入口接收进程锁内、claim事务前通过FrozenCredentialSetResolver核实的材料及permit，不能在持有聚合锁时再锁凭据集；回调同样先准备认证材料。测试当前下一步仍PENDING/marker为空但首PLACE已发送时，可信回调可收敛原单。
+- [x] 下一步的旧完成/新行/checkpoint/Timer一起提交；注入Timer登记失败，断言全回滚、资金未提交；不能依赖旧Outbox再次消费才能补下一步。
 
 ```java
 // 下一步调度输入仅稳定身份；在同一supplyChainTransactionManager事务内。
@@ -196,8 +196,8 @@ timer.scheduleOnce(HuashengFlowCodes.EXECUTE_TASK,
     "HS:EXEC:" + nextOperationNo, payload, databaseClock.toInstant(now));
 ```
 
-- [ ] 资金IT先RED再新增SupplierOrderLifecycle受控permit入口：完整type201且可信金额匹配才commitByReference；可信失败无资产才releaseByReference；无permit通用入口不能推进华昇。guard不反向依赖lifecycle，避免Bean循环。最终资产/状态/资金同事务，CAS失败回滚。
-- [ ] GREEN三类纯测/IT；观察commit/release真实流水和Reservation状态，不只mock调用次数。
+- [x] 资金IT先RED再新增SupplierOrderLifecycle受控permit入口：完整type201且可信金额匹配才commitByReference；可信失败无资产才releaseByReference；无permit通用入口不能推进华昇。guard不反向依赖lifecycle，避免Bean循环。最终资产/状态/资金同事务，CAS失败回滚。
+- [x] GREEN三类纯测/IT；观察commit/release真实流水和Reservation状态，不只mock调用次数。
 
 ## 6. Task 5：生产Runner、Timer原单恢复与重启
 
@@ -207,13 +207,13 @@ timer.scheduleOnce(HuashengFlowCodes.EXECUTE_TASK,
 - Modify: `J/border/fulfillment/application/FulfillmentOperationExecuteHandler.java`（华昇分派必须在旧EXECUTING/UNKNOWN提前跳过与普通claim之前）。
 - Test: `T/border/fulfillment/application/huashengflow/HuashengRunnerTest.java`、`HuashengRecoveryIntegrationTest.java`、`HuashengRestartIntegrationTest.java`。
 
-- [ ] 写Runner单测并RED：互斥锁在claim前尝试，覆盖claim/HTTP/apply，忙不占资格；finally异常/中断释放；同一进程不同冻结版本不同时外呼；MDC保存/新traceId和executionId/退出恢复；不能用taskId冒充traceId。该唯一锁由显式配置注入runner和callback，不各自new一把锁。
-- [ ] 显式配置Bean连接A4传输、A5缓存/TokenManager/facade与专用executor；启用属性`aifuli.supply-chain.huasheng-fulfillment.enabled=false`；metadata、executor、runner和必要Handlers同条件。纯通信类仍无@Component。测试property=true真实装配，禁mock executor。
-- [ ] 先写恢复IT：PLACE丢响应→QUERY原outOrderSn；CONFIRM丢响应→QUERY原orderSn；TAKE丢响应→QUERY SUCCESS/Y后同orderSn取同卡；7014一直不PLACE、不释放；WAIT才受控CONFIRM；marker前回滚允许首次执行。RED后实现runner与不同taskType恢复触发。
-- [ ] 规格§5.3默认限额写命名常量并累计checkpoint：120s调用/150s资格/30s间隔/30min截止/20QUERY/3CONFIRM/5TAKE，A5 61物理重试独立计数。到限MANUAL与唯一case、资金保持。
-- [ ] 写真实停启IT，分别在认领后未发、响应后结果落库前、下一步已创建前后、QUERY认领后宕机；关闭Spring上下文、保留同隔离MySQL、重新建上下文和空token缓存。不能仅重建codec称为重启。
-- [ ] 断言持久watchdog能驱动新代次QUERY，旧Task/permit迟到跳过；准备Timer在claim前死信也被准备watchdog收尾，Task成功返回不吞恢复需求。模拟持锁调用超过lease时，apply只观察，watchdog锁忙不得返回成功，退出锁后仍有重试驱动QUERY；不得用Future超时释放锁而让原外呼后台继续发送。
-- [ ] GREEN Runner纯测及两IT；保存挡板按原单号去重的外部计数，与本地资金流水同时核对。
+- [x] 写Runner单测并RED：互斥锁在claim前尝试，覆盖claim/HTTP/apply，忙不占资格；finally异常/中断释放；同一进程不同冻结版本不同时外呼；MDC保存/新traceId和executionId/退出恢复；不能用taskId冒充traceId。该唯一锁由显式配置注入runner和callback，不各自new一把锁。
+- [x] 显式配置Bean连接A4传输、A5缓存/TokenManager/facade与专用executor；启用属性`aifuli.supply-chain.huasheng-fulfillment.enabled=false`；metadata、executor、runner和必要Handlers同条件。纯通信类仍无@Component。测试property=true真实装配，禁mock executor。
+- [x] 先写恢复IT：PLACE丢响应→QUERY原outOrderSn；CONFIRM丢响应→QUERY原orderSn；TAKE丢响应→QUERY SUCCESS/Y后同orderSn取同卡；7014一直不PLACE、不释放；WAIT才受控CONFIRM；marker前回滚允许首次执行。RED后实现runner与不同taskType恢复触发。
+- [x] 规格§5.3默认限额写命名常量并累计checkpoint：120s调用/150s资格/30s间隔/30min截止/20QUERY/3CONFIRM/5TAKE，A5 61物理重试独立计数。到限MANUAL与唯一case、资金保持。
+- [x] 写真实停启IT，分别在认领后未发、响应后结果落库前、下一步已创建前后、QUERY认领后宕机；关闭Spring上下文、保留同隔离MySQL、重新建上下文和空token缓存。不能仅重建codec称为重启。
+- [x] 断言持久watchdog能驱动新代次QUERY，旧Task/permit迟到跳过；准备Timer在claim前死信也被准备watchdog收尾，Task成功返回不吞恢复需求。模拟持锁调用超过lease时，apply只观察，watchdog锁忙不得返回成功，退出锁后仍有重试驱动QUERY；不得用Future超时释放锁而让原外呼后台继续发送。
+- [x] GREEN Runner纯测及两IT；保存挡板按原单号去重的外部计数，与本地资金流水同时核对。
 
 ## 7. Task 6：冻结版本回调与持久nonce防重
 
@@ -226,13 +226,13 @@ timer.scheduleOnce(HuashengFlowCodes.EXECUTE_TASK,
 - Test: `T/supplieradapter/huasheng/protocol/HuashengCallbackParserTest.java`、`T/border/fulfillment/application/huashengflow/HuashengCallbackIntegrationTest.java`、`HuashengCallbackRestContractTest.java`。
 - Modify Test: `T/architecture/SupplyChainModuleArchitectureTest.java`；直接受影响Servlet/Gateway保护测试沿现有测试类添加。
 
-- [ ] Parser RED：有界读取2MiB原hex密文、超限在验签/AES前拒绝；Appid/X-Sign长度限制、原密文验签后解密；Appid错/签名错/重复key/尾随/时间/nonce/数量/六型/FAILED非空list拒绝；成功卡片使用A已有验证规则而非宽松JSON。
-- [ ] 实施规格§8.1冻结版本定位；不取最新凭据、不遍历公钥；临时秘密和解密数组finally擦除。
-- [ ] Inbox IT先RED：同nonce同内容只一次；同nonce异内容或改投版本409；已提交同内容过时间窗200；未处理旧内容400；事务回滚后可重投；不同nonce同资产幂等；同步响应与回调竞态不重扣；CONFIRM认领后至结果落库期间回调不能抢先释放，认证后等进程锁超3秒返回503且没有Inbox/领域写入。
-- [ ] 按进程执行锁→Inbox→聚合→资金锁序实现华昇窄接口，eventId与payloadDigest按规格§8.2生成，不能直接调用不校验payloadDigest的通用tryStart就宣称防重完整；迁移中的Inbox摘要COMMENT和DO注释一致，不改其它consumer算法。
-- [ ] HTTP契约RED后薄Controller：400/404/409/500/503不套业务200；只有提交完成或已成功幂等返回`ResponseEntity.ok("success")`。callback成功/失败事实使用lifecycle统一规则，不伪造同步permit。
-- [ ] 只开放精确回调根/版本子路径，登录豁免不等于供应商认证豁免。新增独立callback敏感路径判断，复用上下文路径段匹配；相邻`huasheng-other`不受影响。
-- [ ] GREEN parser/IT/RestContract及shared common/web/gateway直接保护回归；架构新增Controller不依赖DAL/外呼主体，协议parser无Spring/MyBatis。公网网关路由保持实机待验，不擅自部署。
+- [x] Parser RED：有界读取2MiB原hex密文、超限在验签/AES前拒绝；Appid/X-Sign长度限制、原密文验签后解密；Appid错/签名错/重复key/尾随/时间/nonce/数量/六型/FAILED非空list拒绝；成功卡片使用A已有验证规则而非宽松JSON。
+- [x] 实施规格§8.1冻结版本定位；不取最新凭据、不遍历公钥；临时秘密和解密数组finally擦除。
+- [x] Inbox IT先RED：同nonce同内容只一次；同nonce异内容或改投版本409；已提交同内容过时间窗200；未处理旧内容400；事务回滚后可重投；不同nonce同资产幂等；同步响应与回调竞态不重扣；CONFIRM认领后至结果落库期间回调不能抢先释放，认证后等进程锁超3秒返回503且没有Inbox/领域写入。
+- [x] 按进程执行锁→Inbox→聚合→资金锁序实现华昇窄接口，eventId与payloadDigest按规格§8.2生成，不能直接调用不校验payloadDigest的通用tryStart就宣称防重完整；迁移中的Inbox摘要COMMENT和DO注释一致，不改其它consumer算法。
+- [x] HTTP契约RED后薄Controller：400/404/409/500/503不套业务200；只有提交完成或已成功幂等返回`ResponseEntity.ok("success")`。callback成功/失败事实使用lifecycle统一规则，不伪造同步permit。
+- [x] 只开放精确回调根/版本子路径，登录豁免不等于供应商认证豁免。新增独立callback敏感路径判断，复用上下文路径段匹配；相邻`huasheng-other`不受影响。
+- [x] GREEN parser/IT/RestContract及shared common/web/gateway直接保护回归；架构新增Controller不依赖DAL/外呼主体，协议parser无Spring/MyBatis。公网网关路由保持实机待验，不擅自部署。
 
 直接受影响共享模块定向回归（不运行其它模块无关单测）：
 

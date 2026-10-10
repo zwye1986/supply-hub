@@ -62,6 +62,17 @@ import com.aifuli.module.supplychain.tradecore.catalog.pricing.ProjectQuoteKeyCo
 import com.aifuli.module.supplychain.tradecore.catalog.pricing.ProductNotSaleableException;
 import com.aifuli.module.supplychain.tradecore.catalog.pricing.StandardPricingQuoteService;
 import com.aifuli.module.supplychain.tradecore.catalog.pricing.StandardPricingQuoteService.FrozenQuote;
+import com.aifuli.module.supplychain.supplieradapter.metadata.PublishedConnectorConfigurationResolver;
+import com.aifuli.module.supplychain.supplieradapter.metadata.PublishedConnectorConfigurationResolver.PublishedConnectorConfiguration;
+import com.aifuli.module.supplychain.supplieradapter.metadata.HuashengOrderV1Metadata;
+import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierOfferVersionDO;
+import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferVersionMapper;
+import com.aifuli.module.supplychain.border.fulfillment.application.huashengflow.HuashengCheckpoint;
+import com.aifuli.module.supplychain.border.fulfillment.application.huashengflow.HuashengCheckpointCodec;
+import com.aifuli.module.supplychain.border.fulfillment.application.huashengflow.HuashengFlowCodes;
+import com.aifuli.module.supplychain.border.fulfillment.application.huashengflow.HuashengFlowPolicy;
+import com.aifuli.module.supplychain.infrastructure.timer.PersistentTimer;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.aifuli.framework.common.exception.ServiceException;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -140,6 +151,11 @@ public class FulfillmentAcceptanceLifecycle {
     private final ObjectMapper objectMapper;
     private final OrderSummaryPolicyRegistry orderSummaryPolicyRegistry;
     private final ObjectProvider<AcceptanceFailureInjector> failureInjector;
+    private final ObjectProvider<PublishedConnectorConfigurationResolver> connectorResolverProvider;
+    private final ObjectProvider<SupplierOfferVersionMapper> offerVersionMapperProvider;
+    private final ObjectProvider<HuashengCheckpointCodec> checkpointCodecProvider;
+    private final ObjectProvider<PersistentTimer> persistentTimerProvider;
+    private final ObjectProvider<FulfillmentCallbackProperties> callbackPropertiesProvider;
 
     /**
      * 在敏感目标加密前，根据采购商商品关系解析平台 SKU 持有的权威 Schema。
@@ -449,9 +465,10 @@ public class FulfillmentAcceptanceLifecycle {
         if (orderMapper.advanceDetailVersion(order.getId(), 0L, 1L, now) != 1) {
             throw new IllegalStateException("Supply-chain order detail version lost monotonicity");
         }
-        FulfillmentOperationDO operation = createOperation(bOrder, listing.sku(), now);
+        FulfillmentOperationDO operation = createOperation(command, bOrder, listing.sku(), now);
         operationMapper.insert(operation);
         inject(AcceptanceFailureInjector.Stage.B_ORDER_CREATED);
+        scheduleHuashengPreparationWatchdogIfApplicable(operation, command.traceId(), now);
 
         rechargeFrequencyLifecycle.enqueue(new RechargeFrequencyLifecycle.EnqueueCommand(
                 order.getId(), order.getOrderNo(), fulfillmentRequest.getId(), operation.getOperationNo(),
@@ -691,7 +708,23 @@ public class FulfillmentAcceptanceLifecycle {
                 .activeFlag(Boolean.TRUE).version(0L).createdAt(now).updatedAt(now).build();
     }
 
-    private FulfillmentOperationDO createOperation(BOrderDO bOrder, PlatformSkuDO sku, LocalDateTime now) {
+    private FulfillmentOperationDO createOperation(PreparedAcceptance command, BOrderDO bOrder, PlatformSkuDO sku, LocalDateTime now) {
+        PublishedConnectorConfigurationResolver connectorResolver = connectorResolverProvider != null
+                ? connectorResolverProvider.getIfAvailable() : null;
+        PublishedConnectorConfiguration connectorConfig = null;
+        if (connectorResolver != null && bOrder.getConnectorVersionId() != null) {
+            try {
+                connectorConfig = connectorResolver.resolve(bOrder.getConnectorVersionId());
+            } catch (Exception e) {
+                log.warn("[履约][lifecycle] 连接器版本解析失败 connectorVersionId={}, error={}",
+                        bOrder.getConnectorVersionId(), e.getMessage());
+            }
+        }
+
+        if (connectorConfig != null && HuashengOrderV1Metadata.TYPE.equals(connectorConfig.adapterType())) {
+            return createHuashengInitialOperation(command, bOrder, connectorConfig, now);
+        }
+
         AdapterStepCode step = AdapterStepCode.forFulfillmentType(sku.getFulfillmentType());
         String idempotencyKey = FulfillmentIdempotencyKeys.operation(bOrder.getBOrderNo(), 1);
         return FulfillmentOperationDO.builder().operationNo(businessNoGenerator.next(BusinessNoPrefixes.OP))
@@ -702,6 +735,147 @@ public class FulfillmentAcceptanceLifecycle {
                         + "|" + bOrder.getConnectorVersionId()).getBytes(StandardCharsets.UTF_8)))
                 .status(FulfillmentInitialStatuses.OPERATION_PENDING).attemptCount(0)
                 .createdAt(now).updatedAt(now).version(0L).build();
+    }
+
+    private FulfillmentOperationDO createHuashengInitialOperation(PreparedAcceptance command, BOrderDO bOrder,
+                                                                   PublishedConnectorConfiguration connectorConfig,
+                                                                   LocalDateTime now) {
+        HuashengCheckpointCodec codec = checkpointCodecProvider != null ? checkpointCodecProvider.getIfAvailable() : null;
+        if (codec == null) {
+            throw new IllegalStateException("HuashengCheckpointCodec 不可用，无法执行华昇首单受理");
+        }
+        SupplierOfferVersionMapper offerVersionMapper = offerVersionMapperProvider != null ? offerVersionMapperProvider.getIfAvailable() : null;
+        if (offerVersionMapper == null) {
+            throw new IllegalStateException("SupplierOfferVersionMapper 不可用，无法执行华昇首单受理");
+        }
+        SupplierOfferVersionDO offerVersion = offerVersionMapper.selectById(bOrder.getOfferVersionId());
+        if (offerVersion == null || offerVersion.getExternalSkuCode() == null || offerVersion.getExternalSkuCode().isBlank()) {
+            throw new IllegalStateException("华昇 Offer 外部商品编码缺失: offerVersionId=" + bOrder.getOfferVersionId());
+        }
+        long couponId;
+        try {
+            couponId = Long.parseLong(offerVersion.getExternalSkuCode().trim());
+            if (couponId <= 0) {
+                throw new IllegalArgumentException("华昇 couponId 必须为正整数");
+            }
+        } catch (NumberFormatException e) {
+            throw new IllegalStateException("华昇 externalSkuCode 无法解析为正整数 couponId: " + offerVersion.getExternalSkuCode());
+        }
+
+        if (bOrder.getBillno() == null || bOrder.getBillno().isBlank()) {
+            throw new IllegalStateException("bOrder.billno 不能为空");
+        }
+
+        int expireTime = 300;
+        if (connectorConfig.extraParameters() != null && connectorConfig.extraParameters().containsKey("expireTime")) {
+            String raw = connectorConfig.extraParameters().get("expireTime");
+            if (raw != null && !raw.isBlank()) {
+                try {
+                    expireTime = Integer.parseInt(raw.trim());
+                } catch (NumberFormatException e) {
+                    log.warn("[履约][lifecycle] 华昇 expireTime 解析异常 raw={}, 采用默认300", raw);
+                }
+            }
+        }
+        if (expireTime < HuashengFlowCodes.EXPIRE_TIME_MIN_SECONDS || expireTime > HuashengFlowCodes.EXPIRE_TIME_MAX_SECONDS) {
+            expireTime = 300;
+        }
+
+        String outMobile = null;
+        if (connectorConfig.extraParameters() != null && connectorConfig.extraParameters().containsKey("outMobile")) {
+            outMobile = connectorConfig.extraParameters().get("outMobile");
+        }
+        if ((outMobile == null || outMobile.isBlank()) && command.fulfillmentAccountValue() != null && !command.fulfillmentAccountValue().isBlank()) {
+            outMobile = command.fulfillmentAccountValue();
+        }
+        if (outMobile != null && outMobile.isBlank()) {
+            outMobile = null;
+        }
+
+        FulfillmentCallbackProperties callbackProperties = callbackPropertiesProvider != null ? callbackPropertiesProvider.getIfAvailable() : null;
+        String base = callbackProperties != null ? callbackProperties.getPublicCallbackBaseUrl() : null;
+        if (base == null || base.isBlank()) {
+            throw new IllegalStateException("publicCallbackBaseUrl 不能为空，无法生成华昇回调地址");
+        }
+        String normalizedBase = base.endsWith("/") ? base.substring(0, base.length() - 1) : base;
+        String callbackPath = connectorConfig.callbackPath() != null && !connectorConfig.callbackPath().isBlank()
+                ? connectorConfig.callbackPath() : "/callbacks/suppliers/huasheng";
+        String normalizedPath = callbackPath.startsWith("/") ? callbackPath : "/" + callbackPath;
+        if (!normalizedPath.endsWith("/")) {
+            normalizedPath = normalizedPath + "/";
+        }
+        String notifyUrl = normalizedBase + normalizedPath + bOrder.getConnectorVersionId();
+
+        String operationNo = businessNoGenerator.next(BusinessNoPrefixes.OP);
+        String idempotencyKey = FulfillmentIdempotencyKeys.operation(bOrder.getBOrderNo(), 1);
+        byte[] configDigest = sha256((idempotencyKey + "|" + bOrder.getOfferVersionId()
+                + "|" + bOrder.getConnectorVersionId()).getBytes(StandardCharsets.UTF_8));
+
+        HuashengCheckpoint.Binding binding = new HuashengCheckpoint.Binding(
+                bOrder.getId(),
+                bOrder.getBOrderNo(),
+                operationNo,
+                1,
+                AdapterStepCode.PLACE_ORDER,
+                bOrder.getConnectorVersionId(),
+                bOrder.getOfferVersionId(),
+                configDigest
+        );
+        HuashengCheckpoint.PlaceParameters placeParams = new HuashengCheckpoint.PlaceParameters(
+                bOrder.getBillno(),
+                couponId,
+                HuashengFlowCodes.TYPE201_ORDER_QUANTITY,
+                expireTime,
+                outMobile,
+                notifyUrl
+        );
+        HuashengCheckpoint.Progress progress = new HuashengCheckpoint.Progress(
+                0, 0, 0, null, null, command.traceId()
+        );
+        HuashengCheckpoint checkpoint = new HuashengCheckpoint(
+                binding, placeParams, null, null, progress, null
+        );
+        HuashengCheckpointCodec.Stored stored = codec.encrypt(checkpoint);
+
+        return FulfillmentOperationDO.builder()
+                .operationNo(operationNo)
+                .bOrderId(bOrder.getId())
+                .operationKind(FulfillmentOperationKind.FULFILL.name())
+                .adapterStepCode(AdapterStepCode.PLACE_ORDER.name())
+                .sequenceNo(1)
+                .idempotencyKey(idempotencyKey)
+                .configDigest(configDigest)
+                .status(FulfillmentInitialStatuses.OPERATION_PENDING)
+                .attemptCount(0)
+                .checkpointSchemaVersion(stored.schemaVersion())
+                .checkpointKeyVersion(stored.keyVersion())
+                .checkpointCiphertext(stored.ciphertext())
+                .executionGeneration(0L)
+                .recoveryCount(0)
+                .createdAt(now)
+                .updatedAt(now)
+                .version(0L)
+                .build();
+    }
+
+    private void scheduleHuashengPreparationWatchdogIfApplicable(FulfillmentOperationDO operation, String originTraceId, LocalDateTime now) {
+        if (AdapterStepCode.PLACE_ORDER.name().equals(operation.getAdapterStepCode())
+                && operation.getCheckpointCiphertext() != null) {
+            PersistentTimer persistentTimer = persistentTimerProvider != null ? persistentTimerProvider.getIfAvailable() : null;
+            if (persistentTimer != null) {
+                ObjectNode prepPayload = objectMapper.createObjectNode();
+                prepPayload.put("operationNo", operation.getOperationNo());
+                if (originTraceId != null) {
+                    prepPayload.put("originTraceId", originTraceId);
+                }
+                persistentTimer.scheduleOnce(
+                        HuashengFlowCodes.PREPARATION_WATCHDOG_TASK,
+                        "HS:PREP:" + operation.getOperationNo(),
+                        prepPayload,
+                        databaseClock.toInstant(now.plusMinutes(HuashengFlowPolicy.PREPARATION_WATCHDOG_MINUTES))
+                );
+            }
+        }
     }
 
     private void appendAcceptanceEvents(PreparedAcceptance command, SupplyChainOrderDO order,
