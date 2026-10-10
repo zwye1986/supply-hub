@@ -225,6 +225,7 @@ class MasterDataLifecycleIntegrationTest {
             ProductCatalogCommandService.class, ProductCenterTestConfiguration.class, BuyerListingPublicationService.class,
             com.aifuli.module.supplychain.routing.application.SupplierRoutingApplicationService.class,
             com.aifuli.module.supplychain.tradecore.catalog.application.CurrentSupplyEligibilityReader.class,
+            com.aifuli.module.supplychain.infrastructure.configuration.BuyerSelectionCatalogProperties.class,
             BuyerCatalogQueryService.class})
     static class TestConfiguration {
         @Bean

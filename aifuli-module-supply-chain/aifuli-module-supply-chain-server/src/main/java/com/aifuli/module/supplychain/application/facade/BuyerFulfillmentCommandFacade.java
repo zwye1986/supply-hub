@@ -8,6 +8,7 @@ import com.aifuli.module.supplychain.api.fulfillment.dto.FulfillmentReceiptStatu
 import com.aifuli.module.supplychain.api.fulfillment.dto.FulfillmentTargetDTO;
 import com.aifuli.module.supplychain.api.order.dto.SupplyChainOrderStatus;
 import com.aifuli.module.supplychain.border.fulfillment.application.FulfillmentAcceptanceLifecycle;
+import com.aifuli.module.supplychain.border.fulfillment.application.FrozenAcceptanceIdentityReader;
 import com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyAcceptanceCoordinator;
 import com.aifuli.module.supplychain.border.fulfillment.application.FulfillmentAcceptanceLifecycle.TargetSchemaSnapshot;
 import com.aifuli.module.supplychain.border.fulfillment.application.FulfillmentTargetSchemaRegistry;
@@ -62,6 +63,7 @@ public class BuyerFulfillmentCommandFacade {
     private final EnvelopeCryptoPort envelopeCrypto;
     private final HmacFingerprintPort hmacFingerprint;
     private final FulfillmentAcceptanceLifecycle lifecycle;
+    private final FrozenAcceptanceIdentityReader frozenIdentityReader;
     private final RechargeFrequencyAcceptanceCoordinator acceptanceCoordinator;
     private final BusinessNoGenerator businessNoGenerator;
     private final ObjectMapper objectMapper;
@@ -85,11 +87,21 @@ public class BuyerFulfillmentCommandFacade {
         BuyerResolver.BuyerSnapshot buyer = buyerResolver.resolve(
                 request.getSourceSystem(), request.getExternalTenantId(), now);
         ProjectSnapshot project = projectAccessResolver.requireActiveByCode(request.getProjectCode(), buyer.id());
-        TargetSchemaSnapshot targetSchema = lifecycle.resolveTargetSchema(buyer.id(), request.getBuyerSkuCode());
+        // 当前Schema解析前读冻结回执身份：已受理同参与续跑用冻结SKU/Schema算指纹，不因当前目录变化变成冲突。
+        FrozenAcceptanceIdentityReader.FrozenAcceptanceIdentity frozen =
+                frozenIdentityReader.read(project.projectId(), request.getBuyerOrderNo());
+        TargetSchemaSnapshot targetSchema;
+        if (frozen != null) {
+            // claim 前只比较冻结事实；执行分支再解析当前目录及校验目标，见设计 §3.1/§8。
+            targetSchema = new TargetSchemaSnapshot(frozen.platformSkuId(), frozen.targetSchemaCode(),
+                    frozen.targetSchemaVersion(), true, null);
+        } else {
+            targetSchema = lifecycle.resolveTargetSchema(buyer.id(), request.getBuyerSkuCode());
+        }
         // 仅作链路追踪与审计 traceId（outbox/资金/状态日志沿用）；对外稳定回执号见回执快照 receiptNo。
         String traceId = businessNoGenerator.next(BusinessNoPrefixes.REQ);
         FulfillmentAcceptanceLifecycle.PreparedAcceptance prepared = prepare(
-                request, buyer, project, targetSchema, traceId);
+                request, buyer, project, targetSchema, traceId, frozen == null);
         FulfillmentAcceptanceLifecycle.ClaimResult claim;
         try {
             claim = claimWithProjectKeyRaceRetry(prepared);
@@ -101,6 +113,12 @@ public class BuyerFulfillmentCommandFacade {
         if (!claim.executeAcceptance()) {
             log.info("[履约][facade] 抢占后回放 receiptId={}", claim.receiptId());
             return toResponse(lifecycle.replay(claim.receiptId()));
+        }
+        if (frozen != null) {
+            TargetSchemaSnapshot current = lifecycle.resolveTargetSchema(buyer.id(), request.getBuyerSkuCode());
+            targetSchema = new TargetSchemaSnapshot(frozen.platformSkuId(), frozen.targetSchemaCode(),
+                    frozen.targetSchemaVersion(), true, current.catalogIdentity());
+            prepared = prepare(request, buyer, project, targetSchema, traceId, true);
         }
         try {
             FulfillmentAcceptanceReceiptRespDTO response = toResponse(acceptanceCoordinator.accept(claim.receiptId(), prepared));
@@ -150,7 +168,7 @@ public class BuyerFulfillmentCommandFacade {
      */
     private FulfillmentAcceptanceLifecycle.PreparedAcceptance prepare(
             AcceptFulfillmentReqDTO request, BuyerResolver.BuyerSnapshot buyer,
-            ProjectSnapshot project, TargetSchemaSnapshot targetSchema, String traceId) {
+            ProjectSnapshot project, TargetSchemaSnapshot targetSchema, String traceId, boolean validateAndEncrypt) {
         FulfillmentTargetDTO target = request.getTarget();
         Map<String, String> normalizedTargetValues = new TreeMap<>(target.getValues());
         boolean mobileTarget = FulfillmentTargetFields.ACCOUNT_TYPE_MOBILE.equals(
@@ -164,7 +182,7 @@ public class BuyerFulfillmentCommandFacade {
         byte[] targetCanonical = canonicalTarget(normalizedTargetValues, targetSchema);
         byte[] targetDigest = hmacFingerprint.fingerprint(FulfillmentTargetFields.FINGERPRINT_PURPOSE, targetCanonical);
         boolean targetValid = targetSchema.available() && (!mobileTarget || normalizedTargetMobile != null);
-        if (targetValid) {
+        if (targetValid && validateAndEncrypt) {
             try {
                 targetSchemaRegistry.validate(
                         targetSchema.schemaCode(), targetSchema.schemaVersion(), normalizedTargetValues);
@@ -173,7 +191,7 @@ public class BuyerFulfillmentCommandFacade {
             }
         }
         EnvelopeCryptoPort.EncryptedPayload encrypted = null;
-        if (targetValid) {
+        if (targetValid && validateAndEncrypt) {
             encrypted = envelopeCrypto.encrypt(targetCanonical, associatedData(
                     buyer.id(), request.getBuyerOrderNo(),
                     targetSchema.schemaCode(), targetSchema.schemaVersion()));

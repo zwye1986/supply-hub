@@ -2,8 +2,11 @@ package com.aifuli.module.supplychain.tradecore.catalog.dal.mysql;
 
 import com.aifuli.framework.mybatis.core.mapper.BaseMapperX;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerListingDO;
+import com.aifuli.module.supplychain.tradecore.catalog.domain.BuyerListingStatus;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import org.apache.ibatis.annotations.Mapper;
+
+import java.util.List;
 
 @Mapper
 public interface BuyerListingMapper extends BaseMapperX<BuyerListingDO> {
@@ -49,5 +52,34 @@ public interface BuyerListingMapper extends BaseMapperX<BuyerListingDO> {
         return selectOneForUpdate(new LambdaQueryWrapper<BuyerListingDO>()
                 .eq(BuyerListingDO::getBuyerId, buyerId)
                 .eq(BuyerListingDO::getBuyerSkuCode, buyerSkuCode));
+    }
+
+    /** 按买家商品身份定位受理目录；管理保存后目录定位使用。 */
+    default BuyerListingDO selectByBuyerProductId(Long buyerProductId) {
+        return selectOne(BuyerListingDO::getBuyerProductId, buyerProductId);
+    }
+
+    /** 扫描遍历上界：AUTO且非退役的最大主键；无候选返回null。见设计 §6.2「公平推进与重启」。 */
+    default Long selectMaxAutoSweepableId() {
+        List<BuyerListingDO> rows = selectList(new LambdaQueryWrapper<BuyerListingDO>()
+                .select(BuyerListingDO::getId)
+                .eq(BuyerListingDO::getManagementMode, "AUTO_SELECTION")
+                .ne(BuyerListingDO::getStatus, BuyerListingStatus.RETIRED.getCode())
+                .orderByDesc(BuyerListingDO::getId)
+                .last("LIMIT 1"));
+        return rows.isEmpty() ? null : rows.getFirst().getId();
+    }
+
+    /** 扫描候选有限ID集：AUTO且非退役、主键升序、(afterId, upperId]；只读ID不锁行。见设计 §6.1。 */
+    default List<Long> selectAutoSweepableIds(Long afterId, Long upperId, int limit) {
+        return selectList(new LambdaQueryWrapper<BuyerListingDO>()
+                .select(BuyerListingDO::getId)
+                .eq(BuyerListingDO::getManagementMode, "AUTO_SELECTION")
+                .ne(BuyerListingDO::getStatus, BuyerListingStatus.RETIRED.getCode())
+                .gt(afterId != null, BuyerListingDO::getId, afterId)
+                .le(BuyerListingDO::getId, upperId)
+                .orderByAsc(BuyerListingDO::getId)
+                .last("LIMIT " + limit))
+                .stream().map(BuyerListingDO::getId).toList();
     }
 }

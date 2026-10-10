@@ -32,7 +32,8 @@ class BuyerListingManagementSafetyTest {
     private final SupplyChainDatabaseClock clock = mock(SupplyChainDatabaseClock.class);
     private final BuyerListingPublicationService service = new BuyerListingPublicationService(
             clock, listings, versions, availability, changes, buyers, sellability, outbox,
-            buyerPricing, buyerVersions, platformPricing, eligibilityReader, new ObjectMapper());
+            buyerPricing, buyerVersions, platformPricing, eligibilityReader, new ObjectMapper(),
+            new com.aifuli.module.supplychain.infrastructure.configuration.BuyerSelectionCatalogProperties());
     private final LocalDateTime now = LocalDateTime.of(2026, 10, 4, 12, 0);
 
     @Test

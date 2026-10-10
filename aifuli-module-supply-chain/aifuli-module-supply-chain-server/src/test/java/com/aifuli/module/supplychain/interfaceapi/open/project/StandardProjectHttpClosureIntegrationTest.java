@@ -215,6 +215,8 @@ class StandardProjectHttpClosureIntegrationTest {
                                    java.util.concurrent.CountDownLatch release) { }
     /** 首冻独立事务已提交、最终受理事务尚未开启时的一次性中断标记，用于复现进程中断后的同参续跑。 */
     private static volatile String interruptBeforeAcceptance;
+    /** 首冻独立事务已提交、最终受理事务执行时的一次性可重试拒绝标记，用于模拟最终受理阶段失败保留报价。 */
+    private static volatile String failAcceptanceOnce;
 
     @Test
     void projectRetireCommittedBeforeFinalAcceptRejectsWithoutSideEffects() throws Exception {
@@ -395,7 +397,7 @@ class StandardProjectHttpClosureIntegrationTest {
     @Test
     void failedAcceptanceRetainsIssuedQuoteAndCasRetryUsesOriginalPriceWhileNewOrderUsesNewPrice() {
         String orderNo = "CAS-PRICE-" + UNIQUE_SEQ.incrementAndGet();
-        setAvailability(BUYER_SKU_VOUCHER, ListingAvailability.UNAVAILABLE, "SUPPLY_NOT_READY");
+        failAcceptanceOnce = orderNo;
         try {
             var rejected = postVoucherCreate(orderNo, null);
             assertThat(rejected.getCode()).isZero();
@@ -406,7 +408,6 @@ class StandardProjectHttpClosureIntegrationTest {
                     Long.class, PROJECT_A_ID, orderNo)).isZero();
             String token = jdbc.queryForObject("SELECT quote_token FROM sc_standard_pricing_quote WHERE project_id=? AND buyer_order_no=?",
                     String.class, PROJECT_A_ID, orderNo);
-            setAvailability(BUYER_SKU_VOUCHER, ListingAvailability.AVAILABLE, "SUPPLY_READY");
             saveVoucherPricing(new BigDecimal("90"));
             var replay = postVoucherCreate(orderNo, null);
             assertThat(replay.getData().get("receiptStatus")).isEqualTo("REJECTED_RETRYABLE");
@@ -423,7 +424,7 @@ class StandardProjectHttpClosureIntegrationTest {
             assertThat(jdbc.queryForObject("SELECT buyer_settlement_amount FROM sc_supply_chain_order WHERE project_id=? AND buyer_order_no=?",
                     Long.class, PROJECT_A_ID, newOrderNo)).isEqualTo(9_000L);
         } finally {
-            setAvailability(BUYER_SKU_VOUCHER, ListingAvailability.AVAILABLE, "SUPPLY_READY");
+            failAcceptanceOnce = null;
             saveVoucherPricing(new BigDecimal("98"));
         }
     }
@@ -614,6 +615,156 @@ class StandardProjectHttpClosureIntegrationTest {
     }
 
     /**
+     * 冻结回执身份优先：已受理同参在平台SKU目标Schema变化后仍回放——用冻结SKU/Schema算格式2指纹，
+     * 不重新解析当前Schema；改商品编码仍属异参冲突。设计 §8「冻结事实回放与兼容边界」。
+     */
+    @Test
+    void manualUnknownProjectionUsesCurrentHttpQualificationButOldRpcStillRejects() {
+        String orderNo = "MANUAL-UNKNOWN-" + UNIQUE_SEQ.incrementAndGet();
+        var listing = server.getBean(BuyerListingMapper.class).selectByBuyerAndSku(BUYER_ID,
+                server.getBean(PlatformSkuMapper.class).selectByCode(SKU_VOUCHER_CODE).getId());
+        setAvailability(BUYER_SKU_VOUCHER, ListingAvailability.UNKNOWN, "NOT_EVALUATED");
+        try {
+            var response = postVoucherCreate(orderNo, null);
+            assertThat(response.getData().get("receiptStatus")).isEqualTo("ACCEPTED");
+            String rpcNo = orderNo + "-RPC";
+            quoteService.quote(rpcQuoteRequest(PROJECT_A_CODE, rpcNo, SKU_VOUCHER_CODE));
+            var request = new com.aifuli.module.supplychain.api.fulfillment.dto.AcceptFulfillmentReqDTO();
+            request.setSourceSystem(SOURCE_SYSTEM); request.setExternalTenantId(EXTERNAL_TENANT_ID);
+            request.setProjectCode(PROJECT_A_CODE); request.setBuyerOrderNo(rpcNo);
+            request.setBuyerSkuCode(BUYER_SKU_VOUCHER); request.setQuantity(1L);
+            var target = new com.aifuli.module.supplychain.api.fulfillment.dto.FulfillmentTargetDTO();
+            target.setValues(Map.of("deliveryMode", "BUYER_ASSET_QUERY")); request.setTarget(target);
+            var rpc = server.getBean(com.aifuli.module.supplychain.application.facade.BuyerFulfillmentCommandFacade.class)
+                    .acceptFulfillment(request);
+            assertThat(rpc.getRejectionCode()).isEqualTo("INVENTORY_INSUFFICIENT");
+            assertThat(jdbc.queryForObject("SELECT availability FROM sc_buyer_listing_availability WHERE listing_id=?",
+                    Integer.class, listing.getId())).isEqualTo((int) ListingAvailability.UNKNOWN.getCode());
+        } finally {
+            setAvailability(BUYER_SKU_VOUCHER, ListingAvailability.AVAILABLE, "SUPPLY_READY");
+        }
+    }
+
+    @Test
+    void currentProjectUnavailableRejectsBeforeFreezeEvenWhenOtherProjectConfirmed() {
+        String orderNo = "PROJECT-NO-SUPPLY-" + UNIQUE_SEQ.incrementAndGet();
+        Long ruleId = jdbc.queryForObject("SELECT id FROM sc_std_routing_rule WHERE rule_code='WS_TELCO'", Long.class);
+        try {
+            jdbc.update("UPDATE sc_std_routing_rule SET project_mode='SPECIFIED' WHERE id=?", ruleId);
+            jdbc.update("INSERT INTO sc_std_routing_rule_scope(rule_id,scope_kind,scope_code,created_at) VALUES (?,'PROJECT',?,NOW(3))",
+                    ruleId, PROJECT_B_CODE);
+            var response = postVoucherCreate(orderNo, null);
+            assertThat(response.getData().get("receiptStatus")).isEqualTo("REJECTED_RETRYABLE");
+            assertThat(response.getData().get("rejectionCode")).isEqualTo("NO_ROUTABLE_SUPPLIER");
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_standard_pricing_quote WHERE project_id=? AND buyer_order_no=?", Long.class, PROJECT_A_ID, orderNo)).isZero();
+            assertThat(jdbc.queryForObject("SELECT result_fulfillment_request_no FROM sc_fulfillment_acceptance_receipt WHERE project_id=? AND buyer_order_no=?", String.class, PROJECT_A_ID, orderNo)).isNull();
+
+            // 规则恢复后以 CAS 版本重试正常受理
+            jdbc.update("DELETE FROM sc_std_routing_rule_scope WHERE rule_id=? AND scope_kind='PROJECT'", ruleId);
+            jdbc.update("UPDATE sc_std_routing_rule SET project_mode='ALL' WHERE id=?", ruleId);
+            long cas = ((Number) response.getData().get("receiptVersion")).longValue();
+            var accepted = postVoucherCreate(orderNo, cas);
+            assertThat(accepted.getCode()).isZero();
+            assertThat(accepted.getData().get("receiptStatus")).isEqualTo("ACCEPTED");
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_standard_pricing_quote WHERE project_id=? AND buyer_order_no=?", Long.class, PROJECT_A_ID, orderNo)).isEqualTo(1);
+        } finally {
+            jdbc.update("DELETE FROM sc_std_routing_rule_scope WHERE rule_id=? AND scope_kind='PROJECT'", ruleId);
+            jdbc.update("UPDATE sc_std_routing_rule SET project_mode='ALL' WHERE id=?", ruleId);
+        }
+    }
+
+    @Test
+    void adminPricingAutomaticallyPublishesCatalogAndSignedHttpAcceptsWithoutSqlProjectionRepair() {
+        var draft = createBridgeDraft(false);
+        var coordinator = server.getBean(com.aifuli.module.supplychain.tradecore.catalog.application.BuyerSelectionCatalogAdminCoordinator.class);
+        var saved = coordinator.saveBuyerPricing(BUYER_CODE, List.of(draft.bpdCode()),
+                GenericBatchPricingService.ProjectOverrides.allInherited(), 1L);
+        assertThat(saved.getCatalogResults().getFirst().getPublicationState()).isEqualTo("PUBLISHED");
+        assertThat(saved.getCatalogResults().getFirst().getAvailabilityStatus()).isEqualTo("AVAILABLE");
+        String orderNo = "AUTO-SIGNED-SUCCESS-" + UNIQUE_SEQ.incrementAndGet();
+        var accepted = postBridgeCreate(orderNo, draft.bpdCode(), null);
+        assertThat(accepted.getData().get("receiptStatus")).isEqualTo("ACCEPTED");
+        String realOrderNo = (String) accepted.getData().get("orderNo");
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_standard_pricing_quote WHERE project_id=? AND buyer_order_no=? AND status='CONSUMED'",
+                Long.class, PROJECT_A_ID, orderNo)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_supplier_routing_round WHERE order_id=(SELECT id FROM sc_supply_chain_order WHERE order_no=?)",
+                Long.class, realOrderNo)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT buyer_settlement_amount FROM sc_supply_chain_order WHERE order_no=?", Long.class, realOrderNo)).isEqualTo(10000L);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_fund_reservation WHERE reference_no=(SELECT result_fulfillment_request_no FROM sc_fulfillment_acceptance_receipt WHERE project_id=? AND buyer_order_no=?)", Long.class, PROJECT_A_ID, orderNo)).isEqualTo(1);
+        Long listingId = server.getBean(BuyerListingMapper.class).selectByListingNo(draft.listingNo()).getId();
+        Long productId = jdbc.queryForObject("SELECT buyer_product_id FROM sc_buyer_listing WHERE id=?", Long.class, listingId);
+        try {
+            jdbc.update("UPDATE sc_buyer_listing SET buyer_product_id=999999999 WHERE id=?", listingId);
+            var replay = postBridgeCreate(orderNo, draft.bpdCode(), null);
+            assertThat(replay.getData().get("idempotentReplay")).isEqualTo(true);
+            assertThat(replay.getData().get("orderNo")).isEqualTo(realOrderNo);
+        } finally {
+            jdbc.update("UPDATE sc_buyer_listing SET buyer_product_id=? WHERE id=?", productId, listingId);
+        }
+    }
+
+    @Test
+    void acceptedReplayUsesFrozenSchemaAfterPlatformSkuSchemaChange() {
+        String orderNo = "FROZEN-SCHEMA-" + UNIQUE_SEQ.incrementAndGet();
+        var accepted = postVoucherCreate(orderNo, null);
+        assertThat(accepted.getData().get("receiptStatus")).isEqualTo("ACCEPTED");
+        String originalSchema = jdbc.queryForObject(
+                "SELECT target_schema_code FROM sc_platform_sku WHERE sku_code=?", String.class, SKU_VOUCHER_CODE);
+        Integer originalVersion = jdbc.queryForObject(
+                "SELECT target_schema_version FROM sc_platform_sku WHERE sku_code=?", Integer.class, SKU_VOUCHER_CODE);
+        try {
+            // 当前Schema编号变化：无冻结身份时指纹将不同而冲突；冻结身份下同参仍回放。
+            jdbc.update("UPDATE sc_platform_sku SET target_schema_code='FROZEN_REPLAY_SCHEMA', "
+                    + "target_schema_version=99 WHERE sku_code=?", SKU_VOUCHER_CODE);
+            var replay = postVoucherCreate(orderNo, null);
+            assertThat(replay.getCode()).isZero();
+            assertThat(replay.getData().get("orderNo")).isEqualTo(accepted.getData().get("orderNo"));
+            assertThat(replay.getData().get("idempotentReplay")).isEqualTo(true);
+            // 改商品编码同商品仍异参：原请求编码参与指纹比较。
+            String changedCode = "{\"buyerOrderNo\":\"" + orderNo + "\",\"buyerSkuCode\":\"SKU_ALIAS_CHANGED_"
+                    + UNIQUE_SEQ.incrementAndGet() + "\",\"quantity\":1,\"target\":{\"deliveryMode\":\"BUYER_ASSET_QUERY\"}}";
+            var conflict = postSigned(ORDERS_PATH, changedCode.getBytes(StandardCharsets.UTF_8), credentialsA(),
+                    System.currentTimeMillis(), "frozen-nonce-" + UNIQUE_SEQ.incrementAndGet()).getBody();
+            assertThat(conflict.getCode()).isEqualTo(
+                    com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.IDEMPOTENCY_CONFLICT.getCode());
+        } finally {
+            jdbc.update("UPDATE sc_platform_sku SET target_schema_code=?, target_schema_version=? WHERE sku_code=?",
+                    originalSchema, originalVersion, SKU_VOUCHER_CODE);
+        }
+    }
+
+    /**
+     * 首冻前准备：AUTO目录暂停时不创建报价，保存可重试拒绝；恢复后同参按原冻结键续跑。
+     * 设计 §7.2「首冻前准备」。
+     */
+    @Test
+    void suspendedAutoCatalogRejectsBeforeFreezeWithoutQuote() {
+        String orderNo = "SUSPENDED-AUTO-" + UNIQUE_SEQ.incrementAndGet();
+        Long skuId = server.getBean(PlatformSkuMapper.class).selectByCode(SKU_VOUCHER_CODE).getId();
+        var listing = server.getBean(BuyerListingMapper.class).selectByBuyerAndSku(BUYER_ID, skuId);
+        server.getBean(BuyerListingPublicationService.class).changeStatus(
+                new BuyerListingPublicationService.ChangeListingStatusCommand(
+                        listing.getListingNo(), listing.getVersion(),
+                        com.aifuli.module.supplychain.tradecore.catalog.domain.BuyerListingStatus.SUSPENDED,
+                        1L, "trace-suspend", null, null));
+        try {
+            var response = postVoucherCreate(orderNo, null);
+            assertThat(response.getCode()).isZero();
+            assertThat(response.getData().get("receiptStatus")).isEqualTo("REJECTED_RETRYABLE");
+            assertThat(response.getData().get("rejectionCode")).isEqualTo("LISTING_VERSION_EXPIRED");
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_standard_pricing_quote "
+                    + "WHERE project_id=? AND buyer_order_no=?", Long.class, PROJECT_A_ID, orderNo)).isZero();
+        } finally {
+            var fresh = server.getBean(BuyerListingMapper.class).selectById(listing.getId());
+            server.getBean(BuyerListingPublicationService.class).changeStatus(
+                    new BuyerListingPublicationService.ChangeListingStatusCommand(
+                            fresh.getListingNo(), fresh.getVersion(),
+                            com.aifuli.module.supplychain.tradecore.catalog.domain.BuyerListingStatus.PUBLISHED,
+                            1L, "trace-resume", null, null));
+        }
+    }
+
+    /**
      * 首冻阶段发现已有报价但当前项目选品已停用时，必须返回稳定 CommonResult SKU_NOT_SALEABLE，
      * 报价保持 ISSUED、回执保持 PROCESSING 且不写 rejection_code，不得伪造已保存的拒绝回执；
      * 因此选品恢复后同一 buyerOrderNo 无需 previousReceiptVersion 即可按原冻结价续跑受理。
@@ -688,14 +839,14 @@ class StandardProjectHttpClosureIntegrationTest {
     }
 
     @Test
-    void autoDraftNullVersionRejectsTwiceWithCorrectCasAndRetainsRealIssuedQuote() {
+    void autoDraftRejectsTwiceWithCorrectCasWithoutQuote() {
         var draft = createBridgeDraft(false);
         String orderNo = "AUTO-DRAFT-" + UNIQUE_SEQ.incrementAndGet();
         var first = postBridgeCreate(orderNo, draft.bpdCode(), null);
         assertThat(first.getCode()).isZero();
         assertThat(first.getData().get("receiptStatus")).isEqualTo("REJECTED_RETRYABLE");
         assertThat(first.getData().get("rejectionCode")).isEqualTo("LISTING_VERSION_EXPIRED");
-        assertNullDraftVersionAndIssuedQuote(orderNo);
+        assertNoDraftQuote(orderNo);
         long cas = ((Number) first.getData().get("receiptVersion")).longValue();
         var wrong = postBridgeCreate(orderNo, draft.bpdCode(), cas + 99);
         // 原CAS契约：错误版本同参仅回放拒绝，不重开，不改写为新的错误语义。
@@ -706,13 +857,13 @@ class StandardProjectHttpClosureIntegrationTest {
         assertThat(second.getCode()).isZero();
         assertThat(second.getData().get("receiptStatus")).isEqualTo("REJECTED_RETRYABLE");
         assertThat(second.getData().get("rejectionCode")).isEqualTo("LISTING_VERSION_EXPIRED");
-        assertNullDraftVersionAndIssuedQuote(orderNo);
+        assertNoDraftQuote(orderNo);
         assertThat(jdbc.queryForObject("SELECT attempt_no FROM sc_fulfillment_acceptance_receipt WHERE project_id=? AND buyer_order_no=?", Integer.class, PROJECT_A_ID, orderNo)).isEqualTo(2);
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_supply_chain_order WHERE project_id=? AND buyer_order_no=?", Long.class, PROJECT_A_ID, orderNo)).isZero();
     }
 
     @Test
-    void manualDraftNullVersionCasRetryContinuesAfterRealPublishWithoutChangingFrozenQuote() {
+    void manualDraftRejectsBeforeFreezeThenContinuesAfterRealPublish() {
         // 经真实商品命令创建未选品对照SKU，使SKU/LST自增主键不偶然同数；不修改任何目录主键。
         String controlSku = String.format("SKU_001_%03d", BRIDGE_SKU_SEQUENCE.incrementAndGet());
         server.getBean(ProductCatalogCommandService.class).createSku(new ProductCatalogCommandService.CreateSkuCommand(
@@ -722,13 +873,13 @@ class StandardProjectHttpClosureIntegrationTest {
         var first = postBridgeCreate(orderNo, draft.bpdCode(), null);
         assertThat(first.getCode()).isZero();
         assertThat(first.getData().get("receiptStatus")).isEqualTo("REJECTED_RETRYABLE");
-        assertNullDraftVersionAndIssuedQuote(orderNo);
+        assertThat(first.getData().get("rejectionCode")).isEqualTo("LISTING_VERSION_EXPIRED");
+        assertNoDraftQuote(orderNo);
         long cas = ((Number) first.getData().get("receiptVersion")).longValue();
         var second = postBridgeCreate(orderNo, draft.bpdCode(), cas);
         assertThat(second.getCode()).isZero();
         assertThat(second.getData().get("receiptStatus")).isEqualTo("REJECTED_RETRYABLE");
-        assertNullDraftVersionAndIssuedQuote(orderNo);
-        Long quoteId = jdbc.queryForObject("SELECT id FROM sc_standard_pricing_quote WHERE project_id=? AND buyer_order_no=?", Long.class, PROJECT_A_ID, orderNo);
+        assertNoDraftQuote(orderNo);
         server.getBean(BuyerListingPublicationService.class).publish(new BuyerListingPublicationService.PublishListingCommand(
                 draft.listingNo(), 0L, 9800L, "真实手工发布", LocalDateTime.now().minusMinutes(1), null,
                 "修复真实未发布条件", 1L, "trace-manual-repair", null, null));
@@ -737,12 +888,12 @@ class StandardProjectHttpClosureIntegrationTest {
         Long realSkuId = jdbc.queryForObject("SELECT platform_sku_id FROM sc_buyer_product WHERE buyer_product_code=?", Long.class, draft.bpdCode());
         // 要求本fixture物理主键互异，确保错误写PLT/SKU不会因数字巧合通过LST引用断言。
         assertThat(realLstId).isNotEqualTo(realPltId).isNotEqualTo(realSkuId);
-        assertThat(jdbc.queryForObject("SELECT listing_id FROM sc_standard_pricing_quote WHERE id=?", Long.class, quoteId)).isEqualTo(realPltId);
         /* 原手工发布完成，旧fixture继续设置RPC原投影；此处不表示C从零可售已交付。 */
         setAvailability(draft.alias(), ListingAvailability.AVAILABLE, "SUPPLY_READY");
         var repaired = postBridgeCreate(orderNo, draft.bpdCode(), ((Number) second.getData().get("receiptVersion")).longValue());
         assertThat(repaired.getCode()).isZero();
         assertThat(repaired.getData().get("receiptStatus")).isEqualTo("ACCEPTED");
+        Long quoteId = jdbc.queryForObject("SELECT id FROM sc_standard_pricing_quote WHERE project_id=? AND buyer_order_no=?", Long.class, PROJECT_A_ID, orderNo);
         // 052原重开保留尝试版本列；最终已接受绑定必须指向真实新商业版本，不补假版本号。
         assertThat(jdbc.queryForObject("SELECT v.version_no FROM sc_fulfillment_acceptance_receipt r JOIN sc_buyer_listing_version v ON v.id=r.listing_version_id WHERE r.project_id=? AND r.buyer_order_no=?", Integer.class, PROJECT_A_ID, orderNo)).isEqualTo(1);
         assertThat(jdbc.queryForObject("SELECT status FROM sc_standard_pricing_quote WHERE id=?", String.class, quoteId)).isEqualTo("CONSUMED");
@@ -751,6 +902,12 @@ class StandardProjectHttpClosureIntegrationTest {
         assertThat(jdbc.queryForObject("SELECT f.listing_id FROM sc_fulfillment_request f JOIN sc_supply_chain_order o ON o.id=f.order_id WHERE o.project_id=? AND o.buyer_order_no=?", Long.class, PROJECT_A_ID, orderNo)).isEqualTo(realLstId);
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_fulfillment_request f JOIN sc_supply_chain_order o ON o.id=f.order_id JOIN sc_buyer_listing l ON l.id=f.listing_id WHERE o.project_id=? AND o.buyer_order_no=? AND l.listing_no=?", Long.class, PROJECT_A_ID, orderNo, draft.listingNo())).isEqualTo(1);
         assertThat(postBridgeCreate(orderNo, draft.alias(), null).getCode()).isEqualTo(com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.IDEMPOTENCY_CONFLICT.getCode());
+    }
+
+    /** 草稿目录首冻前拒绝后不得创建报价；未发布目录 listing_version_no 保持空。 */
+    private void assertNoDraftQuote(String orderNo) {
+        assertThat(jdbc.queryForObject("SELECT listing_version_no FROM sc_fulfillment_acceptance_receipt WHERE project_id=? AND buyer_order_no=?", Integer.class, PROJECT_A_ID, orderNo)).isNull();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_standard_pricing_quote WHERE project_id=? AND buyer_order_no=?", Long.class, PROJECT_A_ID, orderNo)).isZero();
     }
 
     private record BridgeDraft(String bpdCode, String listingNo, String alias) { }
@@ -773,7 +930,7 @@ class StandardProjectHttpClosureIntegrationTest {
         String listingNo = manual ? catalog.createBuyerListing(new ProductCatalogCommandService.CreateBuyerListingCommand(BUYER_CODE, skuCode, alias, 1L)) : null;
         var item = new com.aifuli.module.supplychain.interfaceapi.admin.BuyerAdminController.BuyerProductItemReqVO(); item.setPlatformSkuCode(skuCode);
         var request = new com.aifuli.module.supplychain.interfaceapi.admin.BuyerAdminController.AddBuyerProductsReqVO(); request.setItems(List.of(item));
-        String bpd = withSyntheticAdmin(() -> server.getBean(com.aifuli.module.supplychain.interfaceapi.admin.BuyerAdminController.class).addProducts(BUYER_CODE, request).getData().getFirst());
+        String bpd = withSyntheticAdmin(() -> server.getBean(com.aifuli.module.supplychain.interfaceapi.admin.BuyerAdminController.class).addProducts(BUYER_CODE, request).getData().getSavedCodes().getFirst());
         var projectItem = new com.aifuli.module.supplychain.interfaceapi.admin.ProjectAdminController.ProjectProductItemReqVO(); projectItem.setPlatformSkuCode(skuCode);
         var projectRequest = new com.aifuli.module.supplychain.interfaceapi.admin.ProjectAdminController.AddProjectProductsReqVO(); projectRequest.setItems(List.of(projectItem));
         withSyntheticAdmin(() -> server.getBean(com.aifuli.module.supplychain.interfaceapi.admin.ProjectAdminController.class).addProducts(PROJECT_A_CODE, projectRequest));
@@ -790,10 +947,6 @@ class StandardProjectHttpClosureIntegrationTest {
         user.setTenantId(1L); user.setVisitTenantId(2L);
         security.setAuthentication(new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(user, null, List.of()));
         try { return action.get(); } finally { security.setAuthentication(original); }
-    }
-    private void assertNullDraftVersionAndIssuedQuote(String orderNo) {
-        assertThat(jdbc.queryForObject("SELECT listing_version_no FROM sc_fulfillment_acceptance_receipt WHERE project_id=? AND buyer_order_no=?", Integer.class, PROJECT_A_ID, orderNo)).isNull();
-        assertThat(jdbc.queryForObject("SELECT status FROM sc_standard_pricing_quote WHERE project_id=? AND buyer_order_no=?", String.class, PROJECT_A_ID, orderNo)).isEqualTo("ISSUED");
     }
     private static CommonResult<Map<String, Object>> postBridgeCreate(String orderNo, String code, Long previous) {
         String request = "{\"buyerOrderNo\":\"" + orderNo + "\",\"buyerSkuCode\":\"" + code + "\",\"quantity\":1,\"target\":{\"deliveryMode\":\"BUYER_ASSET_QUERY\"}"
@@ -833,9 +986,18 @@ class StandardProjectHttpClosureIntegrationTest {
         }
         @org.aspectj.lang.annotation.Around("execution(* com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyAcceptanceCoordinator.accept*(..))")
         public Object beforeAcceptance(org.aspectj.lang.ProceedingJoinPoint joinPoint) throws Throwable {
+            long receiptId = ((Number) joinPoint.getArgs()[0]).longValue();
             var command = (com.aifuli.module.supplychain.border.fulfillment.application.FulfillmentAcceptanceLifecycle.PreparedAcceptance) joinPoint.getArgs()[1];
             if (command.buyerOrderNo().equals(interruptBeforeAcceptance)) {
                 throw new IllegalStateException("simulated process interruption after price freeze commit");
+            }
+            if (command.buyerOrderNo().equals(failAcceptanceOnce)) {
+                failAcceptanceOnce = null;
+                throw new com.aifuli.module.supplychain.border.fulfillment.application.FulfillmentAcceptanceLifecycle.BusinessRejection(
+                        receiptId, null,
+                        com.aifuli.module.supplychain.border.fulfillment.domain.AcceptanceReceiptStatus.REJECTED_RETRYABLE,
+                        com.aifuli.module.supplychain.border.fulfillment.domain.AcceptanceRejectionCode.NO_ROUTABLE_SUPPLIER,
+                        null);
             }
             awaitPause(command.buyerOrderNo(), PauseStage.BEFORE_ACCEPT);
             return joinPoint.proceed();
@@ -1976,6 +2138,7 @@ class StandardProjectHttpClosureIntegrationTest {
                 "--aifuli.supply-chain.openapi.enabled=false",
                 "--aifuli.supply-chain.timer.enabled=false",
                 "--aifuli.supply-chain.outbox.enabled=false",
+                "--aifuli.supply-chain.catalog.sweep-enabled=false",
                 "--tbsg.channel.rpc.enabled=false",
                 "--aifuli.tracer.enable=false",
                 "--aifuli.metrics.enable=false",

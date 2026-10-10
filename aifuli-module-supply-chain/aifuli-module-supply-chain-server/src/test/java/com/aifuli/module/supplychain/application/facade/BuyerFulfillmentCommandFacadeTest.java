@@ -6,6 +6,7 @@ import com.aifuli.module.supplychain.api.fulfillment.dto.FulfillmentReceiptStatu
 import com.aifuli.module.supplychain.api.fulfillment.dto.FulfillmentTargetDTO;
 import com.aifuli.module.supplychain.api.order.dto.SupplyChainOrderStatus;
 import com.aifuli.module.supplychain.border.fulfillment.application.FulfillmentAcceptanceLifecycle;
+import com.aifuli.module.supplychain.border.fulfillment.application.FrozenAcceptanceIdentityReader;
 import com.aifuli.module.supplychain.border.fulfillment.application.FulfillmentAcceptanceLifecycle.AcceptanceSnapshot;
 import com.aifuli.module.supplychain.border.fulfillment.application.FulfillmentAcceptanceLifecycle.ClaimResult;
 import com.aifuli.module.supplychain.border.fulfillment.application.FulfillmentAcceptanceLifecycle.PreparedAcceptance;
@@ -101,6 +102,8 @@ class BuyerFulfillmentCommandFacadeTest {
     @Mock
     private FulfillmentAcceptanceLifecycle lifecycle;
     @Mock
+    private FrozenAcceptanceIdentityReader frozenIdentityReader;
+    @Mock
     private RechargeFrequencyAcceptanceCoordinator acceptanceCoordinator;
     @Mock
     private BusinessNoGenerator businessNoGenerator;
@@ -110,8 +113,8 @@ class BuyerFulfillmentCommandFacadeTest {
     @BeforeEach
     void setUp() {
         facade = new BuyerFulfillmentCommandFacade(databaseClock, buyerResolver, projectAccessResolver,
-                targetSchemaRegistry, envelopeCrypto, hmacFingerprint, lifecycle, acceptanceCoordinator,
-                businessNoGenerator, TRANSITIONAL_MAPPER);
+                targetSchemaRegistry, envelopeCrypto, hmacFingerprint, lifecycle, frozenIdentityReader,
+                acceptanceCoordinator, businessNoGenerator, TRANSITIONAL_MAPPER);
     }
 
     /**
@@ -121,6 +124,19 @@ class BuyerFulfillmentCommandFacadeTest {
      * <p>断言：不因缺失购买人身份、客户端商品版本、报价凭证串与支付时间抛出校验异常，
      * 且流程进入 claim 并沿重放路径返回回执。</p>
      */
+    @Test
+    void frozenReplaySkipsCurrentCatalogAndCurrentTargetValidation() throws Exception {
+        stubTrustedIdentityResolution();
+        when(frozenIdentityReader.read(any(), eq(BUYER_ORDER_NO))).thenReturn(
+                new FrozenAcceptanceIdentityReader.FrozenAcceptanceIdentity(88L, TARGET_SCHEMA_CODE, 1));
+        when(lifecycle.claim(any())).thenReturn(new ClaimResult(RECEIPT_ID, false, true));
+        when(lifecycle.replay(RECEIPT_ID)).thenReturn(snapshot(true));
+        org.mockito.Mockito.clearInvocations(lifecycle, targetSchemaRegistry, envelopeCrypto);
+        assertThat(facade.acceptFulfillment(transitionalValidatedRequest()).getIdempotentReplay()).isTrue();
+        verify(lifecycle, org.mockito.Mockito.never()).resolveTargetSchema(any(), anyString());
+        org.mockito.Mockito.verifyNoInteractions(targetSchemaRegistry, envelopeCrypto);
+    }
+
     @Test
     void acceptFulfillmentNoLongerRequiresRemovedIdentityFields() {
         stubTrustedIdentityResolution();

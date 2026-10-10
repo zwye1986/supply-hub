@@ -290,7 +290,8 @@ class BuyerSelectionCatalogRefreshIntegrationTest {
         assertThat(availability.getReasonCode()).isEmpty();
         assertThat(availability.getBasisDigest()).hasSize(32);
         assertThat(availability.getBasisJson()).contains(String.valueOf(pricing.getCurrentVersionId()));
-        assertThat(availability.getValidUntil()).isEqualTo(offerValidTo);
+        // 投影陈旧安全：期限=min(未来事实边界, evaluatedAt+30s)，夹具Offer边界为1天后，30秒上限生效。见设计 §6.4。
+        assertThat(availability.getValidUntil()).isEqualTo(availability.getEvaluatedAt().plusSeconds(30));
 
         assertThat(listingVersionCount()).isEqualTo(1);
         assertThat(listingChangeCount()).isEqualTo(1);
@@ -639,7 +640,7 @@ class BuyerSelectionCatalogRefreshIntegrationTest {
         assertThat(after.getAvailability()).isEqualTo(ListingAvailability.AVAILABLE.getCode());
         assertThat(after.getReasonCode()).isEmpty();
         assertThat(after.getEvaluatedAt()).isAfterOrEqualTo(before.getEvaluatedAt());
-        assertThat(after.getValidUntil()).isEqualTo(offerValidTo);
+        assertThat(after.getValidUntil()).isEqualTo(after.getEvaluatedAt().plusSeconds(30));
         assertThat(after.getBasisVersion()).isEqualTo(before.getBasisVersion() + 1);
         assertThat(after.getVersion()).isEqualTo(before.getVersion() + 1);
         assertThat(fanoutCount(listing.getListingNo())).isZero();
@@ -975,7 +976,8 @@ class BuyerSelectionCatalogRefreshIntegrationTest {
             OutboxEventRepository.class, BuyerCommandService.class, ProductCatalogCommandService.class,
             ProductCenterTestConfiguration.class, RoutingPolicyPublicationService.class,
             SupplierRoutingApplicationService.class, GenericBatchPricingService.class,
-            BuyerListingPublicationService.class})
+            BuyerListingPublicationService.class,
+            com.aifuli.module.supplychain.infrastructure.configuration.BuyerSelectionCatalogProperties.class})
     @ComponentScan(basePackages = "com.aifuli.module.supplychain.tradecore.catalog.application",
             useDefaultFilters = false, includeFilters = @ComponentScan.Filter(type = FilterType.REGEX,
                     pattern = ".*(CurrentSupplyEligibilityReader|BuyerSelectionCatalogRefreshService"

@@ -1,5 +1,6 @@
 package com.aifuli.module.supplychain.tradecore.catalog.application;
 
+import com.aifuli.module.supplychain.infrastructure.configuration.BuyerSelectionCatalogProperties;
 import com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerProductDO;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerProductMapper;
@@ -71,6 +72,7 @@ public class BuyerSelectionCatalogRefreshTransactionalWorker {
     private final CurrentSupplyEligibilityReader eligibilityReader;
     private final SupplyChainDatabaseClock databaseClock;
     private final ObjectMapper objectMapper;
+    private final BuyerSelectionCatalogProperties properties;
 
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public Outcome refresh(Long listingId, Long operatorId) {
@@ -307,7 +309,13 @@ public class BuyerSelectionCatalogRefreshTransactionalWorker {
         if (basisChanged) {
             basisVersion++;
         }
-        LocalDateTime validUntil = eligibility == null ? null : eligibility.nextFactBoundary();
+        // 投影陈旧安全：成功评估的期限为未来真实事实边界与最大评估有效期的最小值；
+        // 无未来边界也有巡检上限，避免扫描一遍超时后读侧仍续期假AVAILABLE。见设计 §6.4。
+        LocalDateTime maxEvaluationDeadline = now.plusSeconds(properties.effectiveMaxEvaluationAgeSeconds());
+        LocalDateTime validUntil = eligibility == null || eligibility.nextFactBoundary() == null
+                ? maxEvaluationDeadline
+                : (eligibility.nextFactBoundary().isBefore(maxEvaluationDeadline)
+                        ? eligibility.nextFactBoundary() : maxEvaluationDeadline);
         // 显式set允许写入null（清空原因/期限），并按投影版本CAS；updateById会忽略null字段，不能用于清空。
         int updated = availabilityMapper.update(null, new LambdaUpdateWrapper<BuyerListingAvailabilityDO>()
                 .eq(BuyerListingAvailabilityDO::getId, projection.getId())

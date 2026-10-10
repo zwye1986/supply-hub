@@ -1,5 +1,6 @@
 package com.aifuli.module.supplychain.tradecore.catalog.application;
 
+import com.aifuli.module.supplychain.infrastructure.configuration.BuyerSelectionCatalogProperties;
 import com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock;
 
 import com.aifuli.module.supplychain.infrastructure.outbox.OutboxEventRepository;
@@ -64,6 +65,8 @@ public class BuyerListingPublicationService {
     private final CurrentSupplyEligibilityReader eligibilityReader;
     /** 人工恢复安全投影basis序列化，与刷新worker共用同一ObjectMapper口径。 */
     private final ObjectMapper objectMapper;
+    /** 最大评估有效期：恢复投影期限与刷新worker同口径。 */
+    private final BuyerSelectionCatalogProperties properties;
 
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public PublishResult publish(PublishListingCommand command) {
@@ -246,6 +249,11 @@ public class BuyerListingPublicationService {
                 || !Arrays.equals(projection.getBasisDigest(), digest);
         long basisVersion = (projection.getBasisVersion() == null ? 0L : projection.getBasisVersion())
                 + (basisChanged ? 1 : 0);
+        // 与刷新worker同口径：期限为未来事实边界与最大评估有效期的最小值，无边界也有巡检上限。见设计 §6.4。
+        LocalDateTime maxEvaluationDeadline = now.plusSeconds(properties.effectiveMaxEvaluationAgeSeconds());
+        LocalDateTime boundary = recovery.eligibility() == null ? null : recovery.eligibility().nextFactBoundary();
+        LocalDateTime validUntil = boundary == null || !boundary.isBefore(maxEvaluationDeadline)
+                ? maxEvaluationDeadline : boundary;
         // 显式set允许清空原因并按投影版本CAS；updateById会忽略null字段，不能用于清空。
         int updated = availabilityMapper.update(null, new LambdaUpdateWrapper<BuyerListingAvailabilityDO>()
                 .eq(BuyerListingAvailabilityDO::getId, projection.getId())
@@ -258,8 +266,7 @@ public class BuyerListingPublicationService {
                 .set(BuyerListingAvailabilityDO::getBasisJson, BuyerAvailabilityBasis.json(listing.getId(),
                         recovery.pricingVersionId(), ListingAvailability.AVAILABLE, null,
                         recovery.eligibility(), objectMapper))
-                .set(BuyerListingAvailabilityDO::getValidUntil,
-                        recovery.eligibility() == null ? null : recovery.eligibility().nextFactBoundary())
+                .set(BuyerListingAvailabilityDO::getValidUntil, validUntil)
                 .set(BuyerListingAvailabilityDO::getUpdatedAt, now)
                 .set(BuyerListingAvailabilityDO::getVersion, projection.getVersion() + 1));
         if (updated != 1) {

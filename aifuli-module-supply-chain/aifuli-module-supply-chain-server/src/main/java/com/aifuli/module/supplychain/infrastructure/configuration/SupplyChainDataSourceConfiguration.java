@@ -50,6 +50,8 @@ public class SupplyChainDataSourceConfiguration {
         // 显式命名连接池：日志隔离与池身份识别（B03 解阻验证见
         // docs/superpowers/specs/2026-10-09-druid-to-hikari-migration-design.md#adr-5b03-异步建连日志解阻定位客观声明）
         dataSource.setPoolName("supply-chain-pool");
+        // 最终受理Reader（REQUIRES_NEW）使并发任务需外层+Reader双连接，池大小可配置；默认10。
+        dataSource.setMaximumPoolSize(properties.getMaximumPoolSize());
         // 驱动级物理 TCP 建连超时：经 Connector/J connectTimeout 属性注入（R02 获审 1500ms）
         dataSource.addDataSourceProperty("connectTimeout", String.valueOf(properties.getConnectTimeoutMillis()));
         // 池借用等待超时：常规健康值，预算链路借前/借后单独截断
