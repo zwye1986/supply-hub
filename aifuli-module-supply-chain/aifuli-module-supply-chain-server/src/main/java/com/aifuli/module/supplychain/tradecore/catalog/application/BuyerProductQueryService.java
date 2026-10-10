@@ -58,6 +58,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
+import java.time.LocalDateTime;
 
 import static com.aifuli.framework.common.exception.util.ServiceExceptionUtil.exception;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BUYER_PROFILE_NOT_FOUND;
@@ -101,6 +102,7 @@ public class BuyerProductQueryService {
     private final BuyerProjectMapper projectMapper;
     private final SettlementPriceResolver settlementPriceResolver;
     private final ObjectMapper objectMapper;
+    private final BuyerAcceptanceCatalogReadService acceptanceCatalog;
 
     /**
      * 分页查询未移除分销商品。按更新时间倒序。
@@ -308,6 +310,7 @@ public class BuyerProductQueryService {
                 : genericDistributionInherited ? distPriceCents : null;
         ResolvedPrice resolved = resolveQuietly(l3ForResolve, l2ForResolve, l1ForResolve);
         TaxMetadata tax = loadEffectiveTax(buyerPricingVersion, sku == null ? null : sku.getId());
+        var catalog = acceptanceCatalog.read(product);
         return new BuyerProductListItem(
                 product.getBuyerProductCode(),
                 sku == null ? null : sku.getSkuCode(),
@@ -331,7 +334,10 @@ public class BuyerProductQueryService {
                 resolved == null ? null : resolved.source().name(),
                 projectView.projectPriceCovered(),
                 projectView.projectNames(),
-                product.getDisplayThresholdPercent());
+                product.getDisplayThresholdPercent(),
+                catalog.canonicalBuyerSkuCode(), catalog.acceptanceListingNo(), catalog.managementMode(),
+                catalog.publicationState(), catalog.availabilityStatus(), catalog.catalogRefreshReason(),
+                catalog.sourceBuyerPricingVersionId(), catalog.lastEvaluatedAt(), catalog.nextEvaluateAt());
     }
 
     /**
@@ -545,6 +551,15 @@ public class BuyerProductQueryService {
             @Schema(description = "价格来源层级：L1 / L2 / L3") String priceSource,
             @Schema(description = "是否被多个项目L3覆盖") boolean projectPriceCovered,
             @Schema(description = "覆盖该SKU的项目名称") List<String> projectNames,
-            @Schema(description = "利润空间低于该百分比时C端隐藏，本批不消费") Integer displayThresholdPercent) {
+            @Schema(description = "利润空间低于该百分比时C端隐藏，本批不消费") Integer displayThresholdPercent,
+            @Schema(description = "分销商品稳定业务编码；项目下单 canonical 编码为 BPD") String canonicalBuyerSkuCode,
+            @Schema(description = "采购商上架记录永久业务编号") String acceptanceListingNo,
+            @Schema(description = "受理目录管理来源：MANUAL手工管理，AUTO_SELECTION页面选品自动管理") String managementMode,
+            @Schema(description = "采购商商品生命周期：DRAFT/PUBLISHED/SUSPENDED/RETIRED") String publicationState,
+            @Schema(description = "采购商商品供给可用性投影：AVAILABLE/UNAVAILABLE/UNKNOWN；不是项目实时授权") String availabilityStatus,
+            @Schema(description = "供给可用性原因编码；过期或来源失配显示待重新评估原因") String catalogRefreshReason,
+            @Schema(description = "自动商业快照来源的分销通用定价版本主键，逻辑引用sc_buyer_sku_pricing_version.id；手工版本为空") Long sourceBuyerPricingVersionId,
+            @Schema(description = "供给可用性投影评估时间，Asia/Shanghai") LocalDateTime lastEvaluatedAt,
+            @Schema(description = "供给可用性投影下次必须重建的时间，Asia/Shanghai；历史未评估为空") LocalDateTime nextEvaluateAt) {
     }
 }

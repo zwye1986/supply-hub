@@ -51,7 +51,25 @@ class BuyerAdminRestContractTest {
             "", "/{buyerCode}", "/{buyerCode}/children",
             "/{buyerCode}/products", "/{buyerCode}/products/{buyerProductCode}",
             "/{buyerCode}/products/pricing/preview", "/{buyerCode}/products/pricing",
-            "/{buyerCode}/invoice");
+            "/{buyerCode}/invoice", "/{buyerCode}/products/{buyerProductCode}/acceptance-catalog/recalculate");
+
+    @Test
+    void acceptanceCatalogFieldsAreReadOnlyAndRecalculationUsesBuyerUpdatePermission() {
+        var mapper = new ObjectMapper();
+        var fields = mapper.getSerializationConfig().introspect(mapper.constructType(BuyerProductListItem.class))
+                .findProperties().stream().map(property -> property.getName()).collect(Collectors.toSet());
+        assertThat(fields).contains("canonicalBuyerSkuCode", "acceptanceListingNo", "managementMode",
+                "publicationState", "availabilityStatus", "catalogRefreshReason", "sourceBuyerPricingVersionId",
+                "lastEvaluatedAt", "nextEvaluateAt");
+        var methods = Arrays.stream(BuyerAdminController.class.getDeclaredMethods())
+                .filter(method -> method.getAnnotation(PostMapping.class) != null)
+                .filter(method -> Arrays.asList(method.getAnnotation(PostMapping.class).value()).contains(
+                        "/{buyerCode}/products/{buyerProductCode}/acceptance-catalog/recalculate")).toList();
+        assertThat(methods).hasSize(1);
+        assertThat(methods.getFirst().getAnnotation(org.springframework.security.access.prepost.PreAuthorize.class).value())
+                .isEqualTo(SupplyChainAdminPermissions.BUYER_UPDATE_EXPRESSION);
+        assertThat(methods.getFirst().getParameterCount()).isEqualTo(2);
+    }
 
     @Test
     void mappingsAreNounsUnderBuyers() {

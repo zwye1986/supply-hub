@@ -178,6 +178,20 @@ class SupplyChainAdminMethodSecurityContractTest {
     }
 
     @Test
+    void buyerQueryCannotRecalculateAcceptanceCatalog() {
+        grant(BUYER_QUERY);
+        assertThatThrownBy(() -> buyerController.recalculateAcceptanceCatalog("BYR_A", "BPD_A"))
+                .isInstanceOf(AccessDeniedException.class);
+    }
+
+    @Test
+    void buyerUpdateCanRecalculateAcceptanceCatalog() {
+        grant(SupplyChainAdminPermissions.BUYER_UPDATE);
+        assertThatCode(() -> buyerController.recalculateAcceptanceCatalog("BYR_A", "BPD_A"))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
     void supplierQueryCanInvokeSkuQueryForSupplierResource() {
         grant(SUPPLIER_QUERY);
 

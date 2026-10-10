@@ -323,6 +323,17 @@ public class BuyerAdminController {
                 GenericPricingRequestMapper.toBuyerOverrides(request), getLoginUserId()));
     }
 
+    /** 同步真实重算，不接收价格或状态；技术失败不伪装为排队成功。见最小业务设计 §7。 */
+    @PostMapping("/{buyerCode}/products/{buyerProductCode}/acceptance-catalog/recalculate")
+    @PreAuthorize(BUYER_UPDATE_EXPRESSION)
+    @Operation(summary = "同步重算分销商品受理目录",
+            description = "校验分销商归属，必要时补身份后独立刷新；返回真实结果，不代表每个项目实时获准下单。")
+    public CommonResult<com.aifuli.module.supplychain.tradecore.catalog.application.AcceptanceCatalogRecalculateRespVO> recalculateAcceptanceCatalog(
+            @PathVariable String buyerCode,
+            @PathVariable String buyerProductCode) {
+        return success(catalogSaveCoordinator.recalculateAcceptanceCatalog(buyerCode, buyerProductCode, getLoginUserId()));
+    }
+
     @DeleteMapping("/{buyerCode}/products/{buyerProductCode}")
     @PreAuthorize(BUYER_DELETE_EXPRESSION)
     @Operation(summary = "逻辑移除分销商品",
