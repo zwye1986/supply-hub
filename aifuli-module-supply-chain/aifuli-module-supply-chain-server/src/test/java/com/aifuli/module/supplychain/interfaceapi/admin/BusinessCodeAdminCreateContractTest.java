@@ -32,7 +32,7 @@ class BusinessCodeAdminCreateContractTest {
     void buyerCreateRejectsExplicitEmptyCode() throws Exception {
         var request = mapper.readValue("{\"buyerCode\":\"\"}",
                 BuyerAdminController.BuyerSaveReqVO.class);
-        assertThatThrownBy(() -> new BuyerAdminController(null, null, null, null, null, null)
+        assertThatThrownBy(() -> new BuyerAdminController(null, null, null, null, null, null, null)
                 .create(request))
                 .isInstanceOf(ServiceException.class)
                 .extracting(error -> ((ServiceException) error).getCode())
@@ -43,7 +43,7 @@ class BusinessCodeAdminCreateContractTest {
     void projectCreateRejectsManualCode() throws Exception {
         var request = mapper.readValue("{\"projectCode\":\"PRJ_001_001\"}",
                 ProjectAdminController.ProjectSaveReqVO.class);
-        assertThatThrownBy(() -> new ProjectAdminController(null, null, null, null, null)
+        assertThatThrownBy(() -> new ProjectAdminController(null, null, null, null, null, null)
                 .create(request))
                 .isInstanceOf(ServiceException.class)
                 .extracting(error -> ((ServiceException) error).getCode())

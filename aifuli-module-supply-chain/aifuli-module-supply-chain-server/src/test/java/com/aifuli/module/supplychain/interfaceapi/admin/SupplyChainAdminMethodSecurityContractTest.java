@@ -484,7 +484,8 @@ class SupplyChainAdminMethodSecurityContractTest {
                     mock(BuyerProductCommandService.class),
                     mock(BuyerProductQueryService.class),
                     mock(com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericBatchPricingService.class),
-                    mock(BuyerInvoiceService.class));
+                    mock(BuyerInvoiceService.class),
+                    mock(com.aifuli.module.supplychain.tradecore.catalog.application.BuyerSelectionCatalogAdminCoordinator.class));
         }
 
         @Bean

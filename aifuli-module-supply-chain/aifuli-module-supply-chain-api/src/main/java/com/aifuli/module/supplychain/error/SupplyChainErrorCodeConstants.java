@@ -244,6 +244,8 @@ public interface SupplyChainErrorCodeConstants {
     ErrorCode BUYER_CATALOG_RETIRED = error(1_050_001_174, "受理目录已退役，不能恢复或重新创建");
     ErrorCode BUYER_CATALOG_IDENTITY_RACE = error(1_050_001_175, "受理目录身份竞争未收敛，请稍后重试");
 
+    ErrorCode BUYER_CATALOG_REFRESH_FAILED = error(1_050_001_176, "受理目录刷新失败，将由后台扫描自动重试");
+
     // 项目标准资产查询稳定错误，设计见 docs/superpowers/specs/2026-10-02-project-standard-query-asset-design.md#4-资产结果与封闭载荷。
     ErrorCode ASSET_QUERY_UNSUPPORTED_PRODUCT_TYPE =
             error(1_050_001_158, "此类商品不能查询资产，请通过查单接口获取订单信息");
@@ -274,6 +276,7 @@ public interface SupplyChainErrorCodeConstants {
             entry(BUYER_CATALOG_NOT_READY, RetryDirective.RETRY_SAME_KEY_AFTER_CONDITION_CHANGE),
             entry(BUYER_CATALOG_RETIRED, RetryDirective.DO_NOT_RETRY),
             entry(BUYER_CATALOG_IDENTITY_RACE, RetryDirective.RETRY_SAME_KEY),
+            entry(BUYER_CATALOG_REFRESH_FAILED, RetryDirective.RETRY_SAME_KEY),
             entry(FREQUENCY_RESOURCE_NOT_FOUND, RetryDirective.DO_NOT_RETRY),
             entry(FREQUENCY_VERSION_CONFLICT, RetryDirective.DO_NOT_RETRY),
             entry(FREQUENCY_STATE_INVALID, RetryDirective.DO_NOT_RETRY),

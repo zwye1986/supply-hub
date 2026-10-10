@@ -515,10 +515,6 @@ class FulfillmentAcceptanceIntegrationTest {
             com.aifuli.module.supplychain.tradecore.catalog.application.BuyerAcceptanceCatalogIdentityProbe.class,
             com.aifuli.module.supplychain.tradecore.catalog.application.SettlementPriceResolver.class})
     static class SelectionConfiguration {
-        @Bean com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericBatchPricingService selectionPricing() {
-            // 这里只测试真实受理/SQL视图；商业价与报价沿既有独立fixture，页面定价完整性另由桥接Controller门禁验证。
-            return mock(com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericBatchPricingService.class);
-        }
     }
 
     Fixture seed(ConfigurableApplicationContext context) {
@@ -847,6 +843,7 @@ class FulfillmentAcceptanceIntegrationTest {
         properties.put("aifuli.supply-chain.datasource.username", username());
         properties.put("aifuli.supply-chain.datasource.password", password());
         properties.put("aifuli.supply-chain.datasource.driver-class-name", "com.mysql.cj.jdbc.Driver");
+        // 最终受理新增独立新RR视图Reader（REQUIRES_NEW）：10并发任务各需外层+Reader两个连接。
         properties.put("aifuli.supply-chain.security.key-version", "test-v1");
         properties.put("aifuli.supply-chain.security.envelope-key-base64", KEY_BASE64);
         properties.put("aifuli.supply-chain.security.fingerprint-key-base64", KEY_BASE64);
@@ -875,6 +872,12 @@ class FulfillmentAcceptanceIntegrationTest {
             ProductCatalogCommandService.class, ProductCenterTestConfiguration.class, BuyerListingPublicationService.class,
             BuyerAccountOpeningService.class, FundReservationService.class, AccountLedgerWriter.class,
             RoutingPolicyPublicationService.class, SupplierRoutingApplicationService.class,
+            com.aifuli.module.supplychain.tradecore.catalog.application.CurrentSupplyEligibilityReader.class,
+            com.aifuli.module.supplychain.infrastructure.configuration.BuyerSelectionCatalogProperties.class,
+            com.aifuli.module.supplychain.border.fulfillment.application.FrozenAcceptanceIdentityReader.class,
+            com.aifuli.module.supplychain.tradecore.catalog.application.BuyerSelectionCatalogRequestCoordinator.class,
+            com.aifuli.module.supplychain.tradecore.catalog.application.BuyerSelectionCatalogRefreshService.class,
+            com.aifuli.module.supplychain.tradecore.catalog.application.BuyerSelectionCatalogRefreshTransactionalWorker.class,
             ClosedJsonSchemaValidator.class, FulfillmentTargetSchemaRegistry.class,
             AesGcmEnvelopeCrypto.class, SkuPurchaseLimitService.class, FulfillmentAcceptanceLifecycle.class,
             com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyLifecycle.class,
@@ -928,6 +931,12 @@ class FulfillmentAcceptanceIntegrationTest {
                                 false, null);
                     });
             return service;
+        }
+
+        @Bean
+        com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericBatchPricingService selectionPricing() {
+            // 目录刷新门面的单BPD重算依赖；本测试聚焦受理原子性，重算路径不在此触发。
+            return mock(com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericBatchPricingService.class);
         }
     }
 

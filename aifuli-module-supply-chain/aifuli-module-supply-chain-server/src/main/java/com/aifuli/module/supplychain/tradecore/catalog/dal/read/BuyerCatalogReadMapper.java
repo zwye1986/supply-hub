@@ -5,6 +5,7 @@ import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 /**
@@ -26,7 +27,9 @@ public interface BuyerCatalogReadMapper {
             SELECT l.id AS listing_id,
                    l.buyer_sku_code,
                    l.status AS listing_status,
+                   l.management_mode AS management_mode,
                    lv.version_no AS listing_version,
+                   lv.source_buyer_pricing_version_id AS source_buyer_pricing_version_id,
                    sku.sku_code AS platform_sku_code,
                    spu.spu_code AS platform_spu_code,
                    lv.display_name,
@@ -39,7 +42,10 @@ public interface BuyerCatalogReadMapper {
                    lv.currency,
                    availability.availability,
                    availability.version AS availability_version,
+                   availability.evaluated_at AS evaluated_at,
+                   availability.valid_until AS valid_until,
                    pricing.pricing_status AS pricing_status,
+                   pricing.current_version_id AS buyer_pricing_current_version_id,
                    l.updated_at
               FROM sc_buyer_listing l
               JOIN sc_buyer_listing_version lv ON lv.id = l.current_version_id
@@ -50,6 +56,21 @@ public interface BuyerCatalogReadMapper {
               LEFT JOIN sc_buyer_listing_availability availability ON availability.listing_id = l.id
               LEFT JOIN sc_buyer_product bp ON bp.buyer_id = l.buyer_id AND bp.platform_sku_id = sku.id
               LEFT JOIN sc_buyer_sku_pricing pricing ON pricing.buyer_product_id = bp.id
+            """;
+
+    /**
+     * availableOnly 的AUTO陈旧排除条件：投影期限必须存在且超过本次库时钟，且商业版本来源与买方定价当前版本一致；
+     * MANUAL保持旧RPC准入（发布+投影可用+定价READY）。设计 §6.4「目录 RPC读项及 availableOnly筛选遵守同一库时钟／AUTO过期规则」。
+     */
+    String AVAILABLE_ONLY_CONDITION = """
+                 AND l.status = 10 AND availability.availability = 10
+                 AND pricing.pricing_status = #{saleablePricingStatus}
+                 AND (l.management_mode = 'MANUAL'
+                   OR (l.management_mode = 'AUTO_SELECTION'
+                       AND availability.valid_until IS NOT NULL
+                       AND availability.valid_until &gt; #{now}
+                       AND lv.source_buyer_pricing_version_id IS NOT NULL
+                       AND lv.source_buyer_pricing_version_id = pricing.current_version_id))
             """;
 
     @Select("""
@@ -64,8 +85,7 @@ public interface BuyerCatalogReadMapper {
                  AND sku.fulfillment_type = #{fulfillmentType}
                </if>
                <if test='availableOnly'>
-                 AND l.status = 10 AND availability.availability = 10
-                 AND pricing.pricing_status = #{saleablePricingStatus}
+            """ + AVAILABLE_ONLY_CONDITION + """
                </if>
              ORDER BY l.id ASC
              LIMIT #{limit} OFFSET #{offset}
@@ -76,6 +96,7 @@ public interface BuyerCatalogReadMapper {
                                          @Param("fulfillmentType") String fulfillmentType,
                                          @Param("availableOnly") boolean availableOnly,
                                          @Param("saleablePricingStatus") String saleablePricingStatus,
+                                         @Param("now") LocalDateTime now,
                                          @Param("offset") long offset,
                                          @Param("limit") int limit);
 
@@ -83,6 +104,7 @@ public interface BuyerCatalogReadMapper {
             <script>
             SELECT COUNT(*)
               FROM sc_buyer_listing l
+              JOIN sc_buyer_listing_version lv ON lv.id = l.current_version_id
               JOIN sc_platform_sku sku ON sku.id = l.platform_sku_id
               LEFT JOIN sc_buyer_listing_availability availability ON availability.listing_id = l.id
               LEFT JOIN sc_buyer_product bp ON bp.buyer_id = l.buyer_id AND bp.platform_sku_id = sku.id
@@ -97,8 +119,7 @@ public interface BuyerCatalogReadMapper {
                  AND sku.fulfillment_type = #{fulfillmentType}
                </if>
                <if test='availableOnly'>
-                 AND l.status = 10 AND availability.availability = 10
-                 AND pricing.pricing_status = #{saleablePricingStatus}
+            """ + AVAILABLE_ONLY_CONDITION + """
                </if>
             </script>
             """)
@@ -106,7 +127,8 @@ public interface BuyerCatalogReadMapper {
                    @Param("buyerSkuCode") String buyerSkuCode,
                    @Param("fulfillmentType") String fulfillmentType,
                    @Param("availableOnly") boolean availableOnly,
-                   @Param("saleablePricingStatus") String saleablePricingStatus);
+                   @Param("saleablePricingStatus") String saleablePricingStatus,
+                   @Param("now") LocalDateTime now);
 
     @Select(READ_COLUMNS + " WHERE l.id = #{listingId}")
     BuyerCatalogReadRow selectByListingId(@Param("listingId") Long listingId);

@@ -96,6 +96,7 @@ public class BuyerAdminController {
     private final BuyerProductQueryService productQueryService;
     private final GenericBatchPricingService genericPricingService;
     private final BuyerInvoiceService invoiceService;
+    private final com.aifuli.module.supplychain.tradecore.catalog.application.BuyerSelectionCatalogAdminCoordinator catalogSaveCoordinator;
 
     @GetMapping
     @PreAuthorize(BUYER_QUERY_EXPRESSION)
@@ -270,13 +271,13 @@ public class BuyerAdminController {
                     + "行内 pricing 省略时只关联并继承商品默认定价；传入时与关联处在同一事务，"
                     + "字段与批量保存分销商通用定价相同。任一条缺少平台默认定价则整单回滚，返回 PLATFORM_DEFAULT_PRICING_MISSING。"
                     + "编号 BPD_。已存在未移除行返回 BUYER_PRODUCT_DUPLICATE；已移除同行复活而非插入。金额单位 CNY 分。")
-    public CommonResult<List<String>> addProducts(
+    public CommonResult<com.aifuli.module.supplychain.tradecore.catalog.application.BuyerSelectionCatalogSaveRespVO> addProducts(
             @Parameter(description = "采购商永久业务编码", example = "BYR_01ABC") @PathVariable String buyerCode,
                                                     @Valid @RequestBody AddBuyerProductsReqVO request) {
         List<ProductLine> lines = request.getItems().stream()
                 .map(BuyerAdminController::toProductLine)
                 .toList();
-        return success(productCommandService.addProducts(buyerCode, lines, getLoginUserId()));
+        return success(catalogSaveCoordinator.saveBuyerProducts(buyerCode, lines, getLoginUserId()));
     }
 
     @PatchMapping("/{buyerCode}/products/{buyerProductCode}")
@@ -313,13 +314,13 @@ public class BuyerAdminController {
     @PutMapping("/{buyerCode}/products/pricing")
     @PreAuthorize(BUYER_UPDATE_EXPRESSION)
     @Operation(summary = "批量保存分销商通用定价",
-            description = "仅更新路径分销商下选中商品的通用定价版本；单事务全量成功或回滚，税务仅用于结算展示。")
-    public CommonResult<Boolean> updateProductPricing(
+            description = "仅更新路径分销商下选中商品的通用定价版本；单事务全量成功或回滚，税务仅用于结算展示。"
+                    + "保存确认提交后刷新受影响自动目录并返回逐目录结果。")
+    public CommonResult<com.aifuli.module.supplychain.tradecore.catalog.application.BuyerSelectionCatalogSaveRespVO> updateProductPricing(
             @Parameter(description = "采购商永久业务编码") @PathVariable String buyerCode,
             @Valid @RequestBody BuyerProductBatchPricingReqVO request) {
-        genericPricingService.saveBuyer(buyerCode, request.getBuyerProductCodes(),
-                GenericPricingRequestMapper.toBuyerOverrides(request), getLoginUserId());
-        return success(true);
+        return success(catalogSaveCoordinator.saveBuyerPricing(buyerCode, request.getBuyerProductCodes(),
+                GenericPricingRequestMapper.toBuyerOverrides(request), getLoginUserId()));
     }
 
     @DeleteMapping("/{buyerCode}/products/{buyerProductCode}")

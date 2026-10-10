@@ -158,6 +158,7 @@ public class ProjectAdminController {
     private final ProjectListingCommandService listingCommandService;
     private final ProjectListingQueryService listingQueryService;
     private final GenericBatchPricingService genericPricingService;
+    private final com.aifuli.module.supplychain.tradecore.catalog.application.BuyerSelectionCatalogAdminCoordinator catalogSaveCoordinator;
 
     @GetMapping
     @PreAuthorize(PROJECT_QUERY_EXPRESSION)
@@ -269,12 +270,12 @@ public class ProjectAdminController {
     @Operation(summary = "从分销商品发布到项目目录",
             description = "SKU 必须已是所属 Buyer 的未移除分销商品。默认 l3AdjustMode=FOLLOW_L2。"
                     + "行内 pricing 可在同一事务保存项目综合定价；省略则全继承。编号 PLT_。金额单位 CNY 分。")
-    public CommonResult<List<String>> addProducts(@PathVariable String projectCode,
+    public CommonResult<com.aifuli.module.supplychain.tradecore.catalog.application.BuyerSelectionCatalogSaveRespVO> addProducts(@PathVariable String projectCode,
                                                     @Valid @RequestBody AddProjectProductsReqVO request) {
         List<ListingLine> lines = request.getItems().stream()
                 .map(ProjectAdminController::toListingLine)
                 .toList();
-        return success(listingCommandService.addProducts(projectCode, lines, getLoginUserId()));
+        return success(catalogSaveCoordinator.saveProjectProducts(projectCode, lines, getLoginUserId()));
     }
 
     @PatchMapping("/{projectCode}/products/{listingCode}")
@@ -305,13 +306,13 @@ public class ProjectAdminController {
     @PutMapping("/{projectCode}/products/pricing")
     @PreAuthorize(PROJECT_UPDATE_EXPRESSION)
     @Operation(summary = "批量保存项目综合定价",
-            description = "仅发布路径项目下选中商品的综合定价版本；单事务全量成功或回滚，税务两字段必须整体继承或整体覆盖。")
-    public CommonResult<Boolean> updateProductPricing(
+            description = "仅发布路径项目下选中商品的综合定价版本；单事务全量成功或回滚，税务两字段必须整体继承或整体覆盖。"
+                    + "保存确认提交后刷新受影响自动目录并返回逐目录结果。")
+    public CommonResult<com.aifuli.module.supplychain.tradecore.catalog.application.BuyerSelectionCatalogSaveRespVO> updateProductPricing(
             @Parameter(description = "采购项目全局永久编码") @PathVariable String projectCode,
             @Valid @RequestBody ProjectProductBatchPricingReqVO request) {
-        genericPricingService.saveProject(projectCode, request.getListingCodes(),
-                GenericPricingRequestMapper.toProjectOverrides(request), getLoginUserId());
-        return success(true);
+        return success(catalogSaveCoordinator.saveProjectPricing(projectCode, request.getListingCodes(),
+                GenericPricingRequestMapper.toProjectOverrides(request), getLoginUserId()));
     }
 
     @DeleteMapping("/{projectCode}/products/{listingCode}")

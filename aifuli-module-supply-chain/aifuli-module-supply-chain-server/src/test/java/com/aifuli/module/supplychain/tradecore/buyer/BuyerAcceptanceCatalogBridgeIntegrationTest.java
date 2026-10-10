@@ -571,7 +571,7 @@ class BuyerAcceptanceCatalogBridgeIntegrationTest {
             pricing.setSalesInherited(true); pricing.setServiceFeeInherited(true); pricing.setHideInherited(true); pricing.setTaxInherited(true);
             item.setPricing(pricing); return item;
         }).toList());
-        return context.getBean(BuyerAdminController.class).addProducts(buyer, request).getData();
+        return context.getBean(BuyerAdminController.class).addProducts(buyer, request).getData().getSavedCodes();
     }
     private void publishManualThroughController(String no, long expected, long price, String display) {
         var request = new M1MasterDataAdminController.PublishListingReqVO();
@@ -590,7 +590,7 @@ class BuyerAcceptanceCatalogBridgeIntegrationTest {
         request.setItems(Arrays.stream(skus).map(sku -> {
             var item = new BuyerAdminController.BuyerProductItemReqVO(); item.setPlatformSkuCode(sku); return item;
         }).toList());
-        return context.getBean(BuyerAdminController.class).addProducts(buyer, request).getData();
+        return context.getBean(BuyerAdminController.class).addProducts(buyer, request).getData().getSavedCodes();
     }
     /** 隔离管理员身份，真实Controller取非空operator；不调用外部权限/会员服务。 */
     private static <T> T withSyntheticAdmin(java.util.function.Supplier<T> action) {
@@ -612,7 +612,16 @@ class BuyerAcceptanceCatalogBridgeIntegrationTest {
     }
     @Configuration(proxyBeanMethods = false)
     @Import({BuyerAdminIntegrationTest.TestConfiguration.class, BuyerAdminController.class,
-            M1MasterDataAdminController.class, BuyerCommandService.class, BuyerListingPublicationService.class, OutboxEventRepository.class})
+            M1MasterDataAdminController.class, BuyerCommandService.class, BuyerListingPublicationService.class,
+            OutboxEventRepository.class,
+            com.aifuli.module.supplychain.routing.application.SupplierRoutingApplicationService.class,
+            com.aifuli.module.supplychain.tradecore.catalog.application.CurrentSupplyEligibilityReader.class,
+            com.aifuli.module.supplychain.infrastructure.configuration.BuyerSelectionCatalogProperties.class,
+            com.aifuli.module.supplychain.tradecore.catalog.application.ProjectListingCommandService.class,
+            com.aifuli.module.supplychain.tradecore.catalog.application.ProjectListingPriceSource.class,
+            com.aifuli.module.supplychain.tradecore.catalog.application.BuyerSelectionCatalogRefreshService.class,
+            com.aifuli.module.supplychain.tradecore.catalog.application.BuyerSelectionCatalogRefreshTransactionalWorker.class,
+            com.aifuli.module.supplychain.tradecore.catalog.application.BuyerSelectionCatalogAdminCoordinator.class})
     static class Config { }
     private static void seedCatalog(ProductCatalogCommandService catalog) {
         catalog.createBrand(new ProductCatalogCommandService.CreateBrandCommand(

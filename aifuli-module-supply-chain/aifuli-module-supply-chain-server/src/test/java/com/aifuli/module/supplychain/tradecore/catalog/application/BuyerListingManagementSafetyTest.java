@@ -8,8 +8,10 @@ import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.*;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.*;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.BuyerListingStatus;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import java.time.LocalDateTime;
+import java.util.List;
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.Mockito.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -23,9 +25,15 @@ class BuyerListingManagementSafetyTest {
     private final BuyerMapper buyers = mock(BuyerMapper.class);
     private final ProductSellabilityService sellability = mock(ProductSellabilityService.class);
     private final OutboxEventRepository outbox = mock(OutboxEventRepository.class);
+    private final BuyerSkuPricingMapper buyerPricing = mock(BuyerSkuPricingMapper.class);
+    private final BuyerSkuPricingVersionMapper buyerVersions = mock(BuyerSkuPricingVersionMapper.class);
+    private final PlatformSkuPricingMapper platformPricing = mock(PlatformSkuPricingMapper.class);
+    private final CurrentSupplyEligibilityReader eligibilityReader = mock(CurrentSupplyEligibilityReader.class);
     private final SupplyChainDatabaseClock clock = mock(SupplyChainDatabaseClock.class);
     private final BuyerListingPublicationService service = new BuyerListingPublicationService(
-            clock, listings, versions, availability, changes, buyers, sellability, outbox);
+            clock, listings, versions, availability, changes, buyers, sellability, outbox,
+            buyerPricing, buyerVersions, platformPricing, eligibilityReader, new ObjectMapper(),
+            new com.aifuli.module.supplychain.infrastructure.configuration.BuyerSelectionCatalogProperties());
     private final LocalDateTime now = LocalDateTime.of(2026, 10, 4, 12, 0);
 
     @Test
@@ -43,15 +51,27 @@ class BuyerListingManagementSafetyTest {
     }
 
     @Test
-    void automaticSuspendedCannotResumeEvenWithCurrentVersion() {
+    void automaticSuspendedCannotResumeWithoutConfirmedQualification() {
         BuyerListingDO row = auto(BuyerListingStatus.SUSPENDED);
         row.setCurrentVersionId(10L);
         when(listings.selectByListingNoForUpdate("LST_A")).thenReturn(row);
+        // 价格链READY但买家聚合资格非CONFIRMED：恢复必须失败关闭且零写。
+        when(versions.selectById(10L)).thenReturn(BuyerListingVersionDO.builder().id(10L).listingId(5L).build());
+        when(buyerPricing.selectByBuyerProductIdForUpdate(7L)).thenReturn(BuyerSkuPricingDO.builder()
+                .id(21L).buyerProductId(7L).currentVersionId(31L).pricingStatus("READY").build());
+        when(buyerVersions.selectById(31L)).thenReturn(BuyerSkuPricingVersionDO.builder()
+                .id(31L).pricingId(21L).pricingStatus("READY").distributionPriceCents(100L)
+                .currency("CNY").platformPricingVersionId(41L).build());
+        when(platformPricing.selectById(3L)).thenReturn(PlatformSkuPricingDO.builder()
+                .platformSkuId(3L).currentVersionId(41L).build());
+        when(eligibilityReader.readBuyer(7L)).thenReturn(new CurrentSupplyEligibilityReader.BuyerEligibility(
+                SupplyQualification.UNAVAILABLE, List.of(), List.of("NO_CONFIRMED_PROJECT"), now, "fixture", now));
         assertThatThrownBy(() -> service.changeStatus(new BuyerListingPublicationService.ChangeListingStatusCommand(
                 "LST_A", 0L, BuyerListingStatus.PUBLISHED, 2L, "trace", null, null)))
                 .isInstanceOf(ServiceException.class)
                 .extracting(e -> ((ServiceException) e).getCode()).isEqualTo(1_050_001_173);
-        verifyNoInteractions(versions, availability, changes, outbox);
+        verifyNoInteractions(changes, outbox);
+        verify(availability, never()).selectByListingIdForUpdate(anyLong());
         verify(listings, never()).update(isNull(), any(com.baomidou.mybatisplus.core.conditions.Wrapper.class));
     }
 

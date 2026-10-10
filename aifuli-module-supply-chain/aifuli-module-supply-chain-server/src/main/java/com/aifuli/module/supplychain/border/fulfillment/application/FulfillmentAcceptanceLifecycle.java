@@ -34,6 +34,8 @@ import com.aifuli.module.supplychain.infrastructure.identity.BusinessNoGenerator
 import com.aifuli.module.supplychain.infrastructure.identity.BusinessNoPrefixes;
 import com.aifuli.module.supplychain.infrastructure.outbox.OutboxEventRepository;
 import com.aifuli.module.supplychain.routing.application.SupplierRoutingApplicationService;
+import com.aifuli.module.supplychain.tradecore.catalog.application.CurrentSupplyEligibilityReader;
+import com.aifuli.module.supplychain.tradecore.catalog.application.SupplyQualification;
 import com.aifuli.module.supplychain.routing.domain.RoutingCandidate;
 import com.aifuli.module.supplychain.routing.domain.RoutingDecisionStatus;
 import com.aifuli.module.supplychain.routing.domain.RoutingInput;
@@ -130,6 +132,7 @@ public class FulfillmentAcceptanceLifecycle {
     private final SkuPurchaseLimitService purchaseLimitService;
     private final StandardPricingQuoteService pricingQuoteService;
     private final SupplierRoutingApplicationService routingService;
+    private final CurrentSupplyEligibilityReader eligibilityReader;
     private final FundReservationService fundReservationService;
     private final RechargeFrequencyLifecycle rechargeFrequencyLifecycle;
     private final OutboxEventRepository outboxRepository;
@@ -321,7 +324,7 @@ public class FulfillmentAcceptanceLifecycle {
 
         LocalDateTime now = now();
         LockedListing locked = lockListingAndSku(command);
-        ListingSnapshot listing = requireSaleableListing(command, now, locked);
+        ListingSnapshot listing = requireSaleableListing(command, now, locked, directProjectOrder);
         // 报价消费按项目永久键锁定首次冻结报价，不携带用户、支付时间、报价 token 或调用方商品版本；
         // quoteId/listingId 等真实冻结值经 FrozenQuote 进入本事务持久化（回执级新列见 052 增量）。
         // 设计见 docs/superpowers/specs/2026-10-02-standard-internal-quote-freeze-design.md#3-受理内查取与唯一消费。
@@ -365,7 +368,16 @@ public class FulfillmentAcceptanceLifecycle {
         String orderRemark = purchaseLimitService.isPersonalLimitSkipped(
                 listing.sku(), command.targetAccountType(), command.fulfillmentAccountValue())
                 ? PURCHASE_LIMIT_SKIP_REMARK : null;
-        SupplierRoutingApplicationService.RoutingSnapshot routing = route(command, listing.sku(), now);
+        // 建单/资金前经独立新RR视图Reader复核真实项目资格：仅CONFIRMED通过，用其RoutingSnapshot
+        // 持久化路由，不在本事务旧RR快照再次route。设计 §7.2「下单顺序」第6步、§3「最终受理」。
+        CurrentSupplyEligibilityReader.ProjectEligibility eligibility =
+                eligibilityReader.readProject(new RoutingInput(command.buyerId(), command.projectId(),
+                        listing.sku().getId(), listing.sku().getFulfillmentType(), command.quantity(), now, Map.of()));
+        if (eligibility.qualification() != SupplyQualification.CONFIRMED) {
+            throw rejection(receiptId, listing.version().getId(), AcceptanceReceiptStatus.REJECTED_RETRYABLE,
+                    AcceptanceRejectionCode.NO_ROUTABLE_SUPPLIER);
+        }
+        SupplierRoutingApplicationService.RoutingSnapshot routing = eligibility.routingSnapshot();
         if (!routing.decision().selected()) {
             throw rejection(receiptId, listing.version().getId(), AcceptanceReceiptStatus.REJECTED_RETRYABLE,
                     AcceptanceRejectionCode.NO_ROUTABLE_SUPPLIER);
@@ -482,6 +494,28 @@ public class FulfillmentAcceptanceLifecycle {
     }
 
     /**
+     * 首冻前目录未就绪的可重试拒绝：不创建新报价，PROCESSING 回执落库 REJECTED_RETRYABLE 供条件恢复后
+     * 按原冻结键续跑；已终态回执不重复改写。设计 §7.2「首冻前准备」。
+     */
+    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
+    public AcceptanceSnapshot rejectBeforeFreeze(long receiptId, Long listingVersionId,
+                                                 AcceptanceRejectionCode code) {
+        log.info("[履约][lifecycle] 首冻前拒绝 receiptId={}, code={}", receiptId, code);
+        FulfillmentAcceptanceReceiptDO receipt = receiptMapper.selectByIdForUpdate(receiptId);
+        if (receipt == null) {
+            throw new IllegalStateException("Acceptance receipt disappeared before pre-freeze rejection");
+        }
+        if (receipt.getStatus() == AcceptanceReceiptStatus.PROCESSING.getCode()) {
+            int updated = receiptMapper.markRejected(receipt.getId(), listingVersionId,
+                    AcceptanceReceiptStatus.REJECTED_RETRYABLE.getCode(), code.name(), now());
+            if (updated != 1) {
+                throw new IllegalStateException("Acceptance rejection lost receipt state");
+            }
+        }
+        return snapshot(receipt.getId(), false);
+    }
+
+    /**
      * 业务拒绝：PROCESSING 回执标记拒绝码后回放快照。
      */
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
@@ -544,7 +578,7 @@ public class FulfillmentAcceptanceLifecycle {
     }
 
     private ListingSnapshot requireSaleableListing(PreparedAcceptance command, LocalDateTime now,
-                                                    LockedListing locked) {
+                                                    LockedListing locked, boolean directProjectOrder) {
         BuyerListingDO listing = locked.listing();
         // 业务版本由服务端取得：按 Listing 当前发布版本锁定校验，不再接受调用方提交的商品版本。
         // 设计见 docs/superpowers/specs/2026-10-02-standard-acceptance-project-key-design.md#2-首次身份与重放优先。
@@ -556,10 +590,13 @@ public class FulfillmentAcceptanceLifecycle {
                     AcceptanceReceiptStatus.REJECTED_RETRYABLE,
                     AcceptanceRejectionCode.LISTING_VERSION_EXPIRED);
         }
-        BuyerListingAvailabilityDO availability = listingAvailabilityMapper.selectByListingId(listing.getId());
-        if (availability == null || availability.getAvailability() != ListingAvailability.AVAILABLE.getCode()) {
-            throw rejection(command.receiptIdHint(), version.getId(), AcceptanceReceiptStatus.REJECTED_RETRYABLE,
-                    AcceptanceRejectionCode.INVENTORY_INSUFFICIENT);
+        // HTTP 只认最终项目新视图，不以共享投影拒绝 MANUAL UNKNOWN；旧 RPC 保留原投影前置。见设计 §7.2/§8。
+        if (!directProjectOrder) {
+            BuyerListingAvailabilityDO availability = listingAvailabilityMapper.selectByListingId(listing.getId());
+            if (availability == null || availability.getAvailability() != ListingAvailability.AVAILABLE.getCode()) {
+                throw rejection(command.receiptIdHint(), version.getId(), AcceptanceReceiptStatus.REJECTED_RETRYABLE,
+                        AcceptanceRejectionCode.INVENTORY_INSUFFICIENT);
+            }
         }
         PlatformSkuDO sku;
         try {
@@ -578,17 +615,6 @@ public class FulfillmentAcceptanceLifecycle {
                     AcceptanceRejectionCode.INVALID_TARGET);
         }
         return new ListingSnapshot(listing, version, sku);
-    }
-
-    private SupplierRoutingApplicationService.RoutingSnapshot route(
-            PreparedAcceptance command, PlatformSkuDO sku, LocalDateTime now) {
-        try {
-            return routingService.route(new RoutingInput(command.buyerId(), command.projectId(), sku.getId(),
-                    sku.getFulfillmentType(), command.quantity(), now, Map.of()));
-        } catch (IllegalArgumentException | IllegalStateException exception) {
-            throw rejection(command.receiptIdHint(), null, AcceptanceReceiptStatus.REJECTED_RETRYABLE,
-                    AcceptanceRejectionCode.NO_ROUTABLE_SUPPLIER);
-        }
     }
 
     private RoutingPersistence persistRouting(PreparedAcceptance command, SupplyChainOrderDO order,
@@ -980,12 +1006,12 @@ public class FulfillmentAcceptanceLifecycle {
         private final AcceptanceReceiptStatus receiptStatus;
         private final AcceptanceRejectionCode rejectionCode;
 
-        BusinessRejection(long receiptId, Long listingVersionId,
+        public BusinessRejection(long receiptId, Long listingVersionId,
                           AcceptanceReceiptStatus receiptStatus, AcceptanceRejectionCode rejectionCode) {
             this(receiptId, listingVersionId, receiptStatus, rejectionCode, null);
         }
 
-        BusinessRejection(long receiptId, Long listingVersionId,
+        public BusinessRejection(long receiptId, Long listingVersionId,
                           AcceptanceReceiptStatus receiptStatus, AcceptanceRejectionCode rejectionCode, Throwable cause) {
             super(rejectionCode.name(), cause, false, false);
             this.receiptId = receiptId;

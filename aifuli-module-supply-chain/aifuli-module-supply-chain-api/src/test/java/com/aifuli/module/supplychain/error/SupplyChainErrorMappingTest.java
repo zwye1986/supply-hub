@@ -174,6 +174,22 @@ class SupplyChainErrorMappingTest {
     }
 
     @Test
+    void preservesBuyerSelectionCatalogErrorContracts() {
+        assertErrorContract(SupplyChainErrorCodeConstants.BUYER_CATALOG_CODE_CONFLICT, 1_050_001_171,
+                "分销商品受理目录编码或归属冲突", RetryDirective.DO_NOT_RETRY);
+        assertErrorContract(SupplyChainErrorCodeConstants.BUYER_CATALOG_AUTO_MANAGED, 1_050_001_172,
+                "页面选品自动目录不接受手工商业价格发布", RetryDirective.DO_NOT_RETRY);
+        assertErrorContract(SupplyChainErrorCodeConstants.BUYER_CATALOG_NOT_READY, 1_050_001_173,
+                "自动受理目录尚未具备真实发布资格", RetryDirective.RETRY_SAME_KEY_AFTER_CONDITION_CHANGE);
+        assertErrorContract(SupplyChainErrorCodeConstants.BUYER_CATALOG_RETIRED, 1_050_001_174,
+                "受理目录已退役，不能恢复或重新创建", RetryDirective.DO_NOT_RETRY);
+        assertErrorContract(SupplyChainErrorCodeConstants.BUYER_CATALOG_IDENTITY_RACE, 1_050_001_175,
+                "受理目录身份竞争未收敛，请稍后重试", RetryDirective.RETRY_SAME_KEY);
+        assertErrorContract(SupplyChainErrorCodeConstants.BUYER_CATALOG_REFRESH_FAILED, 1_050_001_176,
+                "受理目录刷新失败，将由后台扫描自动重试", RetryDirective.RETRY_SAME_KEY);
+    }
+
+    @Test
     void everyDeclaredErrorCodeHasRetryDirective() throws Exception {
         Set<Integer> declared = new HashSet<>();
         for (Field field : SupplyChainErrorCodeConstants.class.getFields()) {

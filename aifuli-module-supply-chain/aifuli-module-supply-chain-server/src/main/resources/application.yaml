@@ -59,6 +59,15 @@ aifuli:
       - /admin-api/supply-chain/v3/api-docs/**
   supply-chain:
     enabled: true
+    catalog:
+      # 自动目录后台扫描与投影评估配置：默认启用；关闭时不承诺保存后自动重试收敛。
+      # 每批最多目录数、固定延迟秒数与最大评估有效期秒数，非正数启动拒绝。
+      sweep-enabled: ${AIFULI_SUPPLY_CHAIN_CATALOG_SWEEP_ENABLED:true}
+      sweep-batch-size: ${AIFULI_SUPPLY_CHAIN_CATALOG_SWEEP_BATCH_SIZE:100}
+      sweep-delay-seconds: ${AIFULI_SUPPLY_CHAIN_CATALOG_SWEEP_DELAY_SECONDS:30}
+      max-evaluation-age-seconds: ${AIFULI_SUPPLY_CHAIN_CATALOG_MAX_EVALUATION_AGE_SECONDS:30}
+      # 扫描/下单准备触发自动发布时的显式系统操作人ID；未配置时自动发布报未就绪。
+      system-operator-id: ${AIFULI_SUPPLY_CHAIN_CATALOG_SYSTEM_OPERATOR_ID:0}
     recharge-frequency:
       # 仅配置引用；32字节稳定Base64密钥由环境提供，变更须离线迁移队列身份。
       identity-key-ref: ${AIFULI_SUPPLY_CHAIN_RECHARGE_FREQUENCY_IDENTITY_KEY_REF:env:AIFULI_SUPPLY_CHAIN_RECHARGE_FREQUENCY_IDENTITY_KEY}

@@ -40,6 +40,17 @@
 
 最终受理保留 receipt → LST → SKU → quote → PLT → BPD 的当前读锁序；Reader 在建单／资金前独立建立新供给视图，不在原受理快照再次 route。普通身份定位在最终受理事务外完成，不能提前建立 RR 旧视图影响配额统计。
 
+### 3.1 2026-10-10 评审修复边界（用户确认方案 3）
+
+- 仅扩大供应链共享 Hikari 池：默认 `maximum-pool-size` 从 10 调为 40，显式覆盖仍允许 10～200；不增加连接预留、限流或 Reader 独立池，不改变预算包装器、事务管理器及关闭协议。受理可能同时占用外层与 REQUIRES_NEW Reader 两条连接，40 是本轮 10 并发门禁配置，不是任意并发无饥饿保证；部署按实例数和数据库连接预算评估。显式小池或更多并发仍可能借连接超时。并发夹具移除专用 40 覆盖，验证真实默认值。
+- 四个管理编排入口在调用领域服务前拒绝活动事务（含 rollback-only），不偷偷挂起，防止 REQUIRED 加入外层事务后虚报 COMMITTED。
+- 冻结分支先仅用冻结 SKU/Schema 规范化并计算指纹交 claim 裁决，不解析当前目录、不调用当前 Schema 校验或加密；claim 要求执行时才解析当前目录并重新校验／加密，仍以冻结 SKU/Schema 计算指纹。新尝试不绕过准入。
+- 首冻准备显式接收可信 projectId、数量，经项目 Reader 读取 SKU 履约类型并检查该项目；UNKNOWN/UNAVAILABLE 均不创建报价。最终 HTTP 跳过 availability 投影门禁但保留商业版本、商品及项目准入，旧 RPC 保留 AVAILABLE 门禁。
+- 扫描每个新条目开始前检查中断，已尝试条目推进 cursor，剩余条目不启动。独立轮次安装只含本轮 traceId/executionId 的新 MDC，退出恢复完整旧快照，不继承 originTraceId 或旧业务字段。
+- 扫描异常按封闭的查询／刷新 × 业务／技术四类桶聚合（不按 listingId、traceId 或异常类名建桶），窗口 60 秒、最多 4 桶。首次技术失败 WARN 保留因果，ServiceException WARN 错误码无堆栈；窗口汇总 totalCount/suppressedCount，完整无失败遍历后恢复并清桶。逐条失败精确计入 SweepBatch，批次失败摘要 DEBUG；查询由生命周期、刷新由扫描服务各自终结一次。不改共享日志／八进程协议，不声称全系统顶层 JSON 已实现。
+- 前端 DEFERRED 仅在扫描启用时承诺自动发布；四保存请求的无响应 reject 显示结果未确认并建议核对列表，不判回滚、不自动重发。
+- 补真实管理保存→AUTO 发布→签名受理成功整链，不以 MANUAL 加 SQL AVAILABLE 夹具替代。
+
 ## 4. 自动商业刷新与生命周期
 
 ### 4.1 真实来源与幂等
@@ -64,6 +75,18 @@ READY存量标记本身不证明其价格依赖仍有效；须核真实来源／
 人工恢复 AUTO 仍走现有带 expectedVersion 的状态入口，必须明确人工命令，在同一 LST 当前锁内检查 READY 价格及真实资格后才恢复；不能“先读通过，再无检查改状态”。自动扫描／下单准备不能传人工恢复模式。RETIRED 不接受恢复。
 
 缺价格／供给是 DEFERRED；损坏引用／归属矛盾／SQL／序列化故障为技术失败，不能泛 catch 为 UNKNOWN。管理触发发布使用真实管理操作人；扫描／下单触发无管理操作人时使用显式配置的系统操作人 ID，来源版本发布人独立保留。未配置为明确自动发布配置错误，不填0、随机用户或冒充原请求操作人；不访问 system 库查询用户。
+
+#### Task 3 实施接口与事务边界
+
+- 刷新门面 `BuyerSelectionCatalogRefreshService.refresh(Long listingId, Trigger trigger, Long operatorId)` 是事务外唯一自动刷新入口，`Trigger` 为服务内封闭枚举 `ADMIN_SAVE`／`SWEEP`／`ORDER_PREPARE`。`ADMIN_SAVE` 必须携带真实管理操作人，为空即拒绝且不产生任何写入；`SWEEP`／`ORDER_PREPARE` 忽略调用方操作人，发布使用显式配置的系统操作人（`BuyerCatalogProperties`，配置键 `aifuli.supply-chain.catalog.system-operator-id`），未配置或非正数视为未配置。门面发现活动事务（含 rollback-only）时抛 `IllegalTransactionStateException`，不用 NOT_SUPPORTED 挂起调用者事务。
+- 门面只做编排：经真实代理调用 worker；worker 内部返回需重算的 BPD 身份时，在 LST 事务外调用既有 `GenericBatchPricingService.initializeBuyerProduct` 单 BPD 重建继承版本并确认提交后再刷新一次；第二次仍缺条件按真实结果返回，不循环、不在持 LST 锁时调用任何会锁 SKU／定价／项目的重建。`SWEEP`／`ORDER_PREPARE` 且未配置系统操作人时不委派重算，直接返回首次评估结果（投影已按真实价格依赖写入安全投影）。不新增价格公式，门面自身不写任何表。
+- worker `BuyerSelectionCatalogRefreshTransactionalWorker` 在供应链事务管理器上运行独立短写事务，任一步失败整体回滚；锁序 LST → BPD → BuyerPricing → availability，SKU／SPU 仅普通读，不锁 SKU、PLT、project 或供给行，不外呼。MANUAL 与 RETIRED 在读取身份后立即返回且零写；AUTO 关联缺损、已指向版本缺失或跨归属、SQL／JSON 故障为技术失败继续上抛。非 MANUAL／RETIRED 刷新前必须校验已指向商业版本存在且归属本 LST，缺失或跨归属为技术失败零写。Mapper 增量：`BuyerListingAvailabilityMapper.selectByListingIdForUpdate`、`BuyerListingVersionMapper.selectByListingAndSource`（同来源快照列表：首个沿用已冻结业务有效期，全量做同摘要幂等复用）。
+- 价格依赖口径（用户已确认窄口径）：买方定价身份与当前版本存在且归属一致；READY 要求身份与版本均为 READY、`distributionPriceCents` 非空非负、币种 CNY；版本 `platformPricingVersionId` 必须等于平台默认定价身份的当前版本，否则本次不发布并返回 `DEFERRED`（原因 `PRICING_DEPENDENCY_STALE`）交门面单次重算。缺身份／未定价返回 `DEFERRED`（`PRICING_NOT_READY`）；已指向不存在或跨归属版本为技术失败。
+- 决定表（AUTO、BPD 行存在）：BPD 非 ACTIVE 按移除处理，投影 `UNAVAILABLE`，生命周期与历史不变；SUSPENDED 只评估并写安全投影，返回 `PAUSED`，不发布、不恢复；DRAFT／PUBLISHED 在价格 READY、SKU／SPU 有效、买家聚合 CONFIRMED 时发布或续用商业版本（DRAFT 转 PUBLISHED；PUBLISHED 仅来源／内容变化才加版本），任一条件缺失不发布版本：DRAFT 保持 DRAFT，已发布行保留历史与生命周期，投影按真实资格 `AVAILABLE`／`UNKNOWN`／`UNAVAILABLE`，返回 `DEFERRED` 与真实原因（价格、商品、`QUALIFICATION_UNKNOWN`／`QUALIFICATION_UNAVAILABLE`）。系统操作人未配置时仍评估安全投影但不发布，返回 `DEFERRED`（`SYSTEM_OPERATOR_NOT_CONFIGURED`），不填 0、不冒充源发布人。
+- 商业快照沿用原设计 §4.2 字段与摘要（来源版本、真实分销价、币种、SKU 名称、数量 1、已冻结业务有效期），不含刷新时间／操作人／trace；同来源重复或已有同摘要行不新增版本与游标，current 指针永远来自本次当前来源。AUTO 路径只追加本地 `BuyerCatalogChange`（UPSERT），不追加 `buyer-catalog-change-fanout`；无版本且投影状态／原因／basis 未变化时不追加游标，可只更新 `evaluatedAt`；投影 basis 摘要变化才递增 `basisVersion`，`validUntil` 取本次最早未来事实边界（最大评估有效期由 Task 4 追加）。
+- 人工恢复：`BuyerListingPublicationService.changeStatus` 对 `AUTO_SELECTION` 目标 PUBLISHED 在 LST 当前锁内校验同一价格链与买家聚合 CONFIRMED 后 CAS 改状态并追加本地游标（不追加 fanout）；不通过抛 `BUYER_CATALOG_NOT_READY` 且零写。校验时以 `BuyerSkuPricingMapper.selectByBuyerProductIdForUpdate` 锁定买方定价身份行（锁序 LST → BuyerPricing → availability，与刷新 worker 同向，不引入新死锁）；已指向商业版本存在且归属本 LST 为恢复前提，缺失或跨归属为技术失败。校验通过后在同一事务内同步写安全投影（状态 AVAILABLE、原因清空、评估时间本次库时钟、`validUntil` 取本次买家聚合未来事实边界、basis 摘要变化才递增 basisVersion，投影 CAS 失败回滚），投影行缺失为技术失败；恢复不发布新商业版本，版本收敛仍由扫描推进。AUTO 无已发布商业版本（currentVersionId 为空）时目标 PUBLISHED 直接抛 `BUYER_CATALOG_NOT_READY`，不先校验后技术失败。MANUAL 原行为与 RETIRED 拒绝不变；本入口不接受扫描／下单准备调用。
+- 结果：不可变 `BuyerSelectionCatalogRefreshResult(refreshOutcome, publicationState, availabilityStatus, reasonCode, evaluatedAt)`；`BuyerCatalogRefreshOutcome` 封闭为 UPDATED／UNCHANGED／DEFERRED／FAILED／SKIPPED_MANUAL／PAUSED／TERMINAL，`FAILED` 由后续管理编排在捕获技术失败时生成，刷新门面自身技术失败继续抛出。
+- 实现注记（Task 3 落地）：`sc_buyer_listing_availability.reason_code` 为交付的非空列，AVAILABLE 投影写空串并在比较／摘要中按「无原因」归一，不新增 DDL 变更集；SUSPENDED 不委派重算、不恢复生命周期；AUTO 的暂停／退役／人工恢复也只追加本地游标，不追加 fanout；依赖前移判定为「买方定价版本 `platform_pricing_version_id` 不等于平台默认定价身份当前版本」，重算委派复用既有单 BPD 入口，不重发平台版本、不循环。
 
 ## 5. 管理保存成功与刷新失败契约
 
@@ -97,7 +120,7 @@ READY存量标记本身不证明其价格依赖仍有效；须核真实来源／
 实际修改分销／项目选品及定价的 API 类型与调用处，按结果提示保存完成、已发布、待就绪、刷新失败、MANUAL／暂停／退役等摘要；批量包含异常项身份及原因，可用已有消息／结果对话框，不加列表列。
 
 - 已保存、已发布且本次评估通过：提示目录已发布，不说全部项目可下单。
-- 已保存、待就绪：真实原因＋条件满足后后台自动发布。
+- 已保存、待就绪：真实原因；仅扫描启用时提示条件满足后后台自动发布，扫描关闭时明确暂无自动发布。
 - 已保存、刷新失败且扫描启用：后台将自动重试，当前可售未确认；扫描关闭时不得承诺自动重试。
 - MANUAL／暂停／退役：明确状态，不说自动恢复可售。
 - 保存确认提交后关闭表单并刷新原列表，目录失败不引导重复添加／保存。
