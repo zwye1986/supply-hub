@@ -39,6 +39,8 @@ import java.util.*;
 import static com.aifuli.framework.common.exception.util.ServiceExceptionUtil.exception;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PLATFORM_DEFAULT_PRICING_MISSING;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PLATFORM_SKU_NOT_FOUND;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PLATFORM_SPU_NOT_FOUND;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PLATFORM_SKU_PRICING_NOT_ALLOWED;
 
 /**
  * 商品默认、分销商与项目三层通用批量定价编排。写入前先完成整批试算，随后发布不可变版本并逐层切换当前指针。
@@ -616,12 +618,24 @@ public class GenericBatchPricingService {
         return buyer;
     }
 
+    /**
+     * 人工默认定价的权威准入：SKU 与所属 SPU 必须同时启用；不存在与状态拒绝分别返回稳定业务错误。
+     * 预览只读，保存锁定 SKU 后对整批完成检查再发布版本；本层继续上抛，不重复记录异常堆栈。
+     * 此守卫不用于审计读取和复合保存首版自动初始化，不能把草稿的系统默认定价与人工定价混为一谈。
+     * 设计见 {@code docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#6-管理端接口}。
+     */
     private PlatformSkuDO requireSku(String code, boolean forUpdate) {
         PlatformSkuDO sku = forUpdate ? skuMapper.selectByCodeForUpdate(code) : skuMapper.selectByCode(code);
-        PlatformSpuDO spu = sku == null ? null : spuMapper.selectById(sku.getSpuId());
-        if (sku == null || sku.getStatus() != CatalogEntityStatus.ACTIVE.getCode()
-                || spu == null || spu.getStatus() != CatalogEntityStatus.ACTIVE.getCode()) {
-            throw new IllegalArgumentException("active platform SKU not found");
+        if (sku == null) {
+            throw exception(PLATFORM_SKU_NOT_FOUND);
+        }
+        PlatformSpuDO spu = spuMapper.selectById(sku.getSpuId());
+        if (spu == null) {
+            throw exception(PLATFORM_SPU_NOT_FOUND);
+        }
+        if (!Objects.equals(sku.getStatus(), CatalogEntityStatus.ACTIVE.getCode())
+                || !Objects.equals(spu.getStatus(), CatalogEntityStatus.ACTIVE.getCode())) {
+            throw exception(PLATFORM_SKU_PRICING_NOT_ALLOWED, code);
         }
         return sku;
     }
