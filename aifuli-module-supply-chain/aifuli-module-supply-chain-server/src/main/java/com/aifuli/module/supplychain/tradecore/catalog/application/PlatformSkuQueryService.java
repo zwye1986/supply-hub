@@ -18,6 +18,7 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSk
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSpuDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceVersionMapper;
+import com.aifuli.module.supplychain.tradecore.supply.application.SupplierOfferEligibilityService;
 import com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSpuMapper;
@@ -75,6 +76,8 @@ public class PlatformSkuQueryService {
     private final BuyerProductMapper buyerProductMapper;
     private final BuyerProjectMapper buyerProjectMapper;
     private final ProjectListingMapper projectListingMapper;
+
+    private final SupplierOfferEligibilityService eligibilityService;
 
     /**
      * 分页查询启用标品 SKU。供应商三码集合为空或候选 SPU 三码无一命中时返回空页；
@@ -275,65 +278,13 @@ public class PlatformSkuQueryService {
     }
 
     /**
-     * 当前页 SKU 的最低有效供货价。口径与通用定价一致：供应商启用、Offer 已发布；
-     * 当前版本有效则用版本单价，否则回退身份列；多条取最低。0 是有效价格，没有候选则为空。
-     * 设计见 {@code docs/superpowers/specs/2026-09-22-effective-supply-price-identity-fallback-design.md}。
+     * 当前页 SKU 的最低有效供货价。口径与通用定价一致：只取结构有效且满足一期数量1的已发布版本冻结单价，
+     * 多条取最低；不回退身份列。0 是有效价格，没有候选则为空。
+     * 设计见 {@code docs/superpowers/specs/2026-10-11-supplier-offer-lifecycle-design.md#1-核心业务规则}。
      */
     private Map<Long, Long> minimumSupplyPrices(List<PlatformSkuDO> skus) {
-        List<Long> skuIds = new ArrayList<>();
-        Map<Long, Long> suggestedBySku = new HashMap<>();
-        for (PlatformSkuDO sku : skus) {
-            if (sku.getId() != null) {
-                skuIds.add(sku.getId());
-                suggestedBySku.put(sku.getId(), sku.getSuggestedSalePrice());
-            }
-        }
-        if (skuIds.isEmpty()) {
-            return Map.of();
-        }
-        List<SupplierOfferDO> offers = offerMapper.selectList(new LambdaQueryWrapper<SupplierOfferDO>()
-                .in(SupplierOfferDO::getPlatformSkuId, skuIds)
-                .eq(SupplierOfferDO::getStatus, OfferStatus.PUBLISHED.getCode()));
-        if (offers.isEmpty()) {
-            return Map.of();
-        }
-        Set<Long> versionIds = new HashSet<>();
-        Set<Long> supplierIds = new HashSet<>();
-        for (SupplierOfferDO offer : offers) {
-            if (offer.getCurrentVersionId() != null) {
-                versionIds.add(offer.getCurrentVersionId());
-            }
-            if (offer.getSupplierId() != null) {
-                supplierIds.add(offer.getSupplierId());
-            }
-        }
-        Map<Long, SupplierOfferVersionDO> versions = new HashMap<>();
-        if (!versionIds.isEmpty()) {
-            for (SupplierOfferVersionDO version : offerVersionMapper.selectList(new LambdaQueryWrapper<SupplierOfferVersionDO>()
-                    .in(SupplierOfferVersionDO::getId, versionIds))) {
-                versions.put(version.getId(), version);
-            }
-        }
-        Map<Long, SupplierDO> suppliers = new HashMap<>();
-        if (!supplierIds.isEmpty()) {
-            for (SupplierDO supplier : supplierMapper.selectList(new LambdaQueryWrapper<SupplierDO>()
-                    .in(SupplierDO::getId, supplierIds))) {
-                suppliers.put(supplier.getId(), supplier);
-            }
-        }
-        LocalDateTime now = databaseClock.now();
-        Map<Long, Long> minimumBySku = new HashMap<>();
-        for (SupplierOfferDO offer : offers) {
-            SupplierOfferVersionDO version = offer.getCurrentVersionId() == null
-                    ? null : versions.get(offer.getCurrentVersionId());
-            Long suggested = offer.getPlatformSkuId() == null ? null : suggestedBySku.get(offer.getPlatformSkuId());
-            Long price = EffectiveSupplyPrice.of(offer, suppliers.get(offer.getSupplierId()), version, suggested, now);
-            if (price == null || offer.getPlatformSkuId() == null) {
-                continue;
-            }
-            minimumBySku.merge(offer.getPlatformSkuId(), price, Math::min);
-        }
-        return minimumBySku;
+        return eligibilityService.resolveMinimumSupplyPrices(skus.stream().map(PlatformSkuDO::getId)
+                .filter(java.util.Objects::nonNull).toList(), databaseClock.now());
     }
 
     private SkuListItem toListItem(PlatformSkuDO sku, PlatformSpuDO spu, String categoryName, Long supplyPriceCents) {

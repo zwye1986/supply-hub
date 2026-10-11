@@ -83,23 +83,75 @@ class SupplierOfferPublicationListOnShelfTest {
                 inventorySourceMapper, offerMapper, offerVersionMapper, externalSkuBindingMapper,
                 new AdapterMetadataRegistry(List.of(new QnmGameOrderV1Metadata())), schemaValidator,
                 businessNoGenerator, outboxRepository, new ObjectMapper(), productSellabilityService,
-                eventPublisher, adapterTypeAllowList);
+                eventPublisher, adapterTypeAllowList, mock(com.aifuli.module.supplychain.tradecore.supply.dal.mysql.CredentialSetMapper.class));
     }
 
     private void stubOfferSupplierAndSku(String fulfillmentType) {
         SupplierOfferDO offer = SupplierOfferDO.builder()
                 .id(1L).offerNo(OFFER_NO).supplierId(SUPPLIER_ID).platformSkuId(SKU_ID)
-                .externalSkuCode("QNM-EXT-1").draftUnitPrice(1999L)
+                .externalSkuCode("QNM-EXT-1").priceMode("FIXED").draftUnitPrice(1999L)
                 .draftMinQuantity(1L).draftMaxQuantity(100L)
                 .status(OfferStatus.PUBLISHED.getCode()).version(0L).build();
         when(offerMapper.selectByNoForUpdate(OFFER_NO)).thenReturn(offer);
+        when(offerMapper.selectByNo(OFFER_NO)).thenReturn(offer);
         SupplierDO supplier = SupplierDO.builder()
                 .id(SUPPLIER_ID).supplierCode(SUPPLIER_CODE).supplierType("STANDARD_SUPPLIER")
                 .status(SupplierStatus.ACTIVE.getCode()).build();
-        when(supplierMapper.selectByCode(SUPPLIER_CODE)).thenReturn(supplier);
+        when(supplierMapper.selectByCodeForUpdate(SUPPLIER_CODE)).thenReturn(supplier);
         PlatformSkuDO sku = PlatformSkuDO.builder().id(SKU_ID).fulfillmentType(fulfillmentType).build();
         when(productSellabilityService.requireSellableById(SKU_ID))
                 .thenReturn(new ProductSellabilityService.SellableProduct(sku, new PlatformSpuDO()));
+    }
+
+    /** 技术端新增同样遵循供应商互斥与默认下架，不得旁路生命周期。 */
+    @Test void technicalCreateOfferIsSuspendedAndLocksSupplierBeforeInsert() {
+        stubTechnicalCreate();
+        service.createOffer(new SupplierOfferPublicationService.CreateOfferCommand(SUPPLIER_CODE,"SKU_1","OF_1",1L));
+        var row = org.mockito.ArgumentCaptor.forClass(SupplierOfferDO.class);
+        var order = org.mockito.Mockito.inOrder(supplierMapper,offerMapper);
+        order.verify(supplierMapper).selectByCodeForUpdate(SUPPLIER_CODE);
+        order.verify(offerMapper).insert(row.capture());
+        org.assertj.core.api.Assertions.assertThat(row.getValue().getStatus()).isEqualTo(OfferStatus.SUSPENDED.getCode());
+        org.assertj.core.api.Assertions.assertThat(row.getValue().getCurrentVersionId()).isNull();
+    }
+    @Test void technicalInventoryCreateLocksSupplierBeforeInsert() {
+        stubTechnicalCreate();
+        service.createRemoteOnDemandInventory(new SupplierOfferPublicationService.CreateInventorySourceCommand(
+                SUPPLIER_CODE,"SKU_1","EXT_1",1L));
+        var order = org.mockito.Mockito.inOrder(supplierMapper,inventorySourceMapper);
+        order.verify(supplierMapper).selectByCodeForUpdate(SUPPLIER_CODE);
+        order.verify(inventorySourceMapper).insert(org.mockito.ArgumentMatchers.any(com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.InventorySourceDO.class));
+    }
+    @Test void technicalCreatesRejectDefaultOuterIsolationBeforeReadingSupplier() {
+        org.springframework.transaction.support.TransactionSynchronizationManager.setActualTransactionActive(true);
+        try {
+            assertThatThrownBy(() -> service.createOffer(new SupplierOfferPublicationService.CreateOfferCommand(
+                    SUPPLIER_CODE,"SKU_1","OF_1",1L))).isInstanceOf(IllegalStateException.class).hasMessageContaining("READ_COMMITTED");
+            assertThatThrownBy(() -> service.createRemoteOnDemandInventory(new SupplierOfferPublicationService.CreateInventorySourceCommand(
+                    SUPPLIER_CODE,"SKU_1","EXT_1",1L))).isInstanceOf(IllegalStateException.class).hasMessageContaining("READ_COMMITTED");
+            org.mockito.Mockito.verifyNoInteractions(supplierMapper,offerMapper,inventorySourceMapper);
+        } finally { org.springframework.transaction.support.TransactionSynchronizationManager.clear(); }
+    }
+    private void stubTechnicalCreate() {
+        SupplierDO supplier = SupplierDO.builder().id(SUPPLIER_ID).supplierCode(SUPPLIER_CODE)
+                .supplierType("STANDARD_SUPPLIER").status(SupplierStatus.ACTIVE.getCode()).build();
+        when(supplierMapper.selectByCode(SUPPLIER_CODE)).thenReturn(supplier);
+        when(supplierMapper.selectByCodeForUpdate(SUPPLIER_CODE)).thenReturn(supplier);
+        when(productSellabilityService.requireSellableByCode("SKU_1")).thenReturn(new ProductSellabilityService.SellableProduct(
+                PlatformSkuDO.builder().id(SKU_ID).build(),new PlatformSpuDO()));
+    }
+
+    private void stubPublishedConnector() {
+        SupplierConnectorDO connector = SupplierConnectorDO.builder().id(CONNECTOR_ID).supplierId(SUPPLIER_ID)
+                .status((short)10).adapterType(QnmGameOrderV1Metadata.TYPE).currentVersionId(CONNECTOR_VERSION_ID).build();
+        SupplierConnectorVersionDO version = SupplierConnectorVersionDO.builder().id(CONNECTOR_VERSION_ID).connectorId(CONNECTOR_ID)
+                .status(ConnectorVersionStatus.PUBLISHED.getCode()).build();
+        when(connectorMapper.selectPublishedBySupplier(SUPPLIER_ID)).thenReturn(connector);
+        when(connectorMapper.selectByIdForUpdate(CONNECTOR_ID)).thenReturn(connector);
+        when(connectorVersionMapper.selectById(CONNECTOR_VERSION_ID)).thenReturn(version);
+        when(connectorVersionMapper.selectByIdForUpdate(CONNECTOR_VERSION_ID)).thenReturn(version);
+        when(adapterTypeAllowList.isAllowed(QnmGameOrderV1Metadata.TYPE)).thenReturn(true);
+        when(capabilityMapper.selectByConnectorVersionIdForUpdate(CONNECTOR_VERSION_ID)).thenReturn(List.of());
     }
 
     private ListOnShelfCommand command() {
@@ -107,17 +159,29 @@ class SupplierOfferPublicationListOnShelfTest {
     }
 
     @Test
+    void rejectsRealtimeDraftBeforeAttemptingPublication() {
+        stubOfferSupplierAndSku("VOUCHER_CODE");
+        SupplierOfferDO offer = offerMapper.selectByNoForUpdate(OFFER_NO);
+        offer.setPriceMode("REALTIME");
+        stubPublishedConnector();
+        assertThatThrownBy(() -> service.listOnShelf(command()))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("FIXED");
+    }
+
+    @Test
     void rejectsWhenOfferDoesNotBelongToPathSupplier() {
         SupplierOfferDO offer = SupplierOfferDO.builder()
                 .id(1L).offerNo(OFFER_NO).supplierId(999L).platformSkuId(SKU_ID)
-                .externalSkuCode("QNM-EXT-1").draftUnitPrice(1999L)
+                .externalSkuCode("QNM-EXT-1").priceMode("FIXED").draftUnitPrice(1999L)
                 .draftMinQuantity(1L).draftMaxQuantity(100L)
                 .status(OfferStatus.PUBLISHED.getCode()).version(0L).build();
         when(offerMapper.selectByNoForUpdate(OFFER_NO)).thenReturn(offer);
-        when(supplierMapper.selectByCode(SUPPLIER_CODE)).thenReturn(SupplierDO.builder()
+        when(offerMapper.selectByNo(OFFER_NO)).thenReturn(offer);
+        when(supplierMapper.selectByCodeForUpdate(SUPPLIER_CODE)).thenReturn(SupplierDO.builder()
                 .id(SUPPLIER_ID).supplierCode(SUPPLIER_CODE).supplierType("STANDARD_SUPPLIER")
                 .status(SupplierStatus.ACTIVE.getCode()).build());
 
+        stubPublishedConnector();
         assertThatThrownBy(() -> service.listOnShelf(command()))
                 .isInstanceOf(IllegalArgumentException.class);
     }
@@ -138,7 +202,7 @@ class SupplierOfferPublicationListOnShelfTest {
         stubOfferSupplierAndSku("VOUCHER_CODE");
         when(connectorMapper.selectPublishedBySupplier(SUPPLIER_ID)).thenReturn(
                 SupplierConnectorDO.builder().id(CONNECTOR_ID).supplierId(SUPPLIER_ID)
-                        .adapterType(QnmGameOrderV1Metadata.TYPE).currentVersionId(CONNECTOR_VERSION_ID).build());
+                        .status((short)10).adapterType(QnmGameOrderV1Metadata.TYPE).currentVersionId(CONNECTOR_VERSION_ID).build());
         when(adapterTypeAllowList.isAllowed(QnmGameOrderV1Metadata.TYPE)).thenReturn(false);
 
         assertThatThrownBy(() -> service.listOnShelf(command()))
@@ -152,16 +216,33 @@ class SupplierOfferPublicationListOnShelfTest {
         stubOfferSupplierAndSku("VOUCHER_CODE");
         when(connectorMapper.selectPublishedBySupplier(SUPPLIER_ID)).thenReturn(
                 SupplierConnectorDO.builder().id(CONNECTOR_ID).supplierId(SUPPLIER_ID)
-                        .adapterType(QnmGameOrderV1Metadata.TYPE).currentVersionId(CONNECTOR_VERSION_ID).build());
+                        .status((short)10).adapterType(QnmGameOrderV1Metadata.TYPE).currentVersionId(CONNECTOR_VERSION_ID).build());
         when(adapterTypeAllowList.isAllowed(QnmGameOrderV1Metadata.TYPE)).thenReturn(true);
-        when(connectorVersionMapper.selectById(CONNECTOR_VERSION_ID)).thenReturn(
+        when(connectorVersionMapper.selectByIdForUpdate(CONNECTOR_VERSION_ID)).thenReturn(
                 SupplierConnectorVersionDO.builder().id(CONNECTOR_VERSION_ID).connectorId(CONNECTOR_ID)
                         .status(ConnectorVersionStatus.PUBLISHED.getCode()).build());
-        when(capabilityMapper.selectByConnectorVersionId(CONNECTOR_VERSION_ID)).thenReturn(List.of());
+        SupplierConnectorVersionDO version = connectorVersionMapper.selectByIdForUpdate(CONNECTOR_VERSION_ID);
+        when(connectorVersionMapper.selectById(CONNECTOR_VERSION_ID)).thenReturn(version);
+        SupplierConnectorDO connector = connectorMapper.selectPublishedBySupplier(SUPPLIER_ID);
+        when(connectorMapper.selectByIdForUpdate(CONNECTOR_ID)).thenReturn(connector);
+        when(capabilityMapper.selectByConnectorVersionIdForUpdate(CONNECTOR_VERSION_ID)).thenReturn(List.of());
 
         assertThatThrownBy(() -> service.listOnShelf(command()))
                 .isInstanceOf(ServiceException.class)
                 .extracting(e -> ((ServiceException) e).getCode())
                 .isEqualTo(OFFER_CAPABILITY_MISSING.getCode());
     }
+    @Test
+    void locksPublicationDependenciesBeforeOffer() {
+        stubOfferSupplierAndSku("VOUCHER_CODE");
+        stubPublishedConnector();
+        assertThatThrownBy(() -> service.listOnShelf(command())).isInstanceOf(ServiceException.class);
+        var ordered = org.mockito.Mockito.inOrder(supplierMapper, connectorMapper, connectorVersionMapper, capabilityMapper, offerMapper);
+        ordered.verify(supplierMapper).selectByCodeForUpdate(SUPPLIER_CODE);
+        ordered.verify(connectorMapper).selectByIdForUpdate(CONNECTOR_ID);
+        ordered.verify(connectorVersionMapper).selectByIdForUpdate(CONNECTOR_VERSION_ID);
+        ordered.verify(capabilityMapper).selectByConnectorVersionIdForUpdate(CONNECTOR_VERSION_ID);
+        ordered.verify(offerMapper).selectByNoForUpdate(OFFER_NO);
+    }
+
 }

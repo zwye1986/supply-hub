@@ -174,13 +174,21 @@ class SupplierOfferSalePriceIntegrationTest {
     void discountCreateAndUpdateIgnoreMissingOrForgedClientHint(Long hint) {
         Fixture f = fixture(9600);
         long before = pricingVersions(f.sku());
+        long originalPricing = currentPricing(f.sku());
         String no = offers.createPublished(f.supplier(), List.of(discount(f.sku(), hint)), 1L).getFirst();
-        assertThat(pricingVersions(f.sku())).isEqualTo(before + 1);
-        long createdPricing = currentPricing(f.sku());
+        assertThat(pricingVersions(f.sku())).isEqualTo(before);
+        assertThat(currentPricing(f.sku())).isEqualTo(originalPricing);
         assertThat(jdbc.queryForObject("SELECT supply_price_cents FROM sc_platform_sku_pricing_version WHERE id=?",
-                Long.class, createdPricing)).isEqualTo(8640L);
+                Long.class, originalPricing)).isNull();
+        // 列表返回录入身份字段，折扣模式不伪造固定单价；前端按销售建议价和折扣展示报价。
+        // docs/superpowers/specs/2026-10-11-supplier-offer-lifecycle-design.md#2-单一读模型与前端契约
+        var draft = page(f);
+        assertThat(draft.path("unitPriceCents").isNull()).isTrue();
+        assertThat(draft.path("discountBp").asInt()).isEqualTo(9000);
+        assertThat(draft.path("suggestedSalePriceCents").asLong()).isEqualTo(9600L);
         offers.updateCommercial(f.supplier(), no, discount(f.sku(), hint), 1L);
-        assertThat(pricingVersions(f.sku())).isEqualTo(before + 2);
+        assertThat(pricingVersions(f.sku())).isEqualTo(before);
+        assertThat(currentPricing(f.sku())).isEqualTo(originalPricing);
         var offer = context.getBean(SupplierOfferMapper.class).selectByNo(no);
         assertThat(offer.getDiscountBp()).isEqualTo(9000);
         assertThat(offer.getDraftUnitPrice()).isNull();
@@ -210,9 +218,9 @@ class SupplierOfferSalePriceIntegrationTest {
         assertThat(page(f).path("suggestedSalePriceCents").asLong(-1)).isZero();
     }
 
-    /** 首行已插入且真实同步定价版本已写入，第二行业务拒绝须将整批及首行价格版本/指针一并回滚。 */
+    /** 首行下架身份插入后第二行拒绝，整批回滚；正式定价版本与指针始终不受草稿创建影响。 */
     @Test
-    void invalidSecondDiscountRollsBackFirstOfferAndSynchronousPricingVersion() {
+    void invalidSecondDiscountRollsBackFirstOfferWithoutPricingWrites() {
         Fixture f = fixture(9600);
         PlatformSkuDO invalid = createSku(0);
         long before = pricingVersions(f.sku());
@@ -240,6 +248,10 @@ class SupplierOfferSalePriceIntegrationTest {
             SupplierCooperativeProductService.class, ProductCenterTestConfiguration.class})
     static class TestConfiguration {
         @Bean ObjectMapper objectMapper() { return new ObjectMapper().findAndRegisterModules(); }
+        /** 销售建议价/折扣准入链路不涉及发布；只补合作商品服务新增的发布编排依赖。 */
+        @Bean com.aifuli.module.supplychain.tradecore.supply.application.SupplierOfferPublicationService publicationService() {
+            return mock(com.aifuli.module.supplychain.tradecore.supply.application.SupplierOfferPublicationService.class);
+        }
         @Bean TaxRateDictionaryAdapter taxRateDictionaryAdapter() {
             TaxRateDictionaryAdapter adapter = mock(TaxRateDictionaryAdapter.class);
             when(adapter.requireEnabled(false, PricingTaxRateCodes.NON_TAXABLE))

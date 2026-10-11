@@ -8,6 +8,10 @@ import org.apache.ibatis.annotations.Mapper;
 @Mapper
 public interface SupplierConnectorMapper extends BaseMapperX<SupplierConnectorDO> {
 
+    default SupplierConnectorDO selectByIdForUpdate(Long id) {
+        return selectOneForUpdate(SupplierConnectorDO::getId, id);
+    }
+
     default SupplierConnectorDO selectByNo(String connectorNo) {
         return selectOne(SupplierConnectorDO::getConnectorNo, connectorNo);
     }

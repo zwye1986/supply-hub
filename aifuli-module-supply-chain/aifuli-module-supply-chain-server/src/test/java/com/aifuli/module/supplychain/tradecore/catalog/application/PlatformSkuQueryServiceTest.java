@@ -14,6 +14,7 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSp
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceVersionMapper;
 import com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock;
+import com.aifuli.module.supplychain.tradecore.supply.application.SupplierEligibilityTestFixture;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSpuMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
@@ -74,7 +75,7 @@ class PlatformSkuQueryServiceTest {
                 supplierMapper, mock(SupplierSupplyScopeMapper.class),
                 offerMapper, offerVersionMapper, categoryQueryService, databaseClock,
                 mock(BuyerMapper.class),
-                buyerProductMapper, buyerProjectMapper, projectListingMapper);
+                buyerProductMapper, buyerProjectMapper, projectListingMapper, SupplierEligibilityTestFixture.create(supplierMapper, offerMapper, offerVersionMapper, skuMapper, spuMapper));
     }
 
     @Test
@@ -222,15 +223,17 @@ class PlatformSkuQueryServiceTest {
                         .status(OfferStatus.PUBLISHED.getCode()).build(),
                 SupplierOfferDO.builder().id(2L).platformSkuId(11L).supplierId(5L).currentVersionId(22L)
                         .status(OfferStatus.PUBLISHED.getCode()).build()));
-        when(offerVersionMapper.selectList(any())).thenReturn(List.of(
+        when(offerVersionMapper.selectBatchIds(any())).thenReturn(List.of(
                 SupplierOfferVersionDO.builder().id(21L).supplierSettlementUnitPrice(1_800L)
                         .validFrom(LocalDateTime.of(2026, 9, 1, 0, 0)).build(),
                 SupplierOfferVersionDO.builder().id(22L).supplierSettlementUnitPrice(2_200L)
                         .validFrom(LocalDateTime.of(2026, 9, 1, 0, 0))
                         .validTo(LocalDateTime.of(2026, 9, 1, 0, 0)).build()));
-        when(supplierMapper.selectList(any())).thenReturn(List.of(
+        when(supplierMapper.selectBatchIds(any())).thenReturn(List.of(
                 SupplierDO.builder().id(4L).status(SupplierStatus.ACTIVE.getCode()).build(),
                 SupplierDO.builder().id(5L).status(SupplierStatus.ACTIVE.getCode()).build()));
+
+        SupplierEligibilityTestFixture.seedDependencies(service, List.of(sku), List.of(spu));
 
         PlatformSkuQueryService.SkuListItem row = service.page(
                 new PlatformSkuQueryService.SkuPageQuery(
@@ -243,7 +246,7 @@ class PlatformSkuQueryServiceTest {
     }
 
     @Test
-    void projectsFixedIdentitySupplyPriceWhenOfferHasNoVersion() {
+    void projectsNoSupplyPriceWhenOfferHasNoVersion() {
         PlatformSpuDO spu = PlatformSpuDO.builder()
                 .id(8L).spuCode("SPU_IQY").spuName("爱奇艺黄金会员")
                 .status(CatalogEntityStatus.ACTIVE.getCode()).build();
@@ -259,7 +262,7 @@ class PlatformSkuQueryServiceTest {
                 SupplierOfferDO.builder().id(1L).platformSkuId(11L).supplierId(4L)
                         .status(OfferStatus.PUBLISHED.getCode())
                         .priceMode("FIXED").draftUnitPrice(20_000L).build()));
-        when(supplierMapper.selectList(any())).thenReturn(List.of(
+        when(supplierMapper.selectBatchIds(any())).thenReturn(List.of(
                 SupplierDO.builder().id(4L).status(SupplierStatus.ACTIVE.getCode()).build()));
 
         PlatformSkuQueryService.SkuListItem row = service.page(
@@ -267,6 +270,6 @@ class PlatformSkuQueryServiceTest {
                         null, null, null, null, null, null, null, 1, 10))
                 .getList().getFirst();
 
-        assertThat(row.supplyPriceCents()).isEqualTo(20_000L);
+        assertThat(row.supplyPriceCents()).isNull();
     }
 }

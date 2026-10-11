@@ -44,6 +44,8 @@ import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.CredentialSlotMa
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.InventorySourceMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierConnectorMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierConnectorVersionMapper;
+import com.aifuli.module.supplychain.supplieradapter.metadata.SupplierConnectorCapabilityDO;
+import com.aifuli.module.supplychain.supplieradapter.metadata.SupplierConnectorCapabilityMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferVersionMapper;
@@ -104,6 +106,7 @@ class BuyerSelectionCatalogSweepIntegrationTest {
         mysql.start();
         context = new SpringApplicationBuilder(TestConfiguration.class).web(WebApplicationType.NONE)
                 .properties(Map.of("aifuli.supply-chain.enabled", true,
+"aifuli.supply-chain.connector.allowed-adapter-types", "QNM_GAME_ORDER_V1",
                         "aifuli.supply-chain.datasource.url", mysql.getJdbcUrl(),
                         "aifuli.supply-chain.datasource.username", mysql.getUsername(),
                         "aifuli.supply-chain.datasource.password", mysql.getPassword(),
@@ -365,6 +368,13 @@ class BuyerSelectionCatalogSweepIntegrationTest {
                 .validatedAt(now).validationExpiresAt(now.plusDays(1)).publishedAt(now).configDigest(new byte[32])
                 .status((short) 10).version(0L).createdAt(now).updatedAt(now).build();
         context.getBean(SupplierConnectorVersionMapper.class).insert(connectorVersion);
+        // 共享结构有效性守卫要求主能力及执行画像所需查询/回调能力启用（生命周期设计 §3.2）。
+        SupplierConnectorCapabilityMapper capabilityMapper = context.getBean(SupplierConnectorCapabilityMapper.class);
+        for (String capabilityCode : List.of("CREATE_RECHARGE", "QUERY_ORDER", "RECEIVE_CALLBACK")) {
+            capabilityMapper.insert(SupplierConnectorCapabilityDO.builder()
+                    .connectorVersionId(connectorVersion.getId()).capabilityCode(capabilityCode)
+                    .enabled((short) 1).metadataVersion(1).createdAt(now).build());
+        }
         jdbc.update("UPDATE sc_supplier_connector SET current_version_id=? WHERE id=?",
                 connectorVersion.getId(), connector.getId());
         InventorySourceDO inventory = InventorySourceDO.builder().sourceNo("IN" + unique).supplierId(created.getId())

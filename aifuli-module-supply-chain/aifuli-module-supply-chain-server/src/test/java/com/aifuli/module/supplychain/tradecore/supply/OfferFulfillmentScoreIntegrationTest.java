@@ -14,6 +14,7 @@ import com.aifuli.module.supplychain.tradecore.supply.application.OfferFulfillme
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierCooperativeProductService;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierCooperativeProductService.DraftLine;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierCooperativeProductService.OfferListItem;
+import com.aifuli.module.supplychain.tradecore.supply.application.SupplierOfferPublicationService;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierProfileCommandService;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierProfileCommandService.ContactLine;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierProfileCommandService.CreateSupplierProfileCommand;
@@ -28,6 +29,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.context.ConfigurableApplicationContext;
+import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
 import org.testcontainers.containers.MySQLContainer;
@@ -241,5 +243,9 @@ class OfferFulfillmentScoreIntegrationTest {
             SupplierProfileCommandService.class, SupplierSupplyScopeService.class,
             SupplierCooperativeProductService.class, OfferFulfillmentScoreService.class})
     static class TestConfiguration {
+        /** 评分链路不涉及发布；只补合作商品服务新增的发布编排依赖。 */
+        @Bean SupplierOfferPublicationService publicationService() {
+            return org.mockito.Mockito.mock(SupplierOfferPublicationService.class);
+        }
     }
 }

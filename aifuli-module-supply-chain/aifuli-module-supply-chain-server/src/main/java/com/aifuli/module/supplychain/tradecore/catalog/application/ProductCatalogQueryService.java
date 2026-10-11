@@ -2,6 +2,7 @@ package com.aifuli.module.supplychain.tradecore.catalog.application;
 
 import com.aifuli.framework.common.pojo.PageParam;
 import com.aifuli.framework.common.pojo.PageResult;
+import com.aifuli.module.supplychain.tradecore.supply.application.SupplierOfferEligibilityService;
 import com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerDO;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerProductDO;
@@ -84,6 +85,7 @@ public class ProductCatalogQueryService {
     private final BuyerMapper buyerMapper;
     private final BuyerProductMapper buyerProductMapper;
     private final SupplyChainDatabaseClock databaseClock;
+    private final SupplierOfferEligibilityService eligibilityService;
 
     public PageResult<SpuListItem> page(SpuPageQuery query) {
         TabFilter tab = resolveTab(query.tabCode());
@@ -603,7 +605,6 @@ public class ProductCatalogQueryService {
 
         List<Long> skuIds = skus.stream().map(PlatformSkuDO::getId).filter(Objects::nonNull).toList();
         Map<Long, List<SupplierOfferDO>> skuOfferMap = Collections.emptyMap();
-        Map<Long, SupplierOfferVersionDO> versionMap = Collections.emptyMap();
         Map<Long, SupplierDO> supplierMap = Collections.emptyMap();
         if (!skuIds.isEmpty()) {
             List<SupplierOfferDO> offers = offerMapper.selectList(new LambdaQueryWrapper<SupplierOfferDO>()
@@ -625,17 +626,11 @@ public class ProductCatalogQueryService {
             skuOfferMap = activeSupplierOffers.stream()
                     .collect(Collectors.groupingBy(SupplierOfferDO::getPlatformSkuId));
 
-            List<Long> versionIds = activeSupplierOffers.stream()
-                    .map(SupplierOfferDO::getCurrentVersionId)
-                    .filter(Objects::nonNull).distinct().toList();
-            if (!versionIds.isEmpty()) {
-                versionMap = offerVersionMapper.selectBatchIds(versionIds).stream()
-                        .collect(Collectors.toMap(SupplierOfferVersionDO::getId, v -> v, (a, b) -> a));
-            }
+
         }
 
         // 5. 组装结果
-        LocalDateTime supplyPriceAt = databaseClock.now();
+        Map<Long, Long> minimumPrices = eligibilityService.resolveMinimumSupplyPrices(skuIds, databaseClock.now());
         List<ProductManagementSpuItem> items = new ArrayList<>(spus.size());
         for (PlatformSpuDO spu : spus) {
             List<PlatformSkuDO> spuSkus = spuSkuMap.getOrDefault(spu.getId(), List.of());
@@ -654,20 +649,14 @@ public class ProductCatalogQueryService {
                     continue;
                 }
                 List<SupplierOfferDO> skuOffers = skuOfferMap.getOrDefault(sku.getId(), List.of());
-                Long minSupplyPrice = null;
+                Long minSupplyPrice = minimumPrices.get(sku.getId());
                 List<SupplierSimpleInfo> suppliers = new ArrayList<>();
                 for (SupplierOfferDO offer : skuOffers) {
                     SupplierDO s = offer.getSupplierId() == null ? null : supplierMap.get(offer.getSupplierId());
                     if (s != null) {
                         suppliers.add(new SupplierSimpleInfo(s.getSupplierCode(), s.getSupplierName()));
                     }
-                    SupplierOfferVersionDO version = offer.getCurrentVersionId() == null
-                            ? null : versionMap.get(offer.getCurrentVersionId());
-                    Long price = EffectiveSupplyPrice.of(offer, s, version, sku.getSuggestedSalePrice(),
-                            supplyPriceAt);
-                    if (price != null && (minSupplyPrice == null || price < minSupplyPrice)) {
-                        minSupplyPrice = price;
-                    }
+
                 }
 
                 Long supplyPriceExclusive = null;
@@ -876,37 +865,13 @@ public class ProductCatalogQueryService {
      */
     private List<SupplierOfferDO> offersInsideEffectiveSupplyRange(List<SupplierOfferDO> offers,
                                                                    Long supplyPriceMin, Long supplyPriceMax) {
-        List<Long> versionIds = offers.stream()
-                .map(SupplierOfferDO::getCurrentVersionId)
+        List<Long> skuIds = offers.stream().map(SupplierOfferDO::getPlatformSkuId)
                 .filter(Objects::nonNull).distinct().toList();
-        Map<Long, SupplierOfferVersionDO> versions = versionIds.isEmpty() ? Map.of()
-                : offerVersionMapper.selectBatchIds(versionIds).stream()
-                .collect(Collectors.toMap(SupplierOfferVersionDO::getId, version -> version, (left, right) -> left));
-        List<Long> supplierIds = offers.stream().map(SupplierOfferDO::getSupplierId).filter(Objects::nonNull).distinct().toList();
-        Map<Long, SupplierDO> suppliers = supplierIds.isEmpty() ? Map.of()
-                : supplierMapper.selectBatchIds(supplierIds).stream()
-                .collect(Collectors.toMap(SupplierDO::getId, supplier -> supplier, (left, right) -> left));
-        List<Long> skuIds = offers.stream().map(SupplierOfferDO::getPlatformSkuId).filter(Objects::nonNull).distinct().toList();
-        Map<Long, Long> suggestedBySku = new HashMap<>();
-        if (!skuIds.isEmpty()) {
-            for (PlatformSkuDO sku : skuMapper.selectBatchIds(skuIds)) {
-                if (sku.getId() != null) {
-                    suggestedBySku.put(sku.getId(), sku.getSuggestedSalePrice());
-                }
-            }
-        }
-        LocalDateTime now = databaseClock.now();
+        Map<Long, Long> minimumPrices = eligibilityService.resolveMinimumSupplyPrices(skuIds, databaseClock.now());
         List<SupplierOfferDO> matched = new ArrayList<>();
         for (SupplierOfferDO offer : offers) {
-            SupplierOfferVersionDO version = offer.getCurrentVersionId() == null
-                    ? null : versions.get(offer.getCurrentVersionId());
-            SupplierDO supplier = offer.getSupplierId() == null ? null : suppliers.get(offer.getSupplierId());
-            Long suggested = offer.getPlatformSkuId() == null ? null : suggestedBySku.get(offer.getPlatformSkuId());
-            Long price = EffectiveSupplyPrice.of(offer, supplier, version, suggested, now);
-            if (price == null) {
-                continue;
-            }
-            if ((supplyPriceMin == null || price >= supplyPriceMin)
+            Long price = minimumPrices.get(offer.getPlatformSkuId());
+            if (price != null && (supplyPriceMin == null || price >= supplyPriceMin)
                     && (supplyPriceMax == null || price <= supplyPriceMax)) {
                 matched.add(offer);
             }

@@ -280,7 +280,10 @@ class ProductBatchShelfSyncIntegrationTest {
         }
         ExecutorService pool = Executors.newFixedThreadPool(2);
         try {
-            Future<?> writer = pool.submit(() -> new TransactionTemplate(transactionManager).executeWithoutResult(tx -> {
+            TransactionTemplate writerTransaction = new TransactionTemplate(transactionManager);
+            // 批量定价以局部RC读取正式供给；本测试的外层事务必须遵守相同契约。
+            if (pricing) writerTransaction.setIsolationLevel(org.springframework.transaction.TransactionDefinition.ISOLATION_READ_COMMITTED);
+            Future<?> writer = pool.submit(() -> writerTransaction.executeWithoutResult(tx -> {
                 try { mutation.call(); }
                 catch (RuntimeException failure) { throw failure; }
                 catch (Exception failure) { throw new IllegalStateException(failure); }

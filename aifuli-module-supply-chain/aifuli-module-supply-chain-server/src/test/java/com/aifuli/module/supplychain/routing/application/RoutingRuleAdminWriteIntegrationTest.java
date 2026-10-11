@@ -35,6 +35,8 @@ import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.CredentialSlotMa
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.InventorySourceMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierConnectorMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierConnectorVersionMapper;
+import com.aifuli.module.supplychain.supplieradapter.metadata.SupplierConnectorCapabilityDO;
+import com.aifuli.module.supplychain.supplieradapter.metadata.SupplierConnectorCapabilityMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferVersionMapper;
@@ -130,6 +132,8 @@ class RoutingRuleAdminWriteIntegrationTest {
             SupplierConnectorMapper connectorMapper = context.getBean(SupplierConnectorMapper.class);
             SupplierConnectorVersionMapper connectorVersionMapper =
                     context.getBean(SupplierConnectorVersionMapper.class);
+            SupplierConnectorCapabilityMapper capabilityMapper =
+                    context.getBean(SupplierConnectorCapabilityMapper.class);
             InventorySourceMapper inventoryMapper = context.getBean(InventorySourceMapper.class);
             SupplierOfferMapper offerMapper = context.getBean(SupplierOfferMapper.class);
             SupplierOfferVersionMapper offerVersionMapper =
@@ -148,10 +152,10 @@ class RoutingRuleAdminWriteIntegrationTest {
             // 双候选同价（500 分）且无评分：三策略打平，候选优先级裁决。
             createOfferFixture(SUPPLIER_A, "奇那梦写测", 500L, sku200, seedNow,
                     supplierMapper, credentialMapper, connectorMapper, connectorVersionMapper,
-                    inventoryMapper, offerMapper, offerVersionMapper);
+                    capabilityMapper, inventoryMapper, offerMapper, offerVersionMapper);
             createOfferFixture(SUPPLIER_B, "后备写测", 500L, sku200, seedNow,
                     supplierMapper, credentialMapper, connectorMapper, connectorVersionMapper,
-                    inventoryMapper, offerMapper, offerVersionMapper);
+                    capabilityMapper, inventoryMapper, offerMapper, offerVersionMapper);
 
             // 044 预置引导策略已带开放区间生效版本（GLOBAL_DEFAULT），写测夹具接续其后继发布
             // 首组业务规则（版本 2）：与管理端真实首笔操作同路径，避免与预置版本区间重叠。
@@ -334,6 +338,7 @@ class RoutingRuleAdminWriteIntegrationTest {
             String supplierCode, String supplierName, long price, PlatformSkuDO sku, LocalDateTime now,
             SupplierMapper supplierMapper, CredentialSlotMapper credentialMapper,
             SupplierConnectorMapper connectorMapper, SupplierConnectorVersionMapper connectorVersionMapper,
+            SupplierConnectorCapabilityMapper capabilityMapper,
             InventorySourceMapper inventoryMapper, SupplierOfferMapper offerMapper,
             SupplierOfferVersionMapper offerVersionMapper) {
         SupplierDO supplier = SupplierDO.builder()
@@ -363,6 +368,12 @@ class RoutingRuleAdminWriteIntegrationTest {
                 .status(ConnectorVersionStatus.PUBLISHED.getCode()).version(0L)
                 .createdBy(1L).createdAt(now).updatedBy(1L).updatedAt(now).build();
         connectorVersionMapper.insert(connectorVersion);
+        // 共享结构有效性守卫要求主能力及执行画像所需查询/回调能力启用（生命周期设计 §3.2）。
+        for (String capabilityCode : List.of("CREATE_RECHARGE", "QUERY_ORDER", "RECEIVE_CALLBACK")) {
+            capabilityMapper.insert(SupplierConnectorCapabilityDO.builder()
+                    .connectorVersionId(connectorVersion.getId()).capabilityCode(capabilityCode)
+                    .enabled((short) 1).metadataVersion(1).createdAt(now).build());
+        }
         connector.setCurrentVersionId(connectorVersion.getId());
         connector.setUpdatedAt(now);
         assertThat(connectorMapper.updateById(connector)).isEqualTo(1);
@@ -421,6 +432,7 @@ class RoutingRuleAdminWriteIntegrationTest {
     private ConfigurableApplicationContext applicationContext() {
         Map<String, Object> properties = new LinkedHashMap<>();
         properties.put("aifuli.supply-chain.enabled", true);
+properties.put("aifuli.supply-chain.connector.allowed-adapter-types", "QNM_GAME_ORDER_V1");
         properties.put("aifuli.supply-chain.datasource.url", jdbcUrl());
         properties.put("aifuli.supply-chain.datasource.username", username());
         properties.put("aifuli.supply-chain.datasource.password", password());

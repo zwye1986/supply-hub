@@ -39,13 +39,14 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import org.springframework.context.ApplicationEventPublisher;
 
 /**
- * 合作商品新增即上架、状态仅 PUBLISHED↔SUSPENDED、改价不写版本表。
+ * 合作商品新增默认下架、正式发布校验、商业草稿不改变生效定价版本。
  *
- * <p>设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#55-合作商品}。</p>
+ * <p>设计见 {@code docs/superpowers/specs/2026-10-11-supplier-offer-lifecycle-design.md#1-核心业务规则}。</p>
  */
 class SupplierCooperativeProductServiceTest {
 
@@ -59,6 +60,8 @@ class SupplierCooperativeProductServiceTest {
     private final SupplyChainDatabaseClock databaseClock = mock(SupplyChainDatabaseClock.class);
     private final ApplicationEventPublisher eventPublisher = mock(ApplicationEventPublisher.class);
     private final ProductCategoryCoverageService categoryCoverageService = mock(ProductCategoryCoverageService.class);
+    private final SupplierOfferPublicationService publicationService = mock(SupplierOfferPublicationService.class);
+    private final SupplierOfferEligibilityService eligibilityService = mock(SupplierOfferEligibilityService.class);
     private SupplierCooperativeProductService service;
 
     @BeforeEach
@@ -71,7 +74,8 @@ class SupplierCooperativeProductServiceTest {
                 skuMapper, spuMapper,
                 mock(PlatformSettlementPriceMapper.class),
                 mock(PlatformSettlementPriceVersionMapper.class),
-                businessNoGenerator, eventPublisher, categoryCoverageService);
+                businessNoGenerator, eventPublisher, categoryCoverageService,
+                publicationService, eligibilityService);
     }
 
     /** 用给定类目快照构建真实归属判定器（与生产同一实现），避免在命中规则上再打 mock。 */
@@ -91,12 +95,12 @@ class SupplierCooperativeProductServiceTest {
         ArgumentCaptor<SupplierOfferDO> captor = ArgumentCaptor.forClass(SupplierOfferDO.class);
         verify(offerMapper).insert(captor.capture());
         SupplierOfferDO inserted = captor.getValue();
-        assertThat(inserted.getStatus()).isEqualTo(OfferStatus.PUBLISHED.getCode());
+        assertThat(inserted.getStatus()).isEqualTo(OfferStatus.SUSPENDED.getCode());
         assertThat(inserted.getDraftMaxQuantity()).isEqualTo(100L);
         assertThat(inserted.getDraftMinQuantity()).isEqualTo(1L);
         assertThat(inserted.getStabilityScore()).isEqualTo(OfferFulfillmentScore.DEFAULT);
         assertThat(inserted.getTimelinessScore()).isEqualTo(OfferFulfillmentScore.DEFAULT);
-        verify(eventPublisher).publishEvent(new PricingDependencyChangedEvent(11L));
+        verifyNoInteractions(eventPublisher);
     }
 
     /**
@@ -154,7 +158,7 @@ class SupplierCooperativeProductServiceTest {
 
         verify(offerMapper).updateById(any(SupplierOfferDO.class));
         verify(offerVersionMapper, never()).insert(any(com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierOfferVersionDO.class));
-        verify(eventPublisher).publishEvent(new PricingDependencyChangedEvent(11L));
+        verifyNoInteractions(eventPublisher);
     }
 
     @Test
@@ -374,7 +378,8 @@ class SupplierCooperativeProductServiceTest {
         var versions = mock(PlatformSettlementPriceVersionMapper.class);
         service = new SupplierCooperativeProductService(databaseClock, supplierMapper, scopeMapper,
                 offerMapper, offerVersionMapper, skuMapper, spuMapper, prices, versions,
-                businessNoGenerator, eventPublisher, categoryCoverageService);
+                businessNoGenerator, eventPublisher, categoryCoverageService,
+                publicationService, eligibilityService);
         when(skuMapper.selectById(11L)).thenReturn(PlatformSkuDO.builder()
                 .id(11L).spuId(21L).suggestedSalePrice(salePrice).marketPrice(10000L).build());
         if (legacyPrice != null) {
@@ -425,7 +430,7 @@ class SupplierCooperativeProductServiceTest {
         service.updateCommercial("SPL_A", "OFR_1", line, 1L);
         verify(offerMapper).insert(any(SupplierOfferDO.class));
         verify(offerMapper).updateById(any(SupplierOfferDO.class));
-        verify(eventPublisher, org.mockito.Mockito.times(2)).publishEvent(new PricingDependencyChangedEvent(11L));
+        verifyNoInteractions(eventPublisher);
     }
 
     @org.junit.jupiter.params.ParameterizedTest
@@ -483,9 +488,55 @@ class SupplierCooperativeProductServiceTest {
         when(offerMapper.selectCount(any())).thenReturn(0L);
     }
 
+    @Test
+    void changeOfferStatusPublishedDelegatesToListOnShelf() {
+        service.changeOfferStatus("SPL_A", "OFR_1", OfferStatus.PUBLISHED, 2L);
+        // 委派时按管理端同一约定补齐非空 traceId（outbox trace_id 非空），其余字段透传。
+        verify(publicationService).listOnShelf(org.mockito.ArgumentMatchers.argThat(command ->
+                "SPL_A".equals(command.supplierCode()) && "OFR_1".equals(command.offerNo())
+                        && command.validTo() == null && Long.valueOf(2L).equals(command.operatorId())
+                        && command.traceId() != null && command.traceId().startsWith("admin-")
+                        && command.correlationId() == null && command.causationId() == null));
+        verify(offerMapper, never()).updateById(any(SupplierOfferDO.class));
+    }
+
+    @Test
+    void changeOfferStatusSuspendedLocksSupplierUpdatesStatusAndPublishesEvent() {
+        stubSupplierAndOffer(OfferStatus.PUBLISHED);
+        when(offerMapper.updateById(any(SupplierOfferDO.class))).thenReturn(1);
+
+        service.changeOfferStatus("SPL_A", "OFR_1", OfferStatus.SUSPENDED, 2L);
+
+        verify(supplierMapper).selectByCodeForUpdate("SPL_A");
+        ArgumentCaptor<SupplierOfferDO> captor = ArgumentCaptor.forClass(SupplierOfferDO.class);
+        verify(offerMapper).updateById(captor.capture());
+        assertThat(captor.getValue().getStatus()).isEqualTo(OfferStatus.SUSPENDED.getCode());
+        verify(eventPublisher).publishEvent(new PricingDependencyChangedEvent(11L));
+    }
+
+    @Test
+    void pagePopulatesCanPublishAndPublishBlockedReasonFromEligibilityService() {
+        stubSupplier();
+        SupplierOfferDO offer = SupplierOfferDO.builder()
+                .offerNo("OFR_1").platformSkuId(11L).status(OfferStatus.SUSPENDED.getCode())
+                .priceMode("FIXED").draftUnitPrice(9500L).build();
+        when(offerMapper.selectPage(any(com.aifuli.framework.common.pojo.PageParam.class), any())).thenReturn(
+                new com.aifuli.framework.common.pojo.PageResult<>(List.of(offer), 1L));
+        when(skuMapper.selectById(11L)).thenReturn(PlatformSkuDO.builder()
+                .id(11L).spuId(21L).suggestedSalePrice(9600L).marketPrice(10000L).build());
+        when(eligibilityService.checkPublishEligibility(any(), any(), any(), any()))
+                .thenReturn(SupplierOfferEligibilityService.PublishEligibility.blocked("供应商履约连接器未配置"));
+
+        var result = service.page("SPL_A", null, null, null, 1, 20);
+        var item = result.getList().getFirst();
+        assertThat(item.canPublish()).isFalse();
+        assertThat(item.publishBlockedReason()).isEqualTo("供应商履约连接器未配置");
+    }
+
     private void stubSupplierAndOffer(OfferStatus status) {
         SupplierDO supplier = SupplierDO.builder().id(9L).supplierCode("SPL_A").build();
         when(supplierMapper.selectByCode("SPL_A")).thenReturn(supplier);
+        when(supplierMapper.selectByCodeForUpdate("SPL_A")).thenReturn(supplier);
         when(offerMapper.selectByNoForUpdate("OFR_1")).thenReturn(SupplierOfferDO.builder()
                 .id(77L).offerNo("OFR_1").supplierId(9L).platformSkuId(11L)
                 .supplyScopeId(101L).status(status.getCode()).version(0L).build());

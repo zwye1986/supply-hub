@@ -647,8 +647,10 @@ public class ProductCatalogCommandService {
      * 原子创建 SPU 与至少一个 SKU。
      * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#413-spusku-复合创建postsupply-chainproductsspus}。
      */
-    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
+    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class, isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public String createProduct(SaveSpuCommand command) {
+        // 默认定价同步初始化与复合保存共用RC，见docs/superpowers/specs/2026-10-11-supplier-offer-lifecycle-design.md#34-闭环四同步重算的锁顺序与并发事务规范。
+        com.aifuli.module.supplychain.tradecore.supply.application.SupplierLifecycleTransactions.requireReadCommitted();
         log.info("创建平台商品 spuCode={} spuName={} sellableCategory={} productType={} productClassification={} "
                         + "skuCount={} operatorId={}",
                 command.spuCode(), command.spuName(), command.sellableCategory(), command.productType(),
@@ -722,8 +724,10 @@ public class ProductCatalogCommandService {
     }
 
     /** 全量更新 SPU，并按 SKU 编码执行新增、修改和安全停用。 */
-    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
+    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class, isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public void updateProduct(String spuCode, SaveSpuCommand command) {
+        // 默认定价同步初始化与复合保存共用RC，见docs/superpowers/specs/2026-10-11-supplier-offer-lifecycle-design.md#34-闭环四同步重算的锁顺序与并发事务规范。
+        com.aifuli.module.supplychain.tradecore.supply.application.SupplierLifecycleTransactions.requireReadCommitted();
         log.info("更新平台商品 spuCode={} skuCount={} operatorId={}", spuCode,
                 command.skus() == null ? 0 : command.skus().size(), command.operatorId());
         if (command.skus() == null || command.skus().isEmpty()) {
@@ -788,6 +792,7 @@ public class ProductCatalogCommandService {
         existing.forEach(sku -> byCode.put(sku.getSkuCode(), sku));
         Set<String> requested = new HashSet<>();
         Set<String> defaultPricingInitializationSkuCodes = new LinkedHashSet<>();
+        Set<Long> defaultPricingInitializationSkuIds = new LinkedHashSet<>();
         Set<Long> priceDependencyChangedSkuIds = new LinkedHashSet<>();
         LocalDateTime now = now();
         for (SaveSkuLine line : command.skus()) {
@@ -811,8 +816,9 @@ public class ProductCatalogCommandService {
                     scopedBusinessCodeService.allocateChild(ScopedBusinessCodeService.Kind.SKU,
                             spu.getId(), spu.getCodeScopeNo(), code, command.operatorId());
                 }
-                insertValidatedSku(spu, code, inheritedLine, skuStatus, schema, command.operatorId(), now);
+                PlatformSkuDO inserted = insertValidatedSku(spu, code, inheritedLine, skuStatus, schema, command.operatorId(), now);
                 defaultPricingInitializationSkuCodes.add(code);
+                defaultPricingInitializationSkuIds.add(inserted.getId());
             } else {
                 Long previousMarketPrice = sku.getMarketPrice();
                 Long previousSuggestedSalePrice = sku.getSuggestedSalePrice();
@@ -821,6 +827,7 @@ public class ProductCatalogCommandService {
                 PlatformSkuPricingDO pricing = platformSkuPricingMapper.selectById(sku.getId());
                 if (pricing == null || pricing.getCurrentVersionId() == null) {
                     defaultPricingInitializationSkuCodes.add(code);
+                    defaultPricingInitializationSkuIds.add(sku.getId());
                 } else if (!java.util.Objects.equals(previousMarketPrice, sku.getMarketPrice())
                         || !java.util.Objects.equals(previousSuggestedSalePrice, sku.getSuggestedSalePrice())) {
                     priceDependencyChangedSkuIds.add(sku.getId());
@@ -837,6 +844,12 @@ public class ProductCatalogCommandService {
                 }
             }
         }
+        // 初始化与重算的合并目标先统一锁定，避免高ID初始化后低ID重算与供给批次形成锁环。
+        // 设计见docs/superpowers/specs/2026-10-11-supplier-offer-lifecycle-design.md#34-闭环四同步重算的锁顺序与并发事务规范。
+        List<Long> allPricingSkuIds = new ArrayList<>(priceDependencyChangedSkuIds);
+        allPricingSkuIds.addAll(defaultPricingInitializationSkuIds);
+        com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuPricingBatchLock.lockByIds(
+                platformSkuPricingMapper, allPricingSkuIds);
         // 复合保存把尚未发布平台定价的 SKU 初始化为系统默认规则；已有版本只在基础价变化时按原规则重算。
         // 两个集合互斥，确保一个 SKU 在单次保存中最多生成一个平台定价版本。
         // 设计见 docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#5-版本继承与可售状态。
@@ -844,7 +857,7 @@ public class ProductCatalogCommandService {
             eventPublisher.publishEvent(new PlatformSkuPricingInitializationEvent(
                     List.copyOf(defaultPricingInitializationSkuCodes), command.operatorId()));
         }
-        priceDependencyChangedSkuIds.forEach(id -> eventPublisher.publishEvent(new PricingDependencyChangedEvent(id)));
+        priceDependencyChangedSkuIds.stream().sorted().forEach(id -> eventPublisher.publishEvent(new PricingDependencyChangedEvent(id)));
     }
 
     /**

@@ -13,6 +13,8 @@ import com.aifuli.module.supplychain.infrastructure.security.EnvelopeCryptoPort;
 import com.aifuli.module.supplychain.infrastructure.security.RechargeFrequencyIdentityKeyProvider;
 import com.aifuli.module.supplychain.infrastructure.timer.TimerTaskContext;
 import com.aifuli.module.supplychain.supplieradapter.metadata.Capability;
+import com.aifuli.module.supplychain.supplieradapter.metadata.SupplierConnectorCapabilityDO;
+import com.aifuli.module.supplychain.supplieradapter.metadata.SupplierConnectorCapabilityMapper;
 import com.aifuli.module.supplychain.supplieradapter.metadata.PublishedConnectorConfigurationResolver;
 import com.aifuli.module.supplychain.testsupport.RoutingPolicyPresetFixture;
 import com.aifuli.module.supplychain.tradecore.account.application.BuyerAccountOpeningService;
@@ -2072,6 +2074,13 @@ class StandardProjectHttpClosureIntegrationTest {
                     .status(ConnectorVersionStatus.PUBLISHED.getCode()).version(0L)
                     .createdBy(1L).createdAt(now).updatedBy(1L).updatedAt(now).build();
             server.getBean(SupplierConnectorVersionMapper.class).insert(connectorVersion);
+            // 共享结构有效性守卫要求主能力及执行画像所需查询/回调能力启用（生命周期设计 §3.2）。
+            SupplierConnectorCapabilityMapper capabilityMapper = server.getBean(SupplierConnectorCapabilityMapper.class);
+            for (String capabilityCode : List.of("ISSUE_ASSET", "CREATE_RECHARGE", "QUERY_ORDER", "RECEIVE_CALLBACK")) {
+                capabilityMapper.insert(SupplierConnectorCapabilityDO.builder()
+                        .connectorVersionId(connectorVersion.getId()).capabilityCode(capabilityCode)
+                        .enabled((short) 1).metadataVersion(1).createdAt(now).build());
+            }
 
             connector.setCurrentVersionId(connectorVersion.getId());
             connector.setUpdatedAt(now);
@@ -2099,7 +2108,8 @@ class StandardProjectHttpClosureIntegrationTest {
                 .versionNo(1).externalSkuCode("QNM-" + sku.getSkuCode()).supplierSettlementUnitPrice(9_000L)
                 .currency("CNY").connectorVersionId(connectorVersionId)
                 .inventorySourceId(inventory.getId()).minQuantity(1L).maxQuantity(1L).quantityStep(1L)
-                .primaryCapabilityCode("CREATE_RECHARGE").completionMode("QUERY_OR_CALLBACK")
+                .primaryCapabilityCode(com.aifuli.module.supplychain.tradecore.supply.application.SupplierOfferPublicationService
+                        .derivePrimaryCapability(sku.getFulfillmentType()).name()).completionMode("QUERY_OR_CALLBACK")
                 .createIdempotencyMode("DEDUP_ONLY").unknownResultPolicy("QUERY_ORDER")
                 .partialDeliveryMode("FORBIDDEN").resultMultiplicity("NONE")
                 .fulfillmentConfigSchemaVersion(1).fulfillmentConfigJson("{}")
@@ -2125,6 +2135,7 @@ class StandardProjectHttpClosureIntegrationTest {
                 "--spring.cloud.nacos.config.import-check.enabled=false",
                 "--spring.boot.admin.client.enabled=false",
                 "--aifuli.tenant.enable=false",
+"--aifuli.supply-chain.connector.allowed-adapter-types=QNM_GAME_ORDER_V1",
                 "--spring.data.redis.repositories.enabled=false",
                 "--spring.autoconfigure.exclude="
                         + "org.redisson.spring.starter.RedissonAutoConfigurationV2,"

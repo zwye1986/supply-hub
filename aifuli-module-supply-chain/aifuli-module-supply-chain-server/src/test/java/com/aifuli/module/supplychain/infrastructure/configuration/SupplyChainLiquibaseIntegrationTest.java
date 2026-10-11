@@ -179,8 +179,7 @@ class SupplyChainLiquibaseIntegrationTest {
                 "expire_at:DATETIME:-:3:NO");
         assertThat(firstStartup.projectAuthNoncePrimaryKeyColumns())
                 .containsExactly("app_id", "nonce");
-        // 062 华昇恢复字段后真实模式为 64 个变更集，启动重放不可重复执行。
-        // 设计见 docs/superpowers/specs/2026-10-09-huasheng-type201-production-closure-design.md#41-追加迁移。
+        // 既有 062 后共 64 个变更集；本轮生命周期修改不增加数据迁移。
         assertThat(firstStartup.changeSetCount()).isEqualTo(64L);
         assertThat(firstStartup.uniqueIndexes())
                 .contains("sc_instore_payment_flow.uk_sc_instore_flow_order",

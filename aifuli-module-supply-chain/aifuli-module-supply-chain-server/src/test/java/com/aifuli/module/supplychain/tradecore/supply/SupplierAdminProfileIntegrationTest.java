@@ -11,6 +11,7 @@ import com.aifuli.module.supplychain.tradecore.catalog.domain.FulfillmentType;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierCooperativeProductService;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierCooperativeProductService.DraftLine;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierCooperativeProductService.OfferListItem;
+import com.aifuli.module.supplychain.tradecore.supply.application.SupplierOfferPublicationService;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierProfileCommandService;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierProfileCommandService.ContactLine;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierProfileCommandService.CreateSupplierProfileCommand;
@@ -35,6 +36,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.context.ConfigurableApplicationContext;
+import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
 import com.aifuli.module.supplychain.testsupport.ProductCenterTestConfiguration;
@@ -187,14 +189,14 @@ class SupplierAdminProfileIntegrationTest {
                     .doesNotContain(offerNos.getFirst());
 
             List<String> readded = offers.createDrafts(supplierCode, List.of(
-                    // 重新选品用新的外部商品编码：uk_sc_supplier_offer_external_sku (supplier_id, external_sku_code)
-                    // 不含状态列，已退役身份行仍占用原编码，故再上架同一平台SKU须换一个供应商侧编码（变更集053）。
+                    // 重新选品建立新的下架身份；未退役身份的外部编码唯一，旧退役身份与冻结版本继续保留。
+                    // 设计见docs/superpowers/specs/2026-10-11-supplier-offer-lifecycle-design.md#1-核心业务规则。
                     new DraftLine("SKU_001_100", "FIXED", 9_500L, null, null, "API_DIRECT", 80L, 1L, "QNM-SKU-001-100-RE")), 1L);
             assertThat(readded).hasSize(1);
             List<SupplierOfferDO> live = offers.listLive(supplierCode);
             assertThat(live).hasSize(2);
             assertThat(live).extracting(SupplierOfferDO::getStatus)
-                    .containsOnly(OfferStatus.PUBLISHED.getCode());
+                    .containsOnly(OfferStatus.SUSPENDED.getCode());
 
             String patchOfferNo = offerNos.get(1);
             offers.changeOfferStatus(supplierCode, patchOfferNo, OfferStatus.SUSPENDED, 1L);
@@ -202,9 +204,14 @@ class SupplierAdminProfileIntegrationTest {
                     .extracting(SupplierOfferDO::getStatus)
                     .containsExactly(OfferStatus.SUSPENDED.getCode());
             offers.changeOfferStatus(supplierCode, patchOfferNo, OfferStatus.PUBLISHED, 1L);
+            // 本上下文的发布编排为mock：验证旧PATCH必须委派，不能直接将状态改为上架。
+            // 真实冻结/绑定/状态切换与失败回滚由SupplierOfferLifecycleIntegrationTest覆盖。
+            org.mockito.Mockito.verify(context.getBean(SupplierOfferPublicationService.class)).listOnShelf(
+                    org.mockito.ArgumentMatchers.argThat(publishCommand -> supplierCode.equals(publishCommand.supplierCode())
+                            && patchOfferNo.equals(publishCommand.offerNo()) && Long.valueOf(1L).equals(publishCommand.operatorId())));
             assertThat(offers.listLive(supplierCode)).filteredOn(row -> patchOfferNo.equals(row.getOfferNo()))
                     .extracting(SupplierOfferDO::getStatus)
-                    .containsExactly(OfferStatus.PUBLISHED.getCode());
+                    .containsExactly(OfferStatus.SUSPENDED.getCode());
         }
     }
 
@@ -346,5 +353,9 @@ class SupplierAdminProfileIntegrationTest {
             SupplierProfileCommandService.class, SupplierProfileQueryService.class,
             SupplierSupplyScopeService.class, SupplierCooperativeProductService.class})
     static class TestConfiguration {
+        /** 档案/详情链路不涉及发布；只补合作商品服务新增的发布编排依赖。 */
+        @Bean SupplierOfferPublicationService publicationService() {
+            return org.mockito.Mockito.mock(SupplierOfferPublicationService.class);
+        }
     }
 }

@@ -19,12 +19,24 @@ import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.annotation.Isolation;
 
 import java.time.LocalDateTime;
 import java.util.List;
 
 import static com.aifuli.framework.common.exception.util.ServiceExceptionUtil.exception;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.SUPPLIER_ALREADY_HAS_PUBLISHED_CONNECTOR;
+
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.PricingDependencyChangedEvent;
+import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierOfferDO;
+import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierMapper;
+import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferMapper;
+import com.aifuli.module.supplychain.tradecore.supply.domain.OfferStatus;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import org.springframework.context.ApplicationEventPublisher;
+import java.util.Objects;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 @Service
 @lombok.extern.slf4j.Slf4j
@@ -36,6 +48,9 @@ public class ConnectorPublicationService {
     private static final String TRANSACTION_MANAGER = "supplyChainTransactionManager";
     private static final String OUTBOX_TARGET = "supplier-config-cache-invalidation";
 
+    private final SupplierMapper supplierMapper;
+    private final SupplierOfferMapper offerMapper;
+    private final ApplicationEventPublisher eventPublisher;
     private final SupplierConnectorMapper connectorMapper;
     private final SupplierConnectorVersionMapper versionMapper;
     private final StatusMappingDefinitionMapper statusMappingMapper;
@@ -47,21 +62,27 @@ public class ConnectorPublicationService {
     private final com.aifuli.module.supplychain.supplieradapter.metadata.AdapterMetadataRegistry metadataRegistry;
     private final ConnectorCredentialBindingValidator credentialBindingValidator;
 
-    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
+    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class, isolation = Isolation.READ_COMMITTED)
     public PublishResult publish(PublishConnectorCommand command) {
-        log.info("[publishConnector] connectorNo={} connectorVersionId={} expectedConnectorVersion={} operatorId={} traceId={}",
+        SupplierLifecycleTransactions.requireReadCommitted();
+        log.info("[publishConnector][连接器发布请求] connectorNo={}, connectorVersionId={}, expectedConnectorVersion={}, operatorId={}, traceId={}",
                 command.connectorNo(),command.connectorVersionId(),command.expectedConnectorVersion(),command.operatorId(),command.traceId());
         // 只读定位集后按集→连接器→版本→项锁序重读；追加项同样集→版本，避免锁序倒置。
         // 设计见 docs/superpowers/specs/2026-10-02-huasheng-fulfillment-adapter-design.md#123-第二切片显式凭据集绑定与运行时配置。
         SupplierConnectorVersionDO located = versionMapper.selectById(command.connectorVersionId());
         if (located == null) throw new IllegalArgumentException("Connector version does not exist");
+        SupplierConnectorDO locatedConnector = connectorMapper.selectByNo(command.connectorNo());
+        if (locatedConnector == null || supplierMapper.selectByIdForUpdate(locatedConnector.getSupplierId()) == null) {
+            throw new IllegalArgumentException("Connector supplier does not exist");
+        }
         Long setId = located.getCredentialSetId();
         if (setId != null && credentialSetMapper.selectByIdForUpdate(setId) == null) {
             throw new IllegalArgumentException("Credential set does not exist");
         }
         SupplierConnectorDO connector = connectorMapper.selectByNoForUpdate(command.connectorNo());
         SupplierConnectorVersionDO version = versionMapper.selectByIdForUpdate(command.connectorVersionId());
-        if (connector == null || version == null || !connector.getId().equals(version.getConnectorId())) {
+        if (connector == null || version == null || !Objects.equals(connector.getSupplierId(), locatedConnector.getSupplierId())
+                || !connector.getId().equals(version.getConnectorId())) {
             throw new IllegalArgumentException("Connector or connector version does not exist");
         }
         if (!java.util.Objects.equals(setId, version.getCredentialSetId())) {
@@ -118,15 +139,22 @@ public class ConnectorPublicationService {
                 "SUPPLIER_CONFIG_PUBLISHED", OUTBOX_TARGET,
                 new ConnectorPublishedPayload(connector.getConnectorNo(), version.getId(), version.getVersionNo()),
                 command.traceId(), command.correlationId(), command.causationId(), now);
+        notifyPricingDependencyChanged(connector.getSupplierId());
         return new PublishResult(connector.getConnectorNo(), version.getId(), version.getVersionNo(),
                 nextAggregateVersion);
     }
 
-    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
+    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class, isolation = Isolation.READ_COMMITTED)
     public void retire(RetireConnectorVersionCommand command) {
+        SupplierLifecycleTransactions.requireReadCommitted();
+        SupplierConnectorDO locatedConnector = connectorMapper.selectByNo(command.connectorNo());
+        if (locatedConnector == null || supplierMapper.selectByIdForUpdate(locatedConnector.getSupplierId()) == null) {
+            throw new IllegalArgumentException("Connector supplier does not exist");
+        }
         SupplierConnectorDO connector = connectorMapper.selectByNoForUpdate(command.connectorNo());
         SupplierConnectorVersionDO version = versionMapper.selectByIdForUpdate(command.connectorVersionId());
-        if (connector == null || version == null || !connector.getId().equals(version.getConnectorId())
+        if (connector == null || version == null || !Objects.equals(connector.getSupplierId(), locatedConnector.getSupplierId())
+                || !connector.getId().equals(version.getConnectorId())
                 || version.getStatus() != ConnectorVersionStatus.PUBLISHED.getCode()) {
             throw new IllegalStateException("Only a published connector version can be retired");
         }
@@ -164,6 +192,19 @@ public class ConnectorPublicationService {
                 "SUPPLIER_CONFIG_RETIRED", OUTBOX_TARGET,
                 new ConnectorPublishedPayload(connector.getConnectorNo(), version.getId(), version.getVersionNo()),
                 command.traceId(), command.correlationId(), command.causationId(), now);
+        notifyPricingDependencyChanged(connector.getSupplierId());
+    }
+
+    private void notifyPricingDependencyChanged(Long supplierId) {
+        if (supplierId == null) {
+            return;
+        }
+        offerMapper.selectPublishedBySupplier(supplierId).stream()
+                .map(SupplierOfferDO::getPlatformSkuId)
+                .filter(java.util.Objects::nonNull)
+                .distinct()
+                .sorted()
+                .forEach(skuId -> eventPublisher.publishEvent(new PricingDependencyChangedEvent(skuId)));
     }
 
     private void publishMappings(Long connectorVersionId, LocalDateTime now) {

@@ -48,9 +48,19 @@ import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericBatchPrici
 import com.aifuli.module.supplychain.tradecore.catalog.pricing.PricingDependencyChangedEvent;
 import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericPricingCalculator.*;
 import com.aifuli.module.supplychain.integration.system.TaxRateDictionaryAdapter;
+import com.aifuli.module.supplychain.supplieradapter.metadata.SupplierConnectorCapabilityDO;
+import com.aifuli.module.supplychain.supplieradapter.metadata.SupplierConnectorCapabilityMapper;
+import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.CredentialSlotDO;
+import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.InventorySourceDO;
+import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierConnectorDO;
+import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierConnectorVersionDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierOfferDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierOfferVersionDO;
+import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.CredentialSlotMapper;
+import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.InventorySourceMapper;
+import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierConnectorMapper;
+import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierConnectorVersionMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferVersionMapper;
@@ -437,12 +447,14 @@ class ProjectAdminIntegrationTest {
                 .page(projectCode, 1, 20).getList().getFirst().projectPricingConfig());
         assertThat(savedConfig).isEqualTo(responseMapper.valueToTree(savedOverrides));
 
-        publishSupplyPrice(context, offer, 9_500L, 2);
+        long supplyConnectorVersionId = firstSupplyConnectorVersionId(context, offer);
+        long supplyInventorySourceId = firstSupplyInventorySourceId(context, offer);
+        publishSupplyPrice(context, offer, 9_500L, 2, supplyConnectorVersionId, supplyInventorySourceId);
         pricing.recalculatePlatformSku(new PricingDependencyChangedEvent(sku.getId()));
         assertThat(projectPricingMapper.selectByListingId(listing.getId()).getPricingStatus())
                 .isEqualTo(PricingStatus.MARGIN_HIDDEN.name());
 
-        publishSupplyPrice(context, offer, 7_000L, 3);
+        publishSupplyPrice(context, offer, 7_000L, 3, supplyConnectorVersionId, supplyInventorySourceId);
         pricing.recalculatePlatformSku(new PricingDependencyChangedEvent(sku.getId()));
         assertThat(projectPricingMapper.selectByListingId(listing.getId()).getPricingStatus())
                 .isEqualTo(PricingStatus.READY.name());
@@ -463,23 +475,72 @@ class ProjectAdminIntegrationTest {
                 .status(SupplierStatus.ACTIVE.getCode()).version(0L).createdBy(1L).createdAt(now)
                 .updatedBy(1L).updatedAt(now).build();
         context.getBean(SupplierMapper.class).insert(supplier);
+        CredentialSlotDO credential = CredentialSlotDO.builder().slotNo("CRD_PRICING").providerType("ENV")
+                .secretRef("env:PRICING").maskedHint("fixture-****").activeSecretVersion("v1").status((short) 10)
+                .version(0L).createdBy(1L).createdAt(now).updatedBy(1L).updatedAt(now).build();
+        context.getBean(CredentialSlotMapper.class).insert(credential);
+        SupplierConnectorDO connector = SupplierConnectorDO.builder().connectorNo("CON_PRICING")
+                .supplierId(supplier.getId()).connectorCode("PRIMARY").adapterType("QNM_GAME_ORDER_V1")
+                .status((short) 10).version(0L).createdBy(1L).createdAt(now).updatedBy(1L).updatedAt(now).build();
+        context.getBean(SupplierConnectorMapper.class).insert(connector);
+        SupplierConnectorVersionDO connectorVersion = SupplierConnectorVersionDO.builder()
+                .connectorId(connector.getId()).versionNo(1).baseUrl("https://pricing.invalid")
+                .merchantAccount("fixture").credentialSlotId(credential.getId()).protocolVersion("V1")
+                .callbackPath("/callback").connectTimeoutMs(1000).readTimeoutMs(3000)
+                .rateLimit(10).concurrencyLimit(2).adapterConfigSchemaVersion(1)
+                .adapterConfigJson("{}").validationStatus((short) 10).validatedAt(now)
+                .validationExpiresAt(now.plusDays(1)).publishedAt(now).configDigest(new byte[32])
+                .status((short) 10).version(0L).createdBy(1L).createdAt(now).updatedBy(1L).updatedAt(now).build();
+        context.getBean(SupplierConnectorVersionMapper.class).insert(connectorVersion);
+        connector.setCurrentVersionId(connectorVersion.getId());
+        connector.setUpdatedAt(now);
+        context.getBean(SupplierConnectorMapper.class).updateById(connector);
+        // 共享结构有效性守卫要求主能力及执行画像所需查询/回调能力启用（生命周期设计 §3.2）。
+        SupplierConnectorCapabilityMapper capabilities = context.getBean(SupplierConnectorCapabilityMapper.class);
+        for (String capabilityCode : java.util.List.of("CREATE_RECHARGE", "QUERY_ORDER", "RECEIVE_CALLBACK")) {
+            capabilities.insert(SupplierConnectorCapabilityDO.builder()
+                    .connectorVersionId(connectorVersion.getId()).capabilityCode(capabilityCode)
+                    .enabled((short) 1).metadataVersion(1).createdAt(now).build());
+        }
+        InventorySourceDO inventory = InventorySourceDO.builder().sourceNo("INV_PRICING")
+                .supplierId(supplier.getId()).platformSkuId(sku.getId())
+                .sourceType("REMOTE_ON_DEMAND").externalSourceCode("EXT_PRICING")
+                .ownerType("SUPPLIER").status((short) 10).version(0L)
+                .createdBy(1L).createdAt(now).updatedBy(1L).updatedAt(now).build();
+        context.getBean(InventorySourceMapper.class).insert(inventory);
         SupplierOfferDO offer = SupplierOfferDO.builder().offerNo("OFR_PRICING")
                 .offerCode("SKU_001_100_PRICING").supplierId(supplier.getId()).platformSkuId(sku.getId())
                 .status(OfferStatus.PUBLISHED.getCode()).version(0L).createdBy(1L).createdAt(now)
                 .updatedBy(1L).updatedAt(now).build();
         context.getBean(SupplierOfferMapper.class).insert(offer);
-        publishSupplyPrice(context, offer, price, 1);
+        publishSupplyPrice(context, offer, price, 1, connectorVersion.getId(), inventory.getId());
         return offer;
     }
 
+    private static long firstSupplyConnectorVersionId(ConfigurableApplicationContext context, SupplierOfferDO offer) {
+        return context.getBean(SupplierOfferVersionMapper.class)
+                .selectList(new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<SupplierOfferVersionDO>()
+                        .eq(SupplierOfferVersionDO::getOfferId, offer.getId())
+                        .eq(SupplierOfferVersionDO::getVersionNo, 1)).getFirst().getConnectorVersionId();
+    }
+
+    private static long firstSupplyInventorySourceId(ConfigurableApplicationContext context, SupplierOfferDO offer) {
+        return context.getBean(SupplierOfferVersionMapper.class)
+                .selectList(new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<SupplierOfferVersionDO>()
+                        .eq(SupplierOfferVersionDO::getOfferId, offer.getId())
+                        .eq(SupplierOfferVersionDO::getVersionNo, 1)).getFirst().getInventorySourceId();
+    }
+
     private static void publishSupplyPrice(ConfigurableApplicationContext context, SupplierOfferDO offer,
-                                           long price, int versionNo) {
+                                           long price, int versionNo, Long connectorVersionId, Long inventorySourceId) {
         LocalDateTime now = context.getBean(com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock.class).now();
         SupplierOfferVersionDO version = SupplierOfferVersionDO.builder().offerId(offer.getId())
                 .versionNo(versionNo).externalSkuCode("EXT-MOVIE-100-V" + versionNo)
-                .supplierSettlementUnitPrice(price).currency("CNY").connectorVersionId(1L)
-                .inventorySourceId(1L).minQuantity(1L).maxQuantity(100L).quantityStep(1L)
-                .primaryCapabilityCode("DIRECT_RECHARGE").completionMode("SYNCHRONOUS")
+                .supplierSettlementUnitPrice(price).currency("CNY").connectorVersionId(connectorVersionId)
+                .inventorySourceId(inventorySourceId).minQuantity(1L).maxQuantity(100L).quantityStep(1L)
+                .primaryCapabilityCode(com.aifuli.module.supplychain.tradecore.supply.application.SupplierOfferPublicationService
+                        .derivePrimaryCapability(context.getBean(PlatformSkuMapper.class).selectById(offer.getPlatformSkuId()).getFulfillmentType()).name())
+                .completionMode("SYNCHRONOUS")
                 .createIdempotencyMode("DEDUP_ONLY").unknownResultPolicy("MANUAL")
                 .partialDeliveryMode("FORBIDDEN").resultMultiplicity("SINGLE")
                 .fulfillmentConfigSchemaVersion(1).fulfillmentConfigJson("{}")
@@ -771,6 +832,8 @@ class ProjectAdminIntegrationTest {
     private ConfigurableApplicationContext applicationContext() {
         Map<String, Object> properties = new LinkedHashMap<>();
         properties.put("aifuli.supply-chain.enabled", true);
+        // 结构有效性守卫 fail-closed：测试种子连接器必须显式进入白名单（生命周期设计 §3.2）。
+        properties.put("aifuli.supply-chain.connector.allowed-adapter-types", "QNM_GAME_ORDER_V1");
         properties.put("aifuli.supply-chain.datasource.url", jdbcUrl());
         properties.put("aifuli.supply-chain.datasource.username", username());
         properties.put("aifuli.supply-chain.datasource.password", password());

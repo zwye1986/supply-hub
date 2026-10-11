@@ -1,5 +1,7 @@
 # 供应链管理端 REST（对齐前端页面）详细设计
 
+> 2026-10-11 当前规则修订：合作商品新增默认 SUSPENDED；PATCH PUBLISHED 统一进入履约校验与版本发布，PATCH SUSPENDED 下架。本文 a7、§5.5 及历史测试中的新增即 PUBLISHED 规则已被取代。 以[《供应商合作商品独立上下架与有效供货价》](./2026-10-11-supplier-offer-lifecycle-design.md)为准。本次尚未部署。
+
 ## 1. 文档定位
 
 本文根据 `supplychainhubweb` 已落地的供应链中台页面（`src/views/supplier`、`src/api/supplier`）定义管理端 REST，供前端关掉 mock 后对接。
