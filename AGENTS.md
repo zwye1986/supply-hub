@@ -1,6 +1,6 @@
 # 仓库服务形态约束
 
-- 供应链管理端前端仓库位于 `/Users/mac/Documents/codeSpace/supplychainhubweb`。排查页面展示、前端请求或判断是否需要前端配套改动时，应检查该仓库的实际实现。
+- 供应链管理端前端仓库位于 `/Users/mac/codespace/supplychainhubweb`（用户于 2026-10-11 确认更新）。排查页面展示、前端请求或判断是否需要前端配套改动时，应检查该仓库的实际实现；前端修改、测试、提交与推送均使用此目录。旧目录 `/Users/mac/Documents/codeSpace/supplychainhubweb` 已停用，不得根据历史记录继续使用，也不得假定两者指向同一目录。
 - 本仓由 mall-pro 拆分而来，`mall`（含 `product`、`promotion`、`trade`）、`pay`、`erp` 模块已删除，仓库内不存在 `MallServerApplication`。不要沿用「商城三模块聚合为同一进程」的旧假设排查问题。拆仓范围见 `docs/superpowers/specs/2026-09-07-supply-hub-repo-split-design.md`。
 - 可独立启动的进程共 8 个：`GatewayServerApplication`、`AifuliServerApplication`（仅聚合 system + infra，member 依赖已注释）、`SystemServerApplication`、`InfraServerApplication`、`MemberServerApplication`、`SupplyChainServerApplication`、`TaobaoFlashChannelApplication`、`MovieServerApplication`。
 - `aifuli-module-supply-chain-server` 是独立进程：独立数据源 `supplyChainDataSource`、独立事务管理器 `supplyChainTransactionManager`、独立库（表名统一 `sc_*` 前缀，表间无物理外键）。供应链代码不得访问 `system_*`、`member_*` 等其它模块的表；管理端菜单与数据字典由 `script/deploy` 下的部署 SQL 写入 system 库。

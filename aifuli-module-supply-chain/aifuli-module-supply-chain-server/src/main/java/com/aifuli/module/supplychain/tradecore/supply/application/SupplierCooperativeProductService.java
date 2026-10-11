@@ -47,6 +47,7 @@ import java.util.Set;
 import static com.aifuli.framework.common.exception.util.ServiceExceptionUtil.exception;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.SUPPLIER_NOT_FOUND;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.SUPPLIER_OFFER_OUT_OF_SCOPE;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.SUPPLIER_OFFER_SUGGESTED_SALE_PRICE_INVALID;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.SUPPLIER_SCOPE_CONFLICT;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.SUPPLIER_STATUS_CONFLICT;
 
@@ -315,7 +316,7 @@ public class SupplierCooperativeProductService {
         SupplierSupplyScopeDO scope = matchScope(scopes, spu, coverage);
         OfferPriceMode priceMode = OfferPriceMode.fromCode(line.priceMode());
         SupplyMode supplyMode = SupplyMode.fromCode(line.supplyMode());
-        validatePrice(priceMode, line);
+        validatePrice(priceMode, line, sku.getSuggestedSalePrice());
         Long maxQuantity = line.maxQuantity() != null ? line.maxQuantity() : scope.getMaxQuantity();
         Long minQuantity = line.minQuantity() != null ? line.minQuantity() : DEFAULT_OFFER_MIN_QUANTITY;
         if (minQuantity == null || maxQuantity == null
@@ -395,6 +396,7 @@ public class SupplierCooperativeProductService {
                 scope == null ? null : scope.getProductType(),
                 scope == null ? null : scope.getProductClassification(),
                 resolveSuggestPriceCents(offer.getPlatformSkuId()),
+                sku == null ? null : sku.getSuggestedSalePrice(),
                 offer.getPriceMode(),
                 offer.getDraftUnitPrice(),
                 offer.getDiscountBp(),
@@ -465,7 +467,12 @@ public class SupplierCooperativeProductService {
         return matched;
     }
 
-    private static void validatePrice(OfferPriceMode mode, DraftLine line) {
+    /**
+     * 折扣准入读取事务内已加载SKU的权威销售建议价；历史客户端提示价可缺省或不一致，不参与准入。
+     * 创建和改价复用本校验，不改FIXED/REALTIME或履约版本冻结价。
+     * 设计见 docs/superpowers/specs/2026-10-11-supplier-offer-sale-price-alignment-design.md#4-服务端折扣准入。
+     */
+    private static void validatePrice(OfferPriceMode mode, DraftLine line, Long suggestedSalePrice) {
         switch (mode) {
             case FIXED -> {
                 if (line.unitPriceCents() == null || line.unitPriceCents() <= 0) {
@@ -473,8 +480,8 @@ public class SupplierCooperativeProductService {
                 }
             }
             case DISCOUNT -> {
-                if (line.suggestedPriceCents() == null || line.suggestedPriceCents() <= 0) {
-                    throw new IllegalArgumentException("DISCOUNT requires suggested price > 0");
+                if (suggestedSalePrice == null || suggestedSalePrice <= 0) {
+                    throw exception(SUPPLIER_OFFER_SUGGESTED_SALE_PRICE_INVALID);
                 }
                 if (line.discountBp() == null || line.discountBp() < 1 || line.discountBp() > 10_000) {
                     throw new IllegalArgumentException("Discount basis points must be 1-10000");
@@ -492,13 +499,18 @@ public class SupplierCooperativeProductService {
                                  SupplyMode supplyMode, Long maxQuantity, Long minQuantity) {
     }
 
+    /**
+     * 商业条款输入；suggestedPriceCents仅为历史兼容提示字段，不作为服务端价格来源。
+     * 设计见 docs/superpowers/specs/2026-10-11-supplier-offer-sale-price-alignment-design.md#4-服务端折扣准入。
+     */
     public record DraftLine(String platformSkuCode, String priceMode, Long unitPriceCents,
                              Integer discountBp, Long suggestedPriceCents, String supplyMode,
                              Long maxQuantity, Long minQuantity, String externalSkuCode) {
     }
 
     /**
-     * 合作商品列表行。金额单位 CNY 分；status 为枚举名。
+     * 合作商品列表行。金额单位 CNY 分；status 为枚举名。销售建议价取SKU，旧suggestPriceCents保留L1原义。
+     * 价格口径见 docs/superpowers/specs/2026-10-11-supplier-offer-sale-price-alignment-design.md#3-后端响应与兼容契约。
      * 设计见 {@code docs/superpowers/specs/2026-10-03-supplier-offer-publication-admin-design.md#67-listoffers-投影扩展m1-沿用--i-b}。
      */
     public record OfferListItem(
@@ -511,6 +523,7 @@ public class SupplierCooperativeProductService {
             @Schema(description = "动态商品类型编码") String productType,
             @Schema(description = "商品分类封闭枚举名") String productClassification,
             @Schema(description = "L1 B端结算单价，CNY分，允许0") Long suggestPriceCents,
+            @Schema(description = "建议零售价/销售建议价，单位为分") Long suggestedSalePriceCents,
             @Schema(description = "供应价模式（字典supply_chain_offer_price_mode）：FIXED固定值，REALTIME实时更新，DISCOUNT按供货折扣") String priceMode,
             @Schema(description = "草稿供应价，CNY分；REALTIME为空") Long unitPriceCents,
             @Schema(description = "折扣基点，10000=100%") Integer discountBp,

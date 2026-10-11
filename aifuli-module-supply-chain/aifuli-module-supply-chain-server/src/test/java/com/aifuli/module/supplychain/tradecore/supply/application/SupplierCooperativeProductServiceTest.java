@@ -365,6 +365,91 @@ class SupplierCooperativeProductServiceTest {
                         .status(CatalogEntityStatus.ACTIVE.getCode()).build()));
     }
 
+    /** 销售建议价来自SKU；旧L1为空或不同均不能改变新响应字段。 */
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({"9600,8000", "9600,", "0,8000", ",8000"})
+    void pageKeepsSkuSalePriceAndLegacyL1Separate(Long salePrice, Long legacyPrice) throws Exception {
+        stubSupplier();
+        var prices = mock(PlatformSettlementPriceMapper.class);
+        var versions = mock(PlatformSettlementPriceVersionMapper.class);
+        service = new SupplierCooperativeProductService(databaseClock, supplierMapper, scopeMapper,
+                offerMapper, offerVersionMapper, skuMapper, spuMapper, prices, versions,
+                businessNoGenerator, eventPublisher, categoryCoverageService);
+        when(skuMapper.selectById(11L)).thenReturn(PlatformSkuDO.builder()
+                .id(11L).spuId(21L).suggestedSalePrice(salePrice).marketPrice(10000L).build());
+        if (legacyPrice != null) {
+            when(prices.selectById(11L)).thenReturn(com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject
+                    .PlatformSettlementPriceDO.builder().platformSkuId(11L).currentVersionId(99L).build());
+            when(versions.selectById(99L)).thenReturn(com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject
+                    .PlatformSettlementPriceVersionDO.builder().unitPriceCents(legacyPrice).build());
+        }
+        when(offerMapper.selectPage(any(com.aifuli.framework.common.pojo.PageParam.class), any())).thenReturn(
+                new com.aifuli.framework.common.pojo.PageResult<>(List.of(SupplierOfferDO.builder()
+                        .offerNo("OFR_1").platformSkuId(11L).priceMode("FIXED").draftUnitPrice(9500L)
+                        .status(OfferStatus.PUBLISHED.getCode()).build()), 1L));
+        var json = new com.fasterxml.jackson.databind.ObjectMapper().valueToTree(
+                service.page("SPL_A", null, null, null, 1, 20).getList().getFirst());
+        assertThat(json.has("suggestedSalePriceCents")).isTrue();
+        assertThat(json.get("suggestedSalePriceCents").isNull() ? null : json.get("suggestedSalePriceCents").longValue())
+                .isEqualTo(salePrice);
+        assertThat(json.get("suggestPriceCents").isNull() ? null : json.get("suggestPriceCents").longValue())
+                .isEqualTo(legacyPrice);
+        assertThat(json.get("unitPriceCents").longValue()).isEqualTo(9500L);
+    }
+
+    @Test
+    void pageWithMissingSkuKeepsSalePriceNullRatherThanFallingBackToL1() {
+        stubSupplier();
+        when(offerMapper.selectPage(any(com.aifuli.framework.common.pojo.PageParam.class), any())).thenReturn(
+                new com.aifuli.framework.common.pojo.PageResult<>(List.of(SupplierOfferDO.builder()
+                        .offerNo("OFR_1").platformSkuId(11L).status(OfferStatus.PUBLISHED.getCode()).build()), 1L));
+        var json = new com.fasterxml.jackson.databind.ObjectMapper().valueToTree(
+                service.page("SPL_A", null, null, null, 1, 20).getList().getFirst());
+        assertThat(json.has("suggestedSalePriceCents")).isTrue();
+        assertThat(json.get("suggestedSalePriceCents").isNull()).isTrue();
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.NullSource
+    @org.junit.jupiter.params.provider.ValueSource(longs = {0, -1, 1, 10000})
+    void discountCreateAndUpdateUseSkuPriceDespiteMissingOrForgedHint(Long hint) {
+        stubCreatePath();
+        when(skuMapper.selectByCode("MOVIE_100")).thenReturn(PlatformSkuDO.builder()
+                .id(11L).skuCode("MOVIE_100").spuId(21L).suggestedSalePrice(9600L)
+                .status(CatalogEntityStatus.ACTIVE.getCode()).build());
+        when(businessNoGenerator.next(BusinessNoPrefixes.OFR)).thenReturn("OFR_DISCOUNT");
+        DraftLine line = new DraftLine("MOVIE_100", "DISCOUNT", null, 9000, hint,
+                "API_DIRECT", 80L, 1L, "external");
+        service.createPublished("SPL_A", List.of(line), 1L);
+        stubSupplierAndOffer(OfferStatus.PUBLISHED);
+        service.updateCommercial("SPL_A", "OFR_1", line, 1L);
+        verify(offerMapper).insert(any(SupplierOfferDO.class));
+        verify(offerMapper).updateById(any(SupplierOfferDO.class));
+        verify(eventPublisher, org.mockito.Mockito.times(2)).publishEvent(new PricingDependencyChangedEvent(11L));
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.NullSource
+    @org.junit.jupiter.params.provider.ValueSource(longs = {0, -1})
+    void discountRejectsInvalidSkuPriceBeforeAnyWriteOrEvent(Long price) {
+        stubCreatePath();
+        stubSupplierAndOffer(OfferStatus.PUBLISHED);
+        when(skuMapper.selectByCode("MOVIE_100")).thenReturn(PlatformSkuDO.builder()
+                .id(11L).skuCode("MOVIE_100").spuId(21L).suggestedSalePrice(price)
+                .status(CatalogEntityStatus.ACTIVE.getCode()).build());
+        DraftLine line = new DraftLine("MOVIE_100", "DISCOUNT", null, 9000, 10000L,
+                "API_DIRECT", 80L, 1L, "external");
+        for (Runnable action : List.<Runnable>of(() -> service.createPublished("SPL_A", List.of(line), 1L),
+                () -> service.updateCommercial("SPL_A", "OFR_1", line, 1L))) {
+            assertThatThrownBy(action::run).isInstanceOf(ServiceException.class)
+                    .hasMessage("折扣模式要求SKU销售建议价大于0，请先在商品中心配置")
+                    .extracting(ex -> ((ServiceException) ex).getCode()).isEqualTo(1_050_001_178);
+        }
+        verify(offerMapper, never()).insert(any(SupplierOfferDO.class));
+        verify(offerMapper, never()).updateById(any(SupplierOfferDO.class));
+        verify(eventPublisher, never()).publishEvent(any(Object.class));
+    }
+
     private void stubSupplier() {
         SupplierDO supplier = SupplierDO.builder().id(9L).supplierCode("SPL_A").build();
         when(supplierMapper.selectByCodeForUpdate("SPL_A")).thenReturn(supplier);

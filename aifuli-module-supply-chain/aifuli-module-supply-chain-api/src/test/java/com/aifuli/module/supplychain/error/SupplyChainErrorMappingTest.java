@@ -25,6 +25,19 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class SupplyChainErrorMappingTest {
 
+    @Test
+    void supplierSalePriceRejectionHasStableCodeAndDoesNotRetry() throws Exception {
+        ErrorCode code = java.util.Arrays.stream(SupplyChainErrorCodeConstants.class.getFields())
+                .filter(field -> field.getName().equals("SUPPLIER_OFFER_SUGGESTED_SALE_PRICE_INVALID"))
+                .map(field -> { try { return (ErrorCode) field.get(null); }
+                    catch (IllegalAccessException ex) { throw new AssertionError(ex); } })
+                .findFirst().orElse(null);
+        assertThat(code).isNotNull();
+        assertThat(code.getCode()).isEqualTo(1_050_001_178);
+        assertThat(code.getMsg()).isEqualTo("折扣模式要求SKU销售建议价大于0，请先在商品中心配置");
+        assertThat(SupplyChainErrorCodeConstants.retryDirective(code.getCode())).isEqualTo(RetryDirective.DO_NOT_RETRY);
+    }
+
     @ParameterizedTest
     @CsvSource({
             "1050001001,DO_NOT_RETRY",

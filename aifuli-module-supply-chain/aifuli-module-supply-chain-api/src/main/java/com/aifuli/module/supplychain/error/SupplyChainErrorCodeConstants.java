@@ -70,6 +70,12 @@ public interface SupplyChainErrorCodeConstants {
     ErrorCode SUPPLIER_SCOPE_CONFLICT = error(1_050_001_054, "同一供应商下品类/类型/分类组合重复");
     ErrorCode SUPPLIER_REGION_INVALID = error(1_050_001_055, "配送区域与行政区划码不一致");
     ErrorCode SUPPLIER_OFFER_OUT_OF_SCOPE = error(1_050_001_056, "SKU 不在该供应商供货配置范围内");
+    /**
+     * 折扣报价须使用SKU权威销售建议价。
+     * 设计见 docs/superpowers/specs/2026-10-11-supplier-offer-sale-price-alignment-design.md#4-服务端折扣准入。
+     */
+    ErrorCode SUPPLIER_OFFER_SUGGESTED_SALE_PRICE_INVALID = error(1_050_001_178,
+            "折扣模式要求SKU销售建议价大于0，请先在商品中心配置");
     ErrorCode CATEGORY_CHAIN_INVALID = error(1_050_001_057, "品类/类型/分类不是启用类目的祖先链");
     ErrorCode BUYER_PARENT_INVALID = error(1_050_001_058, "上级/等级不合法或成环");
     ErrorCode BUYER_PRODUCT_DUPLICATE = error(1_050_001_059, "分销商品 SKU 已存在");
@@ -354,6 +360,7 @@ public interface SupplyChainErrorCodeConstants {
             entry(SUPPLIER_SCOPE_CONFLICT, RetryDirective.DO_NOT_RETRY),
             entry(SUPPLIER_REGION_INVALID, RetryDirective.DO_NOT_RETRY),
             entry(SUPPLIER_OFFER_OUT_OF_SCOPE, RetryDirective.DO_NOT_RETRY),
+            entry(SUPPLIER_OFFER_SUGGESTED_SALE_PRICE_INVALID, RetryDirective.DO_NOT_RETRY),
             entry(CATEGORY_CHAIN_INVALID, RetryDirective.DO_NOT_RETRY),
             entry(BUYER_PARENT_INVALID, RetryDirective.DO_NOT_RETRY),
             entry(BUYER_PRODUCT_DUPLICATE, RetryDirective.DO_NOT_RETRY),

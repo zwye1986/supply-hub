@@ -352,7 +352,9 @@ SPU / 供货范围写入的 `productClassification` 不走 `ClosedEnums`：类�
 - `PATCH /supply-chain/suppliers/{supplierCode}/offers/{offerNo}` `{ "status": "PUBLISHED"|"SUSPENDED" }` 上架/下架
 - `DELETE /supply-chain/suppliers/{supplierCode}/offers/{offerNo}` 逻辑移除（`RETIRED`，列表不再返回）
 
-行字段：平台 SPU/SKU 编码与名称、SPU 三码（`sellableCategory`/`productType`/`productClassification`）、`suggestPriceCents`、`priceMode`（字典 `supply_chain_offer_price_mode`）、`unitPriceCents`、`discountBp`（10000=100%）、`offerSupplyMode`、`maxQuantity`、`minQuantity`、`status`。`FIXED` 单价>0；`DISCOUNT` 折扣 ∈[1,10000] 且建议价>0；`REALTIME` 禁止填固定价。必须按三码整体唯一命中一条供货配置。
+行字段：平台 SPU/SKU 编码与名称、SPU 三码（`sellableCategory`/`productType`/`productClassification`）、`suggestPriceCents`（旧 L1 B 端结算价兼容）、`suggestedSalePriceCents`（SKU 销售建议价，取 `sc_platform_sku.suggested_sale_price`，0 为有效展示值）、`priceMode`（字典 `supply_chain_offer_price_mode`）、`unitPriceCents`、`discountBp`（10000=100%）、`offerSupplyMode`、`maxQuantity`、`minQuantity`、`status`。`FIXED` 单价>0；`DISCOUNT` 折扣 ∈[1,10000] 且建议价>0；`REALTIME` 禁止填固定价。必须按三码整体唯一命中一条供货配置。
+
+2026-10-11 合作商品销售建议价修复：页面销售建议价、改价回填与 DISCOUNT 条款试算使用 `suggestedSalePriceCents`；新增选品读取 SKU `suggestedSalePrice`，不以市场价或旧 L1 代填。DISCOUNT 创建/改价校验使用服务端读取的 SKU 销售建议价，请求 `suggestedPriceCents` 仅保留兼容、不作为权威基数。供应价列表示当前商业条款，区别于履约版本冻结价。详见 `docs/superpowers/specs/2026-10-11-supplier-offer-sale-price-alignment-design.md`。
 
 SKU 未填供货上限时继承供货配置 `maxQuantity`；未填最低起购量时固定取 1。供货配置 `minQuantity` 是预留字段，不得被合作商品继承。
 
