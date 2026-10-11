@@ -88,6 +88,13 @@ SKU 建议价”的限制。本文的“模板”是一次性应用到当前所�
 `taxIncluded=true` 必须是启用字典项）。降级只发生在接口边界，领域已发布版本的税务快照保持完整；
 商品默认层无继承概念，不适用该规则。
 
+管理端商品默认定价的前端序列化规则（2026-10-11 修复）：`taxRateCode` 为必填字符串。
+不含税时税率下拉可以禁用、表单中的选择值可以清空，但 `PricingForm.getValues` 必须输出
+税率常量 `NON_TAXABLE`，`PriceDialog.submit` 必须无条件携带该编码；含税时输出所选启用字典值。
+不把 UI 禁用状态解释为 HTTP 字段可省略。后端请求 DTO 对 `taxIncluded` 使用 `@NotNull`，
+对编码使用 `@NotBlank`，映射器及领域继续校验完整组，不自动推断缺失的含税标志，不放松字典启用校验。
+前后端字段注释、OpenAPI 必填声明及常量注释统一说明本节契约；这是结算展示元数据，不参与价格计算。
+
 ## 5. 版本、继承与可售状态
 
 商品默认配置由 `sc_platform_sku_pricing` 指向不可变 `sc_platform_sku_pricing_version`；分销商配置由 `sc_buyer_sku_pricing`
@@ -181,6 +188,30 @@ when inherit=false`，被全局异常处理器包装为 HTTP 500。错误既无�
 4. 边界归一化逻辑（`GenericPricingRequestMapper.normalizeTaxGroup`、
    `ProjectPricingConfigMerger`）保持不变；本次仅在 DTO 层加固，避免缺字段或组合不合法
    继续以 NPE/500 形式泄露。
+
+### 6.2 商品默认人工定价准入与业务拒绝（2026-10-11 修复）
+
+`POST /products/skus/pricing/preview` 与 `PUT /products/skus/pricing` 保持既有规则：每个 SKU
+及所属 SPU 均须为 `CatalogEntityStatus.ACTIVE`（10）。草稿、停用、归档及状态未知均不得人工定价。
+该限制不适用于只读审计查询，也不适用于复合创建/更新中的首版系统默认定价初始化；不改变交易可售资格。
+
+找不到 SKU 返回已有 `PLATFORM_SKU_NOT_FOUND`，找不到所属 SPU 返回已有 `PLATFORM_SPU_NOT_FOUND`；
+任一存在但未启用时返回 `PLATFORM_SKU_PRICING_NOT_ALLOWED`（`1_050_001_177`），文案携带 SKU
+编码并提示先上架后定价。错误由 `ServiceException` 传播到现有 HTTP 终结边界，输出单行 WARN 和业务错误
+响应，不在服务层额外打印堆栈，不将已知状态拒绝兜底成 `code=500`。共享 `GlobalExceptionHandler` 的普通
+业务拒绝摘要原含换行和第一层调用位置，本轮按日志规范 §2.1/§2.3 收敛为单行参数化错误码与业务文案，不附异常
+对象。该格式调整适用于复用此 Servlet 处理器的进程；错误码、响应、级别、忽略文案与敏感路径专用渲染均保持不变，
+不修改网关日志、追踪、执行器或 ELK 配置，并验证共享处理器及供应链实际 HTTP 边界。该错误为 `DO_NOT_RETRY`，须用户
+核对状态、按正式上架流程处理后主动重新操作；缺供货依赖仍允许保存规则并进入 `DEPENDENCY_MISSING`。
+
+前端列表必须分别保留 SPU 状态与 SKU 状态，不能让 SKU 状态覆盖 SPU 状态后仅检查一层。
+单条入口在两层启用时开放；批量入口要求整个所选范围都符合条件，混合批次整体禁用并提示，不静默过滤
+未启用 SKU。打开弹窗的方法重复执行状态守卫，服务端始终作权威复核，覆盖页面读到启用后被并发停用的情况。
+预览不写库，保存先检查并计算全批、再发布版本；准入失败时不生成任何新版本或下游继承版本。
+
+回归覆盖真实前端表单→提交→HTTP 序列化、不含税切换、单个/批量请求、含税必选字典、两层状态和混合批次；
+后端覆盖请求 Bean Validation、真实 HTTP 业务错误及真实 MySQL/Liquibase 下的批量失败零写入、有效保存和
+下游继承。供应链普通、契约、集成与架构门禁按主设计第 17 章执行，联调证据维护 `docs/集成测试.md`。
 
 ## 7. 项目报价凭证与标准履约
 

@@ -211,6 +211,7 @@ class ProductCenterIntegrationTest {
             assertThat(defaultConfig.hideRule().salesThresholdPercent()).isEqualByComparingTo("0");
             assertThat(defaultConfig.taxMetadata()).isEqualTo(
                     new TaxMetadata(false, PricingTaxRateCodes.NON_TAXABLE, "不征税"));
+            assertManualPricingBatchAtomicity(context, platformSku, defaultConfig);
             LocalDateTime now = LocalDateTime.now();
             PlatformSettlementPriceVersionDO priceVersion = PlatformSettlementPriceVersionDO.builder()
                     .platformSkuId(platformSku.getId())
@@ -351,6 +352,47 @@ class ProductCenterIntegrationTest {
             assertThatThrownBy(() -> brandService.changeStatus(
                     brandCode, CatalogEntityStatus.ARCHIVED, 1L))
                     .isInstanceOf(RuntimeException.class);
+        }
+    }
+
+    /**
+     * 隔离 MySQL 中以真实 Spring 事务验证混合批次零发布；无供货依赖的有效商品仍可保存规则。
+     * 设计见 docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#6-管理端接口。
+     */
+    private void assertManualPricingBatchAtomicity(ConfigurableApplicationContext context,
+                                                  PlatformSkuDO activeSku, PricingConfig config) {
+        PlatformSkuMapper skuMapper = context.getBean(PlatformSkuMapper.class);
+        PlatformSkuPricingMapper identityMapper = context.getBean(PlatformSkuPricingMapper.class);
+        PlatformSkuPricingVersionMapper versionMapper = context.getBean(PlatformSkuPricingVersionMapper.class);
+        GenericBatchPricingService pricing = context.getBean(GenericBatchPricingService.class);
+        var versions = new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<PlatformSkuPricingVersionDO>()
+                .eq(PlatformSkuPricingVersionDO::getPlatformSkuId, activeSku.getId());
+        Long beforeCount = versionMapper.selectCount(versions);
+        Long beforePointer = identityMapper.selectById(activeSku.getId()).getCurrentVersionId();
+        PlatformSkuDO draft = new PlatformSkuDO();
+        org.springframework.beans.BeanUtils.copyProperties(activeSku, draft);
+        draft.setId(null);
+        draft.setSkuCode("SKU_001_101");
+        draft.setSkuName("人工定价准入草稿夹具");
+        draft.setStatus(CatalogEntityStatus.DRAFT.getCode());
+        skuMapper.insert(draft);
+        try {
+            assertThatThrownBy(() -> pricing.savePlatform(List.of(activeSku.getSkuCode(), draft.getSkuCode()), config, 1L))
+                    .isInstanceOf(ServiceException.class).hasMessageContaining(draft.getSkuCode())
+                    .hasMessageContaining("先上架");
+            assertThat(versionMapper.selectCount(versions)).isEqualTo(beforeCount);
+            assertThat(identityMapper.selectById(activeSku.getId()).getCurrentVersionId()).isEqualTo(beforePointer);
+            assertThat(identityMapper.selectById(draft.getId())).isNull();
+            assertThat(pricing.previewPlatform(List.of(activeSku.getSkuCode()), config)).singleElement()
+                    .satisfies(preview -> assertThat(preview.status()).isEqualTo(PricingStatus.DEPENDENCY_MISSING));
+            pricing.savePlatform(List.of(activeSku.getSkuCode()), config, 1L);
+            PlatformSkuPricingDO saved = identityMapper.selectById(activeSku.getId());
+            assertThat(saved.getCurrentVersionId()).isNotEqualTo(beforePointer);
+            assertThat(saved.getPricingStatus()).isEqualTo(PricingStatus.DEPENDENCY_MISSING.name());
+            assertThat(versionMapper.selectCount(versions)).isEqualTo(beforeCount + 1);
+        } finally {
+            // 只清理本测试的临时夹具，避免污染后续管理列表断言；不操作任何真实业务库。
+            skuMapper.deleteById(draft.getId());
         }
     }
 

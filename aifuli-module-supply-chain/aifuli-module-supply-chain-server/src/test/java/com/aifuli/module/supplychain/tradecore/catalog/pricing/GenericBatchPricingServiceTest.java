@@ -43,6 +43,8 @@ import com.aifuli.module.supplychain.tradecore.supply.domain.SupplierStatus;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.ArgumentCaptor;
 
 import java.math.BigDecimal;
@@ -200,6 +202,56 @@ class GenericBatchPricingServiceTest {
         verify(skuMapper, never()).selectByCodeForUpdate(any());
         verify(platformPricingMapper, never()).insert(any(PlatformSkuPricingDO.class));
         verify(platformVersionMapper, never()).insert(any(PlatformSkuPricingVersionDO.class));
+    }
+
+    /** 人工入口的状态拒绝必须是可读业务错误；只读查询与首版自动初始化不复用此限制。 */
+    @ParameterizedTest
+    @EnumSource(value = CatalogEntityStatus.class, names = "ACTIVE", mode = EnumSource.Mode.EXCLUDE)
+    void rejectsNonActiveSkuWithoutPublishing(CatalogEntityStatus status) {
+        assertManualPricingRejected(status, CatalogEntityStatus.ACTIVE);
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = CatalogEntityStatus.class, names = "ACTIVE", mode = EnumSource.Mode.EXCLUDE)
+    void rejectsNonActiveSpuWithoutPublishing(CatalogEntityStatus status) {
+        assertManualPricingRejected(CatalogEntityStatus.ACTIVE, status);
+    }
+
+    private void assertManualPricingRejected(CatalogEntityStatus skuStatus, CatalogEntityStatus spuStatus) {
+        PlatformSkuDO sku = PlatformSkuDO.builder().id(8L).skuCode("SKU_1").spuId(2L)
+                .status(skuStatus.getCode()).build();
+        when(skuMapper.selectByCode("SKU_1")).thenReturn(sku);
+        when(skuMapper.selectByCodeForUpdate("SKU_1")).thenReturn(sku);
+        when(spuMapper.selectById(2L)).thenReturn(PlatformSpuDO.builder().id(2L)
+                .status(spuStatus.getCode()).build());
+        when(taxDictionary.requireEnabled(false, PricingTaxRateCodes.NON_TAXABLE))
+                .thenReturn(config().taxMetadata());
+        assertThatThrownBy(() -> service.previewPlatform(List.of("SKU_1"), config()))
+                .isInstanceOf(ServiceException.class).hasMessageContaining("SKU_1").hasMessageContaining("先上架");
+        assertThatThrownBy(() -> service.savePlatform(List.of("SKU_1"), config(), 1L))
+                .isInstanceOf(ServiceException.class).hasMessageContaining("SKU_1").hasMessageContaining("先上架");
+        verifyNoInteractions(platformPricingMapper, platformVersionMapper, buyerPricingMapper,
+                buyerVersionMapper, projectPricingMapper, projectVersionMapper);
+    }
+
+    @Test
+    void missingSkuReturnsStableBusinessError() {
+        when(taxDictionary.requireEnabled(false, PricingTaxRateCodes.NON_TAXABLE))
+                .thenReturn(config().taxMetadata());
+        assertThatThrownBy(() -> service.previewPlatform(List.of("MISSING"), config()))
+                .isInstanceOfSatisfying(ServiceException.class, error -> assertThat(error.getCode())
+                        .isEqualTo(com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PLATFORM_SKU_NOT_FOUND.getCode()));
+    }
+
+    @Test
+    void missingSpuReturnsStableBusinessError() {
+        when(taxDictionary.requireEnabled(false, PricingTaxRateCodes.NON_TAXABLE))
+                .thenReturn(config().taxMetadata());
+        when(skuMapper.selectByCode("SKU_1")).thenReturn(PlatformSkuDO.builder().id(8L)
+                .skuCode("SKU_1").spuId(2L).status(CatalogEntityStatus.ACTIVE.getCode()).build());
+        assertThatThrownBy(() -> service.previewPlatform(List.of("SKU_1"), config()))
+                .isInstanceOfSatisfying(ServiceException.class, error -> assertThat(error.getCode())
+                        .isEqualTo(com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PLATFORM_SPU_NOT_FOUND.getCode()));
     }
 
     @Test

@@ -246,6 +246,14 @@ public interface SupplyChainErrorCodeConstants {
 
     ErrorCode BUYER_CATALOG_REFRESH_FAILED = error(1_050_001_176, "受理目录刷新失败，将由后台扫描自动重试");
 
+    /**
+     * 商品默认人工定价只接受 SPU、SKU 同时启用；状态拒绝返回业务错误，由用户核对后重新操作。
+     * 不用于草稿首版自动初始化或交易可售判定，不复用状态流转错误。
+     * 设计见 docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#6-管理端接口。
+     */
+    ErrorCode PLATFORM_SKU_PRICING_NOT_ALLOWED =
+            error(1_050_001_177, "商品 SKU【{}】或所属 SPU 未启用，请先上架后再定价");
+
     // 项目标准资产查询稳定错误，设计见 docs/superpowers/specs/2026-10-02-project-standard-query-asset-design.md#4-资产结果与封闭载荷。
     ErrorCode ASSET_QUERY_UNSUPPORTED_PRODUCT_TYPE =
             error(1_050_001_158, "此类商品不能查询资产，请通过查单接口获取订单信息");
@@ -277,6 +285,7 @@ public interface SupplyChainErrorCodeConstants {
             entry(BUYER_CATALOG_RETIRED, RetryDirective.DO_NOT_RETRY),
             entry(BUYER_CATALOG_IDENTITY_RACE, RetryDirective.RETRY_SAME_KEY),
             entry(BUYER_CATALOG_REFRESH_FAILED, RetryDirective.RETRY_SAME_KEY),
+            entry(PLATFORM_SKU_PRICING_NOT_ALLOWED, RetryDirective.DO_NOT_RETRY),
             entry(FREQUENCY_RESOURCE_NOT_FOUND, RetryDirective.DO_NOT_RETRY),
             entry(FREQUENCY_VERSION_CONFLICT, RetryDirective.DO_NOT_RETRY),
             entry(FREQUENCY_STATE_INVALID, RetryDirective.DO_NOT_RETRY),
