@@ -227,19 +227,30 @@ public class ProductAdminController {
     @Operation(summary = "批量变更平台商品状态（批量上下架）",
             description = "支持多选 SPU 或多选 SKU 进行批量上架或下架操作；下架时统一记录下架方式。"
                     + "入参整体校验：未选择商品、编码为空白、或 SPU 与 SKU 项数之和超过 200 时整体拒绝，不产生任何写入。"
-                    + "校验通过后逐项独立事务：任一项失败仅回滚该项，已成功项保持下架/上架结果。"
-                    + "响应携带成功列表与失败明细，成功项数与失败项数之和恒等于入参编码总数，前端据此渲染「成功 N 项、失败 M 项」。")
+                    + "缺省或false按逐实体独立事务处理；syncSkuOnShelf=true仅允许SPU同步上架，后台展开全部未归档SKU，展开总量不超过200。"
+                    + "同步模式一个SPU及全部未归档SKU原子提交，组间独立；任何成员变化或校验失败整组回滚，回执按SPU组计数并提供groups完整范围。"
+                    + "响应携带成功列表与失败明细，旧逐实体模式的成功项数与失败项数之和恒等于入参编码总数，前端据此渲染「成功 N 项、失败 M 项」。")
     public CommonResult<BatchStatusResultVO> batchChangeStatus(@Valid @RequestBody ProductBatchStatusReqVO request) {
         ProductCatalogCommandService.BatchStatusResult result = commandService.batchChangeStatus(
                 new ProductCatalogCommandService.BatchStatusCommand(
                         request.getSpuCodes(), request.getSkuCodes(), request.getTargetStatus(),
-                        request.getUnshelveMode(), getLoginUserId()));
+                        request.getUnshelveMode(), getLoginUserId(), request.getSyncSkuOnShelf()));
         return success(toBatchStatusResultVO(result));
     }
 
     /** 领域结果转对外 VO，保持 admin 包内响应 VO 一律由 {@code @Data} 无参构造 + setter 组装的惯例。 */
     private static BatchStatusResultVO toBatchStatusResultVO(ProductCatalogCommandService.BatchStatusResult result) {
         BatchStatusResultVO vo = new BatchStatusResultVO();
+        vo.setSyncSkuOnShelf(result.syncSkuOnShelf());
+        vo.setGroups(result.groups().stream().map(group -> {
+            BatchStatusGroupVO item = new BatchStatusGroupVO();
+            item.setSpuCode(group.spuCode());
+            item.setSkuCodes(group.skuCodes());
+            item.setSucceeded(group.succeeded());
+            item.setFailedEntityType(group.failedEntityType() == null ? null : group.failedEntityType().getCode());
+            item.setFailedEntityCode(group.failedEntityCode());
+            return item;
+        }).toList());
         vo.setSucceeded(result.succeeded());
         vo.setFailed(result.failed().stream()
                 .map(ProductAdminController::toBatchStatusFailedItemVO)
@@ -255,6 +266,8 @@ public class ProductAdminController {
         vo.setCode(item.code());
         vo.setErrorCode(item.errorCode());
         vo.setErrorMessage(item.errorMessage());
+        vo.setFailedEntityType(item.failedEntityType() == null ? null : item.failedEntityType().getCode());
+        vo.setFailedEntityCode(item.failedEntityCode());
         return vo;
     }
 
@@ -564,7 +577,7 @@ public class ProductAdminController {
         @Min(0) @Schema(description = "SKU库存数量，管理端创建或编辑商品时设置", example = "1000")
         private Long skuInventory;
         @JsonFormat(shape = JsonFormat.Shape.STRING)
-        @Schema(description = "SKU 状态；默认继承 SPU；字典值以字符串返回", type = "string", example = "10")
+        @Schema(description = "SKU 状态；新增缺省继承 SPU，编辑已有 SKU 缺省保留独立状态；字典值以字符串返回", type = "string", example = "10")
         private Short status;
     }
 
@@ -611,6 +624,8 @@ public class ProductAdminController {
     @Data
     @Schema(description = "商品批量上下架请求")
     public static class ProductBatchStatusReqVO {
+        @Schema(description = "是否同步上架 SPU 与全部未归档 SKU；缺省false保持逐实体模式；true仅允许目标ACTIVE、非空SPU、空skuCodes")
+        private Boolean syncSkuOnShelf;
         /**
          * 两个编码列表各自可选（可只选 SPU 或只选 SKU），故不加 {@code @NotEmpty}；
          * 「至少选择一项」与「两表项数之和 ≤ 200」由服务层统一判定并抛
@@ -636,16 +651,39 @@ public class ProductAdminController {
     @Data
     @Schema(description = "商品批量上下架结果")
     public static class BatchStatusResultVO {
-        @Schema(description = "成功处理项的业务编码列表（SPU 与 SKU 混合）")
+        @Schema(description = "是否为同步上架模式；true时成功与失败按SPU组计数")
+        private Boolean syncSkuOnShelf;
+        @Schema(description = "同步模式完整处理范围与整组结果；旧逐实体模式为空数组")
+        private List<BatchStatusGroupVO> groups;
+        @Schema(description = "成功处理项业务编码；同步模式为SPU组编码，旧模式为SPU与SKU混合")
         private List<String> succeeded;
 
         @Schema(description = "失败明细列表")
         private List<BatchStatusFailedItemVO> failed;
     }
 
+    /**
+     * 同步回执必须提供后台解析的完整成员范围，不能用列表页可见规格替代。
+     * 失败组允许空范围，成功组至少包含一个未归档 SKU。
+     * 设计见 {@code docs/superpowers/specs/2026-10-11-platform-product-batch-shelf-sync-design.md#5-结果与页面交互}。
+     */
+    @Data
+    @Schema(description = "商品同步上架分组结果")
+    public static class BatchStatusGroupVO {
+        @Schema(description = "平台SPU永久业务编码") private String spuCode;
+        @Schema(description = "本次完整未归档SKU业务编码范围") private List<String> skuCodes;
+        @Schema(description = "整组是否提交成功；false时整组回滚") private Boolean succeeded;
+        @Schema(description = "失败原因实体类型：SPU或SKU；成功时为空") private String failedEntityType;
+        @Schema(description = "失败原因实体编码；SKU须属于本组范围，SPU须等于spuCode") private String failedEntityCode;
+    }
+
     @Data
     @Schema(description = "商品批量上下架失败明细项")
     public static class BatchStatusFailedItemVO {
+        @Schema(description = "同步模式失败原因实体类型：SPU或SKU；旧模式为空")
+        private String failedEntityType;
+        @Schema(description = "同步模式失败原因实体编码；code仍为失败SPU组编码")
+        private String failedEntityCode;
         @Schema(description = "实体类型：SPU 或 SKU，取值来自 CatalogEntityType", example = "SPU")
         private String entityType;
         @Schema(description = "失败项业务编码", example = "SPU_01ABC")

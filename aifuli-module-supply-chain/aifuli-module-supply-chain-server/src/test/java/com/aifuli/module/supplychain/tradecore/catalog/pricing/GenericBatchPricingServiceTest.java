@@ -222,6 +222,7 @@ class GenericBatchPricingServiceTest {
                 .status(skuStatus.getCode()).build();
         when(skuMapper.selectByCode("SKU_1")).thenReturn(sku);
         when(skuMapper.selectByCodeForUpdate("SKU_1")).thenReturn(sku);
+        when(skuMapper.selectByIdForUpdate(sku.getId())).thenReturn(sku);
         when(spuMapper.selectById(2L)).thenReturn(PlatformSpuDO.builder().id(2L)
                 .status(spuStatus.getCode()).build());
         when(taxDictionary.requireEnabled(false, PricingTaxRateCodes.NON_TAXABLE))
@@ -262,7 +263,8 @@ class GenericBatchPricingServiceTest {
         PlatformSkuPricingDO identity = PlatformSkuPricingDO.builder().platformSkuId(8L)
                 .pricingStatus(PricingStatus.UNPRICED.name()).version(0L).build();
         TaxMetadata normalizedTax = new TaxMetadata(false, PricingTaxRateCodes.NON_TAXABLE, "不征税");
-        when(skuMapper.selectByCodeForUpdate("SKU_NEW")).thenReturn(sku);
+        when(skuMapper.selectByCode("SKU_NEW")).thenReturn(sku);
+        when(skuMapper.selectByIdForUpdate(sku.getId())).thenReturn(sku);
         when(platformPricingMapper.selectBySkuIdForUpdate(8L)).thenReturn(identity);
         when(taxDictionary.requireEnabled(false, PricingTaxRateCodes.NON_TAXABLE)).thenReturn(normalizedTax);
         when(offerMapper.selectPublishedBySku(8L)).thenReturn(List.of());
@@ -299,7 +301,8 @@ class GenericBatchPricingServiceTest {
         PlatformSkuDO sku = PlatformSkuDO.builder().id(8L).skuCode("SKU_PRICED").build();
         PlatformSkuPricingDO identity = PlatformSkuPricingDO.builder().platformSkuId(8L)
                 .currentVersionId(88L).pricingStatus(PricingStatus.READY.name()).build();
-        when(skuMapper.selectByCodeForUpdate("SKU_PRICED")).thenReturn(sku);
+        when(skuMapper.selectByCode("SKU_PRICED")).thenReturn(sku);
+        when(skuMapper.selectByIdForUpdate(sku.getId())).thenReturn(sku);
         when(platformPricingMapper.selectBySkuIdForUpdate(8L)).thenReturn(identity);
 
         service.initializePlatformDefaults(new PlatformSkuPricingInitializationEvent(List.of("SKU_PRICED"), 7L));

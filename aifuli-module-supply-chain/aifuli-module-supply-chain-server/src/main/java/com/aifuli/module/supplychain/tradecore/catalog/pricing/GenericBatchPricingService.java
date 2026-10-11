@@ -132,9 +132,12 @@ public class GenericBatchPricingService {
                 config.taxMetadata().taxRateCode());
         PricingConfig normalized = withTax(config, tax);
         LocalDateTime now = clock.now();
+        // 先统一取得子主键升序锁，再按原请求顺序校验/发布，避免与整商品同步上架形成反序锁环。
+        // 设计见 docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#51-与整商品同步上架的多-sku-锁顺序2026-10-11-复审修正。
+        Map<String, PlatformSkuDO> lockedSkus = PlatformSkuBatchLock.lockByCodes(skuMapper, codes);
         List<CalculatedPlatform> calculated = new ArrayList<>();
         for (String code : codes) {
-            PlatformSkuDO sku = requireSku(code, true);
+            PlatformSkuDO sku = requireSku(code, lockedSkus.get(code));
             PriceDependencies dependencies = dependencies(sku, now);
             calculated.add(new CalculatedPlatform(sku, dependencies,
                     calculator.calculate(normalized, dependencies)));
@@ -158,10 +161,11 @@ public class GenericBatchPricingService {
                 .filter(code -> code != null && !code.isBlank()).map(String::trim).distinct().toList();
         if (skuCodes.isEmpty()) return;
         log.info("复合保存初始化平台默认定价 skuCount={} operatorId={}", skuCodes.size(), event.operatorId());
+        Map<String, PlatformSkuDO> lockedSkus = PlatformSkuBatchLock.lockByCodes(skuMapper, skuCodes);
         List<PlatformSkuDO> unpricedSkus = new ArrayList<>();
         for (String skuCode : skuCodes) {
             // 复合保存允许创建草稿 SKU；默认定价是主数据完整性的一部分，不能沿用人工定价入口的“仅启用 SKU”限制。
-            PlatformSkuDO sku = skuMapper.selectByCodeForUpdate(skuCode);
+            PlatformSkuDO sku = lockedSkus.get(skuCode);
             if (sku == null) {
                 throw exception(PLATFORM_SKU_NOT_FOUND);
             }
@@ -625,7 +629,10 @@ public class GenericBatchPricingService {
      * 设计见 {@code docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#6-管理端接口}。
      */
     private PlatformSkuDO requireSku(String code, boolean forUpdate) {
-        PlatformSkuDO sku = forUpdate ? skuMapper.selectByCodeForUpdate(code) : skuMapper.selectByCode(code);
+        return requireSku(code, forUpdate ? skuMapper.selectByCodeForUpdate(code) : skuMapper.selectByCode(code));
+    }
+
+    private PlatformSkuDO requireSku(String code, PlatformSkuDO sku) {
         if (sku == null) {
             throw exception(PLATFORM_SKU_NOT_FOUND);
         }

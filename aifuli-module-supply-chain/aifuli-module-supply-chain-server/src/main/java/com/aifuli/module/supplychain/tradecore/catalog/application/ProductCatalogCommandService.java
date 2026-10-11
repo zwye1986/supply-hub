@@ -42,6 +42,8 @@ import com.aifuli.module.supplychain.tradecore.profile.domain.ClosedEnums;
 import com.aifuli.module.supplychain.tradecore.profile.domain.SellableCategory;
 import com.aifuli.framework.common.exception.ServiceException;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuBatchLock;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
@@ -105,7 +107,7 @@ public class ProductCatalogCommandService {
     private static final int MAX_BATCH_SKU_COUNT = 200;
     /**
      * 单次批量上下架的 SPU 与 SKU 项数之和上限。
-     * <p>每项走一个 {@code REQUIRES_NEW} 独立事务并额外占用一个数据库连接，故总量必须有界；
+     * <p>旧模式按逐实体，同步模式按 SPU 组走 {@code REQUIRES_NEW} 独立事务，展开数据与写入总量必须有界；
      * 取值与 {@link #MAX_BATCH_SKU_COUNT}、{@code GenericBatchPricingService.MAX_BATCH} 及全仓批量约定一致。
      * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#4110-批量上下架接口put-supply-chainproductsbatch-status}。
      */
@@ -149,8 +151,8 @@ public class ProductCatalogCommandService {
     private final PlatformSkuSchemaRegistry skuSchemaRegistry;
 
     /**
-     * 批量上下架「逐项独立事务」模板：传播行为 {@code REQUIRES_NEW}、隔离级别 {@code READ_COMMITTED}。
-     * <p>不变量：每个 SPU/SKU 的状态迁移各自成事务，任一项失败仅回滚该项，已成功项保持结果。
+     * 批量状态事务模板：旧模式每实体、同步模式每 SPU 组一个真实事务。传播行为 {@code REQUIRES_NEW}、隔离级别 {@code READ_COMMITTED}。
+     * <p>不变量：旧模式每实体独立；同步模式父商品与全部未归档规格原子提交，任一组失败仅回滚该组。
      * 必须由 {@code REQUIRES_NEW} 强制，不能依赖默认 {@code REQUIRED} —— 本方法已无方法级
      * {@code @Transactional}，当前唯一调用方 {@code ProductAdminController} 也非事务，故 {@code REQUIRED}
      * 今天「碰巧」等价；但一旦任何调用方包裹事务，各项将并入外层事务，且被捕获的 {@code ServiceException}
@@ -260,7 +262,9 @@ public class ProductCatalogCommandService {
         if (!CURRENCY_CNY.equals(command.currency())) {
             throw exception(PRODUCT_CURRENCY_INVALID);
         }
-        PlatformSpuDO spu = requireSpu(command.spuCode());
+        // 子成员新增与同步上架共同遵守先父后子的锁顺序，防止解析后漏掉并发新规格。
+        // 设计见 docs/superpowers/specs/2026-10-11-platform-product-batch-shelf-sync-design.md#4-分组事务与并发。
+        PlatformSpuDO spu = requireSpuForUpdate(command.spuCode());
         String skuCode = scopedBusinessCodeService.allocateChild(ScopedBusinessCodeService.Kind.SKU,
                 spu.getId(), spu.getCodeScopeNo(), command.skuCode(), command.operatorId()).code();
         String fulfillmentType = spu.getFulfillmentType();
@@ -351,20 +355,14 @@ public class ProductCatalogCommandService {
     }
 
     /**
-     * 批量变更平台商品（SPU/SKU）状态。
-     * <p><b>逐项独立事务（D1）</b>：每个 SPU 与 SKU 各自在 {@code REQUIRES_NEW} 事务内完成状态迁移，
-     * 任一项失败仅回滚该项，已成功项保持下架/上架结果。响应携带成功列表与失败明细，
-     * 前端据此渲染「成功 N 项、失败 M 项」。
-     * <p><b>入参整体拒绝（D3）</b>：未选择商品、编码为空白、或 SPU 与 SKU 项数之和超过
-     * {@link #MAX_BATCH_STATUS_COUNT}，均在进入逐项循环前整体拒绝并抛 {@code PRODUCT_BATCH_INPUT_INVALID}，
-     * 不产生任何写入；故校验通过后 {@code succeeded.size() + failed.size()} 恒等于入参编码总数。
-     * <p><b>系统异常处置（D2）</b>：只捕获 {@link ServiceException} 计入失败明细；存储故障等系统异常
-     * 记一条含已提交清单的 ERROR 后原样上抛，不伪装为业务拒绝。此时用户拿不到回执但已提交项确实生效，
-     * 由本操作的幂等性兜住——同一编码重复置为同一目标状态结果相同，整体重试无副作用。
-     * <p>设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#4110-批量上下架接口put-supply-chainproductsbatch-status}。
+     * 批量状态编排：旧模式逐实体独立事务；显式同步模式按去重 SPU 及全部未归档 SKU 组原子提交。
+     * 请求级入参及有界展开校验在第一笔写入之前完成；业务拒绝写入回执，系统故障保留因果交 HTTP 终结边界。
+     * 系统故障时此前已提交组仍然生效，调用方须刷新确认，不能把整体异常解释成全批零写入或自动重发。
+     * 成功日志只能在 TransactionTemplate 返回（真实提交完成）后记录。
+     * 设计见 {@code docs/superpowers/specs/2026-10-11-platform-product-batch-shelf-sync-design.md#4-分组事务与并发}。
      */
     public BatchStatusResult batchChangeStatus(BatchStatusCommand command) {
-        log.info("批量变更商品状态 spuCodes={} skuCodes={} targetStatus={} unshelveMode={} operatorId={}",
+        log.info("[商品批量状态开始][接收批量命令] spuCodes={}, skuCodes={}, targetStatus={}, unshelveMode={}, operatorId={}",
                 command.spuCodes(), command.skuCodes(), command.targetStatus(), command.unshelveMode(), command.operatorId());
         CatalogEntityStatus target = CatalogEntityStatus.fromCode(command.targetStatus());
         if (target != CatalogEntityStatus.ACTIVE && target != CatalogEntityStatus.INACTIVE) {
@@ -375,31 +373,153 @@ public class ProductCatalogCommandService {
         if (spuCodes.isEmpty() && skuCodes.isEmpty()) {
             throw exception(PRODUCT_BATCH_INPUT_INVALID);
         }
+        if (Boolean.TRUE.equals(command.syncSkuOnShelf())) {
+            if (target != CatalogEntityStatus.ACTIVE || spuCodes.isEmpty() || !skuCodes.isEmpty()) {
+                throw exception(PRODUCT_BATCH_INPUT_INVALID);
+            }
+            List<String> distinctSpuCodes = new ArrayList<>(new LinkedHashSet<>(spuCodes));
+            if (distinctSpuCodes.size() > MAX_BATCH_STATUS_COUNT) throw exception(PRODUCT_BATCH_INPUT_INVALID);
+            return syncBatchOnShelf(distinctSpuCodes, command.operatorId());
+        }
         if (spuCodes.size() + skuCodes.size() > MAX_BATCH_STATUS_COUNT) {
             throw exception(PRODUCT_BATCH_INPUT_INVALID);
         }
         List<String> succeeded = new ArrayList<>();
         List<BatchStatusFailedItem> failed = new ArrayList<>();
-        try {
-            applyBatchStatus(spuCodes, CatalogEntityType.SPU, target, succeeded, failed,
-                    code -> applySpuStatus(code, target, command.unshelveMode(), command.operatorId()));
-            applyBatchStatus(skuCodes, CatalogEntityType.SKU, target, succeeded, failed,
-                    code -> applySkuStatus(code, target, command.operatorId()));
-        } catch (RuntimeException ex) {
-            // D2：系统异常不伪装为业务拒绝。succeeded 为就地累积，故此处能给出真实的已提交清单，
-            // 供运维在用户只看到整体报错时追溯库里究竟改了哪些行；原样上抛以保留因果链。
-            log.error("批量变更商品状态因系统异常中断 targetStatus={} operatorId={} 已提交={} 项 succeeded={} 已失败={} 项",
-                    target, command.operatorId(), succeeded.size(), succeeded, failed.size(), ex);
-            throw ex;
-        }
-        log.info("批量变更商品状态完成 succeeded={} failed={} targetStatus={} operatorId={}",
+        // 系统故障原样交由 HTTP 终结边界记录因果；此处不重复打印堆栈或失败摘要。
+        applyBatchStatus(spuCodes, CatalogEntityType.SPU, target, succeeded, failed,
+                code -> applySpuStatus(code, target, command.unshelveMode(), command.operatorId()));
+        applyBatchStatus(skuCodes, CatalogEntityType.SKU, target, succeeded, failed,
+                code -> applySkuStatus(code, target, command.operatorId()));
+        log.info("[商品批量状态完成][逐实体事务已提交] successCount={}, failureCount={}, targetStatus={}, operatorId={}",
                 succeeded.size(), failed.size(), target, command.operatorId());
         return new BatchStatusResult(succeeded, failed);
     }
 
     /**
+     * 同步上架以 SPU 组计数，全部范围先有界解析，再逐组提交真实 REQUIRES_NEW 事务。
+     * 已上架父商品也必须处理所有未归档规格，业务失败整组回滚，系统异常保留因果上抛。
+     * 设计见 {@code docs/superpowers/specs/2026-10-11-platform-product-batch-shelf-sync-design.md#4-分组事务与并发}。
+     */
+    private BatchStatusResult syncBatchOnShelf(List<String> spuCodes, Long operatorId) {
+        List<ShelfGroupPlan> plans = new ArrayList<>();
+        int remaining = MAX_BATCH_STATUS_COUNT - spuCodes.size();
+        for (String code : spuCodes) {
+            PlatformSpuDO spu = spuMapper.selectByCode(code);
+            List<PlatformSkuDO> members = spu == null || spu.getStatus() == CatalogEntityStatus.ARCHIVED.getCode()
+                    ? List.of() : readShelfMembers(spu.getId(), remaining + 1);
+            remaining -= members.size();
+            if (remaining < 0) {
+                throw exception(PRODUCT_BATCH_INPUT_INVALID);
+            }
+            plans.add(new ShelfGroupPlan(code, spu == null ? null : spu.getId(),
+                    members.stream().map(row -> new ShelfMember(row.getId(), row.getSkuCode())).toList()));
+        }
+        List<String> succeeded = new ArrayList<>();
+        List<BatchStatusFailedItem> failed = new ArrayList<>();
+        List<BatchStatusGroup> groups = new ArrayList<>();
+        for (ShelfGroupPlan plan : plans) {
+            ShelfFailureLocator locator = new ShelfFailureLocator(CatalogEntityType.SPU, plan.spuCode());
+            List<String> memberCodes = plan.members().stream().map(ShelfMember::skuCode).toList();
+            try {
+                batchStatusTransactionTemplate.executeWithoutResult(tx -> applyShelfGroup(plan, operatorId, locator));
+                // 模板已完成提交，才把整组计入成功回执。
+                succeeded.add(plan.spuCode());
+                groups.add(new BatchStatusGroup(plan.spuCode(), memberCodes, true, null, null));
+                log.info("[商品同步上架组提交][父商品与全部规格已上架] spuCode={}, skuCodes={}, skuCount={}, operatorId={}",
+                        plan.spuCode(), memberCodes, memberCodes.size(), operatorId);
+            } catch (ServiceException rejected) {
+                failed.add(new BatchStatusFailedItem(CatalogEntityType.SPU, plan.spuCode(), rejected.getCode(),
+                        rejected.getMessage(), locator.entityType, locator.code));
+                groups.add(new BatchStatusGroup(plan.spuCode(), memberCodes, false, locator.entityType, locator.code));
+            }
+        }
+        // 部分业务拒绝在同一次执行汇总，避免逐规格 INFO 和多层堆栈；所有成功均已提交。
+        if (!failed.isEmpty()) {
+            log.warn("[商品批量同步上架完成][部分商品组业务拒绝] successCount={}, failureCount={}, operatorId={}, failed={}",
+                    succeeded.size(), failed.size(), operatorId, failed);
+        } else {
+            log.info("[商品批量同步上架完成][全部商品组已提交] successCount={}, operatorId={}", succeeded.size(), operatorId);
+        }
+        return new BatchStatusResult(succeeded, failed, true, groups);
+    }
+
+    /**
+     * 有界只读全部未归档成员范围，不能先物化任意数量 SKU 再检查额度；行锁由统一预锁工具逐主键取得。
+     * 设计见 {@code docs/superpowers/specs/2026-10-11-platform-product-batch-shelf-sync-design.md#3-接口方案比较与推荐契约}。
+     */
+    private List<PlatformSkuDO> readShelfMembers(Long spuId, int limit) {
+        return skuMapper.selectList(new LambdaQueryWrapper<PlatformSkuDO>()
+                .eq(PlatformSkuDO::getSpuId, spuId)
+                .ne(PlatformSkuDO::getStatus, CatalogEntityStatus.ARCHIVED.getCode())
+                .orderByAsc(PlatformSkuDO::getId)
+                .last("LIMIT " + limit));
+    }
+
+    /**
+     * 按父商品→类型→子主键升序锁定并复核成员，所有状态机、类型及 Schema 校验通过后才写第一行。
+     * 设计见 {@code docs/superpowers/specs/2026-10-11-platform-product-batch-shelf-sync-design.md#4-分组事务与并发}。
+     */
+    private void applyShelfGroup(ShelfGroupPlan plan, Long operatorId, ShelfFailureLocator locator) {
+        PlatformSpuDO spu = requireSpuForUpdate(plan.spuCode());
+        if (!java.util.Objects.equals(spu.getId(), plan.spuId())) {
+            throw exception(PRODUCT_CONCURRENT_UPDATE);
+        }
+        List<PlatformSkuDO> members = readShelfMembers(spu.getId(), plan.members().size() + 1);
+        List<ShelfMember> lockedScope = members.stream().map(row -> new ShelfMember(row.getId(), row.getSkuCode())).toList();
+        if (!lockedScope.equals(plan.members())) {
+            throw exception(PRODUCT_CONCURRENT_UPDATE);
+        }
+        if (members.isEmpty()) {
+            throw exception(PRODUCT_SKU_REQUIRED);
+        }
+        // 与复合编辑保持类型锁先于SKU锁；跨父人工定价可能同时连接两个商品，不能形成Type→SKU / SKU→Type环。
+        checkTransition(spu.getStatus(), CatalogEntityStatus.ACTIVE, spu.getSpuCode(), spu.getSpuName());
+        productTypeValidationService.requireActiveForUpdate(spu.getProductType());
+        Map<String, PlatformSkuDO> lockedMembers = PlatformSkuBatchLock.lockExistingRows(skuMapper, members);
+        members = List.copyOf(lockedMembers.values());
+        lockedScope = members.stream().filter(row -> row.getStatus() != CatalogEntityStatus.ARCHIVED.getCode())
+                .map(row -> new ShelfMember(row.getId(), row.getSkuCode())).toList();
+        if (!lockedScope.equals(plan.members())) throw exception(PRODUCT_CONCURRENT_UPDATE);
+        for (PlatformSkuDO sku : members) {
+            locator.locate(CatalogEntityType.SKU, sku.getSkuCode());
+            checkTransition(sku.getStatus(), CatalogEntityStatus.ACTIVE, sku.getSkuCode(), sku.getSkuName());
+            validateSchema(sku.getTargetSchemaCode(), sku.getTargetSchemaVersion(), sku.getResultSchemaCode(),
+                    sku.getResultSchemaVersion(), true);
+        }
+        LocalDateTime timestamp = now();
+        locator.locate(CatalogEntityType.SPU, spu.getSpuCode());
+        // 仅在同步模式显式写NULL；默认NOT_NULL的updateById会漏掉下架方式清理。
+        // 局部更新同时保留版本条件/版本递增，避免把DO全局策略改为ALWAYS影响其它部分更新。
+        // 设计见 docs/superpowers/specs/2026-10-11-platform-product-batch-shelf-sync-design.md#41-复审修正显式-null-与相交多-sku-批次锁顺序。
+        requireUpdated(spuMapper.update(null, new LambdaUpdateWrapper<PlatformSpuDO>()
+                .eq(PlatformSpuDO::getId, spu.getId()).eq(PlatformSpuDO::getVersion, spu.getVersion())
+                .set(PlatformSpuDO::getStatus, CatalogEntityStatus.ACTIVE.getCode())
+                .set(PlatformSpuDO::getUnshelveMode, null)
+                .set(PlatformSpuDO::getUpdatedBy, operatorId).set(PlatformSpuDO::getUpdatedAt, timestamp)
+                .set(PlatformSpuDO::getVersion, spu.getVersion() + 1)));
+        for (PlatformSkuDO sku : members) {
+            locator.locate(CatalogEntityType.SKU, sku.getSkuCode());
+            sku.setStatus(CatalogEntityStatus.ACTIVE.getCode());
+            sku.setUpdatedBy(operatorId);
+            sku.setUpdatedAt(timestamp);
+            requireUpdated(skuMapper.updateById(sku));
+        }
+    }
+
+    private record ShelfMember(Long id, String skuCode) { }
+    private record ShelfGroupPlan(String spuCode, Long spuId, List<ShelfMember> members) { }
+    /** 仅保存事务失败定位，不包装异常，保留原始业务错误与系统故障因果。 */
+    private static final class ShelfFailureLocator {
+        private CatalogEntityType entityType;
+        private String code;
+        private ShelfFailureLocator(CatalogEntityType entityType, String code) { locate(entityType, code); }
+        private void locate(CatalogEntityType entityType, String code) { this.entityType = entityType; this.code = code; }
+    }
+
+    /**
      * 逐项在独立事务内执行状态迁移。已知业务拒绝（{@link ServiceException}）计入 {@code failed} 并继续下一项；
-     * 其余运行时异常向上抛出，由 {@link #batchChangeStatus} 统一记录已提交项后交全局异常处理。
+     * 其余运行时异常向上抛出，由 HTTP 终结边界统一记录因果。
      *
      * @param succeeded 出参：成功项编码就地追加，使调用方在中断时仍能报告已提交清单
      * @param failed    出参：失败明细就地追加
@@ -414,7 +534,7 @@ public class ProductCatalogCommandService {
                 succeeded.add(code);
             } catch (ServiceException ex) {
                 failed.add(new BatchStatusFailedItem(entityType, code, ex.getCode(), ex.getMessage()));
-                log.warn("批量上下架失败 entityType={} businessCode={} targetStatus={} errorCode={} message={}",
+                log.warn("[商品批量状态拒绝][实体业务校验失败] entityType={}, businessCode={}, targetStatus={}, errorCode={}, message={}",
                         entityType.getCode(), code, target, ex.getCode(), ex.getMessage());
             }
         }
@@ -441,6 +561,8 @@ public class ProductCatalogCommandService {
 
     /**
      * 批量记录 SKU 税务元数据。该方法只修改 {@code tax_included/tax_rate}，不得调用价格解析器或修改价格列。
+     * 先按主键升序预锁，再按原请求顺序更新，保持原错误顺序与整批原子性。
+     * 锁顺序见 {@code docs/superpowers/specs/2026-10-11-platform-product-batch-shelf-sync-design.md#41-复审修正显式-null-与相交多-sku-批次锁顺序}。
      * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#411-sku-税务元数据批量记录put-supply-chainproductsskustax-metadata}。
      */
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
@@ -449,9 +571,13 @@ public class ProductCatalogCommandService {
         validateTaxMetadata(command.taxIncluded(), command.taxRate());
         log.info("批量记录SKU税务元数据 skuCount={} taxIncluded={} taxRate={} operatorId={}",
                 skuCodes.size(), command.taxIncluded(), command.taxRate(), command.operatorId());
+        Map<String, PlatformSkuDO> lockedSkus = PlatformSkuBatchLock.lockByCodes(skuMapper, skuCodes);
         LocalDateTime now = now();
         for (String skuCode : skuCodes) {
-            PlatformSkuDO sku = requireSkuForUpdate(skuCode);
+            PlatformSkuDO sku = lockedSkus.get(skuCode);
+            if (sku == null || sku.getStatus() == CatalogEntityStatus.ARCHIVED.getCode()) {
+                throw exception(PLATFORM_SKU_NOT_FOUND);
+            }
             sku.setTaxIncluded(command.taxIncluded());
             sku.setTaxRate(command.taxRate());
             sku.setUpdatedBy(command.operatorId());
@@ -493,7 +619,17 @@ public class ProductCatalogCommandService {
     /** SKU 状态迁移，事务边界约束同 {@link #applySpuStatus}。 */
     private void applySkuStatus(String code, CatalogEntityStatus target, Long operatorId) {
         log.info("变更平台 SKU 状态 skuCode={} targetStatus={} operatorId={}", code, target, operatorId);
+        // 归档改变同步成员范围，必须先锁父行，再锁子行，防止与整商品同步上架死锁。
+        // 设计见 docs/superpowers/specs/2026-10-11-platform-product-batch-shelf-sync-design.md#4-分组事务与并发。
+        PlatformSkuDO snapshot = target == CatalogEntityStatus.ARCHIVED ? requireSku(code) : null;
+        if (snapshot != null) {
+            PlatformSpuDO parent = spuMapper.selectOneForUpdate(PlatformSpuDO::getId, snapshot.getSpuId());
+            if (parent == null) throw exception(PLATFORM_SPU_NOT_FOUND);
+        }
         PlatformSkuDO entity = requireSkuForUpdate(code);
+        if (snapshot != null && !java.util.Objects.equals(snapshot.getSpuId(), entity.getSpuId())) {
+            throw exception(PRODUCT_CONCURRENT_UPDATE);
+        }
         checkTransition(entity.getStatus(), target, entity.getSkuCode(), entity.getSkuName());
         if (target == CatalogEntityStatus.ACTIVE) {
             validateSchema(entity.getTargetSchemaCode(), entity.getTargetSchemaVersion(), entity.getResultSchemaCode(),
@@ -640,9 +776,14 @@ public class ProductCatalogCommandService {
         spu.setUpdatedAt(now());
         requireUpdated(spuMapper.updateById(spu));
 
-        List<PlatformSkuDO> existing = skuMapper.selectList(new LambdaQueryWrapper<PlatformSkuDO>()
+        List<PlatformSkuDO> snapshots = skuMapper.selectList(new LambdaQueryWrapper<PlatformSkuDO>()
                 .eq(PlatformSkuDO::getSpuId, spu.getId())
                 .ne(PlatformSkuDO::getStatus, CatalogEntityStatus.ARCHIVED.getCode()));
+        // 人工批量定价仅读取父商品，因此本入口也要在任何子更新前按主键升序预锁，不能等初始化监听器才排序。
+        // 设计见 docs/superpowers/specs/2026-10-11-platform-product-batch-shelf-sync-design.md#41-复审修正显式-null-与相交多-sku-批次锁顺序。
+        Map<String, PlatformSkuDO> lockedSkus = PlatformSkuBatchLock.lockExistingRows(skuMapper, snapshots);
+        if (lockedSkus.size() != snapshots.size()) throw exception(PRODUCT_CONCURRENT_UPDATE);
+        List<PlatformSkuDO> existing = List.copyOf(lockedSkus.values());
         Map<String, PlatformSkuDO> byCode = new HashMap<>();
         existing.forEach(sku -> byCode.put(sku.getSkuCode(), sku));
         Set<String> requested = new HashSet<>();
@@ -656,7 +797,10 @@ public class ProductCatalogCommandService {
                     : line.skuCode();
             if (!requested.add(code)) throw exception(PRODUCT_SKU_CODE_DUPLICATE);
             PlatformSkuDO sku = byCode.get(code);
-            CatalogEntityStatus skuStatus = writableStatus(line.status(), spuStatus);
+            // 存量规格保持独立状态；只有新增规格的缺省状态继承父商品。
+            // 设计见 docs/superpowers/specs/2026-10-11-platform-product-batch-shelf-sync-design.md#5-结果与页面交互。
+            CatalogEntityStatus skuStatus = writableStatus(line.status(), sku == null ? spuStatus
+                    : CatalogEntityStatus.fromCode(sku.getStatus()));
             if (hasText(line.fulfillmentType()) && !line.fulfillmentType().trim().equals(spu.getFulfillmentType())) {
                 throw exception(PRODUCT_SKU_FIELD_INVALID);
             }
@@ -1469,17 +1613,32 @@ public class ProductCatalogCommandService {
             List<String> skuCodes,
             Short targetStatus,
             String unshelveMode,
-            Long operatorId) {
+            Long operatorId,
+            Boolean syncSkuOnShelf) {
+        public BatchStatusCommand(List<String> spuCodes, List<String> skuCodes, Short targetStatus,
+                                  String unshelveMode, Long operatorId) {
+            this(spuCodes, skuCodes, targetStatus, unshelveMode, operatorId, false);
+        }
     }
 
     /**
      * 批量上下架结果。
-     * <p>{@code succeeded} 列表保留 SPU/SKU 混合业务编码，前端按编码回查展示；
-     * {@code failed} 列表携带每项的稳定错误码与消息，用户可针对失败项重试。
+     * <p>旧模式 succeeded 为逐实体混合编码；同步模式按去重 SPU 组计数，groups 保留完整后台成员范围。
+     * failed 携带稳定错误及实际失败实体定位，任何同步失败组都没有局部提交。
      */
     public record BatchStatusResult(
             List<String> succeeded,
-            List<BatchStatusFailedItem> failed) {
+            List<BatchStatusFailedItem> failed,
+            boolean syncSkuOnShelf,
+            List<BatchStatusGroup> groups) {
+        public BatchStatusResult(List<String> succeeded, List<BatchStatusFailedItem> failed) {
+            this(succeeded, failed, false, List.of());
+        }
+    }
+
+    /** 同步上架范围和整组结果；失败实体定位见设计 §5，SKU 编码必须属于本组范围。 */
+    public record BatchStatusGroup(String spuCode, List<String> skuCodes, boolean succeeded,
+                                   CatalogEntityType failedEntityType, String failedEntityCode) {
     }
 
     /**
@@ -1494,7 +1653,12 @@ public class ProductCatalogCommandService {
             CatalogEntityType entityType,
             String code,
             Integer errorCode,
-            String errorMessage) {
+            String errorMessage,
+            CatalogEntityType failedEntityType,
+            String failedEntityCode) {
+        public BatchStatusFailedItem(CatalogEntityType entityType, String code, Integer errorCode, String errorMessage) {
+            this(entityType, code, errorCode, errorMessage, null, null);
+        }
     }
 
     /** SKU 税务展示元数据批量记录命令。 */

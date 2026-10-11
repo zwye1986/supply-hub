@@ -51,6 +51,7 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.never;
@@ -115,6 +116,11 @@ class ProductCatalogCommandServiceTest {
             return new com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService.Allocation(
                     requested == null ? generator.next(BusinessNoPrefixes.SKU) : requested, 1);
         });
+        when(skuMapper.selectByIdForUpdate(anyLong())).thenAnswer(inv -> {
+            Long id = inv.getArgument(0);
+            return skuMapper.selectList(new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<PlatformSkuDO>())
+                    .stream().filter(row -> id.equals(row.getId())).findFirst().orElse(null);
+        });
         when(spuMapper.insert(any(PlatformSpuDO.class))).thenAnswer(inv -> {
             PlatformSpuDO row = inv.getArgument(0);
             row.setId(1L);
@@ -132,6 +138,20 @@ class ProductCatalogCommandServiceTest {
         service.updateProduct(SPU_CODE, saveCommand());
 
         assertThat(omitted.getStatus()).isEqualTo(CatalogEntityStatus.ACTIVE.getCode());
+    }
+
+    @Test
+    void editingExistingSkuWithoutStatusPreservesItsIndependentStatus() {
+        givenUpdateWithOneOmittedSku();
+        skuMapper.selectList(new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<PlatformSkuDO>()).getFirst()
+                .setStatus(CatalogEntityStatus.INACTIVE.getCode());
+        ProductCatalogCommandService.SaveSkuLine line = new ProductCatalogCommandService.SaveSkuLine(
+                "SKU_KEEP", "保留SKU", FulfillmentType.CARD_CODE_SECRET.code(), 100L, 100L, 100L, 1L, 10L, null);
+        service.updateProduct(SPU_CODE, saveCommand(line));
+        ArgumentCaptor<PlatformSkuDO> captor = ArgumentCaptor.forClass(PlatformSkuDO.class);
+        verify(skuMapper, atLeastOnce()).updateById(captor.capture());
+        assertThat(captor.getAllValues().stream().filter(row -> "SKU_KEEP".equals(row.getSkuCode())).findFirst().orElseThrow().getStatus())
+                .isEqualTo(CatalogEntityStatus.INACTIVE.getCode());
     }
 
     /** 旧调用方只提交最终金额时，服务端必须补齐 FIXED 规则，保证编辑详情可以精确回显来源。 */
@@ -268,6 +288,8 @@ class ProductCatalogCommandServiceTest {
                 .marketPrice(2_000L).suggestedSalePrice(1_800L)
                 .taxIncluded(false).taxRate(null).status(CatalogEntityStatus.ACTIVE.getCode()).build();
         when(skuMapper.selectByCodeForUpdate("SKU_TAX")).thenReturn(sku);
+        when(skuMapper.selectByCode("SKU_TAX")).thenReturn(sku);
+        doReturn(sku).when(skuMapper).selectByIdForUpdate(sku.getId());
         when(skuMapper.updateById(any(PlatformSkuDO.class))).thenReturn(1);
 
         service.batchUpdateSkuTaxMetadata(new ProductCatalogCommandService.SkuTaxMetadataBatchCommand(

@@ -669,6 +669,26 @@ class ProductManagementPageQueryTest {
     }
 
     @Test
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    void supplierSelectionRequiresActiveParentAndSkuEvenWithoutStatusParameter() {
+        when(supplierMapper.selectByCode("SPL_A")).thenReturn(SupplierDO.builder().id(11L).build());
+        PlatformSkuDO sku = PlatformSkuDO.builder().id(2001L).spuId(1001L).skuCode("SKU_A")
+                .status(CatalogEntityStatus.ACTIVE.getCode()).build();
+        when(skuMapper.selectList(any())).thenReturn(List.of(sku));
+        when(spuMapper.selectPage(any(PageParam.class), any())).thenReturn(new PageResult<>(List.of(), 0L));
+        service.managementPage(new ProductManagementPageQuery(null, null, null, null, null, null, null, null,
+                null, null, null, null, "SPL_A", null, null, 1, 20, null, true));
+        ArgumentCaptor<LambdaQueryWrapper<PlatformSpuDO>> parent = ArgumentCaptor.forClass((Class) LambdaQueryWrapper.class);
+        verify(spuMapper).selectPage(any(PageParam.class), parent.capture());
+        assertThat(parent.getValue().getSqlSegment()).contains("status =");
+        assertThat(parent.getValue().getParamNameValuePairs().values()).contains(CatalogEntityStatus.ACTIVE.getCode());
+        ArgumentCaptor<LambdaQueryWrapper<PlatformSkuDO>> child = ArgumentCaptor.forClass((Class) LambdaQueryWrapper.class);
+        verify(skuMapper).selectList(child.capture());
+        assertThat(child.getValue().getSqlSegment()).contains("status =");
+        assertThat(child.getValue().getParamNameValuePairs().values()).contains(CatalogEntityStatus.ACTIVE.getCode());
+    }
+
+    @Test
     void managementPageExcludeAddedSupplierOffersRequiresSupplierCode() {
         assertThatThrownBy(() -> service.managementPage(new ProductManagementPageQuery(
                 null, null, null, null, null, null, null, null,

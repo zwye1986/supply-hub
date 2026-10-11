@@ -479,7 +479,7 @@ public class ProductCatalogQueryService {
 
         // 1. SKU 商品状态 / 兑换方式 / 市场价区间预过滤。
         // 设计见 docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#419-管理端商品列表聚合查询get-supply-chainproductsmanagement-page
-        if (query.status() != null || fulfillmentType != null
+        if (excludeAddedSupplierOffers || query.status() != null || fulfillmentType != null
                 || query.marketPriceMin() != null || query.marketPriceMax() != null) {
             LambdaQueryWrapper<PlatformSkuDO> skuWrapper = managementSkuFilter(query, fulfillmentType);
             List<PlatformSkuDO> matchedSkus = skuMapper.selectList(skuWrapper);
@@ -549,6 +549,9 @@ public class ProductCatalogQueryService {
         // 3. SPU 主查询
         LambdaQueryWrapper<PlatformSpuDO> spuWrapper = new LambdaQueryWrapper<PlatformSpuDO>()
                 .ne(PlatformSpuDO::getStatus, CatalogEntityStatus.ARCHIVED.getCode())
+                // 新增供应商合作准入在分页前强制父商品上架，普通管理列表不限制父状态。
+                // 设计见 docs/superpowers/specs/2026-10-11-platform-product-batch-shelf-sync-design.md#6-合作选品一致性。
+                .eq(excludeAddedSupplierOffers, PlatformSpuDO::getStatus, CatalogEntityStatus.ACTIVE.getCode())
                 .eq(query.brandId() != null, PlatformSpuDO::getBrandId, query.brandId())
                 .in(!filterCategoryIds.isEmpty(), PlatformSpuDO::getPrimaryCategoryId, filterCategoryIds)
                 .in(!productTypes.isEmpty(), PlatformSpuDO::getProductType, productTypes)
@@ -765,6 +768,7 @@ public class ProductCatalogQueryService {
         return new LambdaQueryWrapper<PlatformSkuDO>()
                 .ne(PlatformSkuDO::getStatus, CatalogEntityStatus.ARCHIVED.getCode())
                 .eq(query.status() != null, PlatformSkuDO::getStatus, query.status())
+                .eq(Boolean.TRUE.equals(query.excludeAddedSupplierOffers()), PlatformSkuDO::getStatus, CatalogEntityStatus.ACTIVE.getCode())
                 .eq(fulfillmentType != null, PlatformSkuDO::getFulfillmentType, fulfillmentType)
                 .ge(query.marketPriceMin() != null, PlatformSkuDO::getMarketPrice, query.marketPriceMin())
                 .le(query.marketPriceMax() != null, PlatformSkuDO::getMarketPrice, query.marketPriceMax());
