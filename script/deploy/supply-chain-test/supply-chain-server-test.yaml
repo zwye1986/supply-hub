@@ -7,10 +7,12 @@ spring:
 
 aifuli:
   supply-chain:
+    # pro143 是测试库唯一的 Timer/Outbox 消费者；订单受理后的履约执行依赖两者。
+    # 见 docs/superpowers/specs/2026-10-12-supply-chain-test-timer-outbox-enable-design.md#2-前提核对。
     timer:
-      enabled: false
+      enabled: true
     outbox:
-      enabled: false
+      enabled: true
     openapi:
       enabled: false
     cashier:
