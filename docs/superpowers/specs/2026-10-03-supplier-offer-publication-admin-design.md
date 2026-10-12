@@ -194,7 +194,7 @@ default List<String> fulfillmentSteps() { return List.of(); }
 
 | # | 方法 | 路径 | 用途 |
 | --- | --- | --- | --- |
-| T1 | GET | `/supply-chain/supplier-config/adapter-types` | 列出注册表 `AdapterMetadataRegistry` 的适配器类型 + 各自 `connectorSchemaResource`/schema 版本/`capabilities()`/`credentialKeys()`/`mappingTemplates()` 摘要（供 E1 下拉、能力勾选、凭据行数、映射初始化） |
+| T1 | GET | `/supply-chain/supplier-config/adapter-types` | 列出注册表 `AdapterMetadataRegistry` 的适配器类型 + 各自 `connectorSchemaResource`/schema 版本/`capabilities()`/`capabilityDescriptions`（能力中文说明，§8.4）/`credentialKeys()`/`mappingTemplates()` 摘要（供 E1 下拉、能力勾选、凭据行数、映射初始化） |
 | T2 | GET | `/supply-chain/supplier-config/{supplierCode}/connectors` | 该供应商连接器列表（connectorNo/code/adapterType/status/currentVersionId + **A1 追加 `latestVersionId`/`latestVersionNo`/`latestVersionStatus`**：Phase 1 连接器与版本 1:1，暴露最新版本使前端刷新后仍能对草稿/已验证态驱动 校验→发布→退役，草稿态 `currentVersionId` 为 null 时据 `latestVersionId` 操作） |
 | T3 | GET | `/supply-chain/supplier-config/connectors/{connectorNo}/versions/{versionId}` | 连接器版本详情（公共字段 + `adapter_config_json`/`extra_config` + 校验态 + 能力启用态；**不含凭据明文**） |
 | T4 | GET | `/supply-chain/supplier-config/{supplierCode}/credential-sets` | 凭据集/项列表（**只返回 `item_key`/`provider_type`/`masked_hint`/`status`，绝不返回 `secret_ref` 值或密文**） |
@@ -273,6 +273,10 @@ default List<String> fulfillmentSteps() { return List.of(); }
 ### 8.4 能力子页
 
 展示连接器版本能力启用态（T3/T1），勾选用在连接器草稿的 `validate` 步骤（§6.4）；本页主要为可视化查看 + 引导到连接器校验。
+
+2026-10-12 展示补充（按用户要求修订为后端单一来源）：能力表按「能力编码 / 能力说明 / 启用态」排列，能力说明同时提供中文名称与一句职责解释。中文说明统一定义在后端 `supplieradapter/metadata/Capability` 枚举的 `description` 字段，由 T1 `AdapterTypeView` 新增 `capabilityDescriptions: Map<String,String>` 返回；映射键与该适配器的 `capabilities()` 完全一致，编码与说明均由同一组后端注册能力生成。原 `capabilities: List<String>` 保留，连接器校验请求与封闭能力集合不变；T3 的版本声明与启用态仍来自 `sc_supplier_connector_capability`，不新增数据库字段。前端读取所选适配器返回的映射，禁止维护能力中文字典；旧后端未返回说明、目录外历史编码或缺少说明时，仍展示原编码与原启用态，说明回退为「暂无中文说明」，不得过滤该行或猜测含义。新增平台能力必须同时在枚举内声明中文说明，新适配器复用该枚举即可返回说明，无需修改前端。
+
+中文说明口径：`CREATE_RECHARGE`＝创建充值：向供应商发起充值订单；`ISSUE_ASSET`＝发放资产：向供应商申请发放券码等权益资产；`BIND_BENEFIT`＝绑定权益：将权益绑定到指定用户账号；`QUERY_ORDER`＝查询订单：查询供应商订单状态与履约结果；`QUERY_ASSET`＝查询资产：查询券码等权益资产的状态；`VOID_ASSET`＝作废资产：将已发放的权益资产作废；`UNBIND_ASSET`＝解绑资产：解除权益资产与用户账号的绑定；`QUERY_BALANCE`＝查询余额：查询供应商账户的可用余额；`QUERY_INVENTORY`＝查询库存：查询供应商商品的可用库存；`RECEIVE_CALLBACK`＝接收回调：接收供应商推送的订单状态与履约结果通知。说明只解释接口职责，不承诺退款、重试或账本动作。
 
 ### 8.5 映射子页（G2）
 

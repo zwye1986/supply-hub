@@ -2,6 +2,7 @@ package com.aifuli.module.supplychain.tradecore.supply.application;
 
 import com.aifuli.module.supplychain.supplieradapter.metadata.AdapterMetadata;
 import com.aifuli.module.supplychain.supplieradapter.metadata.AdapterMetadataRegistry;
+import com.aifuli.module.supplychain.supplieradapter.metadata.Capability;
 import com.aifuli.module.supplychain.supplieradapter.metadata.MappingTemplates;
 import com.aifuli.module.supplychain.supplieradapter.metadata.StatusMappingDefinitionDO;
 import com.aifuli.module.supplychain.supplieradapter.metadata.StatusMappingDefinitionMapper;
@@ -26,6 +27,9 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * 供应商履约技术配置菜单的只读投影服务（T1–T5）。
@@ -55,16 +59,21 @@ public class SupplierConfigurationQueryService {
     /**
      * T1：适配器类型目录。来源于代码注册的封闭集 {@link AdapterMetadataRegistry#all()}，
      * 暴露能力、凭据键与映射模板计数供前端渲染表单，前端不能自由声明 adapterType。
+     * 能力说明与编码均取自同一组注册能力，中文说明由后端枚举统一定义。
+     * 设计见 docs/superpowers/specs/2026-10-03-supplier-offer-publication-admin-design.md#84-能力子页。
      */
     public List<AdapterTypeView> listAdapterTypes() {
         return metadataRegistry.all().stream().map(metadata -> {
             MappingTemplates templates = metadata.mappingTemplates();
+            Set<Capability> capabilities = metadata.capabilities();
             return new AdapterTypeView(
                     metadata.adapterType(),
-                    metadata.capabilities().stream().map(Enum::name).toList(),
+                    capabilities.stream().map(Enum::name).toList(),
                     List.copyOf(metadata.credentialKeys()),
                     templates.statusMappings().size(),
-                    templates.errorCodeMappings().size(), metadata.credentialBindingMode().name());
+                    templates.errorCodeMappings().size(), metadata.credentialBindingMode().name(),
+                    capabilities.stream().collect(
+                            Collectors.toUnmodifiableMap(Capability::name, Capability::getDescription)));
         }).toList();
     }
 
@@ -195,10 +204,15 @@ public class SupplierConfigurationQueryService {
                 item.getMaskedHint(), item.getStatus());
     }
 
-    /** T1 适配器类型目录项。capabilities/credentialKeys 为封闭集字符串，计数来自映射模板。 */
+    /**
+     * T1 适配器类型目录项。capabilities/credentialKeys 为封闭集字符串，计数来自映射模板。
+     * capabilityDescriptions 与 capabilities 的编码集合一致，值为后端枚举定义的中文名称与职责解释。
+     * 设计见 docs/superpowers/specs/2026-10-03-supplier-offer-publication-admin-design.md#84-能力子页。
+     */
     public record AdapterTypeView(String adapterType, List<String> capabilities,
                                   List<String> credentialKeys, int statusMappingTemplateCount,
-                                  int errorCodeMappingTemplateCount, String credentialBindingMode) {
+                                  int errorCodeMappingTemplateCount, String credentialBindingMode,
+                                  Map<String, String> capabilityDescriptions) {
     }
 
     /**

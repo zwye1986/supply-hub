@@ -103,6 +103,10 @@ class SupplierConfigurationQueryIntegrationTest {
             assertThat(qnmView.capabilities()).containsExactlyInAnyOrderElementsOf(
                     new QnmGameOrderV1Metadata().capabilities().stream()
                             .map(Enum::name).toList());
+            assertThat(qnmView.capabilityDescriptions().keySet())
+                    .containsExactlyInAnyOrderElementsOf(qnmView.capabilities());
+            assertThat(qnmView.capabilityDescriptions().get("QUERY_ORDER"))
+                    .isEqualTo("查询订单：查询供应商订单状态与履约结果");
             assertThat(qnmView.credentialKeys()).containsExactly("secretKey");
             assertThat(qnmView.statusMappingTemplateCount()).isEqualTo(7);
             assertThat(qnmView.errorCodeMappingTemplateCount()).isZero();

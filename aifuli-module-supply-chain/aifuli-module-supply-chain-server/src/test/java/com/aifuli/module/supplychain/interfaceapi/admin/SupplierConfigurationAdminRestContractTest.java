@@ -106,7 +106,7 @@ class SupplierConfigurationAdminRestContractTest {
     @Test
     void adapterTypeViewExposesCapabilitiesAndCredentialKeys() {
         assertThat(recordComponentNames(SupplierConfigurationQueryService.AdapterTypeView.class))
-                .contains("adapterType", "capabilities", "credentialKeys");
+                .contains("adapterType", "capabilities", "capabilityDescriptions", "credentialKeys");
     }
 
     @Test
