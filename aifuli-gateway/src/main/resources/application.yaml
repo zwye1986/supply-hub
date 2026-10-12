@@ -139,6 +139,13 @@ spring:
               predicates:
                 - Path=/open-api/supply-chain/project/v1/orders, /open-api/supply-chain/project/v1/orders/query, /open-api/supply-chain/project/v1/orders/assets/query
                 - Method=POST
+            # 华昇签名回调保留原始正文、路径和验签头；仅开放单版本 POST。
+            # 设计见 docs/superpowers/specs/2026-10-12-huasheng-callback-routing-design.md#3-精确路由与透传。
+            - id: supply-chain-huasheng-callback
+              uri: "${AIFULI_GATEWAY_SUPPLY_CHAIN_URI:grayLb://supply-chain-server}"
+              predicates:
+                - Path=/callbacks/suppliers/huasheng/{connectorVersionId}
+                - Method=POST
           x-forwarded:
             prefix-enabled: false # 避免 Swagger 重复带上额外的 /admin-api/system 前缀
           default-filters:

@@ -167,6 +167,8 @@ AIFULI_GATEWAY_SUPPLY_CHAIN_URI=http://127.0.0.1:58190
 
 未点名的 bpm/crm/ai 等 `grayLb` 路由可保留在 yaml 中；无实例时仅该前缀失败，不影响已部署服务。
 
+2026-10-12 补充：华昇回调通过 pro197 Nginx → supplyhub 网关 → 独立供应链进程转发。仅新增 `/callbacks/suppliers/huasheng/{connectorVersionId}` 的 POST 路由；Nacos routes 覆盖时须保留运行制品的全部原路由。地址绑定、生效核实、发布与回滚见 [华昇测试环境公网回调路由设计](2026-10-12-huasheng-callback-routing-design.md)。
+
 ## 8. Nacos 与中间件隔离
 
 - 命名空间 ID / 名称：`aifuli-supplyhub-test`（创建后把 **namespaceId** 写入 pro143 `.env` 的 Config/Discovery `NAMESPACE`）。
