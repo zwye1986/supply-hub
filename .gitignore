@@ -62,6 +62,12 @@ package-lock.json
 .history
 *.log
 
+# 各进程 logback-spring.xml 的 FILE appender 使用 ${LOG_FILE} 且未给默认值：
+# 单测/集成测试未设置该属性时，logback 以字面量 LOG_FILE_IS_UNDEFINED 作为文件名，
+# 写到对应模块根目录，滚动后形如 LOG_FILE_IS_UNDEFINED.2026-10-11.0.log。
+# 无扩展名的主文件匹配不到 *.log，需单独忽略，避免误提交构建产物。
+LOG_FILE_IS_UNDEFINED*
+
 functions/mock
 .temp/**
 
