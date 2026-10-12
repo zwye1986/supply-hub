@@ -2,6 +2,8 @@
 
 日期：2026-10-02。状态：承接已确认业务契约的实现细化，待报价Task3完成后实施。
 
+> **2026-10-12 格式3候选增量，待评审：** [平台SKU下单与历史兼容详细设计](2026-10-12-platform-sku-order-contract-design.md) §4～§6 拟为v2保存原平台SKU请求码并使用独立格式3；本文格式2字节、总订单buyerOrderDigest、项目永久键、CAS和离线历史重建范围不变。新格式须追加迁移扩CHECK，禁止修改052或把存量格式2转3；已有格式3不可回退到仅识别0/2的制品。候选尚未实现或迁移，本文旧入口继续适用。本轮前端仓库为 `/Users/mac/codespace/supplychainhubweb`，下文旧目录不再用于修改／测试／提交。
+
 依据`2026-09-30-project-signed-standard-order-http-design.md` §3—§7，以及`2026-10-02-standard-internal-quote-freeze-design.md`。沿既有FulfillmentAcceptanceLifecycle、RechargeFrequencyAcceptanceCoordinator、资金应用服务、路由/履约/Outbox推进，不复制状态机。本文件只讨论代码和自动化门禁；实际环境迁移与离线核实仍暂缓。
 
 ## 1. 双入口与共享命令
