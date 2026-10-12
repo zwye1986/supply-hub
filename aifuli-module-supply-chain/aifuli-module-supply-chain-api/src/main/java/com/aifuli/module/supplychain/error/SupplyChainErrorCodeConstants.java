@@ -260,6 +260,10 @@ public interface SupplyChainErrorCodeConstants {
     ErrorCode PLATFORM_SKU_PRICING_NOT_ALLOWED =
             error(1_050_001_177, "商品 SKU【{}】或所属 SPU 未启用，请先上架后再定价");
 
+    // 项目接入能力独立管理，见 docs/superpowers/specs/2026-10-12-project-standard-product-capability-design.md#3-http-合同。
+    ErrorCode PROJECT_CAPABILITY_VERSION_CONFLICT = error(1_050_001_179, "项目接入能力已变化，请刷新后重新确认");
+    ErrorCode PROJECT_CAPABILITY_CONFIRMATION_REQUIRED = error(1_050_001_180, "关闭项目接入能力须确认并填写1至256字原因");
+
     // 项目标准资产查询稳定错误，设计见 docs/superpowers/specs/2026-10-02-project-standard-query-asset-design.md#4-资产结果与封闭载荷。
     ErrorCode ASSET_QUERY_UNSUPPORTED_PRODUCT_TYPE =
             error(1_050_001_158, "此类商品不能查询资产，请通过查单接口获取订单信息");
@@ -456,6 +460,8 @@ public interface SupplyChainErrorCodeConstants {
             entry(PROJECT_APP_NOT_ENABLED, RetryDirective.RETRY_SAME_KEY_AFTER_CONDITION_CHANGE),
             entry(PROJECT_APP_CONFIRMATION_REQUIRED, RetryDirective.DO_NOT_RETRY),
             entry(PROJECT_APP_CREDENTIAL_STATE_INVALID, RetryDirective.DO_NOT_RETRY),
+            entry(PROJECT_CAPABILITY_VERSION_CONFLICT, RetryDirective.DO_NOT_RETRY),
+            entry(PROJECT_CAPABILITY_CONFIRMATION_REQUIRED, RetryDirective.DO_NOT_RETRY),
             entry(SUPPLIER_ALREADY_HAS_PUBLISHED_CONNECTOR, RetryDirective.DO_NOT_RETRY),
             entry(SUPPLIER_NO_PUBLISHED_CONNECTOR, RetryDirective.DO_NOT_RETRY),
             entry(OFFER_CAPABILITY_MISSING, RetryDirective.DO_NOT_RETRY),

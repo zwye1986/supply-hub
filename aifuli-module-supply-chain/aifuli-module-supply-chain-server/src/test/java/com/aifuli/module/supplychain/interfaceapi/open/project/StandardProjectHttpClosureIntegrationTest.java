@@ -1467,14 +1467,38 @@ class StandardProjectHttpClosureIntegrationTest {
     void testProjectAuthMatrix() {
         String queryJson = "{\"buyerOrderNo\":\"AUTH-MATRIX\"}";
 
-        // 1. 项目能力停用：签名与凭证链通过，requireCapability 阶段拒绝
+        // 1. 已开通过的能力停用：仅保留摘要查单，不允许新订单或卡密读取。
+        // 设计见 docs/superpowers/specs/2026-10-12-project-standard-product-capability-design.md#1-已确认范围。
         jdbc.update("UPDATE sc_project_capability SET status = 20 "
                 + "WHERE project_id = ? AND capability_code = 'STANDARD_PRODUCT'", PROJECT_A_ID);
         try {
-            assertQueryRejected(queryJson, "nonce-cap-" + UNIQUE_SEQ.incrementAndGet());
+            var query = postSignedRaw(QUERY_PATH, queryJson.getBytes(StandardCharsets.UTF_8),
+                    credentialsA(), System.currentTimeMillis(), "nonce-cap-" + UNIQUE_SEQ.incrementAndGet());
+            assertThat(query.getBody().getCode()).isEqualTo(SUPPLY_CHAIN_ORDER_NOT_FOUND.getCode());
+            for (String path : List.of(ORDERS_PATH, ASSETS_PATH)) {
+                var denied = postSignedRaw(path, queryJson.getBytes(StandardCharsets.UTF_8),
+                        credentialsA(), System.currentTimeMillis(), "nonce-cap-deny-" + UNIQUE_SEQ.incrementAndGet());
+                assertThat(denied.getBody().getCode()).isEqualTo(BUYER_AUTH_INVALID.getCode());
+            }
         } finally {
             jdbc.update("UPDATE sc_project_capability SET status = 10 "
                     + "WHERE project_id = ? AND capability_code = 'STANDARD_PRODUCT'", PROJECT_A_ID);
+        }
+
+        // 从未开通的项目不能因有应用凭证而获得历史查单权。
+        jdbc.update("DELETE FROM sc_project_capability WHERE project_id = ? AND capability_code = 'STANDARD_PRODUCT'",
+                PROJECT_A_ID);
+        try {
+            for (String path : List.of(ORDERS_PATH, QUERY_PATH, ASSETS_PATH)) {
+                var denied = postSignedRaw(path, queryJson.getBytes(StandardCharsets.UTF_8),
+                        credentialsA(), System.currentTimeMillis(), "nonce-never-" + UNIQUE_SEQ.incrementAndGet());
+                assertThat(denied.getBody().getCode()).isEqualTo(BUYER_AUTH_INVALID.getCode());
+            }
+        } finally {
+            jdbc.update("""
+                    INSERT INTO sc_project_capability(project_id, capability_code, status, version, created_at, updated_at)
+                    VALUES (?, 'STANDARD_PRODUCT', 10, 0, NOW(3), NOW(3))
+                    """, PROJECT_A_ID);
         }
 
         // 2. 凭证吊销：v1 置 REVOKED 后验签拒绝

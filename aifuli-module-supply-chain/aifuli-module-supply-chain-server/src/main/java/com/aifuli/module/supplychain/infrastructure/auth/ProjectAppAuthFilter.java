@@ -156,7 +156,7 @@ public final class ProjectAppAuthFilter extends OncePerRequestFilter {
             throw authInvalid();
         }
 
-        credentialService.requireCapability(app.projectId(), operation.requiredCapability());
+        credentialService.requireCapability(app.projectId(), operation);
         nonceStore.ensureUnique(headers.appId(), headers.nonce());
         validateScope(operation.scopeType(), headers.buyerUserId(), headers.channelCode());
         try {

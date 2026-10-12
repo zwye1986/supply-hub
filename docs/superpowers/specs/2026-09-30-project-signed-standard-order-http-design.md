@@ -34,7 +34,7 @@
 - `POST /open-api/supply-chain/project/v1/orders/query`：`STANDARD_ORDER_QUERY`，项目可为 ACTIVE 或 SUSPENDED。
 - `POST /open-api/supply-chain/project/v1/orders/assets/query`：`STANDARD_ORDER_ASSET_QUERY`，项目必须 ACTIVE。
 
-三个操作均要求启用 `STANDARD_PRODUCT` 能力，使用项目 scope。应用未启用、凭证已吊销或过期、项目 CLOSED/ARCHIVED 时全部拒绝。SUSPENDED 只允许历史订单摘要查询，不允许新下单或读取卡密；卡密由管理端有权限的人员处理。
+三个操作均校验 `STANDARD_PRODUCT` 能力，使用项目 scope。2026-10-12 已确认的独立能力管理覆盖原“全部要求启用”规则：下单和卡密读取要求能力启用；订单摘要查询接受已开通且启用/停用的能力行，从未开通仍拒绝。应用未启用、凭证已吊销或过期、项目 CLOSED/ARCHIVED 时全部拒绝。SUSPENDED 只允许历史订单摘要查询，不允许新下单或读取卡密；卡密由管理端有权限的人员处理。管理入口、审计和关闭生效边界见 `2026-10-12-project-standard-product-capability-design.md`。
 
 `appId` 验签成功后产出可信 `projectId`、`buyerId` 和应用身份。请求体不接受 `projectId`、`projectCode`、`buyerId`、`sourceSystem`、`externalTenantId`；不得由普通请求头、调用方参数或外部租户映射覆盖项目归属。同一分销商的不同项目彼此隔离。
 
