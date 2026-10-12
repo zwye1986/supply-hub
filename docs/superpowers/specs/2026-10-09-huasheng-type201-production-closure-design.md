@@ -4,6 +4,7 @@
 > 用户最新约束：**单实例优先，先不考虑 QNM**。不改造 QNM，不建设通用工作流、分布式 token 或调度平台。
 > 2026-10-10 Task8修订：用户明确使用华晟通官方测试环境，不新建端到端挡板；真实验收范围仍为type201、FIXED、quantity=1、单实例。
 > 基线：当前工作区 HEAD `0be390d`；通信 A1～A5 已存在。历史验收不是本轮重新运行结果。
+> 2026-10-12 回调数量与映射管理修订：`2026-10-12-huasheng-fulfillment-hardening-design.md` §2～§3覆盖原回调无条件 num=1 及通用追加入口；恢复能力仍保持本设计范围，本轮不扩展补单与人工资金处置。
 > 实施计划：`docs/superpowers/plans/2026-10-09-huasheng-type201-production-closure.md`。
 
 ## 1. 范围与权威关系
@@ -286,7 +287,7 @@ POST `/callbacks/suppliers/huasheng/{connectorVersionId}`，text/plain；只此�
 
 URL版本只定位冻结配置：验证HUA_SHENG类型、已发布版本、凭据绑定、Header Appid逐字等于merchantAccount；解析该版本callbackPublicKey与appSecret，先对**原密文文本字节**用X-Sign验签，再AES解密。不扫描所有供应商密钥、不用最新版本尝试解密。公钥不进入出站Ticket。
 
-Parser复用A金额／卡片验证规则，不复用普通明文envelope作为公开入口。原hex密文正文在验签／AES前按2MiB上限有界读取，不先无限制绑定String；header亦限制Appid为16字节、X-Sign为4096字节。专用严格reader：1MiB解码上限／深度32／字符串16384／重复键和尾随拒绝；timestamp整数秒、nonce非空最多64字符、双号、num=1、totalPrice、SUCCESS／FAILED。SUCCESS list恰一type201；FAILED list允许缺省／空数组，不接受任何非空卡片。金额精度／换算沿A，阈值写常量且受测，不借此建设通用WAF。
+Parser复用A金额／卡片验证规则，不复用普通明文envelope作为公开入口。原hex密文正文在验签／AES前按2MiB上限有界读取，不先无限制绑定String；header亦限制Appid为16字节、X-Sign为4096字节。专用严格reader：1MiB解码上限／深度32／字符串16384／重复键和尾随拒绝；timestamp整数秒、nonce非空最多64字符、双号、totalPrice、SUCCESS／FAILED。回调 num 为交付数量：SUCCESS 必须 num=1 且 list 恰一type201；FAILED 接受 num=0 或省略，保留字段存在性，list 允许缺省／空数组，不接受任何非空卡片。不能将原单订购数量 1 用作 FAILED 的交付数量；检查点零交付与历史 V1 读取兼容见 `2026-10-12-huasheng-fulfillment-hardening-design.md` §2。金额精度／换算沿A，阈值写常量且受测，不借此建设通用WAF。
 
 ### 8.2 持久防重与收敛
 

@@ -59,8 +59,14 @@ public final class HuashengFlowPolicy {
             return HuashengFlowDecision.WAIT_QUERY;
         }
 
-        // 3. 基础订单身份校验 (单号/数量)
-        if (fact.num() != HuashengFlowCodes.TYPE201_ORDER_QUANTITY) {
+        // 3. 基础订单身份校验：失败回调报告零交付，原单订购数量仍从冻结参数核实。
+        // 设计：docs/superpowers/specs/2026-10-12-huasheng-fulfillment-hardening-design.md#21-订购数量与交付数量。
+        boolean failedCallback = fact.endpoint() == HuashengStepFact.Endpoint.CALLBACK
+                && fact.status() == HuashengStepFact.Status.FAILED;
+        int expectedFactQuantity = failedCallback ? HuashengFlowCodes.FAILED_CALLBACK_DELIVERY_QUANTITY
+                : HuashengFlowCodes.TYPE201_ORDER_QUANTITY;
+        if (checkpoint.placeParameters().num() != HuashengFlowCodes.TYPE201_ORDER_QUANTITY
+                || fact.num() != expectedFactQuantity) {
             return HuashengFlowDecision.MANUAL;
         }
         if (!Objects.equals(fact.outOrderSn(), checkpoint.placeParameters().outOrderSn())) {

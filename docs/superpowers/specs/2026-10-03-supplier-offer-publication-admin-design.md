@@ -221,6 +221,8 @@ default List<String> fulfillmentSteps() { return List.of(); }
 
 ### 6.5 映射（G2）
 
+2026-10-12 完善：映射查询增加查看版本、当前发布版本和服务端可操作性；初始化/追加仅针对草稿，华昇封闭十行模板禁止逐条追加，空错误表由适配器内置策略管理。写事务锁版本并更新其乐观锁，旧映射上的验证结果不得落库。前端根据后端管理投影显示说明、限制按钮与函数调用，隔离切换版本后的旧请求/弹窗完成事件。详细契约见 `docs/superpowers/specs/2026-10-12-huasheng-fulfillment-hardening-design.md#3-映射管理契约`。
+
 - 泛化 `initializeQnmStatusMappings`（`:82`）为 `POST /supply-chain/supplier-config/connectors/mappings/initialize`（入参 `connectorVersionId`，按该版本 adapterType 从 `mappingTemplates()` 初始化状态 + 错误码映射）。
 - 保留 `addErrorMapping`（`:90`）追加单条错误码；新增 `POST /supply-chain/supplier-config/connectors/status-mappings` 追加单条状态映射。
 

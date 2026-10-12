@@ -74,6 +74,7 @@ class SupplierConfigurationMappingInitializationTest {
                         "E_TIMEOUT", "", "RESULT_UNKNOWN", "QUERY_FIRST", false))));
         when(statusMappingMapper.selectByConnectorVersionId(VERSION_ID)).thenReturn(List.of());
         when(databaseClock.now()).thenReturn(NOW);
+        when(versionMapper.updateById(any(SupplierConnectorVersionDO.class))).thenReturn(1);
 
         int count = service.initializeMappings(VERSION_ID, 1L);
 
@@ -110,10 +111,15 @@ class SupplierConfigurationMappingInitializationTest {
 
     @Test
     void addStatusMappingAppendsSingleDraftRow() {
-        when(versionMapper.selectById(VERSION_ID)).thenReturn(SupplierConnectorVersionDO.builder()
+        when(versionMapper.selectByIdForUpdate(VERSION_ID)).thenReturn(SupplierConnectorVersionDO.builder()
                 .id(VERSION_ID).connectorId(CONNECTOR_ID).versionNo(2)
-                .status(ConnectorVersionStatus.DRAFT.getCode()).build());
+                .status(ConnectorVersionStatus.DRAFT.getCode()).version(0L).build());
+        when(connectorMapper.selectById(CONNECTOR_ID)).thenReturn(SupplierConnectorDO.builder()
+                .id(CONNECTOR_ID).adapterType(STUB_ADAPTER).build());
+        when(metadataRegistry.require(STUB_ADAPTER)).thenReturn(metadata);
+        when(metadata.statusMappingAppendAllowed()).thenReturn(true);
         when(databaseClock.now()).thenReturn(NOW);
+        when(versionMapper.updateById(any(SupplierConnectorVersionDO.class))).thenReturn(1);
 
         service.addStatusMapping(new SupplierConfigurationCommandService.AddStatusMappingCommand(
                 VERSION_ID, "orderStatus=9", "", "QUERY", "SUCCEEDED", true, 1L));
@@ -131,9 +137,9 @@ class SupplierConfigurationMappingInitializationTest {
 
     @Test
     void addStatusMappingRejectsFactOutsideClosedSet() {
-        when(versionMapper.selectById(VERSION_ID)).thenReturn(SupplierConnectorVersionDO.builder()
+        when(versionMapper.selectByIdForUpdate(VERSION_ID)).thenReturn(SupplierConnectorVersionDO.builder()
                 .id(VERSION_ID).connectorId(CONNECTOR_ID).versionNo(1)
-                .status(ConnectorVersionStatus.DRAFT.getCode()).build());
+                .status(ConnectorVersionStatus.DRAFT.getCode()).version(0L).build());
 
         assertThatThrownBy(() -> service.addStatusMapping(
                 new SupplierConfigurationCommandService.AddStatusMappingCommand(
@@ -143,9 +149,9 @@ class SupplierConfigurationMappingInitializationTest {
     }
 
     private void stubDraftVersion() {
-        when(versionMapper.selectById(VERSION_ID)).thenReturn(SupplierConnectorVersionDO.builder()
+        when(versionMapper.selectByIdForUpdate(VERSION_ID)).thenReturn(SupplierConnectorVersionDO.builder()
                 .id(VERSION_ID).connectorId(CONNECTOR_ID).versionNo(1)
-                .status(ConnectorVersionStatus.DRAFT.getCode()).build());
+                .status(ConnectorVersionStatus.DRAFT.getCode()).version(0L).build());
         when(connectorMapper.selectById(CONNECTOR_ID)).thenReturn(SupplierConnectorDO.builder()
                 .id(CONNECTOR_ID).adapterType(STUB_ADAPTER).build());
     }

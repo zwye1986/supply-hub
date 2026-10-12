@@ -27,6 +27,36 @@ class HuashengCheckpointCodecTest {
     private final ObjectMapper json = new ObjectMapper();
 
     @Test
+    void roundTripsFailedCallbackZeroDeliveryWithoutChangingFrozenOrderQuantity() {
+        var old = checkpoint();
+        var observation = new HuashengCheckpoint.Observation(HuashengEndpoint.CALLBACK,
+                old.orderSn(), old.placeParameters().outOrderSn(), 0, "09.9900", 999,
+                HuashengOrderStatus.FAILED, HuashengField.absent(), HuashengField.absent());
+        var value = new HuashengCheckpoint(binding(), place(), old.orderSn(), observation, old.progress(), null);
+        var restored = codec.decrypt(codec.encrypt(value), binding());
+        assertThat(restored.observation().num()).isZero();
+        assertThat(restored.placeParameters().num()).isEqualTo(1);
+    }
+
+    @Test
+    void legacyFailedCallbackObservationRemainsReadableButZeroIsRestrictedToFailedCallback() {
+        var old = checkpoint();
+        var legacy = new HuashengCheckpoint.Observation(HuashengEndpoint.CALLBACK, old.orderSn(),
+                place().outOrderSn(), 1, "09.9900", 999, HuashengOrderStatus.FAILED,
+                HuashengField.absent(), HuashengField.absent());
+        var value = new HuashengCheckpoint(binding(), place(), old.orderSn(), legacy, old.progress(), null);
+        assertThat(codec.decrypt(codec.encrypt(value), binding()).observation().num()).isEqualTo(1);
+        for (HuashengEndpoint endpoint : List.of(HuashengEndpoint.PLACE, HuashengEndpoint.CONFIRM, HuashengEndpoint.QUERY)) {
+            assertThatThrownBy(() -> new HuashengCheckpoint.Observation(endpoint, old.orderSn(),
+                    place().outOrderSn(), 0, "09.9900", 999, HuashengOrderStatus.FAILED,
+                    HuashengField.absent(), HuashengField.absent())).isInstanceOf(IllegalArgumentException.class);
+        }
+        assertThatThrownBy(() -> new HuashengCheckpoint.Observation(HuashengEndpoint.CALLBACK, old.orderSn(),
+                place().outOrderSn(), 0, "09.9900", 999, HuashengOrderStatus.SUCCESS,
+                HuashengField.absent(), HuashengField.absent())).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
     void roundTripsCompleteFactsWithoutChangingRawMoneyOrOptionalValues() {
         var value = checkpoint();
         var stored = codec.encrypt(value);

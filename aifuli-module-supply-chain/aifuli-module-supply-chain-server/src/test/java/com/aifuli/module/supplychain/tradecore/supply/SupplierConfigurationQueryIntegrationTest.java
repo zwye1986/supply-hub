@@ -19,6 +19,10 @@ import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.CredentialS
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.CredentialItemMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.CredentialSetMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierMapper;
+import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierConnectorVersionMapper;
+import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierConnectorVersionDO;
+import com.aifuli.module.supplychain.supplieradapter.metadata.Capability;
+import com.aifuli.module.supplychain.supplieradapter.metadata.SupplierConnectorCapabilityMapper;
 import com.aifuli.module.supplychain.tradecore.supply.domain.ConnectorVersionStatus;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterAll;
@@ -30,6 +34,9 @@ import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import com.aifuli.module.supplychain.testsupport.ProductCenterTestConfiguration;
 import org.testcontainers.containers.MySQLContainer;
 
@@ -37,8 +44,13 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * 技术菜单只读 GET 面（T1–T5）的投影契约与凭据脱敏不变量集成测试。
@@ -66,6 +78,151 @@ class SupplierConfigurationQueryIntegrationTest {
     static void stopContainer() {
         if (EXTERNAL_JDBC_URL == null && MYSQL.isRunning()) {
             MYSQL.stop();
+        }
+    }
+
+    /**
+     * 映射线程先建立旧 RR 快照，验证事务锁版本并改 VALIDATED；滞后的三个写入口必须当前读等待并拒绝。
+     * 闩锁固定执行顺序，Future 超时只验证等待锁期间无法完成，不靠 sleep 制造竞态。
+     * 设计见 docs/superpowers/specs/2026-10-12-huasheng-fulfillment-hardening-design.md#31-后端元数据与查询。
+     */
+    @Test
+    void validatedCurrentReadFencesAllThreeMappingWritesDespiteOldSnapshot() throws Exception {
+        try (ConfigurableApplicationContext context = applicationContext()) {
+            var configuration = context.getBean(SupplierConfigurationCommandService.class);
+            var versions = context.getBean(SupplierConnectorVersionMapper.class);
+            var record = context.getBean(ConnectorValidationRecordService.class);
+            var transactions = new TransactionTemplate(context.getBean("supplyChainTransactionManager", PlatformTransactionManager.class));
+            var executor = Executors.newSingleThreadExecutor();
+            try {
+                for (MappingWrite write : MappingWrite.values()) {
+                    var draft = newQnmDraft(configuration);
+                    var original = versions.selectById(draft.connectorVersionId());
+                    var snapshotReady = new CountDownLatch(1);
+                    var validationWritten = new CountDownLatch(1);
+                    var mappingStarted = new CountDownLatch(1);
+                    var pending = executor.submit(() -> {
+                        try {
+                            transactions.executeWithoutResult(ignored -> {
+                                assertThat(versions.selectById(draft.connectorVersionId()).getStatus())
+                                        .isEqualTo(ConnectorVersionStatus.DRAFT.getCode());
+                                snapshotReady.countDown();
+                                await(validationWritten);
+                                mappingStarted.countDown();
+                                mappingWrite(configuration, draft.connectorVersionId(), write);
+                            });
+                            return null;
+                        } catch (IllegalStateException rejected) {
+                            return rejected;
+                        }
+                    });
+                    await(snapshotReady);
+                    transactions.executeWithoutResult(ignored -> {
+                        record.record(validationCommand(original));
+                        validationWritten.countDown();
+                        await(mappingStarted);
+                        assertThatThrownBy(() -> pending.get(200, TimeUnit.MILLISECONDS))
+                                .as("映射请求必须等待验证持有的版本行锁")
+                                .isInstanceOf(TimeoutException.class);
+                    });
+                    assertThat(pending.get(5, TimeUnit.SECONDS)).isInstanceOf(IllegalStateException.class)
+                            .hasMessageContaining("draft");
+                    assertThat(versions.selectById(draft.connectorVersionId()).getStatus())
+                            .isEqualTo(ConnectorVersionStatus.VALIDATED.getCode());
+                    var mappings = context.getBean(SupplierConfigurationQueryService.class).getMappings(draft.connectorVersionId());
+                    assertThat(mappings.statusMappings()).isEmpty();
+                    assertThat(mappings.errorCodeMappings()).isEmpty();
+                }
+            } finally {
+                executor.shutdownNow();
+            }
+        }
+    }
+
+    @Test
+    void everyMappingWriteAdvancesVersionAndRejectsValidationBasedOnOldMappings() {
+        try (ConfigurableApplicationContext context = applicationContext()) {
+            var configuration = context.getBean(SupplierConfigurationCommandService.class);
+            var versions = context.getBean(SupplierConnectorVersionMapper.class);
+            var record = context.getBean(ConnectorValidationRecordService.class);
+            var capabilities = context.getBean(SupplierConnectorCapabilityMapper.class);
+            var draft = newQnmDraft(configuration);
+            var original = versions.selectById(draft.connectorVersionId());
+            for (MappingWrite write : MappingWrite.values()) {
+                mappingWrite(configuration, draft.connectorVersionId(), write);
+            }
+            assertThat(versions.selectById(draft.connectorVersionId()).getVersion()).isEqualTo(original.getVersion() + 3);
+            assertThatThrownBy(() -> record.record(validationCommand(original)))
+                    .isInstanceOf(IllegalStateException.class).hasMessageContaining("changed during validation");
+            assertThat(capabilities.selectByConnectorVersionId(draft.connectorVersionId())).isEmpty();
+            assertThat(versions.selectById(draft.connectorVersionId()).getStatus())
+                    .isEqualTo(ConnectorVersionStatus.DRAFT.getCode());
+        }
+    }
+
+    @Test
+    void versionTouchDatabaseFailureRollsBackAllInsertedMappings() {
+        try (ConfigurableApplicationContext context = applicationContext()) {
+            var configuration = context.getBean(SupplierConfigurationCommandService.class);
+            var versions = context.getBean(SupplierConnectorVersionMapper.class);
+            var query = context.getBean(SupplierConfigurationQueryService.class);
+            var jdbc = new JdbcTemplate(context.getBean("supplyChainDataSource", javax.sql.DataSource.class));
+            for (MappingWrite write : MappingWrite.values()) {
+                var draft = newQnmDraft(configuration);
+                // 仅限制本用例版本的递增，以真实 MySQL 约束失败验证同事务映射回滚。
+                // 无需触发器的 SUPER 权限，也不修改数据库全局开关。
+                String constraint = "sc_mapping_touch_guard_" + draft.connectorVersionId();
+                Long connectorId = versions.selectById(draft.connectorVersionId()).getConnectorId();
+                jdbc.execute("ALTER TABLE sc_supplier_connector_version ADD CONSTRAINT " + constraint
+                        + " CHECK (connector_id <> " + connectorId + " OR version = 0)");
+                try {
+                    assertThatThrownBy(() -> mappingWrite(configuration, draft.connectorVersionId(), write))
+                            .isInstanceOf(RuntimeException.class);
+                    assertThat(query.getMappings(draft.connectorVersionId()).statusMappings()).isEmpty();
+                    assertThat(query.getMappings(draft.connectorVersionId()).errorCodeMappings()).isEmpty();
+                    assertThat(versions.selectById(draft.connectorVersionId()).getVersion()).isZero();
+                } finally {
+                    jdbc.execute("ALTER TABLE sc_supplier_connector_version DROP CHECK " + constraint);
+                }
+            }
+        }
+    }
+
+    private enum MappingWrite { INITIALIZE, STATUS, ERROR }
+
+    private static void mappingWrite(SupplierConfigurationCommandService service, Long versionId, MappingWrite write) {
+        switch (write) {
+            case INITIALIZE -> service.initializeMappings(versionId, 1L);
+            case STATUS -> service.addStatusMapping(new SupplierConfigurationCommandService.AddStatusMappingCommand(
+                    versionId, "orderStatus=9", "", "QUERY", "SUCCEEDED", true, 1L));
+            case ERROR -> service.addErrorCodeMapping(new SupplierConfigurationCommandService.AddErrorCodeMappingCommand(
+                    versionId, "E_BUSY", "", "RETRYABLE", "RETRY_SAFE", true, 1L));
+        }
+    }
+
+    private static SupplierConfigurationCommandService.DraftConnectorResult newQnmDraft(SupplierConfigurationCommandService service) {
+        String supplier = service.createSupplier(new SupplierConfigurationCommandService.CreateSupplierCommand(
+                null, "映射版本围栏测试", "映射围栏", "STANDARD_SUPPLIER", null, 1L));
+        String slot = service.createCredentialSlot(new SupplierConfigurationCommandService.CreateCredentialSlotCommand(
+                "ENV", "env:QNM_QUERY_TEST_USERKEY", "qnm-****", "v1", 1L));
+        return service.createConnectorDraft(new SupplierConfigurationCommandService.CreateConnectorDraftCommand(
+                supplier, "MAPPING_FENCE", QnmGameOrderV1Metadata.TYPE, "https://api.qinameng.com", "qnm-user", slot,
+                "V1", "/callbacks/qnm/game-order/v1", 3_000, 10_000, 100, 20, "{}", 1L));
+    }
+
+    private static ConnectorValidationRecordService.RecordValidationCommand validationCommand(SupplierConnectorVersionDO original) {
+        var now = LocalDateTime.now();
+        return new ConnectorValidationRecordService.RecordValidationCommand(original.getId(), original.getVersion(),
+                original.getConfigDigest(), Set.of(Capability.QUERY_ORDER), now, now.plusMinutes(10), 1L,
+                "映射版本围栏验证", "trace-mapping-version-fence");
+    }
+
+    private static void await(CountDownLatch latch) {
+        try {
+            assertThat(latch.await(5, TimeUnit.SECONDS)).as("并发测试同步点须及时到达").isTrue();
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Mapping concurrency test interrupted", interrupted);
         }
     }
 
@@ -118,6 +275,16 @@ class SupplierConfigurationQueryIntegrationTest {
                                     supplierCode, "QNM_PRIMARY", QnmGameOrderV1Metadata.TYPE,
                                     "https://api.qinameng.com", "qnm-user", slotNo, "V1",
                                     "/callbacks/qnm/game-order/v1", 3_000, 10_000, 100, 20, "{}", 1L));
+            // 映射管理契约：真实草稿身份与可操作性由服务端计算，不能将草稿冒充已发布版本。
+            // 设计见 docs/superpowers/specs/2026-10-12-huasheng-fulfillment-hardening-design.md#3-映射管理契约。
+            var draftMappings = objectMapper.valueToTree(query.getMappings(draft.connectorVersionId()));
+            assertThat(draftMappings.path("connectorVersionId").asLong()).isEqualTo(draft.connectorVersionId());
+            assertThat(draftMappings.path("versionNo").asInt()).isEqualTo(1);
+            assertThat(draftMappings.path("versionStatus").asInt()).isEqualTo(ConnectorVersionStatus.DRAFT.getCode());
+            assertThat(draftMappings.path("currentPublishedVersionId").isNull()).isTrue();
+            assertThat(draftMappings.path("initializeAllowed").asBoolean()).isTrue();
+            assertThat(draftMappings.path("statusAppendAllowed").asBoolean()).isTrue();
+            assertThat(draftMappings.path("errorAppendAllowed").asBoolean()).isTrue();
             assertThat(configuration.initializeMappings(draft.connectorVersionId(), 1L)).isEqualTo(7);
             configuration.addErrorCodeMapping(
                     new SupplierConfigurationCommandService.AddErrorCodeMappingCommand(
@@ -164,6 +331,22 @@ class SupplierConfigurationQueryIntegrationTest {
                     query.getMappings(draft.connectorVersionId());
             assertThat(mappings.statusMappings()).hasSize(7);
             assertThat(mappings.errorCodeMappings()).hasSize(1);
+            var publishedMappings = objectMapper.valueToTree(mappings);
+            assertThat(publishedMappings.path("currentPublishedVersionId").asLong()).isEqualTo(draft.connectorVersionId());
+            assertThat(publishedMappings.path("versionStatus").asInt()).isEqualTo(ConnectorVersionStatus.PUBLISHED.getCode());
+            assertThat(publishedMappings.path("initializeAllowed").asBoolean()).isFalse();
+            assertThat(publishedMappings.path("statusAppendAllowed").asBoolean()).isFalse();
+            assertThat(publishedMappings.path("errorAppendAllowed").asBoolean()).isFalse();
+            assertThatThrownBy(() -> configuration.addStatusMapping(
+                    new SupplierConfigurationCommandService.AddStatusMappingCommand(
+                            draft.connectorVersionId(), "orderStatus=9", "", "QUERY", "SUCCEEDED", true, 1L)))
+                    .isInstanceOf(IllegalStateException.class);
+            assertThatThrownBy(() -> configuration.addErrorCodeMapping(
+                    new SupplierConfigurationCommandService.AddErrorCodeMappingCommand(
+                            draft.connectorVersionId(), "E_NEW", "", "RESULT_UNKNOWN", "QUERY_FIRST", false, 1L)))
+                    .isInstanceOf(IllegalStateException.class);
+            assertThat(query.getMappings(draft.connectorVersionId()).statusMappings()).hasSize(7);
+            assertThat(query.getMappings(draft.connectorVersionId()).errorCodeMappings()).hasSize(1);
 
             // T4：凭据集/项列表——先播种一个 ENVELOPE 之外的 ENV 集与项，secret_ref 含可识别标记。
             LocalDateTime now = LocalDateTime.now();

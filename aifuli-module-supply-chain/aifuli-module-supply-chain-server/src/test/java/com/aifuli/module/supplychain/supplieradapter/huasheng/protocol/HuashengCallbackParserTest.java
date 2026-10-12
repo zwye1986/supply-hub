@@ -367,7 +367,7 @@ class HuashengCallbackParserTest {
                 "  \"nonce\": \"nonce1\",\n" +
                 "  \"orderSn\": \"HS_1\",\n" +
                 "  \"outOrderSn\": \"OUT_1\",\n" +
-                "  \"num\": 1,\n" +
+                "  \"num\": 0,\n" +
                 "  \"totalPrice\": \"10.00\",\n" +
                 "  \"status\": \"FAILED\",\n" +
                 "  \"list\": [{\"type\": 201, \"code\": \"C\", \"pass\": \"P\"}]\n" +
@@ -394,7 +394,7 @@ class HuashengCallbackParserTest {
                 "  \"nonce\": \"nonce_failed_1\",\n" +
                 "  \"orderSn\": \"HS_FAILED_1\",\n" +
                 "  \"outOrderSn\": \"OUT_FAILED_1\",\n" +
-                "  \"num\": 1,\n" +
+                "  \"num\": 0,\n" +
                 "  \"totalPrice\": \"10.00\",\n" +
                 "  \"status\": \"FAILED\",\n" +
                 "  \"list\": []\n" +
@@ -415,6 +415,46 @@ class HuashengCallbackParserTest {
         assertThat(fact.orderSn()).isEqualTo("HS_FAILED_1");
         assertThat(fact.outOrderSn()).isEqualTo("OUT_FAILED_1");
         assertThat(fact.card()).isEmpty();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"0", "ABSENT"})
+    @DisplayName("官方 FAILED 回调：零交付或省略数量可解析，并保留原字段存在性")
+    void parsesFailedDeliveryQuantityWithoutInventingOrderQuantity(String number) throws Exception {
+        for (boolean listPresent : new boolean[]{true, false}) {
+            String json = listPresent ? failedCallbackJson(number) : failedCallbackJson(number).replace(",\"list\":[]", "");
+            String cipherHex = encrypt(json);
+            var fact = HuashengCallbackParser.parse(cipherHex.getBytes(StandardCharsets.UTF_8), APP_ID,
+                    sign(cipherHex), APP_ID, publicKey, APP_SECRET);
+            Object deliveredNum = fact.num();
+            var canonical = new com.fasterxml.jackson.databind.ObjectMapper().readTree(fact.canonicalFactBytes(200L));
+            if (number.equals("ABSENT")) {
+                assertThat(deliveredNum).isNull();
+                assertThat(canonical.has("num")).isFalse();
+            } else {
+                assertThat(deliveredNum).isEqualTo(0);
+                assertThat(canonical.get("num").intValue()).isZero();
+            }
+            assertThat(fact.status()).isEqualTo(HuashengOrderStatus.FAILED);
+            assertThat(fact.card()).isEmpty();
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"1", "-1", "null", "\"0\"", "0.0", "2147483648"})
+    @DisplayName("失败回调拒绝非零、空值和非法数量类型")
+    void rejectsInvalidFailedDeliveryQuantity(String number) {
+        String cipherHex = encrypt(failedCallbackJson(number));
+        assertThatThrownBy(() -> HuashengCallbackParser.parse(cipherHex.getBytes(StandardCharsets.UTF_8),
+                APP_ID, sign(cipherHex), APP_ID, publicKey, APP_SECRET))
+                .isInstanceOf(HuashengCallbackParseException.class).hasMessageContaining("num");
+    }
+
+    private static String failedCallbackJson(String number) {
+        String numberField = number.equals("ABSENT") ? "" : "\"num\":" + number + ",";
+        return "{\"timestamp\":1700000000,\"nonce\":\"FAILED_NUM\",\"orderSn\":\"HS_FAILED_1\","
+                + "\"outOrderSn\":\"OUT_FAILED_1\"," + numberField
+                + "\"totalPrice\":\"10.00\",\"status\":\"FAILED\",\"list\":[]}";
     }
 
     @Test

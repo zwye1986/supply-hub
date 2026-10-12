@@ -195,7 +195,10 @@ public class HuashengCallbackApplicationService {
                         HuashengStepFact.StepResult.ACCEPTED,
                         fact.outOrderSn(),
                         fact.orderSn(),
-                        fact.num(),
+                        // 正式 FAILED 表示零交付；原 num 省略仍保留在协议事实/Inbox 摘要中。
+                        // 原单订购数量由锁后 checkpoint 核实，不用回调零交付改写订购数量。
+                        // 设计：docs/superpowers/specs/2026-10-12-huasheng-fulfillment-hardening-design.md#21-订购数量与交付数量。
+                        fact.num() == null ? HuashengFlowCodes.FAILED_CALLBACK_DELIVERY_QUANTITY : fact.num(),
                         fact.rawTotalPrice(),
                         fact.totalPrice().minorUnits(),
                         fact.status() == HuashengOrderStatus.SUCCESS ? HuashengStepFact.Status.SUCCESS : HuashengStepFact.Status.FAILED,

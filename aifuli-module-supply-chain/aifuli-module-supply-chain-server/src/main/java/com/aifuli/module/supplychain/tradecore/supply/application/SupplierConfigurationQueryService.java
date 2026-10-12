@@ -23,6 +23,8 @@ import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierConnecto
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierConnectorVersionMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierMapper;
 import com.aifuli.module.supplychain.tradecore.supply.domain.CredentialStatus;
+import com.aifuli.module.supplychain.tradecore.supply.domain.ConnectorVersionStatus;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -144,15 +146,32 @@ public class SupplierConfigurationQueryService {
     }
 
     /**
-     * T5：连接器版本的状态映射与错误码映射明细投影（协议列，供运营核对与追加）。
+     * T5：映射明细、查看版本身份与适配器管理约束。
+     * 缺少版本或连接器身份直接拒绝；仅草稿可写，初始化还要求两表均空，追加由真实适配器声明。
+     * allowed 是当前可操作性投影，写入口仍独立核验，不替代 HTTP 权限。
+     * 设计见 docs/superpowers/specs/2026-10-12-huasheng-fulfillment-hardening-design.md#31-后端元数据与查询。
      */
     public MappingsView getMappings(Long versionId) {
+        SupplierConnectorVersionDO version = versionMapper.selectById(versionId);
+        if (version == null || version.getConnectorId() == null) {
+            throw new IllegalArgumentException("Connector version does not exist: " + versionId);
+        }
+        SupplierConnectorDO connector = connectorMapper.selectById(version.getConnectorId());
+        if (connector == null) {
+            throw new IllegalArgumentException("Connector does not exist for version: " + versionId);
+        }
+        AdapterMetadata metadata = metadataRegistry.require(connector.getAdapterType());
         List<StatusMappingView> statusMappings = statusMappingMapper.selectByConnectorVersionId(versionId).stream()
                 .map(SupplierConfigurationQueryService::toStatusView).toList();
         List<ErrorCodeMappingView> errorCodeMappings =
                 errorCodeMapMapper.selectByConnectorVersionId(versionId).stream()
                         .map(SupplierConfigurationQueryService::toErrorView).toList();
-        return new MappingsView(statusMappings, errorCodeMappings);
+        boolean draft = Short.valueOf(ConnectorVersionStatus.DRAFT.getCode()).equals(version.getStatus());
+        return new MappingsView(statusMappings, errorCodeMappings,
+                version.getId(), version.getVersionNo(), version.getStatus(), connector.getCurrentVersionId(),
+                draft && statusMappings.isEmpty() && errorCodeMappings.isEmpty(),
+                draft && metadata.statusMappingAppendAllowed(), draft && metadata.errorMappingAppendAllowed(),
+                metadata.mappingDescription());
     }
 
     /**
@@ -241,9 +260,23 @@ public class SupplierConfigurationQueryService {
     public record CapabilityView(String capabilityCode, boolean enabled) {
     }
 
-    /** T5 映射明细：状态映射 + 错误码映射。 */
+    /**
+     * T5 映射明细与管理投影。
+     * connectorVersionId：连接器版本主键，逻辑引用sc_supplier_connector_version.id；
+     * versionNo：连接器业务版本号，从1递增；versionStatus：生命周期：0草稿，5已验证，10已发布，90已退役；
+     * currentPublishedVersionId：当前已发布连接器版本主键。
+     * initializeAllowed/statusAppendAllowed/errorAppendAllowed 为服务端当前可操作性，mappingDescription 为中文协议说明。
+     * 设计见 docs/superpowers/specs/2026-10-12-huasheng-fulfillment-hardening-design.md#3-映射管理契约。
+     */
     public record MappingsView(List<StatusMappingView> statusMappings,
-                               List<ErrorCodeMappingView> errorCodeMappings) {
+                               List<ErrorCodeMappingView> errorCodeMappings,
+                               Long connectorVersionId, Integer versionNo, Short versionStatus,
+                               @JsonInclude(JsonInclude.Include.ALWAYS) Long currentPublishedVersionId, boolean initializeAllowed,
+                               boolean statusAppendAllowed, boolean errorAppendAllowed, String mappingDescription) {
+        /** 兼容旧两列表调用；缺少版本与适配器身份时一律不可写。 */
+        public MappingsView(List<StatusMappingView> statusMappings, List<ErrorCodeMappingView> errorCodeMappings) {
+            this(statusMappings, errorCodeMappings, null, null, null, null, false, false, false, null);
+        }
     }
 
     /** T5 单条状态映射投影。 */

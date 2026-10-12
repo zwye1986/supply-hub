@@ -22,7 +22,7 @@ public record HuashengCallbackFact(
         String nonce,
         String orderSn,
         String outOrderSn,
-        int num,
+        Integer num,
         HuashengPrice totalPrice,
         HuashengOrderStatus status,
         Optional<HuashengProtocolCard> card,
@@ -30,6 +30,9 @@ public record HuashengCallbackFact(
         String appId
 ) {
     private static final ObjectMapper JSON = new ObjectMapper();
+    /** 首期成功回调完整交付一张卡；失败回调未交付任何卡券。 */
+    public static final int SINGLE_CARD_DELIVERY_QUANTITY = 1;
+    public static final int FAILED_DELIVERY_QUANTITY = 0;
 
     public HuashengCallbackFact {
         Objects.requireNonNull(nonce, "nonce must not be null");
@@ -40,6 +43,11 @@ public record HuashengCallbackFact(
         Objects.requireNonNull(card, "card must not be null");
         Objects.requireNonNull(rawTotalPrice, "rawTotalPrice must not be null");
         Objects.requireNonNull(appId, "appId must not be null");
+        // num 是回调交付数量而非订购数量；省略与显式零保留在协议事实及 Inbox 摘要中。
+        // 设计：docs/superpowers/specs/2026-10-12-huasheng-fulfillment-hardening-design.md#21-订购数量与交付数量。
+        boolean validQuantity = status == HuashengOrderStatus.SUCCESS && Integer.valueOf(SINGLE_CARD_DELIVERY_QUANTITY).equals(num)
+                || status == HuashengOrderStatus.FAILED && (num == null || num == FAILED_DELIVERY_QUANTITY);
+        if (!validQuantity) throw new IllegalArgumentException("回调 num 与交付状态不一致");
     }
 
     /**
@@ -50,7 +58,8 @@ public record HuashengCallbackFact(
         ObjectNode root = JSON.createObjectNode();
         root.put("connectorVersionId", connectorVersionId); root.put("timestamp", timestamp);
         root.put("appId", appId); root.put("nonce", nonce); root.put("orderSn", orderSn); root.put("outOrderSn", outOrderSn);
-        root.put("num", num); root.put("rawTotalPrice", rawTotalPrice); root.put("totalPriceMinorUnits", totalPrice.minorUnits());
+        if (num != null) root.put("num", num);
+        root.put("rawTotalPrice", rawTotalPrice); root.put("totalPriceMinorUnits", totalPrice.minorUnits());
         root.put("status", status.name());
         if (card.isPresent()) {
             HuashengProtocolCard c = card.get();
