@@ -12,7 +12,7 @@
 
 设计依据：`../specs/2026-10-12-catalog-source-freshness-correction-design.md`，已获用户书面通过。后端工作目录 `/Users/mac/codespace/supply-hub`，前端 `/Users/mac/codespace/supplychainhubweb`；在原 dev 工作区实施，不创建或切换其它执行环境，不推送／部署／改共享数据。下述 `J` 为后端 `aifuli-module-supply-chain/aifuli-module-supply-chain-server/src/main/java/com/aifuli/module/supplychain`，`T` 为同模块 `src/test/java/com/aifuli/module/supplychain`，`R` 为同模块 `src/main/resources`。
 
-## Task 1：把复杂读模型等价迁至 XML
+## Task 1：把复杂读模型等价迁至 XML（已完成）
 
 **Files:**
 - Modify: `J/tradecore/catalog/dal/read/BuyerCatalogReadMapper.java`
@@ -38,7 +38,7 @@ mvn -pl aifuli-module-supply-chain/aifuli-module-supply-chain-server -am test-co
 
 - [ ] 重跑同一集成命令，4条行为仍通过后单独提交“迁移采购商目录读模型至XML保持原行为”。
 
-## Task 2：先红后绿修管理与 RPC 真实来源
+## Task 2：先红后绿修管理与 RPC 真实来源（已完成）
 
 **Files:**
 - Modify: `J/tradecore/catalog/application/BuyerAvailabilityBasis.java`
@@ -84,7 +84,7 @@ if (!Objects.equals(basis.sourceBuyerPricingVersionId(), currentPricingVersionId
 - [ ] 追加边界／完整性断言：真实商业失配、显式null、缺键、未评估、READY空current、非READY、暂停/退役、DRAFT有效供给、截止等于now及±1ms、商业开始/结束、错误类型／越界／错归属、MANUAL损坏AUTO JSON仍不受影响。
 - [ ] 重跑上述单测，全部绿灯后继续，不把counter重置或新增数据迁移。
 
-## Task 3：SQL筛选与输出一致，真实MySQL验收
+## Task 3：SQL筛选与输出一致，真实MySQL验收（已完成）
 
 **Files:**
 - Modify: `R/mapper/catalog/BuyerCatalogReadMapper.xml`
@@ -116,7 +116,7 @@ mvn -pl aifuli-module-supply-chain/aifuli-module-supply-chain-server -am test-co
 
 核对实际报告Tests run >0；不存在的类名以已存在目录契约名称修正，不把忽略无匹配当通过。
 
-## Task 4：管理页面中文状态与诊断码
+## Task 4：管理页面中文状态与诊断码（已完成）
 
 **Files（frontend repo）:**
 - Modify: `src/views/supplier/distribution/distributor/detail/ProductList.vue`
@@ -135,6 +135,8 @@ case 'UNKNOWN':
 
 ## Task 5：记录交付与第二切片接续
 
-- [ ] 在`docs/集成测试.md`追加红/绿结果、实际测试数、只读/并发证据、前端截图和检查限制，远端仍NOT_RUN。
+- [x] 在`docs/集成测试.md`追加红/绿结果、实际测试数、只读/并发证据、前端截图和检查限制，远端仍NOT_RUN。
 - [ ] 更新本计划复选框及第一份设计实际实施状态；用`git diff --check`、diff复核范围并以中文分别提交后端及前端。不推送或部署。
 - [ ] 状态切片验证后，创建独立SKU v2实施计划，保留第二设计的格式3／安全接线／兼容与回滚门禁，再实施第二切片；不把第一切片通过当v2完成。
+
+执行结果（2026-10-12）：Task1等价迁移前后4条MySQL测试通过并独立提交；Task2定向18条及31条ArchUnit通过；Task3最终8类105条集成/契约通过，含原HTTP/受理，RR移除反证失败/恢复通过；Task4定向23条、eslint/prettier通过，真实5态截图已检查。全量前端229通过/1基线缺文件失败，类型54个基线诊断位置/码无增减。详细命令/证据见`../../集成测试.md`末尾“目录来源纠正第一切片本地实施与验证”。Task1–4下原步骤保留作为复跑清单，标题标明已执行结果，未勾选不表示尚未实施。

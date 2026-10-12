@@ -22,6 +22,10 @@
                availability.version AS availability_version,
                availability.evaluated_at AS evaluated_at,
                availability.valid_until AS valid_until,
+               availability.basis_json,
+               availability.reason_code,
+               lv.valid_from AS commercial_valid_from,
+               lv.valid_to AS commercial_valid_to,
                pricing.pricing_status AS pricing_status,
                pricing.current_version_id AS buyer_pricing_current_version_id,
                l.updated_at
@@ -42,7 +46,15 @@
           OR (l.management_mode = 'AUTO_SELECTION'
               AND availability.valid_until IS NOT NULL
               AND availability.valid_until &gt; #{now}
+              AND availability.evaluated_at IS NOT NULL
+              AND JSON_TYPE(availability.basis_json) = 'OBJECT'
+              AND JSON_TYPE(JSON_EXTRACT(availability.basis_json, '$.listingId')) IN ('INTEGER', 'UNSIGNED INTEGER')
+              AND CAST(JSON_UNQUOTE(JSON_EXTRACT(availability.basis_json, '$.listingId')) AS DECIMAL(65,0)) = l.id
+              AND JSON_TYPE(JSON_EXTRACT(availability.basis_json, '$.sourceBuyerPricingVersionId')) IN ('INTEGER', 'UNSIGNED INTEGER')
+              AND CAST(JSON_UNQUOTE(JSON_EXTRACT(availability.basis_json, '$.sourceBuyerPricingVersionId')) AS DECIMAL(65,0)) = pricing.current_version_id
               AND lv.source_buyer_pricing_version_id IS NOT NULL
+              AND lv.valid_from IS NOT NULL AND lv.valid_from &lt;= #{now}
+              AND (lv.valid_to IS NULL OR lv.valid_to &gt; #{now})
               AND lv.source_buyer_pricing_version_id = pricing.current_version_id))
     </sql>
     <sql id="pageConditions">

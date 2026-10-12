@@ -19,6 +19,8 @@ import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericPricingCal
 import com.aifuli.module.supplychain.tradecore.catalog.readmodel.BuyerCatalogReadRow;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
@@ -35,11 +37,14 @@ public class BuyerCatalogQueryService {
     private final BuyerCatalogReadMapper readMapper;
     private final BuyerCatalogChangeMapper changeMapper;
 
+    /** 列表、总数与输出共用只读 RR 视图和一次库时钟，避免刷新穿插产生自相矛盾的分页。 */
+    @Transactional(transactionManager = "supplyChainTransactionManager", readOnly = true,
+            isolation = Isolation.REPEATABLE_READ)
     public PageResult<BuyerCatalogItemRespDTO> pageCatalog(BuyerCatalogPageReqDTO request) {
-        BuyerResolver.BuyerSnapshot buyer = resolve(request.getSourceSystem(), request.getExternalTenantId());
+        LocalDateTime now = databaseClock.now();
+        BuyerResolver.BuyerSnapshot buyer = resolve(request.getSourceSystem(), request.getExternalTenantId(), now);
         boolean availableOnly = Boolean.TRUE.equals(request.getAvailableOnly());
         String saleablePricingStatus = PricingStatus.READY.name();
-        LocalDateTime now = databaseClock.now();
         long offset = (long) (request.getPageNo() - 1) * request.getPageSize();
         List<BuyerCatalogReadRow> rows = readMapper.selectPage(buyer.id(), request.getBuyerSkuCode(),
                 request.getFulfillmentType(), availableOnly, saleablePricingStatus, now, offset, request.getPageSize());
@@ -48,9 +53,11 @@ public class BuyerCatalogQueryService {
         return new PageResult<>(rows.stream().map(row -> toItem(row, now)).toList(), total);
     }
 
+    @Transactional(transactionManager = "supplyChainTransactionManager", readOnly = true,
+            isolation = Isolation.REPEATABLE_READ)
     public BuyerCatalogChangeBatchRespDTO getCatalogChanges(BuyerCatalogChangesReqDTO request) {
-        BuyerResolver.BuyerSnapshot buyer = resolve(request.getSourceSystem(), request.getExternalTenantId());
         LocalDateTime now = databaseClock.now();
+        BuyerResolver.BuyerSnapshot buyer = resolve(request.getSourceSystem(), request.getExternalTenantId(), now);
         List<BuyerCatalogChangeDO> selected = changeMapper.selectAfterCursor(
                 buyer.id(), request.getCursor(), request.getLimit() + 1);
         boolean hasMore = selected.size() > request.getLimit();
@@ -74,30 +81,29 @@ public class BuyerCatalogQueryService {
         return result;
     }
 
-    private BuyerResolver.BuyerSnapshot resolve(String sourceSystem, String externalTenantId) {
-        return buyerResolver.resolve(sourceSystem, externalTenantId, databaseClock.now());
+    private BuyerResolver.BuyerSnapshot resolve(String sourceSystem, String externalTenantId, LocalDateTime now) {
+        return buyerResolver.resolve(sourceSystem, externalTenantId, now);
     }
 
     /**
-     * AUTO读侧遵守投影陈旧安全：价格来源不匹配（商业版本来源≠买方定价当前版本）或期限为空／不超过库时钟
-     * 一律UNKNOWN，不续期假AVAILABLE；MANUAL与无管理模式的历史行保持旧RPC准入行为。
-     * 无定价身份行时保持历史供给投影（通常为UNKNOWN）；已有身份且非READY时覆盖为不可用。
-     * 设计见 §6.4「投影陈旧安全」与 {@code docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#1-范围与不变量}。
+     * AUTO 与管理读使用同一真实来源／期限规则；非 READY 返回 UNKNOWN 而不是确定不可用。
+     * MANUAL 与无管理模式历史行保持旧 RPC 定价覆盖，不读取 AUTO basis。
+     * 设计见 {@code docs/superpowers/specs/2026-10-12-catalog-source-freshness-correction-design.md#43-rpc-筛选与返回一致}。
      */
     private static String resolveAvailabilityStatus(BuyerCatalogReadRow row, LocalDateTime now) {
-        if (BuyerListingManagementMode.AUTO_SELECTION.name().equals(row.getManagementMode())
-                && (row.getSourceBuyerPricingVersionId() == null
-                || !row.getSourceBuyerPricingVersionId().equals(row.getBuyerPricingCurrentVersionId())
-                || row.getValidUntil() == null || !row.getValidUntil().isAfter(now))) {
-            return ListingAvailability.UNKNOWN.name();
+        ListingAvailability stored = row.getAvailability() == null
+                ? ListingAvailability.UNKNOWN : ListingAvailability.fromCode(row.getAvailability());
+        if (BuyerListingManagementMode.AUTO_SELECTION.name().equals(row.getManagementMode())) {
+            return BuyerCatalogAutoReadPolicy.decide(new BuyerCatalogAutoReadPolicy.Input(
+                    row.getListingId(), BuyerListingStatus.fromCode(row.getListingStatus()), row.getPricingStatus(),
+                    row.getBuyerPricingCurrentVersionId(), row.getBasisJson(), row.getEvaluatedAt(), row.getValidUntil(),
+                    true, row.getSourceBuyerPricingVersionId(), row.getCommercialValidFrom(), row.getCommercialValidTo(),
+                    stored, row.getReasonCode()), now).availability().name();
         }
-        String availability = row.getAvailability() == null
-                ? ListingAvailability.UNKNOWN.name()
-                : ListingAvailability.fromCode(row.getAvailability()).name();
         if (row.getPricingStatus() != null && !PricingStatus.READY.name().equals(row.getPricingStatus())) {
             return ListingAvailability.UNAVAILABLE.name();
         }
-        return availability;
+        return stored.name();
     }
 
     private BuyerCatalogItemRespDTO toItem(BuyerCatalogReadRow row, LocalDateTime now) {

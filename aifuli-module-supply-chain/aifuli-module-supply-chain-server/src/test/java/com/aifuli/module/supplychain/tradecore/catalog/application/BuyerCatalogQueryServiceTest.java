@@ -127,6 +127,21 @@ class BuyerCatalogQueryServiceTest {
                 .containsExactly(ListingAvailability.AVAILABLE.name());
     }
 
+    @Test
+    void autoUnreadyPricingIsUnknownWhileManualContractIsUnchanged() {
+        BuyerCatalogReadRow auto = autoRow(NOW.plusSeconds(10));
+        auto.setPricingStatus(PricingStatus.UNPRICED.name());
+        BuyerCatalogReadRow manual = autoRow(NOW.plusSeconds(10));
+        manual.setManagementMode(BuyerListingManagementMode.MANUAL.name());
+        manual.setBasisJson("[]"); manual.setPricingStatus(PricingStatus.UNPRICED.name());
+        when(readMapper.selectPage(eq(9L), any(), any(), eq(false), eq(PricingStatus.READY.name()), eq(NOW), anyLong(), anyInt()))
+                .thenReturn(List.of(auto, manual));
+        when(readMapper.countPage(eq(9L), any(), any(), eq(false), eq(PricingStatus.READY.name()), eq(NOW)))
+                .thenReturn(2L);
+        assertThat(service.pageCatalog(pageRequest(false)).getList())
+                .extracting(BuyerCatalogItemRespDTO::getAvailabilityStatus).containsExactly("UNKNOWN", "UNAVAILABLE");
+    }
+
     private static BuyerCatalogPageReqDTO pageRequest(boolean availableOnly) {
         BuyerCatalogPageReqDTO request = new BuyerCatalogPageReqDTO();
         request.setSourceSystem("AIFULI_MALL");
@@ -162,7 +177,10 @@ class BuyerCatalogQueryServiceTest {
     /** AUTO行：来源与当前定价版本一致(7L)、期限内有效、定价READY；仅期限可传参制造过期/缺失场景。 */
     private static BuyerCatalogReadRow autoRow(LocalDateTime validUntil) {
         BuyerCatalogReadRow row = row(ListingAvailability.AVAILABLE.getCode(), PricingStatus.READY.name());
+        row.setListingId(4L);
         row.setManagementMode(BuyerListingManagementMode.AUTO_SELECTION.name());
+        row.setBasisJson("{\"listingId\":4,\"sourceBuyerPricingVersionId\":7}");
+        row.setCommercialValidFrom(NOW.minusSeconds(1));
         row.setSourceBuyerPricingVersionId(7L);
         row.setBuyerPricingCurrentVersionId(7L);
         row.setEvaluatedAt(NOW.minusSeconds(1));
