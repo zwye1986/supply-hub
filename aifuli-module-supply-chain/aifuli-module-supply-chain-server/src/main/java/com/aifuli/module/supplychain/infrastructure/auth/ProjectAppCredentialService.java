@@ -160,7 +160,8 @@ public class ProjectAppCredentialService {
         String capabilityCode = operation.requiredCapability();
         ProjectCapabilityDO capability = capabilityMapper.selectByProjectIdAndCode(projectId, capabilityCode);
         boolean historyQuery = ProjectAuthOperations.CAPABILITY_STANDARD_PRODUCT.equals(capabilityCode)
-                && ProjectAuthOperations.STANDARD_ORDER_QUERY.equals(operation.operationCode());
+                && (ProjectAuthOperations.STANDARD_ORDER_QUERY.equals(operation.operationCode())
+                || ProjectAuthOperations.STANDARD_ORDER_QUERY_V2.equals(operation.operationCode()));
         if (capability == null || !(ProjectAuthStatus.ENABLED.matches(capability.getStatus())
                 || (historyQuery && ProjectAuthStatus.SUSPENDED.matches(capability.getStatus())))) {
             log.debug("[project-auth] 项目操作能力拒绝 projectId={}, capabilityCode={}", projectId, capabilityCode);

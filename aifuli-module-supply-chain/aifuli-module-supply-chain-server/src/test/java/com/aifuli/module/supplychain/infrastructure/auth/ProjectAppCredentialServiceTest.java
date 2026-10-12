@@ -324,7 +324,8 @@ class ProjectAppCredentialServiceTest {
                 .flatMap(status -> ProjectAuthOperations.OPERATIONS.stream().map(op -> Arguments.of(status,
                         op.operationCode(), ProjectAuthStatus.ENABLED.matches(status)
                                 || (ProjectAuthStatus.SUSPENDED.matches(status)
-                                && ProjectAuthOperations.STANDARD_ORDER_QUERY.equals(op.operationCode())))));
+                                && (ProjectAuthOperations.STANDARD_ORDER_QUERY.equals(op.operationCode())
+                                || ProjectAuthOperations.STANDARD_ORDER_QUERY_V2.equals(op.operationCode()))))));
     }
 
     @ParameterizedTest

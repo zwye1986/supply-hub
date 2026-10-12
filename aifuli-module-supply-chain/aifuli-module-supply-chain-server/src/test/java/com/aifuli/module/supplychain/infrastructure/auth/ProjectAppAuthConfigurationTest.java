@@ -130,7 +130,8 @@ class ProjectAppAuthConfigurationTest {
                             "/rpc-api/supply-chain/instore/channel-member/*",
                             "/rpc-api/supply-chain/instore/buyer-entry/*",
                             "/rpc-api/supply-chain/buyer/instore/payment/*",
-                            "/open-api/supply-chain/project/v1/orders/*");
+                            "/open-api/supply-chain/project/v1/orders/*",
+                            "/open-api/supply-chain/project/v2/orders/*");
                     assertThat(registration.getUrlPatterns()).containsExactlyInAnyOrderElementsOf(
                             com.aifuli.module.supplychain.api.auth.ProjectAuthOperations.PROTECTED_PREFIXES.stream()
                                     .map(prefix -> prefix + "/*").toList());
@@ -188,7 +189,7 @@ class ProjectAppAuthConfigurationTest {
         yaml.setResources(new ClassPathResource("application.yaml"));
         Properties properties = yaml.getObject();
 
-        Set<String> permitted = IntStream.range(0, 16)
+        Set<String> permitted = IntStream.range(0, properties.size())
                 .mapToObj(index -> properties.getProperty("aifuli.security.permit-all-urls[" + index + "]"))
                 .filter(value -> value != null)
                 .collect(Collectors.toSet());
@@ -197,6 +198,9 @@ class ProjectAppAuthConfigurationTest {
                 "/rpc-api/supply-chain/instore/channel-member/*",
                 "/rpc-api/supply-chain/instore/buyer-entry/*",
                 "/rpc-api/supply-chain/buyer/instore/payment/*",
+                "/open-api/supply-chain/project/v2/orders",
+                "/open-api/supply-chain/project/v2/orders/query",
+                "/open-api/supply-chain/project/v2/orders/assets/query",
                 "/v3/api-docs",
                 "/v3/api-docs/**",
                 "/webjars/**",

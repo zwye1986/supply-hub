@@ -822,3 +822,13 @@ databaseChangeLog:
             encoding: UTF-8
             splitStatements: true
             stripComments: false
+  - changeSet:
+      id: 064-platform-sku-order-request-identity
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 064-platform-sku-order-request-identity.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false

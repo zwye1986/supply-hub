@@ -7,6 +7,8 @@ import com.aifuli.framework.common.pojo.CommonResult;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
@@ -79,9 +81,10 @@ class GlobalExceptionHandlerStandardOrderTest {
         assertThat(response.getHeader("Cache-Control")).isEqualTo("no-store");
     }
 
-    @Test
-    void standardOrderDefaultExceptionSanitizesUrlAndOmitsParamsInLog() {
-        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/open-api/supply-chain/project/v1/orders/13800138000");
+    @ParameterizedTest
+    @ValueSource(strings = {"v1", "v2"})
+    void standardOrderDefaultExceptionSanitizesUrlAndOmitsParamsInLog(String version) {
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/open-api/supply-chain/project/" + version + "/orders/13800138000");
         request.setParameter("secret", "123456");
         request.setContent("{\"sensitive\":\"data\"}".getBytes());
         MockHttpServletResponse response = new MockHttpServletResponse();
@@ -97,7 +100,7 @@ class GlobalExceptionHandlerStandardOrderTest {
         verify(apiErrorLogApi).createApiErrorLogAsync(captor.capture());
         ApiErrorLogCreateReqDTO logDto = captor.getValue();
 
-        assertThat(logDto.getRequestUrl()).isEqualTo("/open-api/supply-chain/project/v1/orders/[protected]");
+        assertThat(logDto.getRequestUrl()).isEqualTo("/open-api/supply-chain/project/" + version + "/orders/[protected]");
         assertThat(logDto.getRequestParams()).isEqualTo("{}");
         assertThat(logDto.getExceptionMessage()).doesNotContain("internal failure with secret");
     }

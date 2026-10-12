@@ -36,6 +36,24 @@ public class ProjectStandardOrderQueryFacade {
         return assets.query(context, buyerOrderNo);
     }
 
+    /**
+     * v2摘要查历史不按创建版本分区，仍校验精确操作。
+     * 设计见 docs/superpowers/specs/2026-10-12-platform-sku-order-contract-design.md#33-响应与查询。
+     */
+    public ProjectStandardOrderQueryRespDTO queryV2(StandardProductContext context, String buyerOrderNo) {
+        validate(context, buyerOrderNo, ProjectAuthOperations.STANDARD_ORDER_QUERY_V2);
+        return orders.query(context, buyerOrderNo);
+    }
+
+    /**
+     * v2资产查询与v1共享权威订单归属及审计，不借摘要操作读取卡密。
+     * 设计见 docs/superpowers/specs/2026-10-12-platform-sku-order-contract-design.md#33-响应与查询。
+     */
+    public ProjectStandardOrderAssetsRespDTO assetsV2(StandardProductContext context, String buyerOrderNo) {
+        validate(context, buyerOrderNo, ProjectAuthOperations.STANDARD_ORDER_ASSET_QUERY_V2);
+        return assets.query(context, buyerOrderNo);
+    }
+
     private static void validate(
             StandardProductContext context, String buyerOrderNo, String operation) {
         if (context == null || !operation.equals(context.operationCode()))

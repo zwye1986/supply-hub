@@ -162,6 +162,7 @@ class SupplyChainLiquibaseIntegrationTest {
                         "sc_fulfillment_acceptance_receipt.fingerprint_version",
                         "sc_fulfillment_acceptance_receipt.target_schema_version",
                         "sc_fulfillment_acceptance_receipt.platform_sku_id",
+                        "sc_fulfillment_acceptance_receipt.requested_platform_sku_code",
                         "sc_fulfillment_acceptance_receipt.pricing_quote_id",
                         "sc_fulfillment_acceptance_receipt.standard_project_key",
                         "sc_fulfillment_acceptance_receipt.legacy_buyer_key",
@@ -179,8 +180,8 @@ class SupplyChainLiquibaseIntegrationTest {
                 "expire_at:DATETIME:-:3:NO");
         assertThat(firstStartup.projectAuthNoncePrimaryKeyColumns())
                 .containsExactly("app_id", "nonce");
-        // 063 新增项目能力审计；原 64 个变更集加 1，既有迁移校验和保持不变。
-        assertThat(firstStartup.changeSetCount()).isEqualTo(65L);
+        // 064 追加平台SKU请求身份；原65个变更集保持，正式增量新增1个。
+        assertThat(firstStartup.changeSetCount()).isEqualTo(66L);
         assertThat(firstStartup.uniqueIndexes())
                 .contains("sc_instore_payment_flow.uk_sc_instore_flow_order",
                         "sc_instore_channel_user_binding.uk_sc_instore_user_binding_project",

@@ -27,6 +27,7 @@ import com.aifuli.module.supplychain.infrastructure.security.HmacFingerprintPort
 import com.aifuli.module.supplychain.infrastructure.security.ProjectCallContextAccessor.StandardProductContext;
 import com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock;
 import com.aifuli.module.supplychain.interfaceapi.open.project.dto.ProjectStandardOrderCreateReqDTO;
+import com.aifuli.module.supplychain.interfaceapi.open.project.dto.ProjectPlatformSkuOrderCreateReqDTO;
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerProjectAccessResolver;
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerProjectAccessResolver.ProjectSnapshot;
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerResolver;
@@ -89,6 +90,28 @@ public class ProjectStandardOrderCommandFacade {
      */
     public ProjectStandardOrderCreateRespDTO create(StandardProductContext context, ProjectStandardOrderCreateReqDTO request) {
         validateContext(context);
+        return createPrepared(context, request, null);
+    }
+
+    /**
+     * 独立v2适配：原SKU请求码用于格式3指纹，内部BPD只由可信商业关系解析，不接受调用方覆盖。
+     * 设计见 docs/superpowers/specs/2026-10-12-platform-sku-order-contract-design.md#42-共享命令及执行分支。
+     */
+    public ProjectStandardOrderCreateRespDTO createV2(StandardProductContext context, ProjectPlatformSkuOrderCreateReqDTO request) {
+        if (context == null || !ProjectAuthOperations.STANDARD_ORDER_CREATE_V2.equals(context.operationCode())) {
+            throw exception(BUYER_AUTH_INVALID);
+        }
+        if (request == null) { throw exception(GlobalErrorCodeConstants.BAD_REQUEST); }
+        ProjectStandardOrderCreateReqDTO internal = new ProjectStandardOrderCreateReqDTO();
+        internal.setBuyerOrderNo(request.getBuyerOrderNo());
+        internal.setQuantity(request.getQuantity());
+        internal.setTarget(request.getTarget());
+        internal.setPreviousReceiptVersion(request.getPreviousReceiptVersion());
+        return createPrepared(context, internal, request.getPlatformSkuCode());
+    }
+
+    private ProjectStandardOrderCreateRespDTO createPrepared(StandardProductContext context,
+            ProjectStandardOrderCreateReqDTO request, String requestedPlatformSkuCode) {
         if (request == null) {
             throw exception(GlobalErrorCodeConstants.BAD_REQUEST);
         }
@@ -99,21 +122,36 @@ public class ProjectStandardOrderCommandFacade {
         ProjectSnapshot project = projectAccessResolver.requireActive(context.projectId(), context.buyerId());
         BuyerSnapshot buyer = buyerResolver.requireActiveById(context.buyerId());
         // 当前Schema/目录解析前先读冻结回执身份：已受理同参与PROCESSING/可重试续跑均用冻结SKU/Schema
-        // 计算格式2指纹，不因当前商品删除、Schema/价格变化、目录暂停或供给变化变成冲突。
-        // 设计见 §8「冻结事实回放与兼容边界」。
-        FrozenAcceptanceIdentityReader.FrozenAcceptanceIdentity frozen =
-                frozenIdentityReader.read(project.projectId(), request.getBuyerOrderNo());
+        // 计算各自格式2/3指纹，不因当前商品删除、Schema/价格变化、目录暂停或供给变化变成冲突。
+        // 设计见 docs/superpowers/specs/2026-10-12-platform-sku-order-contract-design.md#41-冻结优先。
+        FrozenAcceptanceIdentityReader.FrozenAcceptanceIdentity frozen;
+        if (requestedPlatformSkuCode != null) {
+            var receipt = frozenIdentityReader.readIdentity(project.projectId(), request.getBuyerOrderNo());
+            if (receipt != null && (!Short.valueOf(StandardAcceptanceFingerprintPolicy.PLATFORM_SKU_FORMAT_VERSION)
+                    .equals(receipt.fingerprintVersion()) || receipt.binding() == null)) {
+                throw exception(IDEMPOTENCY_CONFLICT);
+            }
+            frozen = receipt == null ? null : receipt.binding();
+            if (receipt != null) { request.setBuyerSkuCode(receipt.buyerSkuCode()); }
+        } else {
+            frozen = frozenIdentityReader.read(project.projectId(), request.getBuyerOrderNo());
+        }
         TargetSchemaSnapshot targetSchema;
         if (frozen != null) {
             // claim 前只比较冻结事实；当前映射损坏不能阻断已受理回放。执行分支再解析与校验，见设计 §3.1/§8。
             targetSchema = new TargetSchemaSnapshot(frozen.platformSkuId(), frozen.targetSchemaCode(),
                     frozen.targetSchemaVersion(), true, null);
         } else {
-            targetSchema = lifecycle.resolveTargetSchema(buyer.id(), request.getBuyerSkuCode());
+            targetSchema = requestedPlatformSkuCode == null
+                    ? lifecycle.resolveTargetSchema(buyer.id(), request.getBuyerSkuCode())
+                    : lifecycle.resolvePlatformSkuTargetSchema(buyer.id(), requestedPlatformSkuCode);
+            if (requestedPlatformSkuCode != null) {
+                request.setBuyerSkuCode(targetSchema.catalogIdentity().buyerProductCode());
+            }
         }
 
         String traceId = businessNoGenerator.next(BusinessNoPrefixes.REQ);
-        PreparedAcceptance prepared = prepare(request, buyer, project, targetSchema, traceId, frozen == null);
+        PreparedAcceptance prepared = prepare(request, buyer, project, targetSchema, traceId, frozen == null, requestedPlatformSkuCode);
 
         ClaimResult claim;
         try {
@@ -130,10 +168,16 @@ public class ProjectStandardOrderCommandFacade {
         }
 
         if (frozen != null) {
-            TargetSchemaSnapshot current = lifecycle.resolveTargetSchema(buyer.id(), request.getBuyerSkuCode());
+            TargetSchemaSnapshot current = requestedPlatformSkuCode == null
+                    ? lifecycle.resolveTargetSchema(buyer.id(), request.getBuyerSkuCode())
+                    : lifecycle.resolvePlatformSkuTargetSchema(buyer.id(), requestedPlatformSkuCode);
+            if (requestedPlatformSkuCode != null && (!java.util.Objects.equals(current.platformSkuId(), frozen.platformSkuId())
+                    || !java.util.Objects.equals(current.catalogIdentity().buyerProductCode(), request.getBuyerSkuCode()))) {
+                throw new IllegalStateException("当前商业商品身份与格式3冻结身份不一致");
+            }
             targetSchema = new TargetSchemaSnapshot(frozen.platformSkuId(), frozen.targetSchemaCode(),
                     frozen.targetSchemaVersion(), true, current.catalogIdentity());
-            prepared = prepare(request, buyer, project, targetSchema, traceId, true);
+            prepared = prepare(request, buyer, project, targetSchema, traceId, true, requestedPlatformSkuCode);
         }
 
         // 首冻前准备：仅需执行的有效新尝试。AUTO刷新目录，MANUAL零写核商业发布；目录未就绪/供给明确
@@ -190,7 +234,8 @@ public class ProjectStandardOrderCommandFacade {
 
     private PreparedAcceptance prepare(
             ProjectStandardOrderCreateReqDTO request, BuyerSnapshot buyer,
-            ProjectSnapshot project, TargetSchemaSnapshot targetSchema, String traceId, boolean validateAndEncrypt) {
+            ProjectSnapshot project, TargetSchemaSnapshot targetSchema, String traceId, boolean validateAndEncrypt,
+            String requestedPlatformSkuCode) {
         Map<String, String> targetValues = request.getTarget();
         Map<String, String> normalizedTargetValues = new TreeMap<>(targetValues);
 
@@ -225,13 +270,15 @@ public class ProjectStandardOrderCommandFacade {
         StandardAcceptanceFingerprintPolicy.RequestIdentity identity =
                 new StandardAcceptanceFingerprintPolicy.RequestIdentity(
                         buyer.id(), project.projectCode(), request.getBuyerOrderNo(),
-                        request.getBuyerSkuCode(),
+                        requestedPlatformSkuCode == null ? request.getBuyerSkuCode() : requestedPlatformSkuCode,
                         targetSchema.available() ? targetSchema.platformSkuId() : null,
                         request.getQuantity(),
                         targetSchema.schemaCode(), targetSchema.schemaVersion(),
                         HexFormat.of().formatHex(targetDigest));
-        byte[] canonical = StandardAcceptanceFingerprintPolicy.canonicalRequest(identity);
-        // 指纹格式 2 下 invariantFingerprint 与 requestFingerprint 同源（见 Lifecycle#claimExisting），
+        byte[] canonical = requestedPlatformSkuCode == null
+                ? StandardAcceptanceFingerprintPolicy.canonicalRequest(identity)
+                : StandardAcceptanceFingerprintPolicy.canonicalPlatformSkuRequest(identity);
+        // 指纹格式2/3下 invariantFingerprint 与 requestFingerprint 同源（见 Lifecycle#claimExisting），
         // 共用一次 sha256 计算；两列保留是为了兼容历史格式与 CHECK 约束，不构成两个独立语义。
         byte[] requestFingerprint = sha256(canonical);
         byte[] invariantFingerprint = requestFingerprint;
@@ -248,7 +295,11 @@ public class ProjectStandardOrderCommandFacade {
                 targetSchema.schemaCode(), targetSchema.schemaVersion(),
                 encrypted == null ? null : encrypted.ciphertext(), targetDigest,
                 encrypted == null ? null : encrypted.keyVersion(), targetValid,
-                invariantFingerprint, requestFingerprint, buyerOrderDigest, request.getPreviousReceiptVersion(), traceId, targetSchema.catalogIdentity());
+                invariantFingerprint, requestFingerprint, buyerOrderDigest, request.getPreviousReceiptVersion(), traceId,
+                targetSchema.catalogIdentity(), requestedPlatformSkuCode == null
+                        ? (short) StandardAcceptanceFingerprintPolicy.FORMAT_VERSION
+                        : StandardAcceptanceFingerprintPolicy.PLATFORM_SKU_FORMAT_VERSION,
+                requestedPlatformSkuCode, targetSchema.platformSkuId());
     }
 
     private byte[] canonicalTarget(Map<String, String> targetValues, TargetSchemaSnapshot targetSchema) {

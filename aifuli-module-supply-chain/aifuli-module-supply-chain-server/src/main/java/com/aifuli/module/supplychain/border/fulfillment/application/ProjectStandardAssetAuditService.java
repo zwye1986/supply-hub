@@ -1,6 +1,5 @@
 package com.aifuli.module.supplychain.border.fulfillment.application;
 
-import com.aifuli.module.supplychain.api.auth.ProjectAuthOperations;
 import com.aifuli.module.supplychain.border.fulfillment.dal.dataobject.SensitiveAccessAuditDO;
 import com.aifuli.module.supplychain.border.fulfillment.dal.mysql.SensitiveAccessAuditMapper;
 import com.aifuli.module.supplychain.border.fulfillment.domain.*;
@@ -62,7 +61,7 @@ public class ProjectStandardAssetAuditService {
                                             ? ProjectStandardAssetAuditEvent.REQUEST_RESOURCE
                                             : ProjectStandardAssetAuditEvent.ASSET_RESOURCE)
                             .resourceId(event.resourceId() == null ? 0L : event.resourceId())
-                            .scopeCode(ProjectAuthOperations.STANDARD_ORDER_ASSET_QUERY)
+                            .scopeCode(context.operationCode())
                             .resultStatus(event.result().getCode())
                             .reasonCode(event.reason().name())
                             .traceId(traceId)

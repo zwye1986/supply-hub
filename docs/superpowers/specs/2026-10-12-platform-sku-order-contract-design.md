@@ -1,6 +1,6 @@
 # 对外平台 SKU 下单与历史兼容详细设计
 
-日期：2026-10-12。状态：**用户已于本线程书面确认评审通过，按第二独立切片实施；未实现、未迁移、未开放 v2。** 已确认独立 v2、格式3、跨版本创建冲突／查询互通及内部商业关系保留。评审确认不包含共享迁移、发布、真实交易或停用 v1 授权。
+日期：2026-10-12。状态：**用户已于本线程书面确认评审通过；第二独立切片已本地实现，HTTP／Liquibase 44项、供应链server 2551项和共享回归36项通过。未推送、未共享迁移、未部署或对外开放v2。** 原RPC／目录补充回归与详细交付证据见 `docs/集成测试.md` 最新实施记录。已确认独立 v2、格式3、跨版本创建冲突／查询互通及内部商业关系保留。评审确认不包含共享迁移、发布、真实交易或停用 v1 授权。
 
 本设计为第二独立切片。先行状态修复见 [目录真实来源校验与管理状态纠正](2026-10-12-catalog-source-freshness-correction-design.md)，不以本片接口改造阻断误判修复。
 
@@ -95,6 +95,8 @@ v2首次 Schema 直接来自已定位的真实平台 SKU，不要求 LST 已发�
 
 `CatalogIdentity.requestedCode` 在格式3内部与已解析 BPD 一致，保持最终内部关联校验；原平台请求码单独传递至指纹／回执。不得在限频协调器重建命令时丢失格式或平台请求码，或把缺字段静默降级为格式2。
 
+实施核对：现有限频等待／执行恢复不重建 `PreparedAcceptance`，而是读取已持久化的总单、履约请求和操作身份。继续复用这些快照，不新增恢复适配器；回执格式3与原平台请求码保持原样，恢复过程不调用格式2指纹重算。只有 HTTP 同参续跑／CAS 再次构建受理命令时传播完整冻结身份。
+
 claim 插入、已有回执比较、项目键竞争后的新事务重探测、PROCESSING 续跑、CAS 重开、reject、最终 accept 和等待队列恢复均传播相同请求身份。格式3路径不调用旧别名 Resolver 回退；所需身份通过可信快照或冻结回执恢复，不依赖前缀猜测。
 
 格式3首次 claim 的 `platform_sku_id` 来自 Resolver 已验证的真实 SKU，即使尚无 LST 也不能取空；现有“只从 gateListing 取SKU”的写法须按格式分支调整。该绑定和原平台请求码首次固化，后续拒绝／重开不覆盖；格式2的既有绑定规则不变。
@@ -133,7 +135,7 @@ CAS 重试继续原 SKU、target 和已存在的永久报价；当前价／路�
 
 ## 6. 数据增量与存量安全
 
-基线主 changelog 末尾为063。实施时复核最新编号并追加下一未占用 changeSet，建议名 `064-platform-sku-order-request-identity`；**本轮不创建 SQL、不修改已执行052、不运行迁移**。
+基线主 changelog 末尾为063，实施时已复核编号未占用，追加 `064-platform-sku-order-request-identity`。设计评审阶段未创建 SQL；评审通过后的实施阶段仅在本地创建增量并由 disposable MySQL 测试执行，**不修改已执行052、不运行共享库迁移**。
 
 只修改供应链 `sc_fulfillment_acceptance_receipt`：
 
@@ -155,7 +157,7 @@ CAS 重试继续原 SKU、target 和已存在的永久报价；当前价／路�
 - `ProjectAppCredentialService`：能力停用后的摘要查询例外同时精确认可 v1/v2 QUERY，不用字符串前缀放宽其它操作。
 - `ProjectCallContextAccessor` 及两个项目 Facade：分别校验对应 v2 操作，不能将 v2上下文伪装成 v1操作码或借查询身份创建订单。
 - server `application.yaml`：管理登录放行只新增三个精确路径，不开放整个 open-api；HMAC保护不能遗漏。
-- `aifuli-gateway`：新增三个精确 POST 路由，无rewrite，原始请求／响应字节透传；其它方法／兄弟路径不开放。
+- `aifuli-gateway`：新增三个精确 POST 路由，无rewrite，原始请求／响应字节透传；其它方法／兄弟路径不开放。Path 使用展开配置显式 `matchTrailingSlash=false`，覆盖共用的 v1/v2 六条注册路径；不能把默认尾斜杠匹配当成精确匹配。合法 v1 路径保持不变，尾斜杠仍非签名合同路径。
 - common `ApiAccessLogPathUtils`：v2根及子路径纳入已有敏感分类，原匹配边界不扩到名称相似的兄弟路径。Gateway／Servlet访问日志、拦截器及安全异常渲染同步受保护；不消费／输出目标和卡密正文、query或签名秘密。
 - `script/deploy` 测试站点 Nginx模板：只增加v2三个精确路径，不开放 `/open-api/**`；原始正文／认证头／trace-id透传，1MiB上限及错误语义保持。实际外层入口在pro197，供应链／Gateway在pro143，不把修改pro143当作公网已通。
 
@@ -165,7 +167,7 @@ CAS 重试继续原 SKU、target 和已存在的永久报价；当前价／路�
 
 ## 8. 管理页面、目录查询与接入迁移
 
-实际前端仓库为 `/Users/mac/codespace/supplychainhubweb`，不得使用旧Documents目录。v2正式开放后才调整 `src/views/supplier/distribution/` 下分销／项目 ProductList及 API 类型注释：
+实际前端仓库为 `/Users/mac/codespace/supplychainhubweb`，不得使用旧Documents目录。可在本地准备并验证 `src/views/supplier/distribution/` 下分销／项目 ProductList及 API 类型注释，但必须在兼容后端、064与外层入口到位、v2正式可用后才发布前端变更，不把本地预览当作远端接口开放：
 
 - 平台SKU编码作为“v2下单编码”；项目列表规格下也显示该码。
 - BPD列改称“分销商品编号（BPD）”，标明“旧v1下单编码”；PLT、LST仍是各自内部关系／目录号，不混成SKU。

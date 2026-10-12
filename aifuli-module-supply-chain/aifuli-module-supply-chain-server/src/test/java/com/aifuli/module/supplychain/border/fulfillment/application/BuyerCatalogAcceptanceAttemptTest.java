@@ -86,7 +86,7 @@ class BuyerCatalogAcceptanceAttemptTest {
     void finalAcceptanceLocksReceiptThenResolvedIdThenSkuBeforeOrdinaryAssociationRead() {
         var identity = new BuyerAcceptanceCatalogResolver.CatalogIdentity(1L, "BPD_7", 7L, "BPD_7", 5L, "LST_5", 3L, "MANUAL");
         when(receiptMapper.selectByIdForUpdate(20L)).thenReturn(FulfillmentAcceptanceReceiptDO.builder()
-                .id(20L).status(AcceptanceReceiptStatus.PROCESSING.getCode()).requestFingerprint(fingerprint).build());
+                .id(20L).fingerprintVersion((short) 2).status(AcceptanceReceiptStatus.PROCESSING.getCode()).requestFingerprint(fingerprint).build());
         when(catalogResolver.lockResolvedIdentity(identity)).thenReturn(draft);
         when(skuMapper.selectByIdForUpdate(3L)).thenReturn(PlatformSkuDO.builder().id(3L).build());
         assertThatThrownBy(() -> lifecycle.accept(20L, command(null, identity)))
@@ -112,7 +112,7 @@ class BuyerCatalogAcceptanceAttemptTest {
         var identity = new BuyerAcceptanceCatalogResolver.CatalogIdentity(1L, "BPD_7", 7L, "BPD_7", 5L, "LST_5", 3L, "MANUAL");
         draft.setCurrentVersionId(90L);
         when(receiptMapper.selectByIdForUpdate(20L)).thenReturn(FulfillmentAcceptanceReceiptDO.builder()
-                .id(20L).status(AcceptanceReceiptStatus.PROCESSING.getCode()).requestFingerprint(fingerprint).build());
+                .id(20L).fingerprintVersion((short) 2).status(AcceptanceReceiptStatus.PROCESSING.getCode()).requestFingerprint(fingerprint).build());
         when(catalogResolver.lockResolvedIdentity(identity)).thenReturn(draft);
         when(skuMapper.selectByIdForUpdate(3L)).thenReturn(PlatformSkuDO.builder().id(3L).build());
         assertThatThrownBy(() -> lifecycle.accept(20L, command(null, identity))).isExactlyInstanceOf(IllegalStateException.class);

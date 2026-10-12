@@ -84,6 +84,15 @@ class ApiAccessLogPathUtilsTest {
 
     @Test
     void standardOrdersPathsAreIdentifiedAndSanitized() {
+        String v2 = "/open-api/supply-chain/project/v2/orders";
+        for (String path : new String[]{v2, v2 + "/query", v2 + "/assets/query", v2 + "/unknown"}) {
+            assertThat(ApiAccessLogPathUtils.isStandardOrdersPath(path, "")).isTrue();
+            assertThat(ApiAccessLogPathUtils.isSensitiveProtectionPath("/sc" + path, "/sc")).isTrue();
+            assertThat(ApiAccessLogPathUtils.isSensitivePlatformPath(path)).isTrue();
+        }
+        assertThat(ApiAccessLogPathUtils.isStandardOrdersPath(v2 + "-other", "")).isFalse();
+        assertThat(ApiAccessLogPathUtils.safeStandardOrderUrl(v2 + "/assets/query", "")).isEqualTo(v2 + "/assets/query");
+        assertThat(ApiAccessLogPathUtils.safeStandardOrderUrl(v2 + "/13800138000", "")).isEqualTo(v2 + "/[protected]");
         assertThat(ApiAccessLogPathUtils.isStandardOrdersPath("/open-api/supply-chain/project/v1/orders", "")).isTrue();
         assertThat(ApiAccessLogPathUtils.isStandardOrdersPath("/open-api/supply-chain/project/v1/orders/query", "")).isTrue();
         assertThat(ApiAccessLogPathUtils.isStandardOrdersPath("/open-api/supply-chain/project/v1/orders/assets/query", "")).isTrue();

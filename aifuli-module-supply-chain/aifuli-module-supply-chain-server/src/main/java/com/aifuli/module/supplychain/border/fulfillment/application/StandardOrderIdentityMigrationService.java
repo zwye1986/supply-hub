@@ -121,9 +121,11 @@ public class StandardOrderIdentityMigrationService {
             if (receipt == null || !Objects.equals(receipt.getResultOrderId(), order.getId())) {
                 throw failure(order.getOrderNo(), Code.ASSOCIATION_INVALID);
             }
-            // 幂等重跑：已重建（格式 2）只校验冻结绑定一致后跳过，不改任何已冻结数据。
+            // 已验证格式2/3只核验冻结绑定后跳过，不能把v2请求重算为格式2。
+            // 见 docs/superpowers/specs/2026-10-12-platform-sku-order-contract-design.md#6-数据增量与存量安全。
             if (receipt.getFingerprintVersion() != null
-                    && receipt.getFingerprintVersion() == StandardAcceptanceFingerprintPolicy.FORMAT_VERSION) {
+                    && (receipt.getFingerprintVersion() == StandardAcceptanceFingerprintPolicy.FORMAT_VERSION
+                    || receipt.getFingerprintVersion() == StandardAcceptanceFingerprintPolicy.PLATFORM_SKU_FORMAT_VERSION)) {
                 verifyRebuiltBindings(order, receipt);
                 skippedRebuilt++;
                 continue;

@@ -343,7 +343,9 @@ public final class ProjectAppAuthFilter extends OncePerRequestFilter {
      */
     private static boolean isStandardOrdersPath(String path) {
         return ProjectAuthOperations.STANDARD_ORDERS_PATH.equals(path)
-                || (path != null && path.startsWith(ProjectAuthOperations.STANDARD_ORDERS_PATH + "/"));
+                || ProjectAuthOperations.STANDARD_ORDERS_V2_PATH.equals(path)
+                || (path != null && (path.startsWith(ProjectAuthOperations.STANDARD_ORDERS_PATH + "/")
+                || path.startsWith(ProjectAuthOperations.STANDARD_ORDERS_V2_PATH + "/")));
     }
 
     private record ParsedHeaders(String appId, int keyVersion, String contractVersion,

@@ -3,6 +3,7 @@ package com.aifuli.module.supplychain.interfaceapi.open.project;
 import com.aifuli.framework.common.exception.ServiceException;
 import com.aifuli.framework.common.exception.enums.GlobalErrorCodeConstants;
 import com.aifuli.module.supplychain.interfaceapi.open.project.dto.ProjectStandardOrderCreateReqDTO;
+import com.aifuli.module.supplychain.interfaceapi.open.project.dto.ProjectPlatformSkuOrderCreateReqDTO;
 import com.fasterxml.jackson.core.JsonFactory;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonToken;
@@ -51,6 +52,25 @@ public class ProjectStandardHttpRequestParser {
      * @return 封闭的 ProjectStandardOrderCreateReqDTO
      */
     public ProjectStandardOrderCreateReqDTO parseCreate(byte[] rawBody) {
+        return parseCreate(rawBody, false);
+    }
+
+    /**
+     * v2独立闭包仅商品字段不同；不能同时接受两个码或按前缀猜语义，其他严格解析规则共用。
+     * 设计见 docs/superpowers/specs/2026-10-12-platform-sku-order-contract-design.md#32-创建请求闭包。
+     */
+    public ProjectPlatformSkuOrderCreateReqDTO parseCreateV2(byte[] rawBody) {
+        var parsed = parseCreate(rawBody, true);
+        var dto = new ProjectPlatformSkuOrderCreateReqDTO();
+        dto.setBuyerOrderNo(parsed.getBuyerOrderNo());
+        dto.setPlatformSkuCode(parsed.getBuyerSkuCode());
+        dto.setQuantity(parsed.getQuantity());
+        dto.setTarget(parsed.getTarget());
+        dto.setPreviousReceiptVersion(parsed.getPreviousReceiptVersion());
+        return dto;
+    }
+
+    private ProjectStandardOrderCreateReqDTO parseCreate(byte[] rawBody, boolean platformSku) {
         if (rawBody == null || rawBody.length == 0) {
             throw invalidParameter("正文为空");
         }
@@ -77,9 +97,12 @@ public class ProjectStandardHttpRequestParser {
                         buyerOrderNo = parser.getText();
                         validateTextField(buyerOrderNo, MAX_STRING_LENGTH);
                     }
-                    case "buyerSkuCode" -> {
+                    case "buyerSkuCode", "platformSkuCode" -> {
+                        if (!fieldName.equals(platformSku ? "platformSkuCode" : "buyerSkuCode")) {
+                            throw invalidParameter("商品编码字段不属于当前契约");
+                        }
                         if (parser.currentToken() != JsonToken.VALUE_STRING) {
-                            throw invalidParameter("buyerSkuCode 必须为字符串");
+                            throw invalidParameter("商品编码必须为字符串");
                         }
                         buyerSkuCode = parser.getText();
                         // buyerSkuCode 上限 64 比通用字符串字段更严格（上位设计 §3）。

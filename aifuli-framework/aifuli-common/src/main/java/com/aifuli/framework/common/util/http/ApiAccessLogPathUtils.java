@@ -17,7 +17,12 @@ public final class ApiAccessLogPathUtils {
      */
     public static final String STANDARD_ORDERS_PATH = "/open-api/supply-chain/project/v1/orders";
 
-    private static final String STANDARD_ORDERS_PATH_SLASH = STANDARD_ORDERS_PATH + "/";
+    /**
+     * 平台SKU v2与v1同级保护，未知子路径也不得输出敏感正文或原始query。
+     * 设计见 docs/superpowers/specs/2026-10-12-platform-sku-order-contract-design.md#7-端到端安全接线。
+     */
+    public static final String STANDARD_ORDERS_V2_PATH = "/open-api/supply-chain/project/v2/orders";
+    private static final String[] STANDARD_ORDER_ROOTS = {STANDARD_ORDERS_PATH, STANDARD_ORDERS_V2_PATH};
 
     /**
      * 华昇供应商回调根路径。
@@ -191,21 +196,21 @@ public final class ApiAccessLogPathUtils {
     public static String safeStandardOrderUrl(String requestUri, String contextPath) {
         if (requestUri == null) { return STANDARD_ORDERS_PATH; }
         String path = stripLeadingContextPath(requestUri, contextPath);
-        if (STANDARD_ORDERS_PATH.equals(path) || isRegisteredStandardOrderSubPath(path)) {
-            return path;
+        for (String root : STANDARD_ORDER_ROOTS) {
+            if (root.equals(path) || path.equals(root + "/query") || path.equals(root + "/assets/query")) {
+                return path;
+            }
+            if (path.startsWith(root + "/")) { return root + "/[protected]"; }
         }
         return STANDARD_ORDERS_PATH + "/[protected]";
     }
 
-    private static boolean isRegisteredStandardOrderSubPath(String path) {
-        return path.equals(STANDARD_ORDERS_PATH + "/query")
-                || path.equals(STANDARD_ORDERS_PATH + "/assets/query");
-    }
-
     /** 已剥离 context path 后的标准订单路径精确匹配：根路径或带尾斜杠的子路径。 */
     private static boolean matchesStandardOrdersPath(String strippedPath) {
-        return STANDARD_ORDERS_PATH.equals(strippedPath)
-                || strippedPath.startsWith(STANDARD_ORDERS_PATH_SLASH);
+        for (String root : STANDARD_ORDER_ROOTS) {
+            if (root.equals(strippedPath) || strippedPath.startsWith(root + "/")) { return true; }
+        }
+        return false;
     }
 
     private static boolean matchesHuashengCallbackPath(String strippedPath) {

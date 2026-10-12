@@ -117,6 +117,27 @@ class StandardAcceptanceFingerprintPolicyTest {
                 PROJECT_CODE, null)).isInstanceOf(IllegalArgumentException.class);
     }
 
+    @Test
+    void platformSkuFormatHasIndependentVectorAndPreservesRawCode() {
+        // 独立按协议字段名/长度编码的向量，不从生产算法导出期望值。
+        String expected = "0000000d666f726d617456657273696f6e000000013300000007627579657249640000000131"
+                + "0000000b70726f6a656374436f64650000000650524a5f46500000000c62757965724f726465724e6f00000006432d46502d31"
+                + "0000000f70726f64756374436f6465547970650000000c504c4154464f524d5f534b55"
+                + "0000000f706c6174666f726d536b75436f646500000006534b552d4650"
+                + "0000001366726f7a656e506c6174666f726d536b7549640000000137000000087175616e746974790000000131"
+                + "00000010746172676574536368656d61436f6465000000164449524543545f52454348415247455f544152474554"
+                + "00000013746172676574536368656d6156657273696f6e0000000131"
+                + "0000000f74617267657444696765737448657800000006616162626363";
+        byte[] actual = StandardAcceptanceFingerprintPolicy.canonicalPlatformSkuRequest(identity(7L));
+        assertThat(hex(actual)).isEqualTo(expected).isNotEqualTo(FIXED_VECTOR_HEX);
+        var changed = new StandardAcceptanceFingerprintPolicy.RequestIdentity(1L, PROJECT_CODE, BUYER_ORDER_NO,
+                "sku-fp", 7L, 1, SCHEMA_CODE, 1, DIGEST_HEX);
+        assertThat(StandardAcceptanceFingerprintPolicy.canonicalPlatformSkuRequest(changed)).isNotEqualTo(actual);
+        var targetChanged = new StandardAcceptanceFingerprintPolicy.RequestIdentity(1L, PROJECT_CODE, BUYER_ORDER_NO,
+                BUYER_SKU_CODE, 7L, 1, SCHEMA_CODE, 1, "aabbcd");
+        assertThat(StandardAcceptanceFingerprintPolicy.canonicalPlatformSkuRequest(targetChanged)).isNotEqualTo(actual);
+    }
+
     private static String hex(byte[] value) {
         return java.util.HexFormat.of().formatHex(value);
     }

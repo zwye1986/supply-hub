@@ -4,6 +4,8 @@ import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerProductMappe
 import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerProductDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerListingDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerListingMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuDO;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import java.util.Objects;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.BuyerListingManagementMode;
@@ -18,6 +20,31 @@ import org.springframework.stereotype.Service;
 public class BuyerAcceptanceCatalogResolver {
     private final BuyerProductMapper productMapper;
     private final BuyerListingMapper listingMapper;
+    private final PlatformSkuMapper skuMapper;
+
+    /**
+     * v2只按平台登记码定位已有商业关系，不解析别名、不补BPD/PLT/LST、不以当前可售状态抹掉真实身份。
+     * Schema由调用应用边界核验；见 docs/superpowers/specs/2026-10-12-platform-sku-order-contract-design.md#41-冻结优先。
+     */
+    public PlatformSkuIdentity resolvePlatformSku(Long buyerId, String requestedCode) {
+        PlatformSkuDO sku = skuMapper.selectByCode(requestedCode);
+        if (sku == null) { return null; }
+        BuyerProductDO product = productMapper.selectByBuyerAndSku(buyerId, sku.getId());
+        if (product == null) { return null; }
+        if (!Objects.equals(product.getBuyerId(), buyerId) || !Objects.equals(product.getPlatformSkuId(), sku.getId())
+                || product.getBuyerProductCode() == null || product.getBuyerProductCode().isBlank()) {
+            throw new IllegalStateException("平台SKU对应的分销商品身份损坏");
+        }
+        BuyerListingDO listing = listingMapper.selectOne(new LambdaQueryWrapper<BuyerListingDO>()
+                .eq(BuyerListingDO::getBuyerId, buyerId).eq(BuyerListingDO::getPlatformSkuId, sku.getId()));
+        if (listing != null) { requireRowOwnership(listing, buyerId, sku.getId()); }
+        return new PlatformSkuIdentity(new CatalogIdentity(buyerId, product.getBuyerProductCode(), product.getId(),
+                product.getBuyerProductCode(), listing == null ? null : listing.getId(),
+                listing == null ? null : listing.getListingNo(), sku.getId(),
+                listing == null ? null : listing.getManagementMode()), sku.getTargetSchemaCode(), sku.getTargetSchemaVersion());
+    }
+
+    public record PlatformSkuIdentity(CatalogIdentity catalogIdentity, String schemaCode, Integer schemaVersion) { }
 
     public CatalogIdentity resolve(Long buyerId, String requestedCode) {
         BuyerProductDO product = productMapper.selectByCode(requestedCode);
