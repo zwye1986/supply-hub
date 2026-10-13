@@ -80,7 +80,7 @@ JAVA_HOME=/Library/Java/JavaVirtualMachines/jdk-21.jdk/Contents/Home mvn -q -pl 
 
 ## Task 2：三个场景事务外接入与历史兼容
 
-**Files:** `border/fulfillment/application/FulfillmentAcceptanceLifecycle.java`、`RechargeFrequencyAcceptanceCoordinator.java`；`border/o2o/application/O2OChannelLifecycle.java`、新增 `O2OOrderCreationCoordinator.java`；`border/instore/application/InstoreChannelLifecycle.java`、新增 `InstoreOrderCreationCoordinator.java`；`application/facade/O2OChannelCommandFacade.java`、`InstoreChannelCommandFacade.java`；相应业务Test/IntegrationTest及 `OrderNoTestConfiguration` 测试支持；前端仅核对现有字符串适配。
+**Files:** `border/fulfillment/application/FulfillmentAcceptanceLifecycle.java`、`RechargeFrequencyAcceptanceCoordinator.java`；`border/o2o/application/O2OChannelLifecycle.java`、新增 `O2OOrderCreationCoordinator.java`；`border/instore/application/InstoreChannelLifecycle.java`、新增 `InstoreOrderCreationCoordinator.java`；`application/facade/O2OChannelCommandFacade.java`、`InstoreChannelCommandFacade.java`；新增 `O2OOrderCreationCoordinatorTest`、`InstoreOrderCreationCoordinatorTest`、`ChannelOrderNumberIntegrationTest`，扩展现有 `InstoreChannelLifecycleTest`、`InstoreChannelCommandFacadeTest`、CARD集成与 `OrderNoTestConfiguration` 测试支持。仓库没有既有O2O Lifecycle/Facade单测，需在新增场景测试中覆盖该逻辑；前端仅核对现有字符串适配。
 
 - [ ] 先扩展当前协调器/场景回放测试形成红灯：新创建取数字号，已接受同参回放不调用取号服务；原队列唯一冲突有限重试保持同一对号码。
 
@@ -108,11 +108,11 @@ tryReplay(command) 返回可信现有结果则直接返回
 - [ ] 运行适用业务Test/IntegrationTest/ContractTest与架构测试；提交中文说明，通过需求与代码质量审查。
 
 ```sh
-JAVA_HOME=/Library/Java/JavaVirtualMachines/jdk-21.jdk/Contents/Home mvn -q -pl aifuli-module-supply-chain/aifuli-module-supply-chain-server -am test -DskipTests=false -Dtest=RechargeFrequencyAcceptanceCoordinatorTest,O2OChannelLifecycleTest,InstoreChannelLifecycleTest,O2OChannelCommandFacadeTest,InstoreChannelCommandFacadeTest,SupplyChainModuleArchitectureTest -Dsurefire.failIfNoSpecifiedTests=false
-JAVA_HOME=/Library/Java/JavaVirtualMachines/jdk-21.jdk/Contents/Home mvn -q -pl aifuli-module-supply-chain/aifuli-module-supply-chain-server -am test-compile failsafe:integration-test failsafe:verify -Psupply-chain-integration -DskipTests=false -DskipITs=false -Dit.test=FulfillmentAcceptanceIntegrationTest,ProjectStandardAcceptanceIntegrationTest,RechargeFrequencyAcceptanceIntegrationTest,O2OChannelIntegrationTest,InstoreChannelIntegrationTest -Dfailsafe.failIfNoSpecifiedTests=false
+JAVA_HOME=/Library/Java/JavaVirtualMachines/jdk-21.jdk/Contents/Home mvn -q -pl aifuli-module-supply-chain/aifuli-module-supply-chain-server -am test -DskipTests=false -Dtest=RechargeFrequencyAcceptanceCoordinatorTest,O2OOrderCreationCoordinatorTest,InstoreOrderCreationCoordinatorTest,InstoreChannelLifecycleTest,InstoreChannelCommandFacadeTest,SupplyChainModuleArchitectureTest -Dsurefire.failIfNoSpecifiedTests=false
+JAVA_HOME=/Library/Java/JavaVirtualMachines/jdk-21.jdk/Contents/Home mvn -q -pl aifuli-module-supply-chain/aifuli-module-supply-chain-server -am test-compile failsafe:integration-test failsafe:verify -Psupply-chain-integration -DskipTests=false -DskipITs=false -Dit.test=FulfillmentAcceptanceIntegrationTest,ProjectStandardAcceptanceIntegrationTest,RechargeFrequencyAcceptanceIntegrationTest,ChannelOrderNumberIntegrationTest -Dfailsafe.failIfNoSpecifiedTests=false
 ```
 
-场景集成类以仓库实际文件为准，若上述两个渠道综合类不存在，使用现有渠道IntegrationTest全匹配并在验证记录写明实际运行类，不能把无匹配当通过。
+新建渠道综合集成类与现有CARD类均应实际运行；不能把无匹配当通过。现有INSTORE会员/退款集成继续按直接受影响范围回归。
 
 ## Task 3：完整门禁、装配故障与交付证据
 

@@ -288,6 +288,9 @@ public interface SupplyChainErrorCodeConstants {
     /** 订单详情不可用只作为成功响应中的详情标记，不作为 CommonResult 失败码。 */
     String DETAIL_UNAVAILABLE = "DETAIL_UNAVAILABLE";
 
+    /** 当日永久预留容量不足；次日或容量问题处理后使用原幂等键重试。 */
+    ErrorCode ORDER_NO_CAPACITY_EXHAUSTED = error(1_050_001_181, "当日订单编号可预留容量不足");
+
     Map<Integer, RetryDirective> RETRY_DIRECTIVES = Map.ofEntries(
             entry(BUYER_CATALOG_CODE_CONFLICT, RetryDirective.DO_NOT_RETRY),
             entry(BUYER_CATALOG_AUTO_MANAGED, RetryDirective.DO_NOT_RETRY),
@@ -451,6 +454,7 @@ public interface SupplyChainErrorCodeConstants {
             entry(BUSINESS_CODE_FORMAT_INVALID, RetryDirective.DO_NOT_RETRY),
             entry(BUSINESS_CODE_OCCUPIED, RetryDirective.DO_NOT_RETRY),
             entry(BUSINESS_CODE_CAPACITY_EXHAUSTED, RetryDirective.DO_NOT_RETRY),
+            entry(ORDER_NO_CAPACITY_EXHAUSTED, RetryDirective.RETRY_SAME_KEY_AFTER_CONDITION_CHANGE),
             entry(CATEGORY_PARENT_IMMUTABLE, RetryDirective.DO_NOT_RETRY),
             entry(BUSINESS_CODE_PARENT_MISMATCH, RetryDirective.DO_NOT_RETRY),
             entry(BUSINESS_CODE_MANUAL_NOT_ALLOWED, RetryDirective.DO_NOT_RETRY),

@@ -62,6 +62,10 @@ aifuli:
       - /admin-api/supply-chain/v3/api-docs/**
   supply-chain:
     enabled: true
+    order-no:
+      env: ${AIFULI_SUPPLY_CHAIN_ORDER_NO_ENV:}
+      scope: ${AIFULI_SUPPLY_CHAIN_ORDER_NO_SCOPE:}
+      segment-size: ${AIFULI_SUPPLY_CHAIN_ORDER_NO_SEGMENT_SIZE:1000}
     catalog:
       # 自动目录后台扫描与投影评估配置：默认启用；关闭时不承诺保存后自动重试收敛。
       # 每批最多目录数、固定延迟秒数与最大评估有效期秒数，非正数启动拒绝。
