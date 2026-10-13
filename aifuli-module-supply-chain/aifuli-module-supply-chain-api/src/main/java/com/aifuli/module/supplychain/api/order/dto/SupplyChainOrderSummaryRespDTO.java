@@ -12,7 +12,7 @@ public class SupplyChainOrderSummaryRespDTO implements Serializable {
 
     /** 供应链总订单稳定业务编号 */
     @Schema(description = "供应链总订单稳定业务编号", requiredMode = Schema.RequiredMode.REQUIRED,
-            example = "SC_01K1XXXXXXXXXXXXXXXXXXXXXX")
+            example = "202610131530274200000001")
     private String orderNo;
 
     /** 订单类型：CARD标准商品履约，O2O配送O2O渠道，INSTORE到店购渠道 */

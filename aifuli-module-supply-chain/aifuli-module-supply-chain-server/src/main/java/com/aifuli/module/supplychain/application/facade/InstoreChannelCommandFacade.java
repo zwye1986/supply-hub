@@ -1,5 +1,6 @@
 package com.aifuli.module.supplychain.application.facade;
 
+import com.aifuli.module.supplychain.border.instore.application.InstoreOrderCreationCoordinator;
 import com.aifuli.module.supplychain.border.instore.application.InstoreChannelLifecycle;
 import com.aifuli.module.supplychain.border.instore.application.InstoreChannelUserBindingResolver;
 import com.aifuli.module.supplychain.border.instore.domain.InstorePaymentFlowStatus;
@@ -35,6 +36,7 @@ public class InstoreChannelCommandFacade {
     private static final long CASHIER_EXPIRES_MINUTES = 30L;
 
     private final InstoreChannelLifecycle lifecycle;
+    private final InstoreOrderCreationCoordinator creationCoordinator;
     private final BuyerIntegrationRouteResolver routeResolver;
     private final BuyerCashierPort cashierPort;
     private final InstorePaymentConvergenceService convergenceService;
@@ -81,7 +83,7 @@ public class InstoreChannelCommandFacade {
 
         BuyerIntegrationRoute route = routeResolver.resolveFrozen(
                 command.projectId(), command.cashierProfileVersionId(), BuyerIntegrationCapabilityCode.CASHIER);
-        InstoreChannelLifecycle.PreparedPayment prepared = lifecycle.createPaymentOrder(
+        InstoreChannelLifecycle.PreparedPayment prepared = creationCoordinator.create(
                 toLifecycleCommand(command, route));
         if (prepared.idempotentReplay()) {
             log.info("[INSTORE][facade] createPayment 幂等回放 projectId={}, outTradeNo={}, hasCashierUrl={}",

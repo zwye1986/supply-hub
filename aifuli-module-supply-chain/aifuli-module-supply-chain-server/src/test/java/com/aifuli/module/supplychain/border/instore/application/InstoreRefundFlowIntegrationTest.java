@@ -669,7 +669,7 @@ class InstoreRefundFlowIntegrationTest {
     }
 
     @Configuration(proxyBeanMethods = false)
-    @Import({SupplyChainDataSourceConfiguration.class, UlidGenerator.class, BusinessNoGenerator.class,
+    @Import({com.aifuli.module.supplychain.border.instore.application.InstoreOrderCreationCoordinator.class, com.aifuli.module.supplychain.testsupport.OrderNoTestConfiguration.class, SupplyChainDataSourceConfiguration.class, UlidGenerator.class, BusinessNoGenerator.class,
             InstoreRefundSequencer.class, AccountLedgerWriter.class, BuyerAccountReturnService.class,
             FundReservationService.class, OutboxEventRepository.class,
             OrderSummaryPolicyRegistry.class, CardOrderSummaryPolicy.class,

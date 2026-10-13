@@ -109,8 +109,8 @@ class InstoreMemberEntryRouteMigrationIntegrationTest {
 
         long changeSetCount = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM DATABASECHANGELOG", Long.class);
-        // 已应用当前冻结的 64 个 changeSet（含062），再次 update 不重复执行。
-        assertThat(changeSetCount).isEqualTo(64L);
+        // 已应用当前冻结的 67 个 changeSet（含063/064/065），再次 update 不重复执行。
+        assertThat(changeSetCount).isEqualTo(67L);
         updateRemaining(dataSource);
         assertThat(jdbc.queryForObject(
                 "SELECT COUNT(*) FROM DATABASECHANGELOG", Long.class)).isEqualTo(changeSetCount);

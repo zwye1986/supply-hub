@@ -140,7 +140,7 @@ class InstoreChannelLifecycleTest {
         when(operationMapper.selectByIdempotencyKey(InstoreIdempotencyKeys.preorder(CHANNEL, TRADE_ID)))
                 .thenReturn(preorderOperation());
 
-        InstoreChannelLifecycle.PreparedPayment result = lifecycle.createPaymentOrder(createCommand(10_000L, 10_000L));
+        InstoreChannelLifecycle.PreparedPayment result = lifecycle.createPaymentOrder(createCommand(10_000L, 10_000L), com.aifuli.module.supplychain.testsupport.OrderNoTestConfiguration.numbers());
 
         assertThat(result.idempotentReplay()).isTrue();
         assertThat(result.paymentFlowNo()).isEqualTo("IPF_1");
@@ -154,7 +154,7 @@ class InstoreChannelLifecycleTest {
         InstorePaymentFlowDO existing = paymentFlow(InstorePaymentFlowStatus.PENDING);
         existing.setPayAmount(9_000L);
         when(paymentFlowMapper.selectByChannelTrade(CHANNEL, TRADE_ID)).thenReturn(existing);
-        assertThatThrownBy(() -> lifecycle.createPaymentOrder(createCommand(10_000L, 10_000L)))
+        assertThatThrownBy(() -> lifecycle.createPaymentOrder(createCommand(10_000L, 10_000L), com.aifuli.module.supplychain.testsupport.OrderNoTestConfiguration.numbers()))
                 .isInstanceOf(ServiceException.class)
                 .extracting(ex -> ((ServiceException) ex).getCode())
                 .isEqualTo(SupplyChainErrorCodeConstants.INSTORE_IDENTITY_CONFLICT.getCode());
@@ -164,7 +164,7 @@ class InstoreChannelLifecycleTest {
     void createPaymentOrderRejectsMissingBinding() {
         when(paymentFlowMapper.selectByChannelTrade(CHANNEL, TRADE_ID)).thenReturn(null);
         when(bindingMapper.selectByProjectUser(101L, "buyer-user-1", CHANNEL)).thenReturn(null);
-        assertThatThrownBy(() -> lifecycle.createPaymentOrder(createCommand(10_000L, 10_000L)))
+        assertThatThrownBy(() -> lifecycle.createPaymentOrder(createCommand(10_000L, 10_000L), com.aifuli.module.supplychain.testsupport.OrderNoTestConfiguration.numbers()))
                 .isInstanceOf(ServiceException.class)
                 .extracting(ex -> ((ServiceException) ex).getCode())
                 .isEqualTo(SupplyChainErrorCodeConstants.INSTORE_CHANNEL_USER_BINDING_MISSING.getCode());
@@ -176,7 +176,7 @@ class InstoreChannelLifecycleTest {
         InstoreChannelUserBindingDO binding = activeBinding();
         binding.setBuyerId(9999L);
         when(bindingMapper.selectByProjectUser(101L, "buyer-user-1", CHANNEL)).thenReturn(binding);
-        assertThatThrownBy(() -> lifecycle.createPaymentOrder(createCommand(10_000L, 10_000L)))
+        assertThatThrownBy(() -> lifecycle.createPaymentOrder(createCommand(10_000L, 10_000L), com.aifuli.module.supplychain.testsupport.OrderNoTestConfiguration.numbers()))
                 .isInstanceOf(ServiceException.class)
                 .extracting(ex -> ((ServiceException) ex).getCode())
                 .isEqualTo(SupplyChainErrorCodeConstants.INSTORE_TENANT_SCOPE_CONFLICT.getCode());
@@ -189,7 +189,7 @@ class InstoreChannelLifecycleTest {
                 ArgumentCaptor.forClass(FundReservationService.FreezeCommand.class);
         ArgumentCaptor<InstoreOperationDO> operationCaptor = ArgumentCaptor.forClass(InstoreOperationDO.class);
 
-        InstoreChannelLifecycle.PreparedPayment result = lifecycle.createPaymentOrder(createCommand(10_000L, 10_000L));
+        InstoreChannelLifecycle.PreparedPayment result = lifecycle.createPaymentOrder(createCommand(10_000L, 10_000L), com.aifuli.module.supplychain.testsupport.OrderNoTestConfiguration.numbers());
 
         assertThat(result.idempotentReplay()).isFalse();
         assertThat(result.payAmount()).isEqualTo(10_000L);
@@ -211,7 +211,7 @@ class InstoreChannelLifecycleTest {
         ArgumentCaptor<InstoreChannelOrderDO> captor =
                 ArgumentCaptor.forClass(InstoreChannelOrderDO.class);
 
-        lifecycle.createPaymentOrder(createCommand(10_000L, 10_000L));
+        lifecycle.createPaymentOrder(createCommand(10_000L, 10_000L), com.aifuli.module.supplychain.testsupport.OrderNoTestConfiguration.numbers());
 
         verify(instoreOrderMapper).insert(captor.capture());
         assertThat(captor.getValue().getSourceSystem()).isEqualTo("AIFULI_MALL");
@@ -227,7 +227,7 @@ class InstoreChannelLifecycleTest {
         stubNewHeadCreate();
         ArgumentCaptor<OrderStatusLogDO> logCaptor = ArgumentCaptor.forClass(OrderStatusLogDO.class);
 
-        lifecycle.createPaymentOrder(createCommand(10_000L, 10_000L));
+        lifecycle.createPaymentOrder(createCommand(10_000L, 10_000L), com.aifuli.module.supplychain.testsupport.OrderNoTestConfiguration.numbers());
 
         verify(orderMapper).advanceDetailVersion(eq(1L), eq(0L), eq(1L), any());
         verify(statusLogMapper).insert(logCaptor.capture());
@@ -268,7 +268,7 @@ class InstoreChannelLifecycleTest {
         when(fundReservationService.freeze(any()))
                 .thenThrow(new IllegalStateException("Buyer CNY account does not exist"));
 
-        assertThatThrownBy(() -> lifecycle.createPaymentOrder(createCommand(10_000L, 10_000L)))
+        assertThatThrownBy(() -> lifecycle.createPaymentOrder(createCommand(10_000L, 10_000L), com.aifuli.module.supplychain.testsupport.OrderNoTestConfiguration.numbers()))
                 .isInstanceOf(ServiceException.class)
                 .extracting(ex -> ((ServiceException) ex).getCode())
                 .isEqualTo(SupplyChainErrorCodeConstants.BUYER_ACCOUNT_NOT_OPENED.getCode());
@@ -284,7 +284,7 @@ class InstoreChannelLifecycleTest {
         existingHead.setTotalAmount(8_000L);
         when(instoreOrderMapper.selectByChannelOrder(CHANNEL, ORDER_ID)).thenReturn(existingHead);
 
-        assertThatThrownBy(() -> lifecycle.createPaymentOrder(createCommand(10_000L, 10_000L)))
+        assertThatThrownBy(() -> lifecycle.createPaymentOrder(createCommand(10_000L, 10_000L), com.aifuli.module.supplychain.testsupport.OrderNoTestConfiguration.numbers()))
                 .isInstanceOf(ServiceException.class)
                 .extracting(ex -> ((ServiceException) ex).getCode())
                 .isEqualTo(SupplyChainErrorCodeConstants.INSTORE_IDENTITY_CONFLICT.getCode());
@@ -305,7 +305,7 @@ class InstoreChannelLifecycleTest {
                         "AIFULI_MALL", "tenant-a", "buyer-user-1", "buyer-user-1",
                         10_000L, 1, 10_000L, "COMPANY", "MERCHANT1",
                         "SHOP1", "Shop", "subject", TRACE);
-        assertThatThrownBy(() -> lifecycle.createPaymentOrder(secondTrade))
+        assertThatThrownBy(() -> lifecycle.createPaymentOrder(secondTrade, com.aifuli.module.supplychain.testsupport.OrderNoTestConfiguration.numbers()))
                 .isInstanceOf(ServiceException.class)
                 .extracting(ex -> ((ServiceException) ex).getCode())
                 .isEqualTo(SupplyChainErrorCodeConstants.INSTORE_IDENTITY_CONFLICT.getCode());
@@ -798,7 +798,6 @@ class InstoreChannelLifecycleTest {
         when(supplierChannelBindingMapper.selectCurrentEnabled(CHANNEL, "MERCHANT1")).thenReturn(channelBinding());
         when(supplierMapper.selectById(31L)).thenReturn(supplier());
         when(instoreOrderMapper.selectByChannelOrder(CHANNEL, ORDER_ID)).thenReturn(null);
-        when(businessNoGenerator.next(BusinessNoPrefixes.SC)).thenReturn("SC_1");
         when(businessNoGenerator.next(BusinessNoPrefixes.ISC)).thenReturn("ISC_1");
         when(businessNoGenerator.next(BusinessNoPrefixes.IPF)).thenReturn("IPF_FLOW", "IPF_OTN");
         when(businessNoGenerator.next(BusinessNoPrefixes.IOP)).thenReturn("IOP_1");

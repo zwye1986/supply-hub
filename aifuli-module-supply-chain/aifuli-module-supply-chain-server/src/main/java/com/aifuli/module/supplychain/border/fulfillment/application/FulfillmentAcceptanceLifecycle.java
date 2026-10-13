@@ -77,6 +77,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.aifuli.framework.common.exception.ServiceException;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.aifuli.module.supplychain.infrastructure.identity.PreparedOrderNumbers;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
@@ -333,6 +334,21 @@ public class FulfillmentAcceptanceLifecycle {
     }
 
     /**
+     * 事务外协调器的可信回放探测：只返回已接受且完整指纹一致的持久化身份，不授予新建权限。
+     * 设计见 {@code docs/superpowers/specs/2026-10-13-supply-chain-order-number-design.md#52-标准履约-card}。
+     */
+    @Transactional(transactionManager = TRANSACTION_MANAGER, readOnly = true)
+    public AcceptanceSnapshot tryReplayAccepted(long receiptId, PreparedAcceptance command) {
+        FulfillmentAcceptanceReceiptDO receipt = receiptMapper.selectById(receiptId);
+        if (receipt == null || receipt.getStatus() != AcceptanceReceiptStatus.ACCEPTED.getCode()) return null;
+        if (!Objects.equals(receipt.getFingerprintVersion(), command.fingerprintVersion())
+                || !Arrays.equals(receipt.getRequestFingerprint(), command.requestFingerprint())) {
+            throw new IdempotencyConflictException();
+        }
+        return snapshot(receiptId, true);
+    }
+
+    /**
      * 受理主路径：校验可售 Listing、路由供应商、建总订单/BOrder 并冻结资金。
      *
      * <p>本方法只写本地事务，不调用供应商适配器。一期冻结不检查可用余额；缺账户映射为
@@ -341,8 +357,8 @@ public class FulfillmentAcceptanceLifecycle {
      * {@code docs/superpowers/specs/2026-08-17-supply-chain-phase1-buyer-account-overdraft.md}。</p>
      */
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
-    public AcceptanceSnapshot accept(long receiptId, PreparedAcceptance command) {
-        return acceptPrepared(receiptId, command, false);
+    public AcceptanceSnapshot accept(long receiptId, PreparedAcceptance command, PreparedOrderNumbers numbers) {
+        return acceptPrepared(receiptId, command, numbers, false);
     }
 
     /**
@@ -351,11 +367,11 @@ public class FulfillmentAcceptanceLifecycle {
      * 设计见 docs/superpowers/specs/2026-10-03-standard-project-direct-order-price-freeze-design.md#3-定价身份与当前准入。
      */
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
-    public AcceptanceSnapshot acceptDirectProjectOrder(long receiptId, PreparedAcceptance command) {
-        return acceptPrepared(receiptId, command, true);
+    public AcceptanceSnapshot acceptDirectProjectOrder(long receiptId, PreparedAcceptance command, PreparedOrderNumbers numbers) {
+        return acceptPrepared(receiptId, command, numbers, true);
     }
 
-    private AcceptanceSnapshot acceptPrepared(long receiptId, PreparedAcceptance command, boolean directProjectOrder) {
+    private AcceptanceSnapshot acceptPrepared(long receiptId, PreparedAcceptance command, PreparedOrderNumbers numbers, boolean directProjectOrder) {
         log.info("[履约][lifecycle] accept 入口 receiptId={}, buyerOrderNo={}, traceId={}",
                 receiptId, command.buyerOrderNo(), command.traceId());
         FulfillmentAcceptanceReceiptDO receipt = receiptMapper.selectByIdForUpdate(receiptId);
@@ -370,6 +386,8 @@ public class FulfillmentAcceptanceLifecycle {
             }
             return snapshot(receiptId, true);
         }
+        Objects.requireNonNull(numbers, "预分配订单号码不可为空");
+        Objects.requireNonNull(numbers.billno(), "标准履约必须预分配双号");
         requireProcessingReceipt(receipt, command);
         if (command.quantity() != 1) {
             throw rejection(receiptId, null, AcceptanceReceiptStatus.REJECTED_FINAL,
@@ -449,7 +467,7 @@ public class FulfillmentAcceptanceLifecycle {
                 .require(SupplyChainOrderTypes.ORDER_TYPE_CARD).decide(summaryFact);
 
         SupplyChainOrderDO order = SupplyChainOrderDO.builder()
-                .orderNo(businessNoGenerator.next(BusinessNoPrefixes.SC))
+                .orderNo(numbers.orderNo())
                 .orderType(SupplyChainOrderTypes.ORDER_TYPE_CARD)
                 .buyerId(command.buyerId()).projectId(command.projectId())
                 .pricingQuoteId(frozenQuote.quoteId()).pricingVersionId(frozenQuote.pricingVersionId())
@@ -498,7 +516,7 @@ public class FulfillmentAcceptanceLifecycle {
         RoutingPersistence routingPersistence = persistRouting(command, order, fulfillmentRequest, routing, now);
         inject(AcceptanceFailureInjector.Stage.ROUTING_RECORDED);
 
-        BOrderDO bOrder = createBOrder(order, fulfillmentRequest, selected, now);
+        BOrderDO bOrder = createBOrder(order, fulfillmentRequest, selected, now, numbers.billno());
         bOrderMapper.insert(bOrder);
         if (requestMapper.activateBOrder(fulfillmentRequest.getId(), bOrder.getId(), now) != 1
                 || routingRecordMapper.attachBOrder(routingPersistence.selectedRecordId(), bOrder.getId()) != 1) {
@@ -731,10 +749,9 @@ public class FulfillmentAcceptanceLifecycle {
     }
 
     private BOrderDO createBOrder(SupplyChainOrderDO order, FulfillmentRequestDO request,
-                                  RoutingCandidate selected, LocalDateTime now) {
+                                  RoutingCandidate selected, LocalDateTime now, String billno) {
         String bOrderNo = businessNoGenerator.next(BusinessNoPrefixes.BO);
         // billno 独立于内部 bOrderNo，便于多供应商路由与重放时供应商侧单号稳定唯一。
-        String billno = businessNoGenerator.next(BusinessNoPrefixes.BILL);
         long expectedAmount = Math.multiplyExact(selected.supplierSettlementUnitPrice(), order.getQuantity());
         return BOrderDO.builder().bOrderNo(bOrderNo).fulfillmentRequestId(request.getId())
                 .orderId(order.getId()).attemptNo(1).supplierId(selected.supplierId())

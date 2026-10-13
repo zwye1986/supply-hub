@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.aifuli.module.supplychain.infrastructure.identity.dal.mysql.OrderNoSequenceMapper">
+    <!-- MySQL首次日期竞争只确保存在，不重置高水位，不用INSERT IGNORE吞其它异常。
+         docs/superpowers/specs/2026-10-13-supply-chain-order-number-design.md#42-申请号段的短事务 -->
+    <insert id="ensureDate">
+        INSERT INTO sc_order_no_sequence (sequence_date, last_reserved_value, created_at, updated_at)
+        VALUES (#{date}, 0, #{now}, #{now})
+        ON DUPLICATE KEY UPDATE sequence_date = sequence_date
+    </insert>
+</mapper>

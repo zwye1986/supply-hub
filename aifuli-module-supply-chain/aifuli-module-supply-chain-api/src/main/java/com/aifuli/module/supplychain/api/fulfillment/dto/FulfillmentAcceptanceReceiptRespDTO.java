@@ -32,7 +32,7 @@ public class FulfillmentAcceptanceReceiptRespDTO implements Serializable {
 
     /** 受理成功后的供应链总订单号快照 */
     @Schema(description = "受理成功后的供应链总订单号快照",
-            example = "SC_01K1XXXXXXXXXXXXXXXXXXXXXX")
+            example = "202610131530274200000001")
     private String orderNo;
 
     /** 公共主状态：0已创建，10处理中，20部分成功，30成功，40失败，50已取消，90人工处理 */

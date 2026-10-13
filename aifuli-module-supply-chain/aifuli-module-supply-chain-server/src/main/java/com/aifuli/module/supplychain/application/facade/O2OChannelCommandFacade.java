@@ -3,6 +3,7 @@ package com.aifuli.module.supplychain.application.facade;
 import com.aifuli.module.supplychain.api.o2o.dto.AcceptRefundReqDTO;
 import com.aifuli.module.supplychain.api.o2o.dto.PaymentPreparationTicketDTO;
 import com.aifuli.module.supplychain.api.o2o.dto.PreparePaymentReqDTO;
+import com.aifuli.module.supplychain.border.o2o.application.O2OOrderCreationCoordinator;
 import com.aifuli.module.supplychain.border.o2o.application.O2OChannelLifecycle;
 import com.aifuli.module.supplychain.border.o2o.application.O2OChannelLifecycle.PreparePaymentCommand;
 import com.aifuli.module.supplychain.border.o2o.application.O2OChannelLifecycle.PreparedPayment;
@@ -29,6 +30,7 @@ import java.time.ZoneOffset;
 public class O2OChannelCommandFacade {
 
     private final O2OChannelLifecycle lifecycle;
+    private final O2OOrderCreationCoordinator creationCoordinator;
     private final BuyerCashierPort buyerCashierPort;
     private final BusinessNoGenerator businessNoGenerator;
 
@@ -47,7 +49,7 @@ public class O2OChannelCommandFacade {
                 request.getPayAmount(), request.getExternalMerchantId(), request.getExternalStoreId(),
                 request.getExternalStoreName(), request.getSubject(), traceId);
 
-        PreparedPayment prepared = lifecycle.createPaymentPreparation(command);
+        PreparedPayment prepared = creationCoordinator.create(command);
         if (prepared.idempotentReplay()) {
             log.info("[O2O][facade] preparePayment 幂等回放 outTradeNo={}, invocationId={}",
                     prepared.outTradeNo(), prepared.invocationId());

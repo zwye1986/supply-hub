@@ -39,6 +39,9 @@ import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierCha
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierChannelBindingMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierMapper;
+import com.aifuli.module.supplychain.infrastructure.identity.PreparedOrderNumbers;
+import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerMapper;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BUYER_NOT_FOUND;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -78,6 +81,7 @@ public class O2OChannelLifecycle {
     private static final String TRANSACTION_MANAGER = "supplyChainTransactionManager";
 
     private final O2OChannelUserBindingMapper bindingMapper;
+    private final BuyerMapper buyerMapper;
     private final O2OChannelDetailMapper detailMapper;
     private final O2OOperationMapper operationMapper;
     private final O2ORefundCaseMapper refundCaseMapper;
@@ -93,6 +97,16 @@ public class O2OChannelLifecycle {
 
     // ---- 方法在后续编辑中追加 ----
 
+    /** 保持原有回放合同的短只读事务；完成后才可取号。设计见 {@code docs/superpowers/specs/2026-10-13-supply-chain-order-number-design.md#53-o2o-与-instore}。 */
+    @Transactional(transactionManager = TRANSACTION_MANAGER, readOnly = true)
+    public PreparedPayment tryReplayPayment(PreparePaymentCommand command) {
+        O2OChannelUserBindingDO binding = bindingMapper.selectActiveByChannelUser(command.channelCode(), command.channelUserId());
+        if (binding == null) throw exception(O2O_CHANNEL_USER_BINDING_MISSING);
+        O2OChannelDetailDO existing = detailMapper.selectByChannelTransaction(
+                command.channelCode(), command.transactionId());
+        return existing == null ? null : replayExistingPayment(existing, command);
+    }
+
     /**
      * 第一段：按 (channelCode, transactionId) 幂等建单、冻结 BuyerAccount 并创建 PREORDER Operation。
      *
@@ -101,7 +115,7 @@ public class O2OChannelLifecycle {
      * 详见 {@code docs/superpowers/specs/2026-08-07-supply-chain-phase1-detailed-design.md#18.6-关键编排与幂等}。</p>
      */
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
-    public PreparedPayment createPaymentPreparation(PreparePaymentCommand command) {
+    public PreparedPayment createPaymentPreparation(PreparePaymentCommand command, PreparedOrderNumbers numbers) {
         log.info("[O2O][lifecycle] createPaymentPreparation 入口 channelCode={}, transactionId={}, channelUserId={}, payAmount={}, merchantId={}, traceId={}",
                 command.channelCode(), command.transactionId(), command.channelUserId(),
                 command.payAmount(), command.externalMerchantId(), command.traceId());
@@ -128,6 +142,10 @@ public class O2OChannelLifecycle {
         if (supplier == null) {
             throw exception(O2O_SUPPLIER_CHANNEL_BINDING_NOT_FOUND);
         }
+        // 正式DDL要求真实采购商快照非空，不能用会员身份或null替代。
+        // docs/superpowers/specs/2026-10-13-supply-chain-order-number-design.md#102-o2o既有建单快照约束修复
+        var buyer = buyerMapper.selectById(binding.getBuyerId());
+        if (buyer == null) throw exception(BUYER_NOT_FOUND);
         LocalDateTime now = now();
         byte[] requestFingerprint = sha256(canonicalPaymentRequest(command));
         OrderSummaryFact summaryFact = new OrderSummaryFact(SupplyChainOrderTypes.ORDER_TYPE_O2O,
@@ -136,11 +154,11 @@ public class O2OChannelLifecycle {
         OrderSummaryDecision summary = orderSummaryPolicyRegistry
                 .require(SupplyChainOrderTypes.ORDER_TYPE_O2O).decide(summaryFact);
 
-        String orderNo = businessNoGenerator.next(BusinessNoPrefixes.SC);
+        String orderNo = java.util.Objects.requireNonNull(numbers, "预分配订单号码不可为空").orderNo();
         SupplyChainOrderDO order = SupplyChainOrderDO.builder()
                 .orderNo(orderNo).orderType(SupplyChainOrderTypes.ORDER_TYPE_O2O)
-                .buyerId(binding.getBuyerId()).buyerCodeSnapshot(null).buyerNameSnapshot(null)
-                .buyerUserId(binding.getBuyerUserId()).buyerOrderNo(command.transactionId())
+                .buyerId(binding.getBuyerId()).buyerCodeSnapshot(buyer.getBuyerCode()).buyerNameSnapshot(buyer.getBuyerName())
+                .buyerUserId(binding.getBuyerUserId()).buyerOrderNo(null)
                 .displaySupplierId(supplier.getId()).displaySupplierCode(supplier.getSupplierCode())
                 .displaySupplierName(supplier.getSupplierName())
                 .buyerSettlementAmount(command.payAmount()).currency(Money.CURRENCY_CNY)
@@ -452,7 +470,7 @@ public class O2OChannelLifecycle {
                                           String traceId, LocalDateTime now) {
         outboxRepository.appendLocal(O2OOutboxCodes.AGGREGATE_O2O_DETAIL, detail.getChannelDetailNo(), 1,
                 O2OOutboxCodes.EVENT_O2O_ORDER_SUMMARY_CHANGED, O2OOutboxCodes.TARGET_BUYER_EVENT_RPC,
-                Map.of("orderNo", order.getOrderNo(), "buyerOrderNo", order.getBuyerOrderNo(),
+                Map.of("orderNo", order.getOrderNo(), "buyerOrderNo", detail.getTransactionId(),
                         "orderType", order.getOrderType(), "outTradeNo", detail.getOutTradeNo()),
                 traceId, order.getOrderNo(), detail.getChannelDetailNo(), now);
     }

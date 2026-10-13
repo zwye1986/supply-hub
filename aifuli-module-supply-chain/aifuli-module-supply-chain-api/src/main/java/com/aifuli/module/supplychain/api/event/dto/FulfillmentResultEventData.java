@@ -12,7 +12,7 @@ public final class FulfillmentResultEventData implements BuyerEventData {
 
     /** 供应链总订单稳定业务编号 */
     @Schema(description = "供应链总订单稳定业务编号", requiredMode = Schema.RequiredMode.REQUIRED,
-            example = "SC_01K1XXXXXXXXXXXXXXXXXXXXXX")
+            example = "202610131530274200000001")
     private String orderNo;
 
     /** 履约请求稳定业务编号 */

@@ -48,6 +48,7 @@ import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierChannelB
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierMapper;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.aifuli.module.supplychain.infrastructure.identity.PreparedOrderNumbers;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;
@@ -119,6 +120,14 @@ public class InstoreChannelLifecycle {
     private final BuyerAccountReturnService accountReturnService;
     private final InstoreOrderSummaryPolicy instoreOrderSummaryPolicy;
 
+    /** 保持原有回放合同的短只读事务；完成后才可取号。设计见 {@code docs/superpowers/specs/2026-10-13-supply-chain-order-number-design.md#53-o2o-与-instore}。 */
+    @Transactional(transactionManager = TRANSACTION_MANAGER, readOnly = true)
+    public PreparedPayment tryReplayPayment(CreatePaymentOrderCommand command) {
+        InstorePaymentFlowDO existing = paymentFlowMapper.selectByChannelTrade(
+                command.channelCode(), command.tradeId());
+        return existing == null ? null : replayExistingFlow(existing, command);
+    }
+
     /**
      * 第一段：按 (channelCode,order_id) 幂等建/复用订单头，按 (channelCode,trade_id) 幂等建支付流水，
      * 冻结资金并创建 PREORDER 操作。
@@ -128,7 +137,7 @@ public class InstoreChannelLifecycle {
      * 详见 {@code docs/superpowers/specs/2026-08-18-rtmart-instore-channel-design.md#44-一期联调切片约束}。</p>
      */
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
-    public PreparedPayment createPaymentOrder(CreatePaymentOrderCommand command) {
+    public PreparedPayment createPaymentOrder(CreatePaymentOrderCommand command, PreparedOrderNumbers numbers) {
         log.info("[INSTORE][lifecycle] createPaymentOrder 入口 channelCode={}, channelOrderId={}, tradeId={}, payAmount={}, traceId={}",
                 command.channelCode(), command.channelOrderId(), command.tradeId(), command.payAmount(), command.traceId());
 
@@ -178,7 +187,7 @@ public class InstoreChannelLifecycle {
         SupplyChainOrderDO order;
         boolean orderHeadNewlyCreated;
         if (instoreOrder == null) {
-            SupplyChainOrderWithHead created = createBuyerOrderAndHead(command, binding, channelBinding, supplier, now);
+            SupplyChainOrderWithHead created = createBuyerOrderAndHead(command, binding, channelBinding, supplier, now, numbers);
             order = created.order();
             instoreOrder = created.instoreOrder();
             orderHeadNewlyCreated = true;
@@ -300,9 +309,9 @@ public class InstoreChannelLifecycle {
                                                               InstoreChannelUserBindingDO binding,
                                                               SupplierChannelBindingDO channelBinding,
                                                               SupplierDO supplier,
-                                                              LocalDateTime now) {
+                                                              LocalDateTime now, PreparedOrderNumbers numbers) {
         OrderSummaryDecision summary = decideOrderSummary(InstoreOrderStatus.CREATED);
-        String orderNo = businessNoGenerator.next(BusinessNoPrefixes.SC);
+        String orderNo = java.util.Objects.requireNonNull(numbers, "预分配订单号码不可为空").orderNo();
         SupplyChainOrderDO order = SupplyChainOrderDO.builder()
                 .orderNo(orderNo).orderType(SupplyChainOrderTypes.ORDER_TYPE_INSTORE)
                 .buyerId(binding.getBuyerId()).buyerCodeSnapshot(command.userCode()).buyerNameSnapshot(command.userCode())

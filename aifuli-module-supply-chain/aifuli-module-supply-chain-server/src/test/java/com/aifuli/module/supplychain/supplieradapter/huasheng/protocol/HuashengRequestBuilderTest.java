@@ -186,6 +186,19 @@ class HuashengRequestBuilderTest {
     }
 
     @Test
+    void numericAndHistoricalMerchantOrderNumbersSurviveIndependentDecryption() throws Exception {
+        for (String billno : java.util.List.of("202610131530277300000002", "BILL_01M4SJJ9SHWKPARFPWPJCQW39Q")) {
+            var request = new HuashengPlaceRequest(billno, 8888L, 1, 600,
+                    "https://callback.example.com/notify", "13800138000");
+            var wire = new HuashengRequestBuilder(FIXED_CLOCK, () -> FIXED_NONCE).build(
+                    HuashengEndpoint.PLACE, request, createDefaultContext(), Optional.of("HS_TOKEN_ABC123"));
+            JsonNode payload = decryptAndVerifyIndependently(wire, publicKey, APP_SECRET, APP_ID);
+            assertTrue(payload.get("outOrderSn").isTextual());
+            assertEquals(billno, payload.get("outOrderSn").asText());
+        }
+    }
+
+    @Test
     @DisplayName("Cycle 2: PLACE 请求输入参数守卫与不变量（反例覆盖）")
     void test02_PlaceRequest_ValidationGuards() {
         // 1. num 必须严格等于 1
