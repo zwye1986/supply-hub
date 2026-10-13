@@ -156,7 +156,7 @@ class OfferListOnShelfIntegrationTest {
                     draft.connectorNo(), draft.connectorVersionId(), 0L, 1L,
                     "B1 集成测试连接器发布", "trace-connector", null, null));
 
-            // 业务菜单链路：选品（f1 必填 externalSkuCode）新增两条合作商品，状态 PUBLISHED 但 current_version_id 为空。
+            // 业务菜单链路：选品（f1 必填 externalSkuCode）新增两条合作商品，状态 SUSPENDED 且 current_version_id 为空。
             List<String> offerNos = offers.createPublished(supplierCode, List.of(
                     new DraftLine(DIRECT_SKU, "FIXED", 9_700L, null, null, "API_DIRECT", 500L, 1L,
                             DIRECT_EXTERNAL_CODE),
@@ -274,6 +274,7 @@ class OfferListOnShelfIntegrationTest {
             org.springframework.transaction.support.TransactionTemplate rollback =
                     new org.springframework.transaction.support.TransactionTemplate(context.getBean(
                             "supplyChainTransactionManager", org.springframework.transaction.PlatformTransactionManager.class));
+            rollback.setIsolationLevel(org.springframework.transaction.TransactionDefinition.ISOLATION_READ_COMMITTED);
             assertThatThrownBy(() -> rollback.executeWithoutResult(status -> {
                 offerPublication.listOnShelf(new ListOnShelfCommand(
                         supplierCode, replacement, null, 1L, "trace-rollback", null, null));

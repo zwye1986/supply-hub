@@ -15,7 +15,7 @@ import org.springframework.context.annotation.Import;
 
 /** 为显式列举 Bean 的真实 MySQL 测试补齐商品中心统一校验依赖。 */
 @Configuration(proxyBeanMethods = false)
-@Import({BrandAdminService.class, CategoryCommandService.class, CategoryQueryService.class,
+@Import({SupplierEligibilityTestConfiguration.class, BrandAdminService.class, CategoryCommandService.class, CategoryQueryService.class,
         ProductTypeValidationService.class, ProductSellabilityService.class,
         ProductCategoryCoverageService.class, ProductDeletionValidator.class,
         FulfillmentTargetSchemaRegistry.class,

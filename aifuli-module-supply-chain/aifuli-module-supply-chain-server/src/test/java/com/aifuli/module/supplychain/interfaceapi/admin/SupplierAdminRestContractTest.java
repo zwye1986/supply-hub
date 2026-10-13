@@ -26,6 +26,31 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class SupplierAdminRestContractTest {
 
+    /** 新增销售建议价与历史L1价格同时序列化，兼容提示价可以缺省。 */
+    @Test
+    void offerPricesKeepDistinctJsonMeaningsAndDocumentSkuSalePrice() throws Exception {
+        var sale = Arrays.stream(OfferListItem.class.getRecordComponents())
+                .filter(component -> "suggestedSalePriceCents".equals(component.getName())).findFirst().orElse(null);
+        assertThat(sale).as("SKU销售建议价必须成为独立JSON字段").isNotNull();
+        assertThat(sale.getAccessor().getAnnotation(io.swagger.v3.oas.annotations.media.Schema.class).description())
+                .isEqualTo("建议零售价/销售建议价，单位为分");
+        ObjectMapper mapper = new ObjectMapper();
+        OfferListItem item = mapper.convertValue(java.util.Map.of(
+                "offerNo", "OFR_1", "suggestedSalePriceCents", 9600L, "suggestPriceCents", 8000L,
+                "unitPriceCents", 9500L), OfferListItem.class);
+        var json = mapper.readTree(mapper.writeValueAsString(item));
+        assertThat(json.get("suggestedSalePriceCents").longValue()).isEqualTo(9600L);
+        assertThat(json.get("suggestPriceCents").longValue()).isEqualTo(8000L);
+        SupplierAdminController.DraftReqVO request = mapper.readValue(
+                "{\"platformSkuCode\":\"SKU_001_001\",\"priceMode\":\"DISCOUNT\",\"discountBp\":9000,"
+                        + "\"supplyMode\":\"API_DIRECT\",\"externalSkuCode\":\"external\"}",
+                SupplierAdminController.DraftReqVO.class);
+        assertThat(request.getSuggestedPriceCents()).isNull();
+        assertThat(SupplierAdminController.DraftReqVO.class.getDeclaredField("suggestedPriceCents")
+                .getAnnotation(io.swagger.v3.oas.annotations.media.Schema.class).description())
+                .contains("兼容").contains("SKU");
+    }
+
     @Test
     void simpleSupplierProjectionDocumentsActiveOnly() {
         Method page = Arrays.stream(SupplierAdminController.class.getDeclaredMethods())

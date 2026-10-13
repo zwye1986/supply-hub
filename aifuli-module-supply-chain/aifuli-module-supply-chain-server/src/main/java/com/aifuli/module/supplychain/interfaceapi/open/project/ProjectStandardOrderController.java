@@ -99,7 +99,7 @@ public class ProjectStandardOrderController {
         return CommonResult.success(queryFacade.assets(context, buyerOrderNo));
     }
 
-    private static void requireNoQueryString(HttpServletRequest request) {
+    static void requireNoQueryString(HttpServletRequest request) {
         if (request != null && request.getQueryString() != null && !request.getQueryString().isBlank()) {
             log.debug("[项目标准订单] 拒绝携带 query string 的请求: {}", request.getRequestURI());
             throw exception(GlobalErrorCodeConstants.BAD_REQUEST);

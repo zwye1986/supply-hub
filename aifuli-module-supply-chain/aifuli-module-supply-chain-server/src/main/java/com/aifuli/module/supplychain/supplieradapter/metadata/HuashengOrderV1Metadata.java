@@ -61,6 +61,13 @@ public final class HuashengOrderV1Metadata implements AdapterMetadata {
                 UnknownResultPolicy.QUERY_ORDER, PartialDeliveryMode.FORBIDDEN, ResultMultiplicity.SINGLE, "{}");
     }
     @Override public List<String> fulfillmentSteps() { return List.of("PLACE_ORDER", "CONFIRM_ORDER", "TAKE_CARD", "QUERY_ORDER"); }
+    /** 华昇十行非终态模板与空错误表是发布不变量；设计见 docs/superpowers/specs/2026-10-12-huasheng-fulfillment-hardening-design.md#3-映射管理契约。 */
+    @Override public boolean statusMappingAppendAllowed() { return false; }
+    @Override public boolean errorMappingAppendAllowed() { return false; }
+    @Override public String mappingDescription() {
+        return "华昇采用封闭模板：CREATE 四行、QUERY 四行、CALLBACK 两行，共十行非终态映射，错误映射表必须为空；"
+                + "仅支持一次完整初始化，不支持逐条追加。外部状态只是协议事实，资金结果由受控履约流程核实，不能通过填表配置退款、切供或无界重试。";
+    }
     @Override public MappingTemplates mappingTemplates() {
         var rows = new ArrayList<MappingTemplates.StatusMappingTemplate>();
         for (String phase : List.of("CREATE", "QUERY", "CALLBACK")) {

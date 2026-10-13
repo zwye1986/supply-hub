@@ -1,5 +1,7 @@
 # 供应商履约技术配置与合作商品上架即发布（管理端）
 
+> 2026-10-11 当前规则修订：合作商品新增默认下架；上下架按钮按 Offer.status 驱动，待发布条款使用独立发布变更。本文 §2 的商业上架但无履约版本、§8.6 的仅按就绪度提供上架/重新上架行为已被取代。NOT_CONFIGURED 是商品未发布版本，STALE 是待发布变更，不代表供应商整体配置状态。 以[《供应商合作商品独立上下架与有效供货价》](./2026-10-11-supplier-offer-lifecycle-design.md)为准。本次尚未部署。
+
 > 2026-10-03 后续闭环切片：多密钥适配器新增显式 `credential_set_id`，不复用既有 `credential_slot_id`；凭据密文存储扩容及 UI 条件绑定契约见 `docs/superpowers/specs/2026-10-02-huasheng-fulfillment-adapter-design.md#123-第二切片显式凭据集绑定与运行时配置`。本文已交付 QNM 单槽路径保持，054/055/056/057 历史 SQL 不修改；新功能按该节增量实施。
 
 > 状态：定案（v4，已通过逐项决策评审，可进入 §13 落地）· 修订日期：2026-10-03
@@ -192,7 +194,7 @@ default List<String> fulfillmentSteps() { return List.of(); }
 
 | # | 方法 | 路径 | 用途 |
 | --- | --- | --- | --- |
-| T1 | GET | `/supply-chain/supplier-config/adapter-types` | 列出注册表 `AdapterMetadataRegistry` 的适配器类型 + 各自 `connectorSchemaResource`/schema 版本/`capabilities()`/`credentialKeys()`/`mappingTemplates()` 摘要（供 E1 下拉、能力勾选、凭据行数、映射初始化） |
+| T1 | GET | `/supply-chain/supplier-config/adapter-types` | 列出注册表 `AdapterMetadataRegistry` 的适配器类型 + 各自 `connectorSchemaResource`/schema 版本/`capabilities()`/`capabilityDescriptions`（能力中文说明，§8.4）/`credentialKeys()`/`mappingTemplates()` 摘要（供 E1 下拉、能力勾选、凭据行数、映射初始化） |
 | T2 | GET | `/supply-chain/supplier-config/{supplierCode}/connectors` | 该供应商连接器列表（connectorNo/code/adapterType/status/currentVersionId + **A1 追加 `latestVersionId`/`latestVersionNo`/`latestVersionStatus`**：Phase 1 连接器与版本 1:1，暴露最新版本使前端刷新后仍能对草稿/已验证态驱动 校验→发布→退役，草稿态 `currentVersionId` 为 null 时据 `latestVersionId` 操作） |
 | T3 | GET | `/supply-chain/supplier-config/connectors/{connectorNo}/versions/{versionId}` | 连接器版本详情（公共字段 + `adapter_config_json`/`extra_config` + 校验态 + 能力启用态；**不含凭据明文**） |
 | T4 | GET | `/supply-chain/supplier-config/{supplierCode}/credential-sets` | 凭据集/项列表（**只返回 `item_key`/`provider_type`/`masked_hint`/`status`，绝不返回 `secret_ref` 值或密文**） |
@@ -218,6 +220,8 @@ default List<String> fulfillmentSteps() { return List.of(); }
 能力在 `validateConnector`（`:101`，`ValidateConnectorReqVO.capabilities:Set<String>`）时声明并落 `sc_supplier_connector_capability`（`uk_sc_connector_capability (connector_version_id, capability_code)`）。UI 勾选项来自 T1 的 `capabilities()`（封闭集），前端不自由输入。
 
 ### 6.5 映射（G2）
+
+2026-10-12 完善：映射查询增加查看版本、当前发布版本和服务端可操作性；初始化/追加仅针对草稿，华昇封闭十行模板禁止逐条追加，空错误表由适配器内置策略管理。写事务锁版本并更新其乐观锁，旧映射上的验证结果不得落库。前端根据后端管理投影显示说明、限制按钮与函数调用，隔离切换版本后的旧请求/弹窗完成事件。详细契约见 `docs/superpowers/specs/2026-10-12-huasheng-fulfillment-hardening-design.md#3-映射管理契约`。
 
 - 泛化 `initializeQnmStatusMappings`（`:82`）为 `POST /supply-chain/supplier-config/connectors/mappings/initialize`（入参 `connectorVersionId`，按该版本 adapterType 从 `mappingTemplates()` 初始化状态 + 错误码映射）。
 - 保留 `addErrorMapping`（`:90`）追加单条错误码；新增 `POST /supply-chain/supplier-config/connectors/status-mappings` 追加单条状态映射。
@@ -271,6 +275,10 @@ default List<String> fulfillmentSteps() { return List.of(); }
 ### 8.4 能力子页
 
 展示连接器版本能力启用态（T3/T1），勾选用在连接器草稿的 `validate` 步骤（§6.4）；本页主要为可视化查看 + 引导到连接器校验。
+
+2026-10-12 展示补充（按用户要求修订为后端单一来源）：能力表按「能力编码 / 能力说明 / 启用态」排列，能力说明同时提供中文名称与一句职责解释。中文说明统一定义在后端 `supplieradapter/metadata/Capability` 枚举的 `description` 字段，由 T1 `AdapterTypeView` 新增 `capabilityDescriptions: Map<String,String>` 返回；映射键与该适配器的 `capabilities()` 完全一致，编码与说明均由同一组后端注册能力生成。原 `capabilities: List<String>` 保留，连接器校验请求与封闭能力集合不变；T3 的版本声明与启用态仍来自 `sc_supplier_connector_capability`，不新增数据库字段。前端读取所选适配器返回的映射，禁止维护能力中文字典；旧后端未返回说明、目录外历史编码或缺少说明时，仍展示原编码与原启用态，说明回退为「暂无中文说明」，不得过滤该行或猜测含义。新增平台能力必须同时在枚举内声明中文说明，新适配器复用该枚举即可返回说明，无需修改前端。
+
+中文说明口径：`CREATE_RECHARGE`＝创建充值：向供应商发起充值订单；`ISSUE_ASSET`＝发放资产：向供应商申请发放券码等权益资产；`BIND_BENEFIT`＝绑定权益：将权益绑定到指定用户账号；`QUERY_ORDER`＝查询订单：查询供应商订单状态与履约结果；`QUERY_ASSET`＝查询资产：查询券码等权益资产的状态；`VOID_ASSET`＝作废资产：将已发放的权益资产作废；`UNBIND_ASSET`＝解绑资产：解除权益资产与用户账号的绑定；`QUERY_BALANCE`＝查询余额：查询供应商账户的可用余额；`QUERY_INVENTORY`＝查询库存：查询供应商商品的可用库存；`RECEIVE_CALLBACK`＝接收回调：接收供应商推送的订单状态与履约结果通知。说明只解释接口职责，不承诺退款、重试或账本动作。
 
 ### 8.5 映射子页（G2）
 

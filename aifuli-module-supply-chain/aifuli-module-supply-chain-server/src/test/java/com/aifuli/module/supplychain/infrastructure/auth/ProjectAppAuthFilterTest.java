@@ -114,7 +114,7 @@ class ProjectAppAuthFilterTest {
         });
 
         verify(credentialService).authenticate(APP_ID, 1, CHANNEL_OPERATION.operationCode());
-        verify(credentialService).requireCapability(11L, "INSTORE");
+        verify(credentialService).requireCapability(11L, CHANNEL_OPERATION);
         verify(nonceStore).ensureUnique(APP_ID, "nonce-filter-test");
         assertThat(ProjectAuthContextHolder.get()).isNull();
         assertThat(response.getContentAsByteArray()).isEmpty();
@@ -435,7 +435,7 @@ class ProjectAppAuthFilterTest {
         });
         verify(credentialService).authenticate(APP_ID, 1, operation.operationCode());
         verify(credentialService, never()).authenticate(APP_ID, 1);
-        verify(credentialService).requireCapability(11L, ProjectAuthOperations.CAPABILITY_STANDARD_PRODUCT);
+        verify(credentialService).requireCapability(11L, operation);
         verify(nonceStore).ensureUnique(APP_ID, "nonce-filter-test");
         assertThat(ProjectAuthContextHolder.get()).isNull();
     }
@@ -447,13 +447,13 @@ class ProjectAppAuthFilterTest {
         MockHttpServletRequest invalidSignature = signedRequest(operation, projectCredentials(), BODY, NOW.toEpochMilli());
         invalidSignature.setContent("tampered".getBytes(StandardCharsets.UTF_8));
         assertRejected(runRejectedWithOldContext(invalidSignature));
-        verify(credentialService, never()).requireCapability(org.mockito.ArgumentMatchers.any(), anyString());
+        verify(credentialService, never()).requireCapability(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
         verifyNoInteractions(nonceStore);
 
         doThrow(exception(BUYER_AUTH_INVALID)).when(credentialService)
-                .requireCapability(11L, ProjectAuthOperations.CAPABILITY_STANDARD_PRODUCT);
+                .requireCapability(11L, operation);
         assertRejected(runRejectedWithOldContext(signedRequest(operation, projectCredentials(), BODY, NOW.toEpochMilli())));
-        verify(credentialService).requireCapability(11L, ProjectAuthOperations.CAPABILITY_STANDARD_PRODUCT);
+        verify(credentialService).requireCapability(11L, operation);
         verifyNoInteractions(nonceStore);
     }
 

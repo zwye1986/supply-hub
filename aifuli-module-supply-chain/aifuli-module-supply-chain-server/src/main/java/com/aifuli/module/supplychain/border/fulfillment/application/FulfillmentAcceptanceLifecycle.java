@@ -21,6 +21,7 @@ import com.aifuli.module.supplychain.border.fulfillment.domain.FulfillmentIdempo
 import com.aifuli.module.supplychain.border.fulfillment.domain.FulfillmentInitialStatuses;
 import com.aifuli.module.supplychain.border.fulfillment.domain.FulfillmentOperationKind;
 import com.aifuli.module.supplychain.border.fulfillment.domain.FulfillmentOutboxCodes;
+import com.aifuli.module.supplychain.border.fulfillment.domain.StandardAcceptanceFingerprintPolicy;
 import com.aifuli.module.supplychain.border.order.dal.dataobject.OrderStatusLogDO;
 import com.aifuli.module.supplychain.border.order.dal.dataobject.SupplyChainOrderDO;
 import com.aifuli.module.supplychain.border.order.dal.mysql.OrderStatusLogMapper;
@@ -149,6 +150,7 @@ public class FulfillmentAcceptanceLifecycle {
     private final OutboxEventRepository outboxRepository;
     private final BusinessNoGenerator businessNoGenerator;
     private final ObjectMapper objectMapper;
+    private final FulfillmentTargetSchemaRegistry targetSchemaRegistry;
     private final OrderSummaryPolicyRegistry orderSummaryPolicyRegistry;
     private final ObjectProvider<AcceptanceFailureInjector> failureInjector;
     private final ObjectProvider<PublishedConnectorConfigurationResolver> connectorResolverProvider;
@@ -182,6 +184,27 @@ public class FulfillmentAcceptanceLifecycle {
     }
 
     /**
+     * v2首次真实SKU/Schema解析不要求LST已发布；缺SKU/BPD在claim前失败，Schema损坏不填占位值。
+     * 设计见 docs/superpowers/specs/2026-10-12-platform-sku-order-contract-design.md#41-冻结优先。
+     */
+    @Transactional(transactionManager = TRANSACTION_MANAGER, readOnly = true)
+    public TargetSchemaSnapshot resolvePlatformSkuTargetSchema(Long buyerId, String platformSkuCode) {
+        var resolved = catalogResolver.resolvePlatformSku(buyerId, platformSkuCode);
+        if (resolved == null) {
+            throw com.aifuli.framework.common.exception.util.ServiceExceptionUtil.exception(
+                    com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.SKU_NOT_SALEABLE);
+        }
+        try {
+            if (resolved.schemaVersion() == null) { throw new FulfillmentTargetSchemaRegistry.InvalidTargetException(); }
+            targetSchemaRegistry.requireSupportedSchema(resolved.schemaCode(), resolved.schemaVersion());
+        } catch (FulfillmentTargetSchemaRegistry.InvalidTargetException invalid) {
+            throw new IllegalStateException("平台SKU目标Schema引用损坏", invalid);
+        }
+        return new TargetSchemaSnapshot(resolved.catalogIdentity().platformSkuId(), resolved.schemaCode(),
+                resolved.schemaVersion(), true, resolved.catalogIdentity());
+    }
+
+    /**
      * 抢占受理回执：按项目永久键 (projectId, buyerOrderNo) 幂等创建 PROCESSING 回执或回放已有终态。
      *
      * <p>首次创建不加行锁，靠项目键唯一索引裁决并发；并发首创落败方按项目键当前读重探测获胜回执并
@@ -201,16 +224,21 @@ public class FulfillmentAcceptanceLifecycle {
         // 会让并发首请求同时持有间隙锁，再插入时形成死锁。唯一索引才是创建竞争裁决者。
         FulfillmentAcceptanceReceiptDO existing = receiptMapper.selectByProjectKey(
                 command.projectId(), command.buyerOrderNo());
+        if (existing != null && !Objects.equals(existing.getFingerprintVersion(), command.fingerprintVersion())) {
+            throw new IdempotencyConflictException();
+        }
         BuyerListingDO gateListing = null;
         if (existing == null || existing.getStatus() != AcceptanceReceiptStatus.ACCEPTED.getCode()
                 || !Arrays.equals(existing.getRequestFingerprint(), command.requestFingerprint())) {
             // 已接受同指纹请求只回放；其余MOBILE写路径先核验门禁，暂时关闭不固化为业务终拒。
             // 设计见 docs/superpowers/specs/2026-09-30-direct-recharge-mobile-spu-frequency-design.md#101-迁移执行与核实边界。
-            CatalogIdentity identity = command.catalogIdentity() == null
+            CatalogIdentity identity = command.catalogIdentity() == null && !command.platformSkuRequest()
                     ? catalogResolver.resolve(command.buyerId(), command.buyerSkuCode()) : command.catalogIdentity();
-            gateListing = identity.available() ? listingMapper.selectById(identity.listingId()) : null;
+            gateListing = identity != null && identity.available() ? listingMapper.selectById(identity.listingId()) : null;
             if (gateListing != null) {
                 rechargeFrequencyLifecycle.requireAcceptanceReady(gateListing.getPlatformSkuId(), command.targetAccountType());
+            } else if (existing == null && command.platformSkuRequest()) {
+                rechargeFrequencyLifecycle.requireAcceptanceReady(command.frozenPlatformSkuId(), command.targetAccountType());
             }
         }
         if (existing == null) {
@@ -219,13 +247,15 @@ public class FulfillmentAcceptanceLifecycle {
                     .receiptNo(businessNoGenerator.next(BusinessNoPrefixes.RCP))
                     .buyerId(command.buyerId()).projectId(command.projectId()).buyerOrderNo(command.buyerOrderNo())
                     .buyerSkuCode(command.buyerSkuCode())
+                    .requestedPlatformSkuCode(command.requestedPlatformSkuCode())
                     // 受理时冻结的平台SKU/目标Schema版本：仅服务端可解析的真实值，无解析值时不补假数据。
-                    .platformSkuId(gateListing == null ? null : gateListing.getPlatformSkuId())
+                    .platformSkuId(command.platformSkuRequest() ? command.frozenPlatformSkuId()
+                            : gateListing == null ? null : gateListing.getPlatformSkuId())
                     .quantity(command.quantity()).targetSchemaCode(command.targetSchemaCode())
                     .targetSchemaVersion(command.targetSchemaVersion())
                     .targetDigest(command.targetDigest()).invariantFingerprint(command.invariantFingerprint())
                     .requestFingerprint(command.requestFingerprint())
-                    .fingerprintVersion(FINGERPRINT_FORMAT_NO_USER)
+                    .fingerprintVersion(command.fingerprintVersion())
                     .listingVersionNo(resolveAttemptListingVersionNo(command, gateListing)).attemptNo(1)
                     .status(AcceptanceReceiptStatus.PROCESSING.getCode())
                     .createdAt(now).updatedAt(now).version(0L).build();
@@ -269,7 +299,15 @@ public class FulfillmentAcceptanceLifecycle {
 
     /** 已有回执的竞争收敛：指纹一致按状态回放/续跑/CAS 重开；身份不同一律幂等冲突（旧格式失败关闭）。 */
     private ClaimResult claimExisting(FulfillmentAcceptanceReceiptDO existing, PreparedAcceptance command) {
-        if (Arrays.equals(existing.getRequestFingerprint(), command.requestFingerprint())) {
+        if (Objects.equals(existing.getFingerprintVersion(), command.fingerprintVersion())
+                && Arrays.equals(existing.getRequestFingerprint(), command.requestFingerprint())) {
+            // 格式3续跑/CAS在改回执前按冻结SKU核限频门禁，不解析当前目录，也不让终态回放依赖门禁。
+            if (command.platformSkuRequest() && (existing.getStatus() == AcceptanceReceiptStatus.PROCESSING.getCode()
+                    || existing.getStatus() == AcceptanceReceiptStatus.REJECTED_RETRYABLE.getCode()
+                    && command.previousReceiptVersion() != null
+                    && Objects.equals(command.previousReceiptVersion(), existing.getVersion()))) {
+                rechargeFrequencyLifecycle.requireAcceptanceReady(command.frozenPlatformSkuId(), command.targetAccountType());
+            }
             // 同一请求重试：回执仍处于 PROCESSING 说明上一次 accept 未提交，
             // 由本次重试重新执行 accept（幂等，行锁串行化）；已终态则直接回放快照。
             if (existing.getStatus() == AcceptanceReceiptStatus.PROCESSING.getCode()) {
@@ -326,6 +364,10 @@ public class FulfillmentAcceptanceLifecycle {
         }
         // 并发重试场景：另一线程已在本事务之外完成 accept 并提交，直接回放终态快照。
         if (receipt.getStatus() == AcceptanceReceiptStatus.ACCEPTED.getCode()) {
+            if (!Objects.equals(receipt.getFingerprintVersion(), command.fingerprintVersion())
+                    || !Arrays.equals(receipt.getRequestFingerprint(), command.requestFingerprint())) {
+                throw new IdempotencyConflictException();
+            }
             return snapshot(receiptId, true);
         }
         requireProcessingReceipt(receipt, command);
@@ -954,6 +996,7 @@ public class FulfillmentAcceptanceLifecycle {
     private void requireProcessingReceipt(FulfillmentAcceptanceReceiptDO receipt,
                                           PreparedAcceptance command) {
         if (receipt == null || receipt.getStatus() != AcceptanceReceiptStatus.PROCESSING.getCode()
+                || !Objects.equals(receipt.getFingerprintVersion(), command.fingerprintVersion())
                 || !Arrays.equals(receipt.getRequestFingerprint(), command.requestFingerprint())) {
             throw new IdempotencyConflictException();
         }
@@ -1098,6 +1141,9 @@ public class FulfillmentAcceptanceLifecycle {
         private final Long previousReceiptVersion;
         private final String traceId;
         private final CatalogIdentity catalogIdentity;
+        private final short fingerprintVersion;
+        private final String requestedPlatformSkuCode;
+        private final Long frozenPlatformSkuId;
         private long receiptIdHint;
 
         public PreparedAcceptance(Long projectId, String projectCode, String projectName,
@@ -1122,6 +1168,34 @@ public class FulfillmentAcceptanceLifecycle {
                                   byte[] targetCiphertext, byte[] targetDigest, String targetKeyVersion, boolean targetValid,
                                   byte[] invariantFingerprint, byte[] requestFingerprint,
                                   byte[] buyerOrderDigest, Long previousReceiptVersion, String traceId, CatalogIdentity catalogIdentity) {
+            this(projectId, projectCode, projectName, buyerId, buyerCode, buyerName, buyerOrderNo,
+                    fulfillmentAccountValue, targetAccountType, buyerSkuCode, quantity, targetSchemaCode,
+                    targetSchemaVersion, targetCiphertext, targetDigest, targetKeyVersion, targetValid,
+                    invariantFingerprint, requestFingerprint, buyerOrderDigest, previousReceiptVersion, traceId,
+                    catalogIdentity, FINGERPRINT_FORMAT_NO_USER, null, null);
+        }
+
+        /**
+         * 格式3必须显式传播原码与真实冻结SKU，不允许缺字段降级；旧构造始终使用格式2。
+         * 设计见 docs/superpowers/specs/2026-10-12-platform-sku-order-contract-design.md#42-共享命令及执行分支。
+         */
+        public PreparedAcceptance(Long projectId, String projectCode, String projectName,
+                                  Long buyerId, String buyerCode, String buyerName,
+                                  String buyerOrderNo, String fulfillmentAccountValue, String targetAccountType,
+                                  String buyerSkuCode, long quantity, String targetSchemaCode, int targetSchemaVersion,
+                                  byte[] targetCiphertext, byte[] targetDigest, String targetKeyVersion, boolean targetValid,
+                                  byte[] invariantFingerprint, byte[] requestFingerprint,
+                                  byte[] buyerOrderDigest, Long previousReceiptVersion, String traceId, CatalogIdentity catalogIdentity,
+                                  short fingerprintVersion, String requestedPlatformSkuCode, Long frozenPlatformSkuId) {
+            if (fingerprintVersion != FINGERPRINT_FORMAT_NO_USER
+                    && fingerprintVersion != StandardAcceptanceFingerprintPolicy.PLATFORM_SKU_FORMAT_VERSION
+                    || fingerprintVersion == FINGERPRINT_FORMAT_NO_USER && requestedPlatformSkuCode != null
+                    || fingerprintVersion == StandardAcceptanceFingerprintPolicy.PLATFORM_SKU_FORMAT_VERSION
+                    && (requestedPlatformSkuCode == null || requestedPlatformSkuCode.isBlank()
+                    || frozenPlatformSkuId == null || frozenPlatformSkuId <= 0
+                    || buyerSkuCode == null || buyerSkuCode.isBlank())) {
+                throw new IllegalArgumentException("受理请求格式与冻结商品身份不一致");
+            }
             this.projectId = projectId;
             this.projectCode = projectCode;
             this.projectName = projectName;
@@ -1145,6 +1219,9 @@ public class FulfillmentAcceptanceLifecycle {
             this.previousReceiptVersion = previousReceiptVersion;
             this.traceId = traceId;
             this.catalogIdentity = catalogIdentity;
+            this.fingerprintVersion = fingerprintVersion;
+            this.requestedPlatformSkuCode = requestedPlatformSkuCode;
+            this.frozenPlatformSkuId = frozenPlatformSkuId;
         }
 
         public Long projectId() { return projectId; }
@@ -1170,6 +1247,10 @@ public class FulfillmentAcceptanceLifecycle {
         public Long previousReceiptVersion() { return previousReceiptVersion; }
         public String traceId() { return traceId; }
         public CatalogIdentity catalogIdentity() { return catalogIdentity; }
+        public short fingerprintVersion() { return fingerprintVersion; }
+        public String requestedPlatformSkuCode() { return requestedPlatformSkuCode; }
+        public Long frozenPlatformSkuId() { return frozenPlatformSkuId; }
+        public boolean platformSkuRequest() { return fingerprintVersion == StandardAcceptanceFingerprintPolicy.PLATFORM_SKU_FORMAT_VERSION; }
         public long receiptIdHint() { return receiptIdHint; }
         private void receiptIdHint(long value) { this.receiptIdHint = value; }
     }

@@ -585,6 +585,59 @@ class HuashengCallbackIntegrationTest {
     }
 
     @Test
+    @DisplayName("正式加密 FAILED 回调零交付/省略数量返回200，非法非零交付返回400")
+    void signedFailedCallbackUsesDeliveryQuantityAtHttpBoundary() throws Exception {
+        var keys = java.security.KeyPairGenerator.getInstance("RSA"); keys.initialize(2048);
+        var pair = keys.generateKeyPair();
+        String key = Base64.getEncoder().encodeToString(pair.getPublic().getEncoded());
+        String secret = "abcdef0123456789abcdef0123456789";
+        var config = new PublishedConnectorConfigurationResolver.PublishedConnectorConfiguration(
+                "HS_CALLBACK", CONNECTOR_VER_ID, 1, com.aifuli.module.supplychain.supplieradapter.metadata.HuashengOrderV1Metadata.TYPE,
+                "https://example.test", APP_ID, null, "/callbacks/suppliers/huasheng", Set.of(), 400L,
+                com.aifuli.module.supplychain.supplieradapter.metadata.CredentialBindingMode.CREDENTIAL_SET, 1000, 1000, Map.of());
+        when(context.getBean(PublishedConnectorConfigurationResolver.class).resolve(CONNECTOR_VER_ID)).thenReturn(config);
+        var credentials = context.getBean(FrozenCredentialSetResolver.class);
+        var controller = new com.aifuli.module.supplychain.interfaceapi.callback.HuashengCallbackController(callbackService);
+        var mvc = org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(controller).build();
+        for (String number : new String[]{"0", "ABSENT", "1"}) {
+            var fixture = seedOrderAggregate("HS_FAILED_HTTP_" + number, AdapterStepCode.PLACE_ORDER, 1);
+            claimPlaceToProduceMarker(fixture);
+            String plaintext = "{\"timestamp\":" + databaseClock.toInstant(databaseClock.now()).getEpochSecond()
+                    + ",\"nonce\":\"failed-http-" + number + "\",\"orderSn\":\"HS_HTTP_" + number
+                    + "\",\"outOrderSn\":\"" + fixture.bOrder().getBillno() + "\","
+                    + (number.equals("ABSENT") ? "" : "\"num\":" + number + ",")
+                    + "\"totalPrice\":\"10.00\",\"status\":\"FAILED\",\"list\":[]}";
+            String cipher = com.aifuli.module.supplychain.supplieradapter.huasheng.HuashengCrypto.encryptBodyHex(plaintext, secret, APP_ID);
+            String sign = com.aifuli.module.supplychain.supplieradapter.huasheng.HuashengCrypto.signBodyHex(cipher, pair.getPrivate());
+            // 每次认证都返回新数组，真实入口会擦除材料；重复投递不复用已擦除凭据。
+            when(credentials.resolve(any(), any(), any())).thenAnswer(invocation -> Map.of(
+                    com.aifuli.module.supplychain.supplieradapter.metadata.HuashengOrderV1Metadata.APP_SECRET, secret.toCharArray(),
+                    com.aifuli.module.supplychain.supplieradapter.metadata.HuashengOrderV1Metadata.CALLBACK_PUBLIC_KEY, key.toCharArray()));
+            for (int delivery = 0; delivery < 2; delivery++) {
+                var response = mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .post("/callbacks/suppliers/huasheng/" + CONNECTOR_VER_ID)
+                        .header("Appid", APP_ID).header("X-Sign", sign)
+                        .header("trace-id", "trace-failed-http").content(cipher)).andReturn();
+                assertThat(response.getResponse().getStatus()).isEqualTo(number.equals("1") ? 400 : 200);
+                assertThat(response.getResponse().getContentAsString()).isEqualTo(number.equals("1") ? "Invalid callback" : "success");
+            }
+            var bOrder = bOrderMapper.selectById(fixture.bOrder().getId());
+            if (number.equals("1")) {
+                assertThat(bOrder.getFulfillmentStatus()).isEqualTo(BOrderFulfillmentStatus.PROCESSING.getCode());
+            } else {
+                assertThat(bOrder.getFulfillmentStatus()).isEqualTo(BOrderFulfillmentStatus.FAILED.getCode());
+                var op = operationMapper.selectById(fixture.operation().getId());
+                var checkpoint = checkpointCodec.decrypt(new HuashengCheckpointCodec.Stored(
+                        op.getCheckpointSchemaVersion(), op.getCheckpointKeyVersion(), op.getCheckpointCiphertext()),
+                        new HuashengCheckpoint.Binding(bOrder.getId(), bOrder.getBOrderNo(), op.getOperationNo(),
+                                op.getSequenceNo(), AdapterStepCode.PLACE_ORDER, CONNECTOR_VER_ID, 100L, op.getConfigDigest()));
+                assertThat(checkpoint.observation().num()).isZero();
+                assertThat(checkpoint.placeParameters().num()).isEqualTo(1);
+            }
+        }
+    }
+
+    @Test
     void realSignedParserToControllerRejectsMalformedPlaintextWithoutDisclosure() throws Exception {
         var keys = java.security.KeyPairGenerator.getInstance("RSA"); keys.initialize(2048);
         var pair = keys.generateKeyPair();
@@ -799,6 +852,15 @@ class HuashengCallbackIntegrationTest {
                 }
                 return null;
             }).when(mock).commitHuashengSuccess(any(), any(), any());
+            doAnswer(invocation -> {
+                HuashengExecutionPermit permit = invocation.getArgument(0);
+                BOrderDO bOrder = bOrderMapper.selectById(permit.bOrderId());
+                if (bOrder != null) {
+                    bOrder.setFulfillmentStatus(BOrderFulfillmentStatus.FAILED.getCode());
+                    bOrderMapper.updateById(bOrder);
+                }
+                return null;
+            }).when(mock).releaseHuashengRejection(any(), any(), any());
             return mock;
         }
 

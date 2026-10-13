@@ -22,6 +22,7 @@ import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierOff
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferMapper;
 import com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock;
+import com.aifuli.module.supplychain.tradecore.supply.application.SupplierEligibilityTestFixture;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerDO;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerProductDO;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerMapper;
@@ -80,7 +81,7 @@ class ProductManagementPageQueryTest {
     private final ProductCatalogQueryService service = new ProductCatalogQueryService(
             spuMapper, skuMapper, brandMapper, categoryMapper, typeMapper,
             offerMapper, offerVersionMapper, supplierMapper,
-            typeValidationService, sellabilityService, buyerMapper, buyerProductMapper, databaseClock);
+            typeValidationService, sellabilityService, buyerMapper, buyerProductMapper, databaseClock, SupplierEligibilityTestFixture.create(supplierMapper, offerMapper, offerVersionMapper, skuMapper, spuMapper));
 
     private static final LocalDateTime NOW = LocalDateTime.of(2026, 9, 22, 12, 0);
 
@@ -226,10 +227,10 @@ class ProductManagementPageQueryTest {
         assertThat(sku1.skuCode()).isEqualTo("SKU_MONTH");
         assertThat(sku1.skuName()).isEqualTo("月卡");
         assertThat(sku1.marketPrice()).isEqualTo(2000L);
-        assertThat(sku1.supplyPrice()).isEqualTo(2014L);
-        assertThat(sku1.supplyPriceExclusive()).isEqualTo(1900L);
+        assertThat(sku1.supplyPrice()).isNull();
+        assertThat(sku1.supplyPriceExclusive()).isNull();
         assertThat(sku1.taxRateDisplay()).isEqualTo("6%");
-        assertThat(sku1.taxAmount()).isEqualTo(114L);
+        assertThat(sku1.taxAmount()).isNull();
         assertThat(sku1.suppliers()).hasSize(2);
         assertThat(sku1.suppliers().get(0).supplierName()).isEqualTo("腾讯会员供应商");
         assertThat(sku1.fulfillmentTypeDisplay()).isEqualTo("卡号卡密");
@@ -239,10 +240,10 @@ class ProductManagementPageQueryTest {
         // 季卡（不含税）
         var sku2 = spuItem.skus().get(1);
         assertThat(sku2.skuCode()).isEqualTo("SKU_SEASON");
-        assertThat(sku2.supplyPrice()).isEqualTo(5000L);
-        assertThat(sku2.supplyPriceExclusive()).isEqualTo(5000L);
+        assertThat(sku2.supplyPrice()).isNull();
+        assertThat(sku2.supplyPriceExclusive()).isNull();
         assertThat(sku2.taxRateDisplay()).isEqualTo("不含税");
-        assertThat(sku2.taxAmount()).isEqualTo(0L);
+        assertThat(sku2.taxAmount()).isNull();
         assertThat(sku2.totalInventory()).isEqualTo(0L);
         assertThat(sku2.skuInventory()).isEqualTo(0L);
     }
@@ -662,10 +663,30 @@ class ProductManagementPageQueryTest {
         verify(buyerMapper, never()).selectByBuyerCode(any());
         ArgumentCaptor<LambdaQueryWrapper<SupplierOfferDO>> offerQuery =
                 ArgumentCaptor.forClass((Class) LambdaQueryWrapper.class);
-        verify(offerMapper, times(2)).selectList(offerQuery.capture());
+        verify(offerMapper, times(3)).selectList(offerQuery.capture());
         assertThat(offerQuery.getAllValues().getFirst().getSqlSegment()).contains("supplier_id", "status");
         assertThat(offerQuery.getAllValues().getFirst().getParamNameValuePairs().values())
                 .contains(11L, OfferStatus.RETIRED.getCode());
+    }
+
+    @Test
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    void supplierSelectionRequiresActiveParentAndSkuEvenWithoutStatusParameter() {
+        when(supplierMapper.selectByCode("SPL_A")).thenReturn(SupplierDO.builder().id(11L).build());
+        PlatformSkuDO sku = PlatformSkuDO.builder().id(2001L).spuId(1001L).skuCode("SKU_A")
+                .status(CatalogEntityStatus.ACTIVE.getCode()).build();
+        when(skuMapper.selectList(any())).thenReturn(List.of(sku));
+        when(spuMapper.selectPage(any(PageParam.class), any())).thenReturn(new PageResult<>(List.of(), 0L));
+        service.managementPage(new ProductManagementPageQuery(null, null, null, null, null, null, null, null,
+                null, null, null, null, "SPL_A", null, null, 1, 20, null, true));
+        ArgumentCaptor<LambdaQueryWrapper<PlatformSpuDO>> parent = ArgumentCaptor.forClass((Class) LambdaQueryWrapper.class);
+        verify(spuMapper).selectPage(any(PageParam.class), parent.capture());
+        assertThat(parent.getValue().getSqlSegment()).contains("status =");
+        assertThat(parent.getValue().getParamNameValuePairs().values()).contains(CatalogEntityStatus.ACTIVE.getCode());
+        ArgumentCaptor<LambdaQueryWrapper<PlatformSkuDO>> child = ArgumentCaptor.forClass((Class) LambdaQueryWrapper.class);
+        verify(skuMapper).selectList(child.capture());
+        assertThat(child.getValue().getSqlSegment()).contains("status =");
+        assertThat(child.getValue().getParamNameValuePairs().values()).contains(CatalogEntityStatus.ACTIVE.getCode());
     }
 
     @Test
@@ -730,6 +751,8 @@ class ProductManagementPageQueryTest {
                         .status(SupplierStatus.ACTIVE.getCode()).build(),
                 SupplierDO.builder().id(12L).supplierCode("SUP_B").supplierName("过期供应商")
                         .status(SupplierStatus.SUSPENDED.getCode()).build()));
+
+        SupplierEligibilityTestFixture.seedDependencies(service, List.of(sku), List.of(spu));
 
         PageResult<ProductManagementSpuItem> result = service.managementPage(new ProductManagementPageQuery(
                 null, null, null, null, null, null, null, null,
@@ -848,7 +871,7 @@ class ProductManagementPageQueryTest {
     }
 
     @Test
-    void managementPageFallsBackToFixedDraftPriceWhenOfferHasNoVersion() {
+    void managementPageHasNoSupplyPriceWhenOfferHasNoVersion() {
         PlatformSpuDO spu = PlatformSpuDO.builder()
                 .id(1001L).spuCode("SPU_IQY").spuName("爱奇艺黄金会员").status(CatalogEntityStatus.ACTIVE.getCode())
                 .updatedAt(NOW).build();
@@ -869,12 +892,12 @@ class ProductManagementPageQueryTest {
                 null, null, null, null, null, null, null, null,
                 null, null, null, null, null, null, null, 1, 20, null, null));
 
-        assertThat(result.getList().getFirst().skus().getFirst().supplyPrice()).isEqualTo(20_000L);
+        assertThat(result.getList().getFirst().skus().getFirst().supplyPrice()).isNull();
         assertThat(result.getList().getFirst().skus().getFirst().suppliers()).hasSize(1);
     }
 
     @Test
-    void managementPageSupplyPriceRangeMatchesFixedIdentityFallback() {
+    void managementPageSupplyPriceRangeRejectsOfferWithoutVersion() {
         PlatformSpuDO spu = PlatformSpuDO.builder()
                 .id(1001L).spuCode("SPU_IQY").spuName("爱奇艺黄金会员").status(CatalogEntityStatus.ACTIVE.getCode())
                 .updatedAt(NOW).build();
@@ -896,12 +919,8 @@ class ProductManagementPageQueryTest {
                 null, null, null, null, null, null, null, null,
                 null, null, 15_000L, 25_000L, null, null, null, 1, 20, null, null));
 
-        assertThat(result.getList().getFirst().skus().getFirst().supplyPrice()).isEqualTo(20_000L);
-        ArgumentCaptor<LambdaQueryWrapper<SupplierOfferDO>> offerQuery =
-                ArgumentCaptor.forClass((Class) LambdaQueryWrapper.class);
-        verify(offerMapper, times(2)).selectList(offerQuery.capture());
-        assertThat(offerQuery.getAllValues().getFirst().getSqlSegment()).contains("supplier_id");
-        assertThat(offerQuery.getAllValues().getFirst().getParamNameValuePairs().values()).contains(11L);
+        assertThat(result.getList()).isEmpty();
+        assertThat(result.getTotal()).isZero();
     }
 
     private static ProductCategoryDO category(Long id, Long parentId) {

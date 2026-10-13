@@ -56,6 +56,24 @@ public interface AdapterMetadata {
     MappingTemplates mappingTemplates();
 
     /**
+     * 是否允许在草稿上逐条追加状态映射；可扩展适配器默认允许，封闭模板必须显式关闭。
+     * 这里只声明协议约束，版本生命周期与 HTTP 权限由各自入口负责。
+     * 设计见 docs/superpowers/specs/2026-10-12-huasheng-fulfillment-hardening-design.md#31-后端元数据与查询。
+     */
+    default boolean statusMappingAppendAllowed() { return true; }
+
+    /** 同上，错误映射的逐条追加能力与状态映射分别声明。 */
+    default boolean errorMappingAppendAllowed() { return true; }
+
+    /**
+     * 管理端展示的中文协议说明；不将状态映射误解为任意资金动作配置。
+     * 设计见 docs/superpowers/specs/2026-10-12-huasheng-fulfillment-hardening-design.md#3-映射管理契约。
+     */
+    default String mappingDescription() {
+        return "草稿版本可从模板初始化，并在封闭事实类型、错误分类和重试一致性约束内追加映射；发布后只读。";
+    }
+
+    /**
      * 多步骤履约编排声明（HUA_SHENG 文 AD-1 使用）；单步适配器继承此默认空列表。
      */
     default List<String> fulfillmentSteps() {

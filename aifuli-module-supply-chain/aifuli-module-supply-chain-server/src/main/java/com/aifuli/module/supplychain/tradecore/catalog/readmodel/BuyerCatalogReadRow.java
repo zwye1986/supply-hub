@@ -36,4 +36,12 @@ public class BuyerCatalogReadRow {
     private Long sourceBuyerPricingVersionId;
     /** 买方定价当前版本身份；用于来源匹配判定。 */
     private Long buyerPricingCurrentVersionId;
+    /** 投影评估依据；真实来源见 basis_json.sourceBuyerPricingVersionId，不使用变化计数。 */
+    private String basisJson;
+    /** 存储的供给评估原因码。 */
+    private String reasonCode;
+    /** 商业版本生效时间，AUTO读侧包含此时刻。 */
+    private LocalDateTime commercialValidFrom;
+    /** 商业版本失效时间，AUTO读侧不包含此时刻，空表示无限期。 */
+    private LocalDateTime commercialValidTo;
 }

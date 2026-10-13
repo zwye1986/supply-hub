@@ -13,7 +13,8 @@ import static org.mockito.ArgumentMatchers.*;
 class BuyerAcceptanceCatalogResolverTest {
     private final BuyerProductMapper products = mock(BuyerProductMapper.class);
     private final BuyerListingMapper listings = mock(BuyerListingMapper.class);
-    private final BuyerAcceptanceCatalogResolver resolver = new BuyerAcceptanceCatalogResolver(products, listings);
+    private final BuyerAcceptanceCatalogResolver resolver = new BuyerAcceptanceCatalogResolver(products, listings,
+            mock(com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper.class));
 
     @Test
     void removedBpdAndOldAliasResolveSameManualIdentityWithoutChangingRequestedCode() {

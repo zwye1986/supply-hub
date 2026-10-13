@@ -3,94 +3,18 @@ package com.aifuli.module.supplychain.tradecore.catalog.dal.read;
 import com.aifuli.module.supplychain.tradecore.catalog.readmodel.BuyerCatalogReadRow;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
-import org.apache.ibatis.annotations.Select;
 
 import java.time.LocalDateTime;
 import java.util.List;
 
 /**
- * 买家目录读模型查询。
- *
- * <p><b>为何保留 {@code @Select}（开发规范第 8 条例外）</b>：
- * 本接口是跨 listing / version / sku / spu / brand / category / availability / buyer pricing 的多表 JOIN 读模型，
- * 并带动态 {@code <script>} 条件（buyerSkuCode、fulfillmentType、availableOnly）与分页 OFFSET。
- * {@code LambdaQueryWrapper} 面向单实体表，无法等价表达该投影与动态片段；
- * 若迁出注解应优先落到 XML Mapper，而不是强行改成 Lambda。</p>
- *
- * <p>详见 {@code docs/superpowers/specs/2026-08-07-supply-chain-phase1-detailed-design.md} 目录读模型相关章节，
- * 以及 {@code docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#1-范围与不变量}。</p>
+ * 买家目录多表读模型，分页与计数在 XML 中共用可用性条件；不承担发布或刷新。
+ * 复杂 JOIN 与 JSON 来源无法用单实体 Lambda 表达，按开发规范第8条使用 XML。
+ * 设计见 {@code docs/superpowers/specs/2026-10-12-catalog-source-freshness-correction-design.md#5-实现责任边界与影响范围}。
  */
 @Mapper
 public interface BuyerCatalogReadMapper {
 
-    String READ_COLUMNS = """
-            SELECT l.id AS listing_id,
-                   l.buyer_sku_code,
-                   l.status AS listing_status,
-                   l.management_mode AS management_mode,
-                   lv.version_no AS listing_version,
-                   lv.source_buyer_pricing_version_id AS source_buyer_pricing_version_id,
-                   sku.sku_code AS platform_sku_code,
-                   spu.spu_code AS platform_spu_code,
-                   lv.display_name,
-                   brand.brand_code,
-                   brand.brand_name,
-                   category.category_code,
-                   category.category_name,
-                   sku.fulfillment_type,
-                   lv.buyer_settlement_unit_price,
-                   lv.currency,
-                   availability.availability,
-                   availability.version AS availability_version,
-                   availability.evaluated_at AS evaluated_at,
-                   availability.valid_until AS valid_until,
-                   pricing.pricing_status AS pricing_status,
-                   pricing.current_version_id AS buyer_pricing_current_version_id,
-                   l.updated_at
-              FROM sc_buyer_listing l
-              JOIN sc_buyer_listing_version lv ON lv.id = l.current_version_id
-              JOIN sc_platform_sku sku ON sku.id = l.platform_sku_id
-              JOIN sc_platform_spu spu ON spu.id = sku.spu_id
-              JOIN sc_brand brand ON brand.id = spu.brand_id
-              JOIN sc_product_category category ON category.id = spu.primary_category_id
-              LEFT JOIN sc_buyer_listing_availability availability ON availability.listing_id = l.id
-              LEFT JOIN sc_buyer_product bp ON bp.buyer_id = l.buyer_id AND bp.platform_sku_id = sku.id
-              LEFT JOIN sc_buyer_sku_pricing pricing ON pricing.buyer_product_id = bp.id
-            """;
-
-    /**
-     * availableOnly 的AUTO陈旧排除条件：投影期限必须存在且超过本次库时钟，且商业版本来源与买方定价当前版本一致；
-     * MANUAL保持旧RPC准入（发布+投影可用+定价READY）。设计 §6.4「目录 RPC读项及 availableOnly筛选遵守同一库时钟／AUTO过期规则」。
-     */
-    String AVAILABLE_ONLY_CONDITION = """
-                 AND l.status = 10 AND availability.availability = 10
-                 AND pricing.pricing_status = #{saleablePricingStatus}
-                 AND (l.management_mode = 'MANUAL'
-                   OR (l.management_mode = 'AUTO_SELECTION'
-                       AND availability.valid_until IS NOT NULL
-                       AND availability.valid_until &gt; #{now}
-                       AND lv.source_buyer_pricing_version_id IS NOT NULL
-                       AND lv.source_buyer_pricing_version_id = pricing.current_version_id))
-            """;
-
-    @Select("""
-            <script>
-            """ + READ_COLUMNS + """
-             WHERE l.buyer_id = #{buyerId}
-               AND l.status IN (10, 20)
-               <if test='buyerSkuCode != null and buyerSkuCode != ""'>
-                 AND l.buyer_sku_code = #{buyerSkuCode}
-               </if>
-               <if test='fulfillmentType != null and fulfillmentType != ""'>
-                 AND sku.fulfillment_type = #{fulfillmentType}
-               </if>
-               <if test='availableOnly'>
-            """ + AVAILABLE_ONLY_CONDITION + """
-               </if>
-             ORDER BY l.id ASC
-             LIMIT #{limit} OFFSET #{offset}
-            </script>
-            """)
     List<BuyerCatalogReadRow> selectPage(@Param("buyerId") Long buyerId,
                                          @Param("buyerSkuCode") String buyerSkuCode,
                                          @Param("fulfillmentType") String fulfillmentType,
@@ -100,29 +24,6 @@ public interface BuyerCatalogReadMapper {
                                          @Param("offset") long offset,
                                          @Param("limit") int limit);
 
-    @Select("""
-            <script>
-            SELECT COUNT(*)
-              FROM sc_buyer_listing l
-              JOIN sc_buyer_listing_version lv ON lv.id = l.current_version_id
-              JOIN sc_platform_sku sku ON sku.id = l.platform_sku_id
-              LEFT JOIN sc_buyer_listing_availability availability ON availability.listing_id = l.id
-              LEFT JOIN sc_buyer_product bp ON bp.buyer_id = l.buyer_id AND bp.platform_sku_id = sku.id
-              LEFT JOIN sc_buyer_sku_pricing pricing ON pricing.buyer_product_id = bp.id
-             WHERE l.buyer_id = #{buyerId}
-               AND l.current_version_id IS NOT NULL
-               AND l.status IN (10, 20)
-               <if test='buyerSkuCode != null and buyerSkuCode != ""'>
-                 AND l.buyer_sku_code = #{buyerSkuCode}
-               </if>
-               <if test='fulfillmentType != null and fulfillmentType != ""'>
-                 AND sku.fulfillment_type = #{fulfillmentType}
-               </if>
-               <if test='availableOnly'>
-            """ + AVAILABLE_ONLY_CONDITION + """
-               </if>
-            </script>
-            """)
     long countPage(@Param("buyerId") Long buyerId,
                    @Param("buyerSkuCode") String buyerSkuCode,
                    @Param("fulfillmentType") String fulfillmentType,
@@ -130,6 +31,5 @@ public interface BuyerCatalogReadMapper {
                    @Param("saleablePricingStatus") String saleablePricingStatus,
                    @Param("now") LocalDateTime now);
 
-    @Select(READ_COLUMNS + " WHERE l.id = #{listingId}")
     BuyerCatalogReadRow selectByListingId(@Param("listingId") Long listingId);
 }

@@ -64,7 +64,8 @@ class CurrentSupplyEligibilityReaderIntegrationTest {
                         "aifuli.supply-chain.datasource.url", mysql.getJdbcUrl(),
                         "aifuli.supply-chain.datasource.username", mysql.getUsername(),
                         "aifuli.supply-chain.datasource.password", mysql.getPassword(),
-                        "aifuli.supply-chain.datasource.driver-class-name", "com.mysql.cj.jdbc.Driver"))
+                        "aifuli.supply-chain.datasource.driver-class-name", "com.mysql.cj.jdbc.Driver",
+                        "aifuli.supply-chain.connector.allowed-adapter-types", "QNM_GAME_ORDER_V1"))
                 .run();
         jdbc = new JdbcTemplate(context.getBean("supplyChainDataSource", DataSource.class));
         transactions = new TransactionTemplate(context.getBean("supplyChainTransactionManager",
@@ -431,6 +432,14 @@ class CurrentSupplyEligibilityReaderIntegrationTest {
                 .validatedAt(now).validationExpiresAt(now.plusDays(1)).publishedAt(now).configDigest(new byte[32])
                 .status((short) 10).version(0L).createdAt(now).updatedAt(now).build();
         context.getBean(SupplierConnectorVersionMapper.class).insert(connectorVersion);
+        // 资格解析要求冻结执行画像的主能力与查询/回调能力全部启用，真实写入对应版本能力。
+        // 见 docs/superpowers/specs/2026-10-11-supplier-offer-lifecycle-design.md#32-闭环二路由与定价资格统一结构有效性。
+        for (String capability : List.of("CREATE_RECHARGE", "QUERY_ORDER", "RECEIVE_CALLBACK")) {
+            context.getBean(com.aifuli.module.supplychain.supplieradapter.metadata.SupplierConnectorCapabilityMapper.class)
+                    .insert(com.aifuli.module.supplychain.supplieradapter.metadata.SupplierConnectorCapabilityDO.builder()
+                            .connectorVersionId(connectorVersion.getId()).capabilityCode(capability)
+                            .enabled((short) 1).metadataVersion(1).createdAt(now).build());
+        }
         jdbc.update("UPDATE sc_supplier_connector SET current_version_id=? WHERE id=?", connectorVersion.getId(), connector.getId());
         InventorySourceDO inventory = InventorySourceDO.builder().sourceNo("IN" + unique).supplierId(supplier.getId())
                 .platformSkuId(sku.getId()).sourceType("REMOTE_ON_DEMAND").externalSourceCode(unique)

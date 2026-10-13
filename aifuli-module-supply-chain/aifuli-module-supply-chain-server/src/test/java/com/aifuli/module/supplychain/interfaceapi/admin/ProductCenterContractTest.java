@@ -12,6 +12,13 @@ import com.aifuli.module.supplychain.tradecore.catalog.application.ProductTypeAd
 import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
 import com.aifuli.module.supplychain.tradecore.supply.domain.OfferFulfillmentScore;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.aifuli.module.supplychain.tradecore.supply.application.OfferFulfillmentScoreService;
+import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityType;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.test.web.servlet.request.MockMvcRequestBuilders;
+import org.springframework.test.web.servlet.result.MockMvcResultMatchers;
+import org.springframework.http.MediaType;
+import org.mockito.ArgumentCaptor;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.swagger.v3.core.converter.ModelConverters;
 import io.swagger.v3.oas.annotations.Operation;
@@ -42,6 +49,10 @@ import java.util.Set;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BRAND_LEGACY_API_DEPRECATED;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_STATUS_INVALID;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verify;
+import static org.mockito.ArgumentMatchers.any;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
@@ -49,6 +60,51 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#36-openapiswagger}。
  */
 class ProductCenterContractTest {
+
+    @Test
+    void batchSyncModeAndGroupsAreExplicitInHttpContract() {
+        assertThat(Arrays.stream(ProductAdminController.ProductBatchStatusReqVO.class.getDeclaredFields()).map(f -> f.getName()))
+                .contains("syncSkuOnShelf");
+        assertThat(Arrays.stream(ProductAdminController.BatchStatusResultVO.class.getDeclaredFields()).map(f -> f.getName()))
+                .contains("syncSkuOnShelf", "groups");
+        assertThat(Arrays.stream(ProductAdminController.BatchStatusFailedItemVO.class.getDeclaredFields()).map(f -> f.getName()))
+                .contains("failedEntityType", "failedEntityCode");
+    }
+
+    @Test
+    void syncRequestReachesCommandAndFailureGroupIsProjectedWithoutLosingScope() throws Exception {
+        var commands = mock(ProductCatalogCommandService.class);
+        var controller = new ProductAdminController(mock(ProductCatalogQueryService.class), commands,
+                mock(OfferFulfillmentScoreService.class));
+        var mapper = new ObjectMapper();
+        var request = mapper.readValue("{\"spuCodes\":[\"SPU_1\"],\"skuCodes\":[],\"targetStatus\":\"10\",\"syncSkuOnShelf\":true}",
+                ProductAdminController.ProductBatchStatusReqVO.class);
+        when(commands.batchChangeStatus(any())).thenReturn(
+                new ProductCatalogCommandService.BatchStatusResult(List.of(), List.of(new ProductCatalogCommandService.BatchStatusFailedItem(
+                        CatalogEntityType.SPU, "SPU_1", 123, "规格校验失败",
+                        CatalogEntityType.SKU, "SKU_2")), true,
+                        List.of(new ProductCatalogCommandService.BatchStatusGroup("SPU_1", List.of("SKU_1", "SKU_2"), false,
+                                CatalogEntityType.SKU, "SKU_2"))));
+        var mvc = MockMvcBuilders.standaloneSetup(controller).build();
+        String response = mvc.perform(MockMvcRequestBuilders
+                        .put("/supply-chain/products/batch-status").contentType(MediaType.APPLICATION_JSON)
+                        .content(mapper.writeValueAsString(request)))
+                .andExpect(MockMvcResultMatchers.status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        JsonNode data = mapper.readTree(response).get("data");
+        assertThat(data.get("syncSkuOnShelf").asBoolean()).isTrue();
+        assertThat(data.get("groups").get(0).get("skuCodes")).hasSize(2);
+        assertThat(data.get("groups").get(0).get("succeeded").asBoolean()).isFalse();
+        assertThat(data.get("groups").get(0).get("failedEntityCode").asText()).isEqualTo("SKU_2");
+        assertThat(data.get("failed").get(0).get("entityType").asText()).isEqualTo("SPU");
+        assertThat(data.get("failed").get(0).get("code").asText()).isEqualTo("SPU_1");
+        assertThat(data.get("failed").get(0).get("failedEntityType").asText()).isEqualTo("SKU");
+        var capture = ArgumentCaptor.forClass(ProductCatalogCommandService.BatchStatusCommand.class);
+        verify(commands).batchChangeStatus(capture.capture());
+        assertThat(capture.getValue().syncSkuOnShelf()).isTrue();
+        assertThat(mapper.readValue("{\"spuCodes\":[\"SPU_1\"],\"targetStatus\":10}",
+                ProductAdminController.ProductBatchStatusReqVO.class).getSyncSkuOnShelf()).isNull();
+    }
 
     /** 编辑旧 SPU 时必须回显内部父段，以便管理端新增 SKU 使用真实编号。 */
     @Test
@@ -489,8 +545,8 @@ class ProductCenterContractTest {
         assertRecordComponentsDocumented(com.aifuli.module.supplychain.tradecore.catalog.application.ProductCatalogQueryService.ProductManagementSpuItem.class);
         assertRecordComponentsDocumented(com.aifuli.module.supplychain.tradecore.catalog.application.ProductCatalogQueryService.ProductManagementSkuItem.class);
         assertRecordComponentsDocumented(com.aifuli.module.supplychain.tradecore.catalog.application.ProductCatalogQueryService.SupplierSimpleInfo.class);
-        assertRecordComponentsDocumented(com.aifuli.module.supplychain.tradecore.supply.application.OfferFulfillmentScoreService.SkuFulfillmentScoreView.class);
-        assertRecordComponentsDocumented(com.aifuli.module.supplychain.tradecore.supply.application.OfferFulfillmentScoreService.SkuScoreItem.class);
+        assertRecordComponentsDocumented(OfferFulfillmentScoreService.SkuFulfillmentScoreView.class);
+        assertRecordComponentsDocumented(OfferFulfillmentScoreService.SkuScoreItem.class);
     }
 
     /** 商品列表两个字典筛选参数必须明确 SKU 状态口径及对应字典类型。 */

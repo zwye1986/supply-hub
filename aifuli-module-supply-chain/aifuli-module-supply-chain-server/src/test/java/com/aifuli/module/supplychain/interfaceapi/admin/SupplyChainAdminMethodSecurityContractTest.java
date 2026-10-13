@@ -1,6 +1,7 @@
 package com.aifuli.module.supplychain.interfaceapi.admin;
 
 import com.aifuli.framework.common.biz.system.permission.PermissionCommonApi;
+import com.aifuli.framework.jackson.config.AifuliJacksonAutoConfiguration;
 import com.aifuli.framework.security.core.LoginUser;
 import com.aifuli.framework.security.core.service.SecurityFrameworkService;
 import com.aifuli.framework.security.core.service.SecurityFrameworkServiceImpl;
@@ -20,6 +21,7 @@ import com.aifuli.module.supplychain.routing.application.RoutingRuleStrategy;
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerAdminCommandService;
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerAdminQueryService;
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerInvoiceService;
+import com.aifuli.module.supplychain.tradecore.buyer.application.ProjectCapabilityAdminService;
 import com.aifuli.module.supplychain.tradecore.catalog.application.BuyerProductCommandService;
 import com.aifuli.module.supplychain.tradecore.catalog.application.BuyerProductQueryService;
 import com.aifuli.module.supplychain.tradecore.catalog.application.ProductCatalogCommandService;
@@ -44,6 +46,9 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.context.junit.jupiter.SpringJUnitConfig;
+import org.springframework.http.converter.json.Jackson2ObjectMapperBuilder;
+import org.springframework.http.converter.json.MappingJackson2HttpMessageConverter;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -59,6 +64,8 @@ import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminP
 import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.ORDER_QUERY;
 import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.PRODUCT_QUERY;
 import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.PRODUCT_UPDATE;
+import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.PROJECT_QUERY;
+import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.PROJECT_UPDATE;
 import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.SUPPLIER_QUERY;
 import static com.aifuli.module.supplychain.interfaceapi.admin.SupplyChainAdminPermissions.SUPPLIER_UPDATE;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -69,6 +76,10 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
  * 启用真实 Spring Method Security 的管理端权限契约测试。
@@ -94,11 +105,92 @@ class SupplyChainAdminMethodSecurityContractTest {
     @Resource
     private PlatformSkuAdminController platformSkuController;
     @Resource
+    private OrderViewController orderViewController;
+    @Resource
+    private com.aifuli.module.supplychain.border.order.application.OrderViewQueryService orderViewQueries;
+    @Resource
     private OrderAdminController orderController;
     @Resource
     private SupplierOrderAdminController supplierOrderController;
     @Resource
     private RoutingRuleAdminController routingRuleController;
+    @Resource
+    private ProjectCapabilityAdminController projectCapabilityController;
+    @Resource
+    private ProjectCapabilityAdminService projectCapabilityService;
+
+    @Test
+    void projectCapabilityQueryCannotWriteAndUnauthenticatedCannotRead() {
+        grant(PROJECT_QUERY);
+        assertThatCode(() -> projectCapabilityController.list("PRJ_1")).doesNotThrowAnyException();
+        assertThatThrownBy(() -> projectCapabilityController.enable("PRJ_1",
+                new ProjectCapabilityAdminController.EnableRequest(null))).isInstanceOf(AccessDeniedException.class);
+        assertThatThrownBy(() -> projectCapabilityController.disable("PRJ_1",
+                new ProjectCapabilityAdminController.DisableRequest(0L, true, "暂停接入")))
+                .isInstanceOf(AccessDeniedException.class);
+        SecurityContextHolder.clearContext();
+        assertThatThrownBy(() -> projectCapabilityController.list("PRJ_1"))
+                .isInstanceOf(AccessDeniedException.class);
+    }
+
+    @Test
+    void projectCapabilityEditorAndAdminUseLoggedInOperator() {
+        Long operatorId = ((LoginUser) SecurityContextHolder.getContext().getAuthentication().getPrincipal()).getId();
+        for (String permission : List.of(PROJECT_UPDATE, ADMIN)) {
+            org.mockito.Mockito.clearInvocations(projectCapabilityService);
+            grant(permission);
+            projectCapabilityController.enable("PRJ_1", new ProjectCapabilityAdminController.EnableRequest(null));
+            projectCapabilityController.disable("PRJ_1",
+                    new ProjectCapabilityAdminController.DisableRequest(0L, true, "暂停接入"));
+            org.mockito.Mockito.verify(projectCapabilityService).enable("PRJ_1", null, operatorId);
+            org.mockito.Mockito.verify(projectCapabilityService).disable("PRJ_1", 0L, true, "暂停接入", operatorId);
+        }
+    }
+
+    @Test
+    void projectCapabilityHttpContractUsesReadableTimeAndValidatesRequests() throws Exception {
+        grant(ADMIN);
+        when(projectCapabilityService.list("PRJ_1")).thenReturn(List.of(
+                new ProjectCapabilityAdminService.CapabilityView("STANDARD_PRODUCT", "ENABLED", 7L,
+                        71L, LocalDateTime.of(2026, 10, 12, 9, 24, 35))));
+        var builder = new Jackson2ObjectMapperBuilder();
+        new AifuliJacksonAutoConfiguration().ldtEpochMillisCustomizer().customize(builder);
+        var mvc = MockMvcBuilders.standaloneSetup(projectCapabilityController)
+                .setMessageConverters(new MappingJackson2HttpMessageConverter(builder.build())).build();
+        String path = "/supply-chain/projects/PRJ_1/capabilities";
+        mvc.perform(get(path)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[0].lastChangedAt").value("2026-10-12 09:24:35"))
+                .andExpect(jsonPath("$.data[0].version").value(7));
+        mvc.perform(post(path + "/standard-product/enable").contentType("application/json")
+                .content("{\"expectedVersion\":null}")).andExpect(status().isOk());
+        mvc.perform(post(path + "/standard-product/enable").contentType("application/json")
+                .content("{\"expectedVersion\":-1}")).andExpect(status().isBadRequest());
+        for (String reason : List.of(" ", "长".repeat(257))) {
+            mvc.perform(post(path + "/standard-product/disable").contentType("application/json")
+                    .content("{\"expectedVersion\":7,\"confirmed\":true,\"reason\":\"" + reason + "\"}"))
+                    .andExpect(status().isBadRequest());
+        }
+        mvc.perform(post(path + "/o2o/enable").contentType("application/json").content("{}"))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void plaintextOrderViewRequiresOrderQueryPermissionBeforeServiceAccess() {
+        org.mockito.Mockito.clearInvocations(orderViewQueries);
+        grant();
+        assertThatThrownBy(() -> orderViewController.get("SC_1", "PLATFORM"))
+                .isInstanceOf(AccessDeniedException.class);
+        org.mockito.Mockito.verifyNoInteractions(orderViewQueries);
+    }
+
+    @Test
+    void authorizedPlaintextOrderViewDelegatesWithActualAdminIdentity() {
+        org.mockito.Mockito.clearInvocations(orderViewQueries);
+        grant(ORDER_QUERY);
+        orderViewController.get("SC_1", "PLATFORM");
+        org.mockito.Mockito.verify(orderViewQueries).get(
+                org.mockito.ArgumentMatchers.eq("SC_1"), org.mockito.ArgumentMatchers.eq("PLATFORM"), anyLong());
+    }
 
     @BeforeEach
     void setUp() {
@@ -507,6 +599,26 @@ class SupplyChainAdminMethodSecurityContractTest {
             return new PlatformSkuAdminController(
                     mock(PlatformSkuQueryService.class),
                     mock(com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericBatchPricingService.class));
+        }
+
+        @Bean
+        ProjectCapabilityAdminService projectCapabilityAdminService() {
+            return mock(ProjectCapabilityAdminService.class);
+        }
+
+        @Bean
+        ProjectCapabilityAdminController projectCapabilityAdminController(ProjectCapabilityAdminService service) {
+            return new ProjectCapabilityAdminController(service);
+        }
+
+        @Bean
+        com.aifuli.module.supplychain.border.order.application.OrderViewQueryService orderViewQueries() {
+            return mock(com.aifuli.module.supplychain.border.order.application.OrderViewQueryService.class);
+        }
+
+        @Bean
+        OrderViewController orderViewController(com.aifuli.module.supplychain.border.order.application.OrderViewQueryService queries) {
+            return new OrderViewController(queries);
         }
 
         @Bean

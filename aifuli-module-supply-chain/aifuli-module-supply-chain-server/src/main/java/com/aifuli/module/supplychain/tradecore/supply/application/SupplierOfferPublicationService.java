@@ -29,6 +29,10 @@ import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierExt
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierOfferDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierOfferVersionDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.InventorySourceMapper;
+import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.CredentialSetMapper;
+import com.aifuli.module.supplychain.tradecore.supply.domain.OfferPriceMode;
+import java.util.Objects;
+import java.util.List;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierConnectorMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierConnectorVersionMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierExternalSkuBindingMapper;
@@ -49,6 +53,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.annotation.Isolation;
 
 import java.time.LocalDateTime;
 
@@ -87,11 +92,17 @@ public class SupplierOfferPublicationService {
     private final ObjectMapper objectMapper;
     private final ProductSellabilityService productSellabilityService;
     private final ApplicationEventPublisher eventPublisher;
-    /** adapterType 白名单灰度闸门（§6.8），仅 gate 上架步骤 2 的 C3 连接器候选。 */
+    /** 正式发布与上架共用 adapterType 白名单；见生命周期设计 §3.3。 */
     private final AdapterTypeAllowList adapterTypeAllowList;
+    private final CredentialSetMapper credentialSetMapper;
 
-    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
+    /**
+     * 技术端新增库存也先锁供应商；草稿来源尚不可履约，后续启用时再同步重算。
+     * 见 docs/superpowers/specs/2026-10-11-supplier-offer-lifecycle-design.md#34-闭环四同步重算的锁顺序与并发事务规范。
+     */
+    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class, isolation = Isolation.READ_COMMITTED)
     public String createRemoteOnDemandInventory(CreateInventorySourceCommand command) {
+        SupplierLifecycleTransactions.requireReadCommitted();
         SupplierDO supplier = requireActiveSupplier(command.supplierCode());
         PlatformSkuDO sku = requireActiveSku(command.platformSkuCode());
         LocalDateTime now = now();
@@ -106,10 +117,16 @@ public class SupplierOfferPublicationService {
         return source.getSourceNo();
     }
 
-    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
+    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class, isolation = Isolation.READ_COMMITTED)
     public void activateInventorySource(String sourceNo, long expectedVersion, Long operatorId) {
+        SupplierLifecycleTransactions.requireReadCommitted();
+        InventorySourceDO probe = inventorySourceMapper.selectByNo(sourceNo);
+        if (probe == null || supplierMapper.selectByIdForUpdate(probe.getSupplierId()) == null) {
+            throw new IllegalStateException("Inventory source supplier is missing");
+        }
         InventorySourceDO source = inventorySourceMapper.selectByNoForUpdate(sourceNo);
-        if (source == null || source.getStatus() != InventorySourceStatus.DRAFT.getCode()
+        if (source == null || !Objects.equals(source.getSupplierId(), probe.getSupplierId())
+                || source.getStatus() != InventorySourceStatus.DRAFT.getCode()
                 || source.getVersion() != expectedVersion) {
             throw new IllegalStateException("Inventory source is not an expected draft");
         }
@@ -119,10 +136,17 @@ public class SupplierOfferPublicationService {
         if (inventorySourceMapper.updateById(source) != 1) {
             throw new IllegalStateException("Inventory source activation lost optimistic lock");
         }
+        eventPublisher.publishEvent(new PricingDependencyChangedEvent(source.getPlatformSkuId()));
     }
 
-    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
+    /**
+     * 技术端与管理端新增身份行统一默认下架；先锁供应商以串行化该供应商所有供给写入。
+     * 正式发布才能生成当前履约版本与绑定，禁止新增入口旁路生命周期。
+     * 见 docs/superpowers/specs/2026-10-11-supplier-offer-lifecycle-design.md#1-核心业务规则。
+     */
+    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class, isolation = Isolation.READ_COMMITTED)
     public String createOffer(CreateOfferCommand command) {
+        SupplierLifecycleTransactions.requireReadCommitted();
         SupplierDO supplier = requireActiveSupplier(command.supplierCode());
         PlatformSkuDO sku = requireActiveSku(command.platformSkuCode());
         LocalDateTime now = now();
@@ -131,49 +155,59 @@ public class SupplierOfferPublicationService {
                 .supplierId(supplier.getId()).platformSkuId(sku.getId())
                 .stabilityScore(OfferFulfillmentScore.DEFAULT)
                 .timelinessScore(OfferFulfillmentScore.DEFAULT)
-                .status(OfferStatus.DRAFT.getCode()).version(0L)
+                .status(OfferStatus.SUSPENDED.getCode()).version(0L)
                 .createdBy(command.operatorId()).createdAt(now)
                 .updatedBy(command.operatorId()).updatedAt(now).build();
         offerMapper.insert(offer);
         return offer.getOfferNo();
     }
 
-    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
+    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class, isolation = Isolation.READ_COMMITTED)
     public PublishResult publish(PublishOfferCommand command) {
+        SupplierLifecycleTransactions.requireReadCommitted();
         validateCommercialTerms(command);
-        SupplierOfferDO offer = offerMapper.selectByNoForUpdate(command.offerNo());
-        if (offer == null || offer.getVersion() != command.expectedOfferVersion()
-                || offer.getStatus() == OfferStatus.RETIRED.getCode()) {
-            throw new IllegalStateException("Supplier offer is not publishable at the expected version");
+        SupplierOfferDO probe = offerMapper.selectByNo(command.offerNo());
+        if (probe == null) {
+            throw new IllegalStateException("Supplier offer is missing");
         }
-        SupplierDO supplier = supplierMapper.selectById(offer.getSupplierId());
+        SupplierDO supplier = supplierMapper.selectByIdForUpdate(probe.getSupplierId());
         if (supplier == null || supplier.getStatus() != SupplierStatus.ACTIVE.getCode()) {
             throw new IllegalStateException("Offer supplier is not active");
         }
-        PlatformSkuDO sku = productSellabilityService.requireSellableById(offer.getPlatformSkuId()).sku();
-
-        SupplierConnectorVersionDO connectorVersion = connectorVersionMapper.selectById(command.connectorVersionId());
-        SupplierConnectorDO connector = connectorVersion == null ? null
-                : connectorMapper.selectById(connectorVersion.getConnectorId());
-        if (connectorVersion == null || connector == null
-                || connectorVersion.getStatus() != ConnectorVersionStatus.PUBLISHED.getCode()
-                || !connectorVersion.getId().equals(connector.getCurrentVersionId())
-                || !connector.getSupplierId().equals(offer.getSupplierId())) {
-            throw new IllegalStateException("Offer must use the supplier's current published connector version");
+        LockedConnector locked = lockConnector(supplier, command.connectorVersionId());
+        SupplierOfferDO offer = offerMapper.selectByNoForUpdate(command.offerNo());
+        if (offer == null || !Objects.equals(offer.getSupplierId(), supplier.getId())
+                || offer.getVersion() != command.expectedOfferVersion()
+                || offer.getStatus() == OfferStatus.RETIRED.getCode()) {
+            throw new IllegalStateException("Supplier offer is not publishable at the expected version");
         }
+        PlatformSkuDO sku = productSellabilityService.requireSellableById(offer.getPlatformSkuId()).sku();
+        requireFixedMode(offer);
+        InventorySourceDO source = inventorySourceMapper.selectByNoForUpdate(command.inventorySourceNo());
+        return publishLocked(command, offer, supplier, sku, locked, source);
+    }
 
-        InventorySourceDO source = inventorySourceMapper.selectByNo(command.inventorySourceNo());
-        if (source == null || source.getStatus() != InventorySourceStatus.ACTIVE.getCode()
-                || !source.getSupplierId().equals(offer.getSupplierId())
-                || !source.getPlatformSkuId().equals(offer.getPlatformSkuId())
+    /**
+     * 调用者已按供应商→凭据集→连接器/版本/能力→Offer→库存顺序完成当前读。
+     * 本方法不反向取得依赖锁，在同一RC事务内冻结新履约版本并同步重算价格。
+     * 设计见 docs/superpowers/specs/2026-10-11-supplier-offer-lifecycle-design.md#34-闭环四同步重算的锁顺序与并发事务规范。
+     */
+    private PublishResult publishLocked(PublishOfferCommand command, SupplierOfferDO offer, SupplierDO supplier,
+                                        PlatformSkuDO sku, LockedConnector locked, InventorySourceDO source) {
+        validateCommercialTerms(command);
+        SupplierConnectorDO connector = locked.connector();
+        SupplierConnectorVersionDO connectorVersion = locked.version();
+        if (source == null || source.getStatus() == null || source.getStatus() != InventorySourceStatus.ACTIVE.getCode()
+                || !Objects.equals(source.getSupplierId(), offer.getSupplierId())
+                || !Objects.equals(source.getPlatformSkuId(), offer.getPlatformSkuId())
                 || !SOURCE_TYPE_REMOTE_ON_DEMAND.equals(source.getSourceType())) {
             throw new IllegalStateException("Offer inventory source is not an active matching remote source");
         }
         Capability capability = Capability.valueOf(command.primaryCapabilityCode());
-        requireCapability(connectorVersion.getId(), capability);
-        requireCapabilityMatchesSku(sku, capability);
-        requireExecutionCapabilities(connectorVersion.getId(), command);
-
+        if (!SupplierOfferEligibilityService.executionCapabilitiesEnabled(sku.getFulfillmentType(), capability.name(),
+                command.completionMode(), command.unknownResultPolicy(), locked.capabilities())) {
+            throw exception(OFFER_CAPABILITY_MISSING, supplier.getSupplierCode(), capability.name());
+        }
         AdapterMetadata metadata = metadataRegistry.require(connector.getAdapterType());
         int schemaVersion = metadata.offerSchemaVersion();
         JsonNode config = parse(command.fulfillmentConfigJson());
@@ -237,64 +271,46 @@ public class SupplierOfferPublicationService {
      *   <li>c3 库存自动开通/复用（§2 不变量 8）；</li>
      *   <li>组装发布参数：结算价←{@code draft_unit_price}（g3）、执行画像←{@code defaultExecutionProfile()}（d2）、
      *       数量←身份行草稿、{@code validFrom=now}/{@code validTo} 入参（k1，空＝长期）；</li>
-     *   <li>委托 {@link #publish} 写版本行 + upsert binding + 置 {@code current_version_id}/{@code version+1} + outbox。</li>
+     *   <li>在已持有的供应商与子对象锁内写不可变版本、绑定、当前指针与 outbox，并同步重算价格。</li>
      * </ol>
      *
-     * <p>本方法与 {@link #publish} 同一事务（自调用，REQUIRED 语义合并）：C3/能力守卫先于 publish 的通用
-     * {@code IllegalStateException} 抛出专用业务错误码，保证前端拿到明确文案。</p>
+     * <p>局部 READ_COMMITTED 事务先锁供应商，再按 CredentialSet→Connector→版本/能力→Offer→Inventory 顺序锁定。
+     * 直接复用已锁对象执行发布，避免在 Offer 锁后回头锁连接器或再次调用供应商入口。
+     * 见 {@code docs/superpowers/specs/2026-10-11-supplier-offer-lifecycle-design.md#34-闭环四同步重算的锁顺序与并发事务规范}。</p>
      */
-    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
+    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class, isolation = Isolation.READ_COMMITTED)
     public PublishResult listOnShelf(ListOnShelfCommand command) {
-        log.info("合作商品上架 supplierCode={} offerNo={} validTo={} operatorId={}",
+        SupplierLifecycleTransactions.requireReadCommitted();
+        log.info("[offerListOnShelf][合作商品发布请求] supplierCode={}, offerNo={}, validTo={}, operatorId={}",
                 command.supplierCode(), command.offerNo(), command.validTo(), command.operatorId());
-        SupplierOfferDO offer = offerMapper.selectByNoForUpdate(command.offerNo());
-        if (offer == null || offer.getStatus() == OfferStatus.RETIRED.getCode()) {
-            throw new IllegalStateException("Supplier offer is not listable: " + command.offerNo());
-        }
-        if (offer.getExternalSkuCode() == null || offer.getExternalSkuCode().isBlank()) {
-            throw new IllegalArgumentException("Offer external SKU code is required before list-on-shelf");
-        }
-        SupplierDO supplier = supplierMapper.selectByCode(command.supplierCode());
+        SupplierDO supplier = supplierMapper.selectByCodeForUpdate(command.supplierCode());
         if (supplier == null || supplier.getStatus() != SupplierStatus.ACTIVE.getCode()) {
             throw new IllegalStateException("Offer supplier is not active");
         }
-        if (!offer.getSupplierId().equals(supplier.getId())) {
-            throw new IllegalArgumentException("Offer does not belong to supplier: " + command.supplierCode());
+        LockedConnector locked = lockConnector(supplier, null);
+        SupplierConnectorDO connector = locked.connector();
+        SupplierConnectorVersionDO connectorVersion = locked.version();
+        SupplierOfferDO offer = offerMapper.selectByNoForUpdate(command.offerNo());
+        if (offer == null || offer.getStatus() == OfferStatus.RETIRED.getCode()
+                || !Objects.equals(offer.getSupplierId(), supplier.getId())) {
+            throw new IllegalArgumentException("Offer does not belong to supplier or is retired");
         }
+        requireFixedDraft(offer);
         PlatformSkuDO sku = productSellabilityService.requireSellableById(offer.getPlatformSkuId()).sku();
-
-        SupplierConnectorDO connector = connectorMapper.selectPublishedBySupplier(offer.getSupplierId());
-        if (connector == null || connector.getCurrentVersionId() == null
-                || !adapterTypeAllowList.isAllowed(connector.getAdapterType())) {
-            throw exception(SUPPLIER_NO_PUBLISHED_CONNECTOR, supplier.getSupplierCode());
-        }
-        SupplierConnectorVersionDO connectorVersion =
-                connectorVersionMapper.selectById(connector.getCurrentVersionId());
-        if (connectorVersion == null
-                || connectorVersion.getStatus() != ConnectorVersionStatus.PUBLISHED.getCode()) {
-            throw exception(SUPPLIER_NO_PUBLISHED_CONNECTOR, supplier.getSupplierCode());
-        }
-
         Capability capability = derivePrimaryCapability(sku.getFulfillmentType());
-        boolean capabilityEnabled = capabilityMapper.selectByConnectorVersionId(connectorVersion.getId()).stream()
-                .anyMatch(row -> row.getEnabled() == 1 && row.getCapabilityCode().equals(capability.name()));
+        boolean capabilityEnabled = locked.capabilities().stream()
+                .anyMatch(row -> row.getEnabled() != null && row.getEnabled() == 1
+                        && capability.name().equals(row.getCapabilityCode()));
         if (!capabilityEnabled) {
             throw exception(OFFER_CAPABILITY_MISSING, supplier.getSupplierCode(), capability.name());
         }
-
-        String inventorySourceNo = ensureActiveRemoteInventory(offer, command.operatorId());
-
-        if (offer.getDraftUnitPrice() == null) {
-            // TODO 非 FIXED 价模式（DISCOUNT/REALTIME）的结算价派生未在 §6.6 步骤 5（g3）定义，Phase 1 仅支持
-            //  身份行 draft_unit_price；扩展前须先补设计。见
-            //  docs/superpowers/specs/2026-10-03-supplier-offer-publication-admin-design.md#66-上架即发布服务b1核心。
-            throw new IllegalArgumentException("Offer draft unit price is required for list-on-shelf publication");
-        }
-        if (offer.getDraftMinQuantity() == null || offer.getDraftMaxQuantity() == null) {
-            throw new IllegalArgumentException("Offer draft quantity is required for list-on-shelf publication");
-        }
         AdapterMetadata metadata = metadataRegistry.require(connector.getAdapterType());
         ExecutionProfileDefaults profile = metadata.defaultExecutionProfile();
+        if (!SupplierOfferEligibilityService.executionCapabilitiesEnabled(sku.getFulfillmentType(), capability.name(),
+                profile.completionMode().code(), profile.unknownResultPolicy().code(), locked.capabilities())) {
+            throw exception(OFFER_CAPABILITY_MISSING, supplier.getSupplierCode(), capability.name());
+        }
+        String inventorySourceNo = ensureActiveRemoteInventory(offer, command.operatorId());
         PublishOfferCommand publishCommand = new PublishOfferCommand(
                 offer.getOfferNo(), offer.getVersion(),
                 offer.getExternalSkuCode(), offer.getDraftUnitPrice(),
@@ -306,15 +322,17 @@ public class SupplierOfferPublicationService {
                 profile.resultMultiplicity().code(), profile.fulfillmentConfigJson(),
                 now(), command.validTo(), LIST_ON_SHELF_REASON,
                 command.operatorId(), command.traceId(), command.correlationId(), command.causationId());
-        return publish(publishCommand);
+        InventorySourceDO source = inventorySourceMapper.selectByNoForUpdate(inventorySourceNo);
+        return publishLocked(publishCommand, offer, supplier, sku, locked, source);
     }
 
     /**
      * c3 库存自动开通/复用（§2 不变量 8）：同供应商 + 同 SKU 已有 ACTIVE 的 {@code REMOTE_ON_DEMAND} 来源则复用，
-     * 否则新建 DRAFT 并立即启用（复用 {@link #activateInventorySource} 的乐观锁激活路径），避免多次上架堆积来源。
+     * 否则在当前供应商锁内直接新建 ACTIVE 来源；来源创建与 Offer 发布整体回滚，避免多次上架堆积来源。
+     * 见 {@code docs/superpowers/specs/2026-10-11-supplier-offer-lifecycle-design.md#34-闭环四同步重算的锁顺序与并发事务规范}。
      */
     private String ensureActiveRemoteInventory(SupplierOfferDO offer, Long operatorId) {
-        InventorySourceDO existing = inventorySourceMapper.selectActiveBySupplierSkuAndType(
+        InventorySourceDO existing = inventorySourceMapper.selectActiveBySupplierSkuAndTypeForUpdate(
                 offer.getSupplierId(), offer.getPlatformSkuId(), SOURCE_TYPE_REMOTE_ON_DEMAND);
         if (existing != null) {
             return existing.getSourceNo();
@@ -327,11 +345,10 @@ public class SupplierOfferPublicationService {
                 .sourceType(SOURCE_TYPE_REMOTE_ON_DEMAND)
                 .externalSourceCode(offer.getExternalSkuCode())
                 .ownerType("SUPPLIER")
-                .status(InventorySourceStatus.DRAFT.getCode()).version(0L)
+                .status(InventorySourceStatus.ACTIVE.getCode()).version(0L)
                 .createdBy(operatorId).createdAt(now)
                 .updatedBy(operatorId).updatedAt(now).build();
         inventorySourceMapper.insert(source);
-        activateInventorySource(source.getSourceNo(), 0L, operatorId);
         return source.getSourceNo();
     }
 
@@ -371,33 +388,59 @@ public class SupplierOfferPublicationService {
         }
     }
 
-    private void requireCapability(Long connectorVersionId, Capability capability) {
-        boolean supported = capabilityMapper.selectByConnectorVersionId(connectorVersionId).stream()
-                .anyMatch(row -> row.getEnabled() == 1 && row.getCapabilityCode().equals(capability.name()));
-        if (!supported) {
-            throw new IllegalStateException("Connector version does not enable capability: " + capability);
+    /** 先定位凭据集，再按固定顺序锁后重读与核对全部发布依赖。设计见上述设计§3.4。 */
+    private LockedConnector lockConnector(SupplierDO supplier, Long requestedVersionId) {
+        SupplierConnectorVersionDO requested = requestedVersionId == null ? null
+                : connectorVersionMapper.selectById(requestedVersionId);
+        SupplierConnectorDO located = requestedVersionId == null ? connectorMapper.selectPublishedBySupplier(supplier.getId())
+                : requested == null ? null : connectorMapper.selectById(requested.getConnectorId());
+        if (located == null || located.getCurrentVersionId() == null) {
+            throw exception(SUPPLIER_NO_PUBLISHED_CONNECTOR, supplier.getSupplierCode());
+        }
+        Long versionId = requestedVersionId == null ? located.getCurrentVersionId() : requestedVersionId;
+        SupplierConnectorVersionDO versionProbe = requestedVersionId == null
+                ? connectorVersionMapper.selectById(versionId) : requested;
+        if (versionProbe == null) {
+            throw exception(SUPPLIER_NO_PUBLISHED_CONNECTOR, supplier.getSupplierCode());
+        }
+        Long credentialSetId = versionProbe.getCredentialSetId();
+        if (credentialSetId != null && credentialSetMapper.selectByIdForUpdate(credentialSetId) == null) {
+            throw new IllegalStateException("Connector credential set is missing");
+        }
+        SupplierConnectorDO connector = connectorMapper.selectByIdForUpdate(located.getId());
+        SupplierConnectorVersionDO version = connectorVersionMapper.selectByIdForUpdate(versionId);
+        if (connector == null || version == null || connector.getStatus() == null
+                || connector.getStatus() != SupplierOfferEligibilityService.CONNECTOR_ACTIVE
+                || version.getStatus() == null || version.getStatus() != ConnectorVersionStatus.PUBLISHED.getCode()
+                || !Objects.equals(connector.getSupplierId(), supplier.getId())
+                || !Objects.equals(version.getConnectorId(), connector.getId())
+                || !Objects.equals(version.getId(), connector.getCurrentVersionId())
+                || !Objects.equals(version.getCredentialSetId(), credentialSetId)
+                || !adapterTypeAllowList.isAllowed(connector.getAdapterType())) {
+            throw exception(SUPPLIER_NO_PUBLISHED_CONNECTOR, supplier.getSupplierCode());
+        }
+        List<SupplierConnectorCapabilityDO> capabilities = capabilityMapper.selectByConnectorVersionIdForUpdate(versionId);
+        return new LockedConnector(connector, version, capabilities);
+    }
+
+    private static void requireFixedMode(SupplierOfferDO offer) {
+        if (offer.getPriceMode() != null && !OfferPriceMode.FIXED.name().equals(offer.getPriceMode())) {
+            throw new IllegalArgumentException("Phase one publication only supports FIXED price mode");
         }
     }
 
-    private void requireExecutionCapabilities(Long connectorVersionId, PublishOfferCommand command) {
-        CompletionMode completionMode = CompletionMode.fromCode(command.completionMode());
-        UnknownResultPolicy unknownResultPolicy = UnknownResultPolicy.fromCode(command.unknownResultPolicy());
-        if (completionMode == CompletionMode.QUERY || completionMode == CompletionMode.QUERY_OR_CALLBACK
-                || unknownResultPolicy == UnknownResultPolicy.QUERY_ORDER) {
-            requireCapability(connectorVersionId, Capability.QUERY_ORDER);
-        }
-        if (completionMode == CompletionMode.CALLBACK || completionMode == CompletionMode.QUERY_OR_CALLBACK
-                || unknownResultPolicy == UnknownResultPolicy.WAIT_CALLBACK) {
-            requireCapability(connectorVersionId, Capability.RECEIVE_CALLBACK);
+    private static void requireFixedDraft(SupplierOfferDO offer) {
+        requireFixedMode(offer);
+        if (!OfferPriceMode.FIXED.name().equals(offer.getPriceMode()) || offer.getDraftUnitPrice() == null
+                || offer.getDraftUnitPrice() <= 0 || offer.getExternalSkuCode() == null || offer.getExternalSkuCode().isBlank()
+                || offer.getDraftMinQuantity() == null || offer.getDraftMinQuantity() <= 0
+                || offer.getDraftMaxQuantity() == null || offer.getDraftMaxQuantity() < offer.getDraftMinQuantity()) {
+            throw new IllegalArgumentException("FIXED draft price, external SKU and quantity are required for publication");
         }
     }
 
-    private static void requireCapabilityMatchesSku(PlatformSkuDO sku, Capability capability) {
-        Capability required = derivePrimaryCapability(sku.getFulfillmentType());
-        if (required != capability) {
-            throw new IllegalArgumentException("Primary capability does not match platform SKU fulfillment type");
-        }
-    }
+    private record LockedConnector(SupplierConnectorDO connector, SupplierConnectorVersionDO version,
+                                    List<SupplierConnectorCapabilityDO> capabilities) { }
 
     /**
      * fulfillmentType→primaryCapability 单一映射（B1 上架即发布自动选定主能力，与
@@ -435,7 +478,7 @@ public class SupplierOfferPublicationService {
     }
 
     private SupplierDO requireActiveSupplier(String supplierCode) {
-        SupplierDO supplier = supplierMapper.selectByCode(supplierCode);
+        SupplierDO supplier = supplierMapper.selectByCodeForUpdate(supplierCode);
         if (supplier == null || supplier.getStatus() != SupplierStatus.ACTIVE.getCode()
                 || !"STANDARD_SUPPLIER".equals(supplier.getSupplierType())) {
             throw new IllegalArgumentException("Active standard supplier does not exist: " + supplierCode);

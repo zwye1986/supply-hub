@@ -346,6 +346,43 @@ class HuashengSettlementIntegrationTest {
     }
 
     @Test
+    @DisplayName("失败回调零交付和省略数量均恰一次释放买家预占，检查点不篡改订购数量")
+    void failedCallbackZeroOrAbsentQuantityReleasesReservationExactlyOnce() {
+        for (Integer quantity : new Integer[]{0, null}) {
+            var fixture = seedAggregate(quantity == null ? "HS_FAIL_ABSENT" : "HS_FAIL_ZERO", AdapterStepCode.PLACE_ORDER, 1000L);
+            storeCheckpoint(fixture, null);
+            var price = ((com.aifuli.module.supplychain.supplieradapter.huasheng.failure.HuashengInternalAttempt.Parsed<
+                    com.aifuli.module.supplychain.supplieradapter.huasheng.protocol.HuashengPrice>)
+                    com.aifuli.module.supplychain.supplieradapter.huasheng.protocol.HuashengMoneyParser.parsePrice("10.00")).value();
+            var fact = new com.aifuli.module.supplychain.supplieradapter.huasheng.protocol.HuashengCallbackFact(
+                    databaseClock.toInstant(databaseClock.now()).getEpochSecond(), "failed-" + fixture.operation().getOperationNo(),
+                    fixture.bOrder().getBillno(), fixture.bOrder().getBillno(), quantity, price,
+                    com.aifuli.module.supplychain.supplieradapter.huasheng.protocol.HuashengOrderStatus.FAILED,
+                    java.util.Optional.empty(), "10.00", "0123456789abcdef");
+            var service = context.getBean(HuashengCallbackApplicationService.class);
+            service.handleCallbackFact(1L, 200L, fact, "trace-failed");
+            service.handleCallbackFact(1L, 200L, fact, "trace-failed-repeat");
+            assertFunds(fixture, "RELEASE", 1);
+            assertFunds(fixture, "COMMIT", 0);
+            assertThat(bOrderMapper.selectById(fixture.bOrder().getId()).getFulfillmentStatus())
+                    .isEqualTo(BOrderFulfillmentStatus.FAILED.getCode());
+            assertThat(reservationMapper.selectByReference(testBuyerId, FundReferenceType.CARD_ORDER.code(), fixture.request().getRequestNo())
+                    .getRemainingAmount()).isZero();
+            var changedQuantityPresence = new com.aifuli.module.supplychain.supplieradapter.huasheng.protocol.HuashengCallbackFact(
+                    fact.timestamp(), fact.nonce(), fact.orderSn(), fact.outOrderSn(), quantity == null ? 0 : null,
+                    price, fact.status(), java.util.Optional.empty(), "10.00", fact.appId());
+            assertThatThrownBy(() -> service.handleCallbackFact(1L, 200L, changedQuantityPresence, "trace-failed-conflict"))
+                    .isInstanceOf(HuashengCallbackConflictException.class);
+            assertFunds(fixture, "RELEASE", 1);
+            assertThat(readCheckpoint(fixture).observation().num()).isZero();
+            assertThat(readCheckpoint(fixture).placeParameters().num()).isEqualTo(1);
+            assertThat(assetMapper.selectList(new LambdaQueryWrapper<FulfillmentAssetDO>()
+                    .eq(FulfillmentAssetDO::getBOrderId, fixture.bOrder().getId()))).isEmpty();
+            assertThat(caseCount(fixture)).isZero();
+        }
+    }
+
+    @Test
     void mismatchedAmountRetainsEncryptedAssetEvidenceAndUniqueManualCase() {
         var fixture = seedAggregate("HS_MANUAL_EVIDENCE", AdapterStepCode.PLACE_ORDER, 1000L);
         storeCheckpoint(fixture, null);
@@ -531,7 +568,7 @@ class HuashengSettlementIntegrationTest {
         var card = success ? java.util.Optional.of(HuashengType201AssetCodecTest.card("{\"type\":201,\"code\":\"" + code
                 + "\",\"pass\":\" " + code + "_PASS \",\"validTime\":\"" + validTime + "\"}")) : java.util.Optional.<com.aifuli.module.supplychain.supplieradapter.huasheng.protocol.HuashengProtocolCard>empty();
         var fact = new com.aifuli.module.supplychain.supplieradapter.huasheng.protocol.HuashengCallbackFact(
-                databaseClock.toInstant(databaseClock.now()).getEpochSecond(), nonce, fixture.bOrder().getBillno(), fixture.bOrder().getBillno(), 1,
+                databaseClock.toInstant(databaseClock.now()).getEpochSecond(), nonce, fixture.bOrder().getBillno(), fixture.bOrder().getBillno(), success ? 1 : 0,
                 ((com.aifuli.module.supplychain.supplieradapter.huasheng.failure.HuashengInternalAttempt.Parsed<com.aifuli.module.supplychain.supplieradapter.huasheng.protocol.HuashengPrice>)
                         com.aifuli.module.supplychain.supplieradapter.huasheng.protocol.HuashengMoneyParser.parsePrice(price)).value(),
                 success ? com.aifuli.module.supplychain.supplieradapter.huasheng.protocol.HuashengOrderStatus.SUCCESS

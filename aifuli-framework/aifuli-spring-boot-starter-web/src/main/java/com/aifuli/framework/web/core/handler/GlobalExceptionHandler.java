@@ -5,13 +5,11 @@ import com.aifuli.framework.common.util.http.ApiAccessLogPathUtils;
 import com.aifuli.framework.apilog.core.util.SensitiveExceptionLogUtils;
 import cn.hutool.core.exceptions.ExceptionUtil;
 import cn.hutool.core.map.MapUtil;
-import cn.hutool.core.util.ObjUtil;
 import cn.hutool.core.util.StrUtil;
 import com.aifuli.framework.common.biz.infra.logger.ApiErrorLogCommonApi;
 import com.aifuli.framework.common.biz.infra.logger.dto.ApiErrorLogCreateReqDTO;
 import com.aifuli.framework.common.exception.ErrorCode;
 import com.aifuli.framework.common.exception.ServiceException;
-import com.aifuli.framework.common.exception.util.ServiceExceptionUtil;
 import com.aifuli.framework.common.pojo.CommonResult;
 import com.aifuli.framework.common.util.collection.SetUtils;
 import com.aifuli.framework.common.util.json.JsonUtils;
@@ -350,21 +348,12 @@ public class GlobalExceptionHandler {
         HttpServletRequest request = ServletUtils.getRequest();
         CommonResult<?> safeBusiness = safeBusinessRejectionIfSensitive(request, ex);
         if (safeBusiness != null) { return safeBusiness; }
-        // 不包含的时候，才进行打印，避免 ex 堆栈过多
+        // 业务拒绝由 HTTP 终结边界记录一次单行 WARN，不附异常对象或调用栈；
+        // 忽略文案与上方敏感路径渲染规则保持不变。设计见
+        // docs/superpowers/specs/2026-10-04-logging-standardization-spec.md#23-异常日志分级与防重复打印规范职责单一原则。
         if (!IGNORE_ERROR_MESSAGES.contains(ex.getMessage())) {
-            // 即使打印，也只打印第一层 StackTraceElement，并且使用 warn 在控制台输出，更容易看到
-            try {
-                StackTraceElement[] stackTraces = ex.getStackTrace();
-                for (StackTraceElement stackTrace : stackTraces) {
-                    if (ObjUtil.notEqual(stackTrace.getClassName(), ServiceExceptionUtil.class.getName())) {
-                        log.warn("[serviceExceptionHandler][code({}) message({})]\n\t{}",
-                                ex.getCode(), ex.getMessage(), stackTrace);
-                        break;
-                    }
-                }
-            } catch (Exception ignored) {
-                // 忽略日志，避免影响主流程
-            }
+            log.warn("[serviceExceptionHandler][业务请求被拒绝] code={}, message={}",
+                    ex.getCode(), ex.getMessage());
         }
         return CommonResult.error(ex.getCode(), ex.getMessage());
     }

@@ -9,6 +9,15 @@ import org.apache.ibatis.annotations.Mapper;
 @Mapper
 public interface InventorySourceMapper extends BaseMapperX<InventorySourceDO> {
 
+    /** 发布在Offer锁之后取得库存当前事实；设计见生命周期设计§3.4。 */
+    default InventorySourceDO selectActiveBySupplierSkuAndTypeForUpdate(Long supplierId, Long skuId, String sourceType) {
+        return selectOne(new LambdaQueryWrapper<InventorySourceDO>()
+                .eq(InventorySourceDO::getSupplierId, supplierId).eq(InventorySourceDO::getPlatformSkuId, skuId)
+                .eq(InventorySourceDO::getSourceType, sourceType)
+                .eq(InventorySourceDO::getStatus, InventorySourceStatus.ACTIVE.getCode())
+                .orderByAsc(InventorySourceDO::getId).last("LIMIT 1 FOR UPDATE"));
+    }
+
     default InventorySourceDO selectByNo(String sourceNo) {
         return selectOne(InventorySourceDO::getSourceNo, sourceNo);
     }

@@ -372,7 +372,7 @@ class HuashengFlowPolicyTest {
         var fact = new HuashengStepFact(
                 HuashengStepFact.Endpoint.CALLBACK,
                 HuashengStepFact.StepResult.ACCEPTED,
-                OUT_ORDER_SN, ORDER_SN, 1, PRICE_RAW, EXPECTED_COST,
+                OUT_ORDER_SN, ORDER_SN, 0, PRICE_RAW, EXPECTED_COST,
                 HuashengStepFact.Status.FAILED,
                 HuashengStepFact.RefundStatus.SUCCESS,
                 HuashengStepFact.IsTake.N,
@@ -381,5 +381,41 @@ class HuashengFlowPolicyTest {
 
         var decision = HuashengFlowPolicy.decide(checkpoint, fact, EXPECTED_COST, NOW);
         assertThat(decision).isEqualTo(HuashengFlowDecision.FINAL_REJECTION);
+    }
+
+    @Test
+    @DisplayName("FAILED 回调交付数量为零，未提供退款字段仍沿正式失败语义释放")
+    void callbackFailedZeroDeliveryWithAbsentRefundFieldsIsTrusted() {
+        var fact = new HuashengStepFact(HuashengStepFact.Endpoint.CALLBACK,
+                HuashengStepFact.StepResult.ACCEPTED, OUT_ORDER_SN, ORDER_SN, 0, PRICE_RAW, EXPECTED_COST,
+                HuashengStepFact.Status.FAILED, HuashengStepFact.RefundStatus.ABSENT,
+                HuashengStepFact.IsTake.ABSENT, null, List.of());
+        assertThat(HuashengFlowPolicy.decide(checkpointWithOrderSn(), fact, EXPECTED_COST, NOW))
+                .isEqualTo(HuashengFlowDecision.FINAL_REJECTION);
+    }
+
+    @Test
+    @DisplayName("失败回调不能用订单订购数量一冒充零交付")
+    void callbackFailedWithNonzeroDeliveryRemainsManual() {
+        var fact = new HuashengStepFact(HuashengStepFact.Endpoint.CALLBACK,
+                HuashengStepFact.StepResult.ACCEPTED, OUT_ORDER_SN, ORDER_SN, 1, PRICE_RAW, EXPECTED_COST,
+                HuashengStepFact.Status.FAILED, HuashengStepFact.RefundStatus.ABSENT,
+                HuashengStepFact.IsTake.ABSENT, null, List.of());
+        assertThat(HuashengFlowPolicy.decide(checkpointWithOrderSn(), fact, EXPECTED_COST, NOW))
+                .isEqualTo(HuashengFlowDecision.MANUAL);
+    }
+
+    @Test
+    @DisplayName("失败回调零交付仍不能覆盖已提卡待核证据")
+    void callbackFailedZeroDeliveryCannotReleasePendingAsset() {
+        var original = checkpointWithOrderSn();
+        var held = new HuashengCheckpoint(original.binding(), original.placeParameters(), original.orderSn(),
+                original.observation(), original.progress(), sampleType201Payload());
+        var fact = new HuashengStepFact(HuashengStepFact.Endpoint.CALLBACK,
+                HuashengStepFact.StepResult.ACCEPTED, OUT_ORDER_SN, ORDER_SN, 0, PRICE_RAW, EXPECTED_COST,
+                HuashengStepFact.Status.FAILED, HuashengStepFact.RefundStatus.ABSENT,
+                HuashengStepFact.IsTake.ABSENT, null, List.of());
+        assertThat(HuashengFlowPolicy.decide(held, fact, EXPECTED_COST, NOW))
+                .isEqualTo(HuashengFlowDecision.MANUAL);
     }
 }

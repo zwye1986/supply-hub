@@ -153,11 +153,17 @@ public class ProjectAppCredentialService {
 
     /**
      * 在签名通过后按服务端注册操作的能力编码授权；编码不由请求方自由指定。
-     * 设计见 {@code docs/superpowers/specs/2026-09-29-access-config-backend-impl-design.md#3-a-项目应用发码}。
+     * 已开通再停用的标准品仅保留订单摘要查询，无行和未知状态仍拒绝；不缓存授权状态。
+     * 设计见 {@code docs/superpowers/specs/2026-10-12-project-standard-product-capability-design.md#3-http-合同}。
      */
-    public void requireCapability(Long projectId, String capabilityCode) {
+    public void requireCapability(Long projectId, ProjectAuthOperations.Operation operation) {
+        String capabilityCode = operation.requiredCapability();
         ProjectCapabilityDO capability = capabilityMapper.selectByProjectIdAndCode(projectId, capabilityCode);
-        if (capability == null || !ProjectAuthStatus.ENABLED.matches(capability.getStatus())) {
+        boolean historyQuery = ProjectAuthOperations.CAPABILITY_STANDARD_PRODUCT.equals(capabilityCode)
+                && (ProjectAuthOperations.STANDARD_ORDER_QUERY.equals(operation.operationCode())
+                || ProjectAuthOperations.STANDARD_ORDER_QUERY_V2.equals(operation.operationCode()));
+        if (capability == null || !(ProjectAuthStatus.ENABLED.matches(capability.getStatus())
+                || (historyQuery && ProjectAuthStatus.SUSPENDED.matches(capability.getStatus())))) {
             log.debug("[project-auth] 项目操作能力拒绝 projectId={}, capabilityCode={}", projectId, capabilityCode);
             throw exception(BUYER_AUTH_INVALID);
         }

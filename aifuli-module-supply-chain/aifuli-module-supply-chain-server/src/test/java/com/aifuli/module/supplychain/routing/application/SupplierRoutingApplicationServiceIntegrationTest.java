@@ -121,6 +121,8 @@ class SupplierRoutingApplicationServiceIntegrationTest {
             InventorySourceMapper inventoryMapper = context.getBean(InventorySourceMapper.class);
             SupplierOfferMapper offerMapper = context.getBean(SupplierOfferMapper.class);
             SupplierOfferVersionMapper offerVersionMapper = context.getBean(SupplierOfferVersionMapper.class);
+            com.aifuli.module.supplychain.supplieradapter.metadata.SupplierConnectorCapabilityMapper capabilityMapper =
+                    context.getBean(com.aifuli.module.supplychain.supplieradapter.metadata.SupplierConnectorCapabilityMapper.class);
             JdbcTemplate jdbc = new JdbcTemplate(context.getBean(
                     "supplyChainDataSource", javax.sql.DataSource.class));
 
@@ -136,10 +138,10 @@ class SupplierRoutingApplicationServiceIntegrationTest {
             PlatformSkuDO sku = skuMapper.selectByCode("SKU_001_100");
             OfferFixture qnm = createOfferFixture("QINAMENG", "奇那梦", 900L, 90, 80, sku, now,
                     supplierMapper, credentialMapper, connectorMapper, connectorVersionMapper,
-                    inventoryMapper, offerMapper, offerVersionMapper);
+                    inventoryMapper, offerMapper, offerVersionMapper, capabilityMapper);
             OfferFixture zeta = createOfferFixture("ZETA", "后备供应商", 100L, 60, 50, sku, now,
                     supplierMapper, credentialMapper, connectorMapper, connectorVersionMapper,
-                    inventoryMapper, offerMapper, offerVersionMapper);
+                    inventoryMapper, offerMapper, offerVersionMapper, capabilityMapper);
 
             assertThatThrownBy(() -> publication.createDraft(duplicateRuleDraft(now)))
                     .isInstanceOf(IllegalArgumentException.class)
@@ -335,7 +337,8 @@ class SupplierRoutingApplicationServiceIntegrationTest {
             SupplierMapper supplierMapper, CredentialSlotMapper credentialMapper,
             SupplierConnectorMapper connectorMapper, SupplierConnectorVersionMapper connectorVersionMapper,
             InventorySourceMapper inventoryMapper, SupplierOfferMapper offerMapper,
-            SupplierOfferVersionMapper offerVersionMapper) {
+            SupplierOfferVersionMapper offerVersionMapper,
+            com.aifuli.module.supplychain.supplieradapter.metadata.SupplierConnectorCapabilityMapper capabilityMapper) {
         SupplierDO supplier = SupplierDO.builder()
                 .supplierCode(supplierCode).supplierName(supplierName).shortName(supplierName)
                 .supplierType("STANDARD_SUPPLIER").status(SupplierStatus.ACTIVE.getCode()).version(0L)
@@ -363,6 +366,13 @@ class SupplierRoutingApplicationServiceIntegrationTest {
                 .status(ConnectorVersionStatus.PUBLISHED.getCode()).version(0L)
                 .createdBy(1L).createdAt(now).updatedBy(1L).updatedAt(now).build();
         connectorVersionMapper.insert(connectorVersion);
+        // 结构资格使用真实已启用能力；执行画像同时要求查单与回调。设计见生命周期设计§3.2。
+        for (String code : List.of("CREATE_RECHARGE", "QUERY_ORDER", "RECEIVE_CALLBACK")) {
+            capabilityMapper.insert(com.aifuli.module.supplychain.supplieradapter.metadata.SupplierConnectorCapabilityDO.builder()
+                    .connectorVersionId(connectorVersion.getId()).capabilityCode(code).enabled((short)1)
+                    .metadataVersion(1).createdAt(now).build());
+        }
+
         connector.setCurrentVersionId(connectorVersion.getId());
         connector.setUpdatedAt(now);
         assertThat(connectorMapper.updateById(connector)).isEqualTo(1);
@@ -484,6 +494,7 @@ class SupplierRoutingApplicationServiceIntegrationTest {
     private ConfigurableApplicationContext applicationContext() {
         Map<String, Object> properties = new LinkedHashMap<>();
         properties.put("aifuli.supply-chain.enabled", true);
+        properties.put("aifuli.supply-chain.connector.allowed-adapter-types", "QNM_GAME_ORDER_V1");
         properties.put("aifuli.supply-chain.datasource.url", jdbcUrl());
         properties.put("aifuli.supply-chain.datasource.username", username());
         properties.put("aifuli.supply-chain.datasource.password", password());

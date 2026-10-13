@@ -1,5 +1,7 @@
 # 旅通扫码购入口适配器与 pro143 首次部署详细设计
 
+> **2026-10-12 修订：** pro143 已启用 Timer 与 Outbox。本文 §1 第6条、Nacos 建议内容中的两项 `enabled: false`、环境变量“第二道关闭保护”及 §11/§12 的“共享数据库阶段保持关闭”不再适用，以 [供应链测试环境启用 Timer 与 Outbox](2026-10-12-supply-chain-test-timer-outbox-enable-design.md) 为准；如有开发实例连接同一测试库，必须保持其 Timer/Outbox 关闭。
+
 > 日期：2026-08-24
 >
 > 状态：代码与本地部署制品已实现，待 pro143 部署及真实 HOME 联调

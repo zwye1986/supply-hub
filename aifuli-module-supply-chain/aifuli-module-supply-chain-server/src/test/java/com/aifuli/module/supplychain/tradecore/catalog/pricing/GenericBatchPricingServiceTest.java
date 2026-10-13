@@ -2,6 +2,7 @@ package com.aifuli.module.supplychain.tradecore.catalog.pricing;
 
 import com.aifuli.framework.common.exception.ServiceException;
 import com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock;
+import com.aifuli.module.supplychain.tradecore.supply.application.SupplierEligibilityTestFixture;
 import com.aifuli.module.supplychain.integration.system.TaxRateDictionaryAdapter;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerDO;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerProductDO;
@@ -43,6 +44,8 @@ import com.aifuli.module.supplychain.tradecore.supply.domain.SupplierStatus;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.ArgumentCaptor;
 
 import java.math.BigDecimal;
@@ -88,11 +91,78 @@ class GenericBatchPricingServiceTest {
     @BeforeEach
     void setUp() {
         when(clock.now()).thenReturn(LocalDateTime.of(2026, 9, 16, 10, 0));
+        var pricingInputReader = mock(com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuPricingInputReader.class);
+        when(pricingInputReader.readAfterRootLock(any())).thenAnswer(call -> skuMapper.selectById((Long) call.getArgument(0)));
         service = new GenericBatchPricingService(buyerMapper, buyerProductMapper, projectMapper, listingMapper,
                 skuMapper, spuMapper, platformPricingMapper, platformVersionMapper,
                 buyerPricingMapper, buyerVersionMapper, projectPricingMapper,
                 projectVersionMapper, offerMapper, offerVersionMapper, supplierMapper, taxDictionary, clock,
-                new ObjectMapper());
+                new ObjectMapper(), SupplierEligibilityTestFixture.create(supplierMapper, offerMapper, offerVersionMapper, skuMapper, spuMapper), pricingInputReader);
+    }
+
+    @Test
+    void independentBuyerInitializationLocksPlatformRootBeforeReadingParentVersion() {
+        when(buyerProductMapper.selectById(6L)).thenReturn(BuyerProductDO.builder()
+                .id(6L).platformSkuId(4L).status(BuyerProductStatus.ACTIVE.getCode()).build());
+        when(skuMapper.selectById(4L)).thenReturn(PlatformSkuDO.builder().id(4L).build());
+        service.initializeBuyerProduct(new BuyerProductPricingInitializationEvent(6L, 1L));
+        verify(platformPricingMapper).selectBySkuIdForUpdate(4L);
+        verify(platformPricingMapper, never()).selectById(4L);
+        verifyNoInteractions(buyerPricingMapper, platformVersionMapper);
+    }
+
+    @Test
+    void independentProjectInitializationLocksPlatformRootBeforeReadingBuyerParent() {
+        when(listingMapper.selectById(7L)).thenReturn(
+                com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.ProjectListingDO.builder()
+                        .id(7L).buyerProductId(6L)
+                        .status(com.aifuli.module.supplychain.tradecore.buyer.domain.ProjectListingStatus.AVAILABLE.getCode()).build());
+        when(buyerProductMapper.selectById(6L)).thenReturn(BuyerProductDO.builder()
+                .id(6L).platformSkuId(4L).status(BuyerProductStatus.ACTIVE.getCode()).build());
+        when(skuMapper.selectById(4L)).thenReturn(PlatformSkuDO.builder().id(4L).build());
+        service.initializeProjectListing(new ProjectListingPricingInitializationEvent(7L, 1L));
+        var order = org.mockito.Mockito.inOrder(platformPricingMapper, buyerPricingMapper);
+        order.verify(platformPricingMapper).selectBySkuIdForUpdate(4L);
+        order.verify(buyerPricingMapper).selectByBuyerProductId(6L);
+        verifyNoInteractions(projectPricingMapper, buyerVersionMapper);
+    }
+
+    @Test
+    void reversePlatformBatchTakesCommonPricingLocksInSkuOrder() {
+        stubTwoSkusForPricing();
+        when(taxDictionary.requireEnabled(false, PricingTaxRateCodes.NON_TAXABLE)).thenReturn(config().taxMetadata());
+        when(platformVersionMapper.insert(any(PlatformSkuPricingVersionDO.class))).thenAnswer(call -> {
+            PlatformSkuPricingVersionDO version = call.getArgument(0); version.setId(100L + version.getPlatformSkuId()); return 1;
+        });
+        service.savePlatform(List.of("SKU_2", "SKU_1"), config(), 1L);
+        List<Long> lockAttempts = org.mockito.Mockito.mockingDetails(platformPricingMapper).getInvocations().stream()
+                .filter(call -> call.getMethod().getName().equals("selectBySkuIdForUpdate"))
+                .map(call -> (Long) call.getArgument(0)).toList();
+        assertThat(lockAttempts.subList(0, 2)).containsExactly(1L, 2L);
+    }
+
+    @Test
+    void reverseDefaultInitializationTakesCommonPricingLocksInSkuOrder() {
+        stubTwoSkusForPricing();
+        when(platformPricingMapper.selectBySkuIdForUpdate(1L)).thenReturn(PlatformSkuPricingDO.builder().platformSkuId(1L).currentVersionId(11L).build());
+        when(platformPricingMapper.selectBySkuIdForUpdate(2L)).thenReturn(PlatformSkuPricingDO.builder().platformSkuId(2L).currentVersionId(22L).build());
+        service.initializePlatformDefaults(new PlatformSkuPricingInitializationEvent(List.of("SKU_2", "SKU_1"), 1L));
+        List<Long> lockAttempts = org.mockito.Mockito.mockingDetails(platformPricingMapper).getInvocations().stream()
+                .filter(call -> call.getMethod().getName().equals("selectBySkuIdForUpdate"))
+                .map(call -> (Long) call.getArgument(0)).toList();
+        assertThat(lockAttempts.subList(0, 2)).containsExactly(1L, 2L);
+    }
+
+    private void stubTwoSkusForPricing() {
+        for (long id : List.of(1L, 2L)) {
+            var sku = PlatformSkuDO.builder().id(id).skuCode("SKU_" + id).spuId(10L)
+                    .marketPrice(10000L).suggestedSalePrice(10000L).status(CatalogEntityStatus.ACTIVE.getCode()).build();
+            when(skuMapper.selectByCode(sku.getSkuCode())).thenReturn(sku);
+            when(skuMapper.selectByIdForUpdate(id)).thenReturn(sku);
+            when(platformPricingMapper.selectBySkuIdForUpdate(id)).thenReturn(PlatformSkuPricingDO.builder()
+                    .platformSkuId(id).pricingStatus("UNPRICED").version(0L).build());
+        }
+        when(spuMapper.selectById(10L)).thenReturn(PlatformSpuDO.builder().id(10L).status(CatalogEntityStatus.ACTIVE.getCode()).build());
     }
 
     @Test
@@ -202,6 +272,57 @@ class GenericBatchPricingServiceTest {
         verify(platformVersionMapper, never()).insert(any(PlatformSkuPricingVersionDO.class));
     }
 
+    /** 人工入口的状态拒绝必须是可读业务错误；只读查询与首版自动初始化不复用此限制。 */
+    @ParameterizedTest
+    @EnumSource(value = CatalogEntityStatus.class, names = "ACTIVE", mode = EnumSource.Mode.EXCLUDE)
+    void rejectsNonActiveSkuWithoutPublishing(CatalogEntityStatus status) {
+        assertManualPricingRejected(status, CatalogEntityStatus.ACTIVE);
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = CatalogEntityStatus.class, names = "ACTIVE", mode = EnumSource.Mode.EXCLUDE)
+    void rejectsNonActiveSpuWithoutPublishing(CatalogEntityStatus status) {
+        assertManualPricingRejected(CatalogEntityStatus.ACTIVE, status);
+    }
+
+    private void assertManualPricingRejected(CatalogEntityStatus skuStatus, CatalogEntityStatus spuStatus) {
+        PlatformSkuDO sku = PlatformSkuDO.builder().id(8L).skuCode("SKU_1").spuId(2L)
+                .status(skuStatus.getCode()).build();
+        when(skuMapper.selectByCode("SKU_1")).thenReturn(sku);
+        when(skuMapper.selectByCodeForUpdate("SKU_1")).thenReturn(sku);
+        when(skuMapper.selectByIdForUpdate(sku.getId())).thenReturn(sku);
+        when(spuMapper.selectById(2L)).thenReturn(PlatformSpuDO.builder().id(2L)
+                .status(spuStatus.getCode()).build());
+        when(taxDictionary.requireEnabled(false, PricingTaxRateCodes.NON_TAXABLE))
+                .thenReturn(config().taxMetadata());
+        assertThatThrownBy(() -> service.previewPlatform(List.of("SKU_1"), config()))
+                .isInstanceOf(ServiceException.class).hasMessageContaining("SKU_1").hasMessageContaining("先上架");
+        assertThatThrownBy(() -> service.savePlatform(List.of("SKU_1"), config(), 1L))
+                .isInstanceOf(ServiceException.class).hasMessageContaining("SKU_1").hasMessageContaining("先上架");
+        verifyNoInteractions(platformPricingMapper, platformVersionMapper, buyerPricingMapper,
+                buyerVersionMapper, projectPricingMapper, projectVersionMapper);
+    }
+
+    @Test
+    void missingSkuReturnsStableBusinessError() {
+        when(taxDictionary.requireEnabled(false, PricingTaxRateCodes.NON_TAXABLE))
+                .thenReturn(config().taxMetadata());
+        assertThatThrownBy(() -> service.previewPlatform(List.of("MISSING"), config()))
+                .isInstanceOfSatisfying(ServiceException.class, error -> assertThat(error.getCode())
+                        .isEqualTo(com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PLATFORM_SKU_NOT_FOUND.getCode()));
+    }
+
+    @Test
+    void missingSpuReturnsStableBusinessError() {
+        when(taxDictionary.requireEnabled(false, PricingTaxRateCodes.NON_TAXABLE))
+                .thenReturn(config().taxMetadata());
+        when(skuMapper.selectByCode("SKU_1")).thenReturn(PlatformSkuDO.builder().id(8L)
+                .skuCode("SKU_1").spuId(2L).status(CatalogEntityStatus.ACTIVE.getCode()).build());
+        assertThatThrownBy(() -> service.previewPlatform(List.of("SKU_1"), config()))
+                .isInstanceOfSatisfying(ServiceException.class, error -> assertThat(error.getCode())
+                        .isEqualTo(com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PLATFORM_SPU_NOT_FOUND.getCode()));
+    }
+
     @Test
     void initializesUnpricedSkuWithNonTaxableSystemDefault() throws Exception {
         PlatformSkuDO sku = PlatformSkuDO.builder().id(8L).skuCode("SKU_NEW").spuId(2L)
@@ -210,7 +331,8 @@ class GenericBatchPricingServiceTest {
         PlatformSkuPricingDO identity = PlatformSkuPricingDO.builder().platformSkuId(8L)
                 .pricingStatus(PricingStatus.UNPRICED.name()).version(0L).build();
         TaxMetadata normalizedTax = new TaxMetadata(false, PricingTaxRateCodes.NON_TAXABLE, "不征税");
-        when(skuMapper.selectByCodeForUpdate("SKU_NEW")).thenReturn(sku);
+        when(skuMapper.selectByCode("SKU_NEW")).thenReturn(sku);
+        when(skuMapper.selectByIdForUpdate(sku.getId())).thenReturn(sku);
         when(platformPricingMapper.selectBySkuIdForUpdate(8L)).thenReturn(identity);
         when(taxDictionary.requireEnabled(false, PricingTaxRateCodes.NON_TAXABLE)).thenReturn(normalizedTax);
         when(offerMapper.selectPublishedBySku(8L)).thenReturn(List.of());
@@ -247,7 +369,8 @@ class GenericBatchPricingServiceTest {
         PlatformSkuDO sku = PlatformSkuDO.builder().id(8L).skuCode("SKU_PRICED").build();
         PlatformSkuPricingDO identity = PlatformSkuPricingDO.builder().platformSkuId(8L)
                 .currentVersionId(88L).pricingStatus(PricingStatus.READY.name()).build();
-        when(skuMapper.selectByCodeForUpdate("SKU_PRICED")).thenReturn(sku);
+        when(skuMapper.selectByCode("SKU_PRICED")).thenReturn(sku);
+        when(skuMapper.selectByIdForUpdate(sku.getId())).thenReturn(sku);
         when(platformPricingMapper.selectBySkuIdForUpdate(8L)).thenReturn(identity);
 
         service.initializePlatformDefaults(new PlatformSkuPricingInitializationEvent(List.of("SKU_PRICED"), 7L));
@@ -331,7 +454,7 @@ class GenericBatchPricingServiceTest {
     }
 
     @Test
-    void previewUsesFixedIdentitySupplyPriceWhenOfferHasNoVersion() {
+    void previewHasNoSupplyPriceWhenOfferHasNoVersion() {
         PlatformSkuDO sku = PlatformSkuDO.builder().id(8L).skuCode("SKU_1").spuId(2L)
                 .marketPrice(10_000L).suggestedSalePrice(9_800L)
                 .status(CatalogEntityStatus.ACTIVE.getCode()).build();
@@ -349,7 +472,7 @@ class GenericBatchPricingServiceTest {
 
         List<GenericBatchPricingService.PricingPreview> previews = service.previewPlatform(List.of("SKU_1"), config());
 
-        assertThat(previews.getFirst().supplyPriceCents()).isEqualTo(8_000L);
+        assertThat(previews.getFirst().supplyPriceCents()).isNull();
         verify(offerVersionMapper, never()).selectById(any());
     }
 

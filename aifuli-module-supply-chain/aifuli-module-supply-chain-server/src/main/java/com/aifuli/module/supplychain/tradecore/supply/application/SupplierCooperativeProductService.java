@@ -37,6 +37,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.annotation.Isolation;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -47,12 +48,13 @@ import java.util.Set;
 import static com.aifuli.framework.common.exception.util.ServiceExceptionUtil.exception;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.SUPPLIER_NOT_FOUND;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.SUPPLIER_OFFER_OUT_OF_SCOPE;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.SUPPLIER_OFFER_SUGGESTED_SALE_PRICE_INVALID;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.SUPPLIER_SCOPE_CONFLICT;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.SUPPLIER_STATUS_CONFLICT;
 
 /**
- * 合作商品：新增即上架，改价只更新身份列，不写报价版本；新增与改价须发布定价依赖变更事件。
- * 设计见 {@code docs/superpowers/specs/2026-09-22-effective-supply-price-identity-fallback-design.md}。
+ * 合作商品身份管理：新增默认下架，商业编辑保存待发布草稿；正式上架委派不可变履约版本发布。
+ * 设计见 {@code docs/superpowers/specs/2026-10-11-supplier-offer-lifecycle-design.md#1-核心业务规则}。
  */
 @Slf4j
 @Service
@@ -85,15 +87,18 @@ public class SupplierCooperativeProductService {
      * 设计见 {@code docs/superpowers/specs/2026-09-07-供应链管理端表单字典与标品标签设计.md#1-已确认决策}（d3）。
      */
     private final ProductCategoryCoverageService categoryCoverageService;
+    private final SupplierOfferPublicationService publicationService;
+    private final SupplierOfferEligibilityService eligibilityService;
 
     /**
-     * 批量新增合作商品，状态直接 {@link OfferStatus#PUBLISHED}。供货上限为空时继承命中的供货配置；
+     * 批量新增合作商品，默认下架（{@link OfferStatus#SUSPENDED}）。供货上限为空时继承命中的供货配置；
      * 最低起购量为空时固定为 1，不读取供货配置中的预留字段。
-     * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#54-供货配置}。
+     * 设计见 {@code docs/superpowers/specs/2026-10-11-supplier-offer-lifecycle-design.md#1-核心业务规则}。
      */
-    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
+    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class, isolation = Isolation.READ_COMMITTED)
     public List<String> createPublished(String supplierCode, List<DraftLine> lines, Long operatorId) {
-        log.info("新增合作商品 supplierCode={} skuCount={} operatorId={}",
+        SupplierLifecycleTransactions.requireReadCommitted();
+        log.info("[offerCreate][新增下架合作商品] supplierCode={}, skuCount={}, operatorId={}",
                 supplierCode, lines == null ? 0 : lines.size(), operatorId);
         if (lines == null || lines.isEmpty()) {
             throw new IllegalArgumentException("At least one SKU is required");
@@ -107,28 +112,44 @@ public class SupplierCooperativeProductService {
         LocalDateTime now = databaseClock.now();
         List<String> offerNos = new ArrayList<>();
         for (DraftLine line : lines) {
-            offerNos.add(insertPublished(supplier, scopes, line, operatorId, now, coverage));
+            SupplierOfferDO offer = insertPublished(supplier, scopes, line, operatorId, now, coverage);
+            offerNos.add(offer.getOfferNo());
         }
+        // 新增关系尚未生效，不生成正式定价版本；首次上架编排才同步重算。
+        // 设计见 docs/superpowers/specs/2026-10-11-supplier-offer-lifecycle-design.md#1-核心业务规则。
         return offerNos;
     }
 
     /**
      * 兼容 {@code batch-draft}：委托 {@link #createPublished}。
      */
-    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
+    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class, isolation = Isolation.READ_COMMITTED)
     public List<String> createDrafts(String supplierCode, List<DraftLine> lines, Long operatorId) {
+        SupplierLifecycleTransactions.requireReadCommitted();
         return createPublished(supplierCode, lines, operatorId);
     }
 
     /**
      * 仅允许 {@code PUBLISHED}↔{@code SUSPENDED}；{@code RETIRED} 走 {@link #retire}。
+     * 上架（PUBLISHED）强制委托正式发布编排；下架（SUSPENDED）更新状态并发布定价依赖事件。
      */
-    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
+    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class, isolation = Isolation.READ_COMMITTED)
     public void changeOfferStatus(String supplierCode, String offerNo, OfferStatus target, Long operatorId) {
-        log.info("变更合作商品状态 supplierCode={} offerNo={} target={} operatorId={}",
+        SupplierLifecycleTransactions.requireReadCommitted();
+        log.info("[offerStatusChange][合作商品状态变更请求] supplierCode={}, offerNo={}, target={}, operatorId={}",
                 supplierCode, offerNo, target, operatorId);
         if (target != OfferStatus.PUBLISHED && target != OfferStatus.SUSPENDED) {
             throw exception(SUPPLIER_STATUS_CONFLICT);
+        }
+        if (target == OfferStatus.PUBLISHED) {
+            // PATCH 上架委派正式发布编排；outbox trace_id 非空，无链路上下文时按管理端同一约定生成。
+            publicationService.listOnShelf(new SupplierOfferPublicationService.ListOnShelfCommand(
+                    supplierCode, offerNo, null, operatorId, currentTraceId(), null, null));
+            return;
+        }
+        SupplierDO supplier = supplierMapper.selectByCodeForUpdate(supplierCode);
+        if (supplier == null) {
+            throw exception(SUPPLIER_NOT_FOUND);
         }
         SupplierOfferDO offer = requireLiveOffer(supplierCode, offerNo);
         OfferStatus current = OfferStatus.fromCode(offer.getStatus());
@@ -147,23 +168,28 @@ public class SupplierCooperativeProductService {
 
     /**
      * 改价与供货模式：校验与新增相同，只更新身份列，禁止 {@code offerVersionMapper.insert}。
-     * 身份列单价变化后必须发布定价依赖事件，供列表与通用定价按身份列回退。
-     * 设计见 {@code docs/superpowers/specs/2026-09-22-effective-supply-price-identity-fallback-design.md}。
+     * 身份列保存不触发正式定价；发布变更后才切换冻结成本，禁止篡改已有 Offer 的 platformSkuId。
+     * 设计见 {@code docs/superpowers/specs/2026-10-11-supplier-offer-lifecycle-design.md#1-核心业务规则}。
      */
-    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
+    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class, isolation = Isolation.READ_COMMITTED)
     public void updateCommercial(String supplierCode, String offerNo, DraftLine line, Long operatorId) {
-        log.info("更新合作商品身份列 supplierCode={} offerNo={} platformSkuCode={} operatorId={}",
+        SupplierLifecycleTransactions.requireReadCommitted();
+        log.info("[offerCommercialEdit][保存合作商品草稿] supplierCode={}, offerNo={}, platformSkuCode={}, operatorId={}",
                 supplierCode, offerNo, line == null ? null : line.platformSkuCode(), operatorId);
         if (offerVersionMapper == null) {
             throw new IllegalStateException("offerVersionMapper is required");
         }
-        // f1：改价改供货模式同样强制外部商品编码非空（"校验与新增相同"），并同步身份列；
-        // 编码变化后与当前版本冻结值不一致，列表投影判为 STALE，须重新上架即发布。
         requireExternalSkuCode(line.externalSkuCode());
+        SupplierDO supplier = supplierMapper.selectByCodeForUpdate(supplierCode);
+        if (supplier == null) {
+            throw exception(SUPPLIER_NOT_FOUND);
+        }
         SupplierOfferDO offer = requireLiveOffer(supplierCode, offerNo);
-        SupplierDO supplier = supplierMapper.selectByCode(supplierCode);
         List<SupplierSupplyScopeDO> scopes = scopeMapper.selectBySupplierId(supplier.getId());
         ResolvedOffer resolved = resolveLine(scopes, line, categoryCoverageService.loadResolver());
+        if (!offer.getPlatformSkuId().equals(resolved.sku().getId())) {
+            throw new IllegalArgumentException("Cannot change platform SKU of an existing offer");
+        }
         Long existing = offerMapper.selectCount(new LambdaQueryWrapper<SupplierOfferDO>()
                 .eq(SupplierOfferDO::getSupplierId, supplier.getId())
                 .eq(SupplierOfferDO::getPlatformSkuId, resolved.sku().getId())
@@ -184,12 +210,17 @@ public class SupplierCooperativeProductService {
         offer.setUpdatedBy(operatorId);
         offer.setUpdatedAt(databaseClock.now());
         offerMapper.updateById(offer);
-        eventPublisher.publishEvent(new PricingDependencyChangedEvent(offer.getPlatformSkuId()));
+        // 商业字段仅保存待发布变更，旧冻结版本仍生效，不能触发正式定价重算。
+        // 设计见 docs/superpowers/specs/2026-10-11-supplier-offer-lifecycle-design.md#1-核心业务规则。
     }
 
-    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
+    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class, isolation = Isolation.READ_COMMITTED)
     public void retire(String supplierCode, String offerNo, Long operatorId) {
-        log.info("移除合作商品 supplierCode={} offerNo={} operatorId={}", supplierCode, offerNo, operatorId);
+        SupplierLifecycleTransactions.requireReadCommitted();
+        log.info("[offerRetire][移除合作商品请求] supplierCode={}, offerNo={}, operatorId={}", supplierCode, offerNo, operatorId);
+        if (supplierMapper.selectByCodeForUpdate(supplierCode) == null) {
+            throw exception(SUPPLIER_NOT_FOUND);
+        }
         SupplierOfferDO offer = requireLiveOffer(supplierCode, offerNo);
         offer.setStatus(OfferStatus.RETIRED.getCode());
         offer.setUpdatedBy(operatorId);
@@ -231,7 +262,7 @@ public class SupplierCooperativeProductService {
         PageResult<SupplierOfferDO> page = offerMapper.selectPage(pageParam, wrapper);
         List<OfferListItem> items = new ArrayList<>();
         for (SupplierOfferDO offer : page.getList()) {
-            items.add(toListItem(offer));
+            items.add(toListItem(offer, supplier));
         }
         return new PageResult<>(items, page.getTotal());
     }
@@ -247,7 +278,7 @@ public class SupplierCooperativeProductService {
                 .orderByDesc(SupplierOfferDO::getUpdatedAt));
     }
 
-    private String insertPublished(SupplierDO supplier, List<SupplierSupplyScopeDO> scopes, DraftLine line,
+    private SupplierOfferDO insertPublished(SupplierDO supplier, List<SupplierSupplyScopeDO> scopes, DraftLine line,
                                    Long operatorId, LocalDateTime now,
                                    ProductCategoryCoverageService.CoverageResolver coverage) {
         // f1：供应商外部商品编码选品必填，冻结进身份行后再由上架即发布继承进版本行，执行侧据此作为供应商 productId 发出。
@@ -278,7 +309,7 @@ public class SupplierCooperativeProductService {
                 .draftMinQuantity(resolved.minQuantity())
                 .stabilityScore(OfferFulfillmentScore.DEFAULT)
                 .timelinessScore(OfferFulfillmentScore.DEFAULT)
-                .status(OfferStatus.PUBLISHED.getCode())
+                .status(OfferStatus.SUSPENDED.getCode())
                 .version(0L)
                 .createdBy(operatorId)
                 .createdAt(now)
@@ -286,8 +317,7 @@ public class SupplierCooperativeProductService {
                 .updatedAt(now)
                 .build();
         offerMapper.insert(offer);
-        eventPublisher.publishEvent(new PricingDependencyChangedEvent(resolved.sku().getId()));
-        return offer.getOfferNo();
+        return offer;
     }
 
     /**
@@ -315,7 +345,7 @@ public class SupplierCooperativeProductService {
         SupplierSupplyScopeDO scope = matchScope(scopes, spu, coverage);
         OfferPriceMode priceMode = OfferPriceMode.fromCode(line.priceMode());
         SupplyMode supplyMode = SupplyMode.fromCode(line.supplyMode());
-        validatePrice(priceMode, line);
+        validatePrice(priceMode, line, sku.getSuggestedSalePrice());
         Long maxQuantity = line.maxQuantity() != null ? line.maxQuantity() : scope.getMaxQuantity();
         Long minQuantity = line.minQuantity() != null ? line.minQuantity() : DEFAULT_OFFER_MIN_QUANTITY;
         if (minQuantity == null || maxQuantity == null
@@ -323,6 +353,11 @@ public class SupplierCooperativeProductService {
             throw new IllegalArgumentException("Offer quantity is invalid");
         }
         return new ResolvedOffer(sku, scope, priceMode, supplyMode, maxQuantity, minQuantity);
+    }
+
+    private static String currentTraceId() {
+        String traceId = com.aifuli.framework.common.util.monitor.TracerUtils.getTraceId();
+        return traceId == null || traceId.isBlank() ? "admin-" + java.util.UUID.randomUUID() : traceId;
     }
 
     private SupplierOfferDO requireLiveOffer(String supplierCode, String offerNo) {
@@ -378,13 +413,19 @@ public class SupplierCooperativeProductService {
         return drift ? FulfillmentStatus.STALE : FulfillmentStatus.READY;
     }
 
-    private OfferListItem toListItem(SupplierOfferDO offer) {
+    private OfferListItem toListItem(SupplierOfferDO offer, SupplierDO supplier) {
         PlatformSkuDO sku = skuMapper.selectById(offer.getPlatformSkuId());
         PlatformSpuDO spu = sku == null ? null : spuMapper.selectById(sku.getSpuId());
         SupplierSupplyScopeDO scope = offer.getSupplyScopeId() == null
                 ? null : scopeMapper.selectById(offer.getSupplyScopeId());
         SupplierOfferVersionDO currentVersion = offer.getCurrentVersionId() == null
                 ? null : offerVersionMapper.selectById(offer.getCurrentVersionId());
+        SupplierOfferEligibilityService.PublishEligibility eligibility =
+                eligibilityService != null && supplier != null ? eligibilityService.checkPublishEligibility(offer, supplier, sku, spu)
+                        : null;
+        if (eligibility == null) {
+            eligibility = SupplierOfferEligibilityService.PublishEligibility.allowed();
+        }
         return new OfferListItem(
                 offer.getOfferNo(),
                 spu == null ? null : spu.getSpuCode(),
@@ -395,6 +436,7 @@ public class SupplierCooperativeProductService {
                 scope == null ? null : scope.getProductType(),
                 scope == null ? null : scope.getProductClassification(),
                 resolveSuggestPriceCents(offer.getPlatformSkuId()),
+                sku == null ? null : sku.getSuggestedSalePrice(),
                 offer.getPriceMode(),
                 offer.getDraftUnitPrice(),
                 offer.getDiscountBp(),
@@ -407,7 +449,9 @@ public class SupplierCooperativeProductService {
                 offer.getExternalSkuCode(),
                 offer.getCurrentVersionId(),
                 offer.getVersion(),
-                computeFulfillmentStatus(offer, currentVersion).code());
+                computeFulfillmentStatus(offer, currentVersion).code(),
+                eligibility.canPublish(),
+                eligibility.publishBlockedReason());
     }
 
     private Long resolveSuggestPriceCents(Long skuId) {
@@ -465,7 +509,12 @@ public class SupplierCooperativeProductService {
         return matched;
     }
 
-    private static void validatePrice(OfferPriceMode mode, DraftLine line) {
+    /**
+     * 折扣准入读取事务内已加载SKU的权威销售建议价；历史客户端提示价可缺省或不一致，不参与准入。
+     * 创建和改价复用本校验，不改FIXED/REALTIME或履约版本冻结价。
+     * 设计见 docs/superpowers/specs/2026-10-11-supplier-offer-sale-price-alignment-design.md#4-服务端折扣准入。
+     */
+    private static void validatePrice(OfferPriceMode mode, DraftLine line, Long suggestedSalePrice) {
         switch (mode) {
             case FIXED -> {
                 if (line.unitPriceCents() == null || line.unitPriceCents() <= 0) {
@@ -473,8 +522,8 @@ public class SupplierCooperativeProductService {
                 }
             }
             case DISCOUNT -> {
-                if (line.suggestedPriceCents() == null || line.suggestedPriceCents() <= 0) {
-                    throw new IllegalArgumentException("DISCOUNT requires suggested price > 0");
+                if (suggestedSalePrice == null || suggestedSalePrice <= 0) {
+                    throw exception(SUPPLIER_OFFER_SUGGESTED_SALE_PRICE_INVALID);
                 }
                 if (line.discountBp() == null || line.discountBp() < 1 || line.discountBp() > 10_000) {
                     throw new IllegalArgumentException("Discount basis points must be 1-10000");
@@ -492,13 +541,18 @@ public class SupplierCooperativeProductService {
                                  SupplyMode supplyMode, Long maxQuantity, Long minQuantity) {
     }
 
+    /**
+     * 商业条款输入；suggestedPriceCents仅为历史兼容提示字段，不作为服务端价格来源。
+     * 设计见 docs/superpowers/specs/2026-10-11-supplier-offer-sale-price-alignment-design.md#4-服务端折扣准入。
+     */
     public record DraftLine(String platformSkuCode, String priceMode, Long unitPriceCents,
                              Integer discountBp, Long suggestedPriceCents, String supplyMode,
                              Long maxQuantity, Long minQuantity, String externalSkuCode) {
     }
 
     /**
-     * 合作商品列表行。金额单位 CNY 分；status 为枚举名。
+     * 合作商品列表行。金额单位 CNY 分；status 为枚举名。销售建议价取SKU，旧suggestPriceCents保留L1原义。
+     * 价格口径见 docs/superpowers/specs/2026-10-11-supplier-offer-sale-price-alignment-design.md#3-后端响应与兼容契约。
      * 设计见 {@code docs/superpowers/specs/2026-10-03-supplier-offer-publication-admin-design.md#67-listoffers-投影扩展m1-沿用--i-b}。
      */
     public record OfferListItem(
@@ -511,6 +565,7 @@ public class SupplierCooperativeProductService {
             @Schema(description = "动态商品类型编码") String productType,
             @Schema(description = "商品分类封闭枚举名") String productClassification,
             @Schema(description = "L1 B端结算单价，CNY分，允许0") Long suggestPriceCents,
+            @Schema(description = "建议零售价/销售建议价，单位为分") Long suggestedSalePriceCents,
             @Schema(description = "供应价模式（字典supply_chain_offer_price_mode）：FIXED固定值，REALTIME实时更新，DISCOUNT按供货折扣") String priceMode,
             @Schema(description = "草稿供应价，CNY分；REALTIME为空") Long unitPriceCents,
             @Schema(description = "折扣基点，10000=100%") Integer discountBp,
@@ -523,6 +578,8 @@ public class SupplierCooperativeProductService {
             @Schema(description = "供应商侧商品编码（f1 身份行 external_sku_code），上架时冻结进版本行") String externalSkuCode,
             @Schema(description = "当前已发布履约版本ID；为空表示尚未配置履约") Long currentVersionId,
             @Schema(description = "Offer 聚合乐观锁版本号，上架须回传作为 expectedOfferVersion") Long offerVersion,
-            @Schema(description = "i-b 履约就绪度三态：NOT_CONFIGURED未配置，STALE过期，READY就绪") String fulfillmentStatus) {
+            @Schema(description = "履约发布投影：NOT_CONFIGURED未发布版本，STALE待发布变更，READY已发布且无待发布变更") String fulfillmentStatus,
+            @Schema(description = "是否可上架/发布变更") Boolean canPublish,
+            @Schema(description = "不可上架/发布变更时的中文原因提示，可发布时为空") String publishBlockedReason) {
     }
 }

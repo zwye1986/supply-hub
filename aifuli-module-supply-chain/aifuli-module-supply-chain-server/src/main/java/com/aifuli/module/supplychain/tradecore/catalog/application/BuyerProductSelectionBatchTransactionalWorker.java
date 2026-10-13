@@ -89,14 +89,18 @@ public class BuyerProductSelectionBatchTransactionalWorker {
      * 设计见 {@code docs/superpowers/specs/2026-10-04-buyer-selection-acceptance-catalog-bridge-design.md#34-批次事务边界真实调用者与竞争重试}
      * §3.4「批次事务边界、真实调用者与竞争重试」。
      */
-    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
+    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class, isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public List<String> executeBatch(String buyerCode, List<ProductLine> lines, Long operatorId) {
+        // 行内定价加入同一个RC批次；设计见docs/superpowers/specs/2026-10-11-supplier-offer-lifecycle-design.md#34-闭环四同步重算的锁顺序与并发事务规范。
+        com.aifuli.module.supplychain.tradecore.supply.application.SupplierLifecycleTransactions.requireReadCommitted();
         log.info("关联分销商品 buyerCode={} skuCount={} operatorId={}",
                 buyerCode, lines == null ? 0 : lines.size(), operatorId);
         if (lines == null || lines.isEmpty()) {
             throw new IllegalArgumentException("At least one SKU is required");
         }
         BuyerDO buyer = requireBuyerForUpdate(buyerCode);
+        // 在任何单行初始化或定价前预锁整批SKU根，保持请求处理顺序与既有准入规则。
+        genericPricingService.lockPlatformPricingByCodes(lines.stream().map(line -> line.platformSkuCode()).toList());
         LocalDateTime now = databaseClock.now();
         List<String> codes = new ArrayList<>();
         for (ProductLine line : lines) {

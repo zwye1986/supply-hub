@@ -19,7 +19,10 @@ public class FulfillmentAcceptanceReceiptDO {
     /** 采购项目内部主键；历史受理回执可为空（项目永久键=project_id+buyer_order_no，见052生成列） */
     private Long projectId;
     private String buyerOrderNo;
+    /** 采购商商品编码快照：格式0/2为首次请求编码，格式3为服务端解析的BPD编码 */
     private String buyerSkuCode;
+    /** 格式3首次请求的平台SKU编码；格式0/2为空 */
+    private String requestedPlatformSkuCode;
     /** 受理时冻结的平台SKU内部主键；历史回执未冻结该绑定时为空 */
     private Long platformSkuId;
     private Long quantity;
@@ -30,8 +33,9 @@ public class FulfillmentAcceptanceReceiptDO {
     private byte[] invariantFingerprint;
     private byte[] requestFingerprint;
     /**
-     * 受理请求指纹格式版本：0历史未验证（含用户身份成分，不可用于重放比较），2无用户规范化格式。
-     * 与DDL COMMENT语义一致，见052变更集。
+     * 受理请求指纹格式版本：0历史未验证不可重放，2采购商编码无用户格式，3平台SKU编码无用户格式。
+     * 与064变更集DDL COMMENT语义一致。
+     * 设计见 docs/superpowers/specs/2026-10-12-platform-sku-order-contract-design.md#6-数据增量与存量安全。
      */
     private Short fingerprintVersion;
     /** 受理时消费的标准商品报价凭证主键；历史回执未绑定报价时为空 */

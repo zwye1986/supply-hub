@@ -8,6 +8,7 @@ import com.aifuli.module.supplychain.border.fulfillment.domain.*;
 import com.aifuli.module.supplychain.infrastructure.security.EnvelopeCryptoPort;
 import com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.FulfillmentType;
+import com.aifuli.module.supplychain.border.fulfillment.application.huashengflow.HuashengType201AssetCodec;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -37,7 +38,7 @@ public class ProjectStandardAssetPayloadDecoder {
     public ProjectStandardOrderAssetRespDTO decode(FulfillmentAssetDO asset) {
         long startedAt = System.nanoTime();
         log.debug(
-                "[项目资产解密] assetNo={}, assetType={}, sequenceNo={}",
+                "[项目资产解密][开始] assetNo={}, assetType={}, sequenceNo={}",
                 asset.getAssetNo(),
                 asset.getAssetType(),
                 asset.getSequenceNo());
@@ -55,10 +56,10 @@ public class ProjectStandardAssetPayloadDecoder {
                                     .getBytes(StandardCharsets.UTF_8));
         } catch (RuntimeException failure) {
             log.debug(
-                    "[项目资产解密] assetNo={}, result={}, elapsedNanos={}",
+                    "[项目资产解密][完成] assetNo={}, result={}, elapsedMs={}",
                     asset.getAssetNo(),
                     DECRYPT_FAILED,
-                    System.nanoTime() - startedAt);
+                    (System.nanoTime() - startedAt) / 1_000_000);
             throw new ProjectStandardAssetQueryFailure(DECRYPT_FAILED, failure);
         }
         try {
@@ -99,6 +100,15 @@ public class ProjectStandardAssetPayloadDecoder {
                 case VOUCHER_URL -> dto.setVoucherUrl(alias(payload, "voucherUrl"));
                 default -> throw new IllegalArgumentException("不支持资产类型");
             }
+            // 任一新schema标记出现均严格验证，禁止坏新载荷降级为旧资产。
+            // 设计：docs/superpowers/specs/2026-10-09-huasheng-type201-production-closure-design.md#72-task7授权查询与有效期展示契约。
+            if (payload.has("payloadSchemaVersion") || payload.has("supplierPayload")) {
+                var card = new HuashengType201AssetCodec().readStoredPayload(plaintext,
+                        asset.getSequenceNo(), asset.getAssetType(), asset.getExternalAssetId(),
+                        asset.getValidFrom(), asset.getValidUntil());
+                dto.setValidTimeRaw(card.validTimeRaw());
+                dto.setValidTimeState(card.validTimeState());
+            }
             dto.setAssetNo(asset.getAssetNo());
             dto.setSequenceNo(asset.getSequenceNo());
             dto.setAssetType(asset.getAssetType());
@@ -108,18 +118,22 @@ public class ProjectStandardAssetPayloadDecoder {
             dto.setLifecycleStatus(
                     FulfillmentAssetStatus.fromCode(asset.getLifecycleStatus()).name());
             log.debug(
-                    "[项目资产解密] assetNo={}, result={}, elapsedNanos={}",
+                    "[项目资产解密][完成] assetNo={}, result={}, elapsedMs={}",
                     asset.getAssetNo(),
                     AUTHORIZED_QUERY,
-                    System.nanoTime() - startedAt);
+                    (System.nanoTime() - startedAt) / 1_000_000);
             return dto;
         } catch (Exception failure) {
             log.debug(
-                    "[项目资产解密] assetNo={}, result={}, elapsedNanos={}",
+                    "[项目资产解密][完成] assetNo={}, result={}, elapsedMs={}",
                     asset.getAssetNo(),
                     PAYLOAD_FAILED,
-                    System.nanoTime() - startedAt);
-            throw new ProjectStandardAssetQueryFailure(PAYLOAD_FAILED, failure);
+                    (System.nanoTime() - startedAt) / 1_000_000);
+            // JSON解析异常可能携带输入片段；保留安全校验因果摘要，不传播敏感原值。
+            throw new ProjectStandardAssetQueryFailure(PAYLOAD_FAILED,
+                    failure instanceof com.fasterxml.jackson.core.JsonParseException
+                            ? new com.fasterxml.jackson.core.JsonParseException(null, "资产载荷解析失败")
+                            : new IllegalArgumentException("资产载荷校验失败"));
         } finally {
             if (plaintext != null) Arrays.fill(plaintext, (byte) 0);
         }

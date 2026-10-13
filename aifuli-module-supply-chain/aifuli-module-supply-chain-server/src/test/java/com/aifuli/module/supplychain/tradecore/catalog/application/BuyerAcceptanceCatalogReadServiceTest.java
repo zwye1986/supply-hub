@@ -4,6 +4,7 @@ import com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseCloc
 import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerProductDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.*;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.*;
+import com.aifuli.module.supplychain.tradecore.catalog.domain.BuyerListingStatus;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -32,7 +33,8 @@ class BuyerAcceptanceCatalogReadServiceTest {
                 .buyerSkuCode("BPD_A").buyerProductId(3L).managementMode("AUTO_SELECTION")
                 .status((short) 10).currentVersionId(5L).build();
         projection = BuyerListingAvailabilityDO.builder().listingId(4L).availability((short) 10)
-                .reasonCode("CONFIRMED").basisVersion(6L).evaluatedAt(now.minusSeconds(1))
+                .reasonCode("CONFIRMED").basisVersion(5L)
+                .basisJson("{\"listingId\":4,\"sourceBuyerPricingVersionId\":6}").evaluatedAt(now.minusSeconds(1))
                 .validUntil(now.plusSeconds(20)).build();
         version = BuyerListingVersionDO.builder().id(5L).listingId(4L).sourceBuyerPricingVersionId(6L)
                 .validFrom(now.minusSeconds(1)).build();
@@ -108,6 +110,67 @@ class BuyerAcceptanceCatalogReadServiceTest {
         var view = read();
         assertThat(field(view, "availabilityStatus")).isEqualTo("UNKNOWN");
         assertThat(field(view, "catalogRefreshReason")).isEqualTo("PROJECTION_EXPIRED");
+    }
+
+    @Test
+    void actualBasisSourceInvalidatesEvenWhenCounterEqualsCurrentPrice() throws Exception {
+        projection.setBasisVersion(6L);
+        projection.setBasisJson("{\"listingId\":4,\"sourceBuyerPricingVersionId\":2}");
+        projection.setValidUntil(now);
+        assertThat(field(read(), "catalogRefreshReason")).isEqualTo("SOURCE_CHANGED");
+        projection.setValidUntil(now.plusSeconds(20));
+        assertThat(field(read(), "catalogRefreshReason")).isEqualTo("SOURCE_CHANGED");
+    }
+
+    @Test
+    void missingEvaluationAndExplicitNullSourceRemainDistinct() throws Exception {
+        for (String basis : new String[]{null, "{}", "{\"listingId\":4}"}) {
+            projection.setBasisJson(basis);
+            assertThat(field(read(), "catalogRefreshReason")).isEqualTo("NOT_EVALUATED");
+        }
+        projection.setBasisJson("{\"listingId\":4,\"sourceBuyerPricingVersionId\":null}");
+        assertThat(field(read(), "catalogRefreshReason")).isEqualTo("SOURCE_CHANGED");
+        projection.setEvaluatedAt(null);
+        assertThat(field(read(), "catalogRefreshReason")).isEqualTo("NOT_EVALUATED");
+    }
+
+    @Test
+    void damagedDeclaredBasisIsSystemFailureEvenWhenPricingNotReady() {
+        when(pricing.selectByBuyerProductId(3L)).thenReturn(BuyerSkuPricingDO.builder()
+                .buyerProductId(3L).pricingStatus("UNPRICED").build());
+        for (String basis : new String[]{"[]", "null", "{", "{\"listingId\":9}",
+                "{\"listingId\":4,\"sourceBuyerPricingVersionId\":\"6\"}",
+                "{\"sourceBuyerPricingVersionId\":-1}", "{\"listingId\":4.0}",
+                "{\"listingId\":4,\"sourceBuyerPricingVersionId\":9223372036854775808}"}) {
+            projection.setBasisJson(basis);
+            assertThatThrownBy(this::read).as(basis).hasCauseInstanceOf(IllegalStateException.class);
+        }
+    }
+
+    @Test
+    void priceAndLifecycleTakePriorityOverMissingEvaluation() throws Exception {
+        projection.setBasisJson(null);
+        when(pricing.selectByBuyerProductId(3L)).thenReturn(BuyerSkuPricingDO.builder()
+                .buyerProductId(3L).pricingStatus("READY").build());
+        assertThat(field(read(), "catalogRefreshReason")).isEqualTo("DEFERRED_PRICE");
+        listing.setStatus(BuyerListingStatus.SUSPENDED.getCode());
+        assertThat(field(read(), "catalogRefreshReason")).isEqualTo("SUSPENDED");
+        listing.setStatus(BuyerListingStatus.RETIRED.getCode());
+        assertThat(field(read(), "catalogRefreshReason")).isEqualTo("RETIRED");
+    }
+
+    @Test
+    void draftSupplyAndTimeBoundariesDoNotImplyPublication() throws Exception {
+        projection.setValidUntil(now.plusNanos(1_000_000));
+        version.setValidFrom(now);
+        assertThat(field(read(), "availabilityStatus")).isEqualTo("AVAILABLE");
+        version.setValidFrom(now.plusNanos(1_000_000));
+        assertThat(field(read(), "catalogRefreshReason")).isEqualTo("PROJECTION_EXPIRED");
+        listing.setCurrentVersionId(null); listing.setStatus(BuyerListingStatus.DRAFT.getCode());
+        assertThat(field(read(), "availabilityStatus")).isEqualTo("AVAILABLE");
+        assertThat(field(read(), "publicationState")).isEqualTo("DRAFT");
+        projection.setValidUntil(now.minusNanos(1_000_000));
+        assertThat(field(read(), "catalogRefreshReason")).isEqualTo("PROJECTION_EXPIRED");
     }
 
     private Object read() throws Exception {

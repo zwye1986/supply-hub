@@ -753,7 +753,11 @@ public class SupplierAdminController {
         private Long unitPriceCents;
         @Schema(description = "折扣基点，10000=100%")
         private Integer discountBp;
-        @Schema(description = "L1 B端结算单价，CNY分，允许0")
+        /**
+         * 历史客户端提示字段；折扣准入读取SKU权威值。
+         * 设计见 docs/superpowers/specs/2026-10-11-supplier-offer-sale-price-alignment-design.md#4-服务端折扣准入。
+         */
+        @Schema(description = "历史兼容建议价提示，CNY分，可缺省；服务端折扣准入读取SKU销售建议价")
         private Long suggestedPriceCents;
         @NotBlank
         @Schema(description = "该Offer供货模式")

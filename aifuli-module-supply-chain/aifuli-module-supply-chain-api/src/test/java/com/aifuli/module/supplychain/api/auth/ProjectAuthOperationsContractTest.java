@@ -182,12 +182,21 @@ class ProjectAuthOperationsContractTest {
                 new ProjectAuthOperations.Operation(ProjectAuthOperations.STANDARD_ORDER_ASSET_QUERY, "POST",
                         ProjectAuthOperations.STANDARD_ORDERS_PATH + "/assets/query", ProjectAuthOperations.ScopeType.NONE,
                         "1.0.0", ProjectAuthOperations.CAPABILITY_STANDARD_PRODUCT,
-                        ProjectAuthOperations.ProjectStatePolicy.ACTIVE_ONLY));
-        assertThat(ProjectAuthOperations.OPERATIONS).hasSize(13);
+                        ProjectAuthOperations.ProjectStatePolicy.ACTIVE_ONLY),
+                new ProjectAuthOperations.Operation("STANDARD_ORDER_CREATE_V2", "POST",
+                        "/open-api/supply-chain/project/v2/orders", ProjectAuthOperations.ScopeType.NONE,
+                        "2.0.0", "STANDARD_PRODUCT", ProjectAuthOperations.ProjectStatePolicy.ACTIVE_ONLY),
+                new ProjectAuthOperations.Operation("STANDARD_ORDER_QUERY_V2", "POST",
+                        "/open-api/supply-chain/project/v2/orders/query", ProjectAuthOperations.ScopeType.NONE,
+                        "2.0.0", "STANDARD_PRODUCT", ProjectAuthOperations.ProjectStatePolicy.ACTIVE_OR_SUSPENDED),
+                new ProjectAuthOperations.Operation("STANDARD_ORDER_ASSET_QUERY_V2", "POST",
+                        "/open-api/supply-chain/project/v2/orders/assets/query", ProjectAuthOperations.ScopeType.NONE,
+                        "2.0.0", "STANDARD_PRODUCT", ProjectAuthOperations.ProjectStatePolicy.ACTIVE_ONLY));
+        assertThat(ProjectAuthOperations.OPERATIONS).hasSize(16);
         assertThat(ProjectAuthOperations.OPERATIONS.stream().map(ProjectAuthOperations.Operation::operationCode)
-                .distinct()).hasSize(13);
+                .distinct()).hasSize(16);
         assertThat(ProjectAuthOperations.OPERATIONS.stream().map(op -> op.httpMethod() + " " + op.path())
-                .distinct()).hasSize(13);
+                .distinct()).hasSize(16);
         assertThatThrownBy(() -> ProjectAuthOperations.OPERATIONS.clear())
                 .isInstanceOf(UnsupportedOperationException.class);
         assertThatThrownBy(() -> ProjectAuthOperations.PROTECTED_PREFIXES.clear())

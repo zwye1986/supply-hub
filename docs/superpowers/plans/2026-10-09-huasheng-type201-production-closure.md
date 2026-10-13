@@ -6,7 +6,7 @@
 
 **Architecture:** A1～A5通信保持独立纯对象，由显式配置建Bean；新增华昇专用runner/lifecycle/executor，复用现有Operation、PersistentTimer、聚合锁和资金终结。外呼事务外执行，持久认领代次/watchdog/checkpoint保障原单恢复；不建设通用工作流或分布式token平台，不考虑QNM接线或专项回归。
 
-**Tech Stack:** Java21、Spring Boot、MyBatis Plus、MySQL8.4/Liquibase、现有OkHttp与HTTPS测试挡板、JUnit5/ArchUnit；管理端Vue3/TypeScript/pnpm。
+**Tech Stack:** Java21、Spring Boot、MyBatis Plus、MySQL8.4/Liquibase、现有OkHttp、JUnit5/ArchUnit；管理端Vue3/TypeScript/pnpm。Task8端到端连接华晟通官方测试环境，不新增挡板。
 
 ---
 
@@ -257,9 +257,9 @@ mvn -pl "$S" -am test -DskipTests=false \
 - Create Frontend: `F/src/api/order/asset-valid-time.ts`（纯映射函数，由index.ts调用）。
 - Create Frontend Test: `F/tests/huasheng-valid-time.test.mjs`，复用该仓现有node:test／TS直接导入测试模式，不安装第二套工具。
 
-- [ ] 后端测试先RED：四种有效期state原样；两端cardCode/secret逐字一致；NULL/ABSENT不猜日期；schema/字段冲突拒绝；跨项目拒绝且保留敏感审计。
-- [ ] decoder显式读取payloadSchemaVersion=1和supplierPayload；只向授权DTO新增validTimeRaw/validTimeState。字段注释与规格§7一致，不改现有DB日期含义；内部原始payload查询继续完整返回。
-- [ ] 写前端映射测试先RED，page直接使用expireTime展示；原文优先、不Date解析、不trim，三态缺值显示稳定文案，旧响应没有state仍用原格式化范围。纯函数置于asset-valid-time.ts方便node:test导入，index.ts实际调用，不仅测试孤立副本。映射核心是：
+- [x] 后端测试先RED：四种有效期state原样；两端cardCode/secret逐字一致；NULL/ABSENT不猜日期；schema/字段冲突拒绝；跨项目拒绝且保留敏感审计。
+- [x] decoder显式读取payloadSchemaVersion=1和supplierPayload；只向授权DTO新增validTimeRaw/validTimeState。字段注释与规格§7一致，不改现有DB日期含义；内部原始payload查询继续完整返回。
+- [x] 写前端映射测试先RED，page直接使用expireTime展示；原文优先、不Date解析、不trim，三态缺值显示稳定文案，旧响应没有state仍用原格式化范围。纯函数置于asset-valid-time.ts方便node:test导入，index.ts实际调用，不仅测试孤立副本。映射核心是：
 
 ```ts
 const expireTime = card.validTimeState === 'VALUE'
@@ -272,22 +272,30 @@ const expireTime = card.validTimeState === 'VALUE'
 
 validTimeState=VALUE却缺raw在后端契约拒绝；TS类型使用判别联合或先验证，不能靠非空断言掩盖坏响应。页面密码/卡号不改变原值。
 
-- [ ] GREEN后端纯测/Failsafe；前端工作目录F运行`node --experimental-strip-types --test tests/huasheng-valid-time.test.mjs`、`pnpm exec eslint src/api/order/index.ts src/api/order/types.ts src/api/order/asset-valid-time.ts src/views/supplier/order/components/ExclusiveOrderInfo.vue`、`pnpm ts:check`和`pnpm build:local`。基线已有失败单独记录，不擅自全仓修复。
+- [x] GREEN后端纯测/Failsafe；前端工作目录F运行`node --experimental-strip-types --test tests/huasheng-valid-time.test.mjs`、`pnpm exec eslint src/api/order/index.ts src/api/order/types.ts src/api/order/asset-valid-time.ts src/views/supplier/order/components/ExclusiveOrderInfo.vue`、`pnpm ts:check`和`pnpm build:local`。基线已有失败单独记录，不擅自全仓修复。
+
+Task7实施与验证记录见 `docs/集成测试.md` §7.90.11。设计先补规格§7.2；新增API枚举及共享codec严格读取，契约测试在application包复用独占MySQL夹具。最终供应链默认门禁2214项、正式Failsafe75项及前端定向15项、lint与构建通过；全局类型检查仍有Task7以外既有诊断，基线对照单列记录，不把“执行检查”表述为类型检查全绿。Task8真实环境全链另行验收，本片未提交／推送／部署或真实外呼。
 
 ## 9. Task 8：从真实配置到生产链完整有限验收
 
+> 2026-10-10按用户指示修订：直接使用华晟通官方测试环境；删除新建 `HuashengHttpsFixture` 的计划。范围仍为type201、FIXED、quantity=1、单实例。详细步骤与证据边界见规格§9.1～§9.3。
+
 **Files**
-- Create: `T/border/fulfillment/application/huashengflow/HuashengProductionClosureIntegrationTest.java`、`T/testsupport/HuashengHttpsFixture.java`。
-- Modify: `docs/集成测试.md`§7.90及§8.12，按实际命令/结果更新；本设计/计划只修真实差异。
+- Reuse: 既有华昇通信、配置、生产装配、生命周期、回调、资产、资金及MySQL/Liquibase测试；本任务不创建新供应商挡板。
+- Optional: 按实际验收需要补官方测试环境执行/核验脚本，显式启用、限定测试环境和次数，不在默认CI发起外部交易；若发现真实缺陷再按RED→实现→GREEN修复。
+- Modify: `docs/集成测试.md`§7.90.12及§8.12，按实际命令/结果更新；本设计/计划只修真实差异。
 - Review: `script/deploy/supply-chain-test/docker-compose.yml`（单实例证据），不自动部署或改远端配置。
 
-- [ ] 写从真实管理配置服务发布到生产executor的IT，RED须证明现在没有该装配/流程。所有业务数据通过真实服务/Controller创建，不SQL补发布/路由/资产或用假metadata过校验。
-- [ ] HTTPS fixture用本地RSA/AES、A4 test-onlyTLS装配、严格真实协议字段与独立去重账本；不替代A生产parser。一次受理沿PLACE→CONFIRM→TAKE，另一case PLACE直接SUCCESS；下单业务参数摘要逐字稳定。
-- [ ] 运行成功、明确失败/退款、未知恢复、重复/迟到/重启/回调、冻结配置变更、金额/资产冲突、跨项目隔离及上限人工场景；断言Reservation/资产/资金流水与挡板履约计数，不只响应。
+- [ ] 复核pro143现有测试实例、制品版本、Liquibase增量及历史在途/Timer/Outbox影响，保留历史数据；不启动第二个共库后台或另建MySQL/Redis。按已有授权更新测试服务，确认单实例及实际生效的履约/OpenAPI/Timer开关。
+- [ ] 核准官方测试凭据、type201 couponId、库存/价格和公网回调；使用 `https://coupon-api.yunhuishou.vip`，部署出口校验TLS/访问及允许主机。通过生产通信读取测试商品/授权结果，不关闭HTTPS验证，不将根路径HTTP响应当作协议验收。
+- [ ] 经实际管理页面/Controller完成新配置createDraft→validate→publish和目录/项目准入，记录冻结版本；不SQL补发布/路由/资产或用假metadata过校验。
+- [ ] 项目数量1下单，经生产executor/Timer/官方接口走PLACE→按事实CONFIRM→TAKE/QUERY/回调；下单参数摘要和双单号稳定。WAIT和PLACE直接SUCCESS分别记录，未触发的分支不得标已验。
+- [ ] 核成功、明确失败/退款、未知恢复、重复/迟到/重启/回调、冻结配置变更、金额/资产冲突、跨项目隔离及上限人工覆盖；区分既有自动化与官方环境可触发场景，不伪造供应商响应或破坏共享库。不具备触发条件的实机项保留待验原因。
+- [ ] 核Reservation/资产/资金流水恰一次，结合官方查单/交付及可取得的扣款记录核供应商事实；同张卡在项目接口和实际管理端页面的卡号/卡密/有效期一致，权限与审计正确。
 - [ ] 全量供应链API/server单测与架构；Failsafe运行本期全部ContractTest/IntegrationTest及Liquibase；common/web/gateway直接受影响保护回归。只跳过其它模块无关单测，不为QNM另加专项验收任务，也不排除全量已有用例。
 - [ ] 按规格§8.3检查日志：新执行traceId/executionId不同、origin真实、finally恢复；提交回滚无成功日志；无卡密/token/密文泄露。结构化顶层输出／真实ELK联调未测就保持未验。
-- [ ] 更新§7.90实际证据，区分静态/自动化/实机；若目录自动发布等另片未交付，明确不是“从零页面全链通过”，不SQL补状态。
-- [ ] 提交前/完成声明前加载verification-before-completion技能，重新核工作区、报告和diff。用户未授权不commit/push；真实供应商单次外呼及部署仍单独确认。
+- [ ] 更新§7.90.12实际证据，区分文档核验/自动化/官方环境实机结果；若配置链或场景条件未齐，明确未完成，不SQL补状态。凭据/卡密不写证据正文，未验证项不得勾选。
+- [ ] 提交前/完成声明前重新核工作区、报告和diff。按会话已有授权范围执行，不重复索要已授权事项；方案修订不等于本次已commit/push/deploy或完成外部交易。
 
 ## 10. 自审覆盖与交付检查点
 
@@ -296,6 +304,6 @@ validTimeState=VALUE却缺raw在后端契约拒绝；TS类型使用判别联合�
 - 规格§5～6 → Task4/5/8；每次业务／QUERY认领都有持久watchdog、有限恢复、原单号、代次围栏和最终资金guard。
 - 规格§7 → Task2/7/8；type201全字段三态保真／唯一键／授权查询／实际前端。
 - 规格§8 → Task6/8；公网回调必须存在、冻结版本认证、nonce持久、同事务收敛和安全保护。
-- 规格§9 → Task8；本地挡板和真实供应商分开，不先等其它六型或基础设施专项。
+- 规格§9 → Task8；使用官方测试环境，不新增挡板；既有自动化与实机证据分开，不先等其它六型或基础设施专项。
 
 推荐三个审阅检查点：Task1～3完成后检查冻结配置/资产契约；Task4～6完成后检查生产执行/恢复/回调与资金；Task7～8完成后检查两端查询与有限自动化证据。任何检查点失败只修本片因果，不扩大为平台工程。

@@ -20,7 +20,8 @@ import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericPricingCal
 import com.aifuli.module.supplychain.tradecore.catalog.pricing.PricingTaxGroupValidator;
 
 /**
- * 管理端通用定价请求到领域对象的转换，并在边界完成税务组归一化：声明覆盖时税务组必须完整
+ * 管理端通用定价请求到领域对象的转换。商品默认层没有继承来源，税务组始终完整，
+ * 不含税也必须明确提交 NON_TAXABLE；下游分销商/项目在边界完成税务组归一化：声明覆盖时税务组必须完整
  * （taxIncluded 与 taxRateCode 同时有效），残缺则降级为整体继承并丢弃字段；
  * 声明继承时忽略任何携带的税务字段。缺字段不得默认成不含税。
  * 设计见 {@code docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#6-管理端接口}。

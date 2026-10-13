@@ -107,6 +107,157 @@ class ProductBatchStatusTest {
         TableInfoHelper.initTableInfo(new MapperBuilderAssistant(new MybatisConfiguration(), ""), PlatformSkuDO.class);
         when(clock.now()).thenReturn(LocalDateTime.now());
         when(transactionManager.getTransaction(any())).thenReturn(transactionStatus);
+        when(spuMapper.update(isNull(), any())).thenReturn(1);
+        when(skuMapper.selectByIdForUpdate(anyLong())).thenAnswer(inv -> {
+            Long id = inv.getArgument(0);
+            return skuMapper.selectList(new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<PlatformSkuDO>())
+                    .stream().filter(row -> id.equals(row.getId())).findFirst().orElse(null);
+        });
+    }
+
+    /** 同步模式不能因为父已上架而跳过草稿或主动下架的全部规格。 */
+    @Test
+    void synchronizedShelvingUpdatesAllMembersInOneTransaction() throws Exception {
+        PlatformSpuDO spu = PlatformSpuDO.builder().id(1L).spuCode("SPU_SYNC")
+                .status(CatalogEntityStatus.ACTIVE.getCode()).productType("EQUITY_PRODUCT").version(0L).build();
+        when(spuMapper.selectByCode("SPU_SYNC")).thenReturn(spu);
+        when(spuMapper.selectByCodeForUpdate("SPU_SYNC")).thenReturn(spu);
+        when(spuMapper.updateById(any(PlatformSpuDO.class))).thenReturn(1);
+        List<PlatformSkuDO> members = List.of(syncSku(10L, "SKU_DRAFT", CatalogEntityStatus.DRAFT),
+                syncSku(11L, "SKU_OFF", CatalogEntityStatus.INACTIVE));
+        when(skuMapper.selectList(any())).thenReturn(members);
+        when(skuMapper.updateById(any(PlatformSkuDO.class))).thenReturn(1);
+
+        BatchStatusResult result = service.batchChangeStatus(syncCommand(List.of("SPU_SYNC"), List.of(), CatalogEntityStatus.ACTIVE));
+
+        assertThat(result.succeeded()).containsExactly("SPU_SYNC");
+        verify(skuMapper, times(2)).updateById(any(PlatformSkuDO.class));
+        assertThat(members).allSatisfy(sku -> assertThat(sku.getStatus()).isEqualTo(CatalogEntityStatus.ACTIVE.getCode()));
+        verify(transactionManager).getTransaction(any());
+        // 与复合编辑统一父→类型→SKU顺序，避免跨父定价批次连接形成三方环锁。
+        var lockOrder = inOrder(productTypeValidationService, skuMapper);
+        lockOrder.verify(productTypeValidationService).requireActiveForUpdate("EQUITY_PRODUCT");
+        lockOrder.verify(skuMapper).selectByIdForUpdate(10L);
+    }
+
+    @Test
+    void synchronizedShelvingRejectsExplicitSkuAndInactiveTarget() throws Exception {
+        assertThatThrownBy(() -> service.batchChangeStatus(syncCommand(List.of("SPU_SYNC"), List.of("SKU_A"), CatalogEntityStatus.ACTIVE)))
+                .hasFieldOrPropertyWithValue("code", PRODUCT_BATCH_INPUT_INVALID.getCode());
+        assertThatThrownBy(() -> service.batchChangeStatus(syncCommand(List.of("SPU_SYNC"), List.of(), CatalogEntityStatus.INACTIVE)))
+                .hasFieldOrPropertyWithValue("code", PRODUCT_BATCH_INPUT_INVALID.getCode());
+        verify(transactionManager, never()).getTransaction(any());
+    }
+
+    @Test
+    void synchronizedShelvingRejectsExpandedOverLimitBeforeOpeningAnyTransaction() throws Exception {
+        when(spuMapper.selectByCode("SPU_SYNC")).thenReturn(PlatformSpuDO.builder().id(1L).spuCode("SPU_SYNC")
+                .status(CatalogEntityStatus.DRAFT.getCode()).build());
+        when(skuMapper.selectList(any())).thenReturn(IntStream.rangeClosed(1, 200)
+                .mapToObj(i -> syncSku(i, "SKU_" + i, CatalogEntityStatus.DRAFT)).toList());
+        assertThatThrownBy(() -> service.batchChangeStatus(syncCommand(List.of("SPU_SYNC"), List.of(), CatalogEntityStatus.ACTIVE)))
+                .hasFieldOrPropertyWithValue("code", PRODUCT_BATCH_INPUT_INVALID.getCode());
+        verify(transactionManager, never()).getTransaction(any());
+        verify(spuMapper, never()).updateById(any(PlatformSpuDO.class));
+    }
+
+    private PlatformSkuDO syncSku(long id, String code, CatalogEntityStatus status) {
+        return PlatformSkuDO.builder().id(id).spuId(1L).skuCode(code).skuName(code).status(status.getCode())
+                .targetSchemaCode("DIRECT_RECHARGE_TARGET").targetSchemaVersion(1)
+                .resultSchemaCode("DIRECT_RECHARGE_RESULT").resultSchemaVersion(1).version(0L).build();
+    }
+
+    private BatchStatusCommand syncCommand(List<String> spus, List<String> skus, CatalogEntityStatus target) {
+        return new BatchStatusCommand(spus, skus, target.getCode(), null, 99L, true);
+    }
+
+    @Test
+    void synchronizedShelvingDeduplicatesBeforeApplyingExpandedLimit() {
+        PlatformSpuDO spu = PlatformSpuDO.builder().id(1L).spuCode("SPU_SYNC")
+                .status(CatalogEntityStatus.ACTIVE.getCode()).productType("EQUITY_PRODUCT").version(0L).build();
+        when(spuMapper.selectByCode("SPU_SYNC")).thenReturn(spu);
+        when(spuMapper.selectByCodeForUpdate("SPU_SYNC")).thenReturn(spu);
+        when(spuMapper.updateById(any(PlatformSpuDO.class))).thenReturn(1);
+        when(skuMapper.selectList(any())).thenReturn(List.of(syncSku(10L, "SKU_DRAFT", CatalogEntityStatus.DRAFT)));
+        when(skuMapper.updateById(any(PlatformSkuDO.class))).thenReturn(1);
+        java.util.concurrent.atomic.AtomicReference<BatchStatusResult> captured = new java.util.concurrent.atomic.AtomicReference<>();
+        org.assertj.core.api.Assertions.assertThatCode(() -> captured.set(service.batchChangeStatus(
+                syncCommand(java.util.Collections.nCopies(201, "SPU_SYNC"), List.of(), CatalogEntityStatus.ACTIVE))))
+                .doesNotThrowAnyException();
+        BatchStatusResult result = captured.get();
+        assertThat(result.succeeded()).containsExactly("SPU_SYNC");
+        assertThat(result.groups()).singleElement().satisfies(group -> assertThat(group.skuCodes()).containsExactly("SKU_DRAFT"));
+        verify(transactionManager).commit(transactionStatus);
+    }
+
+    @Test
+    void synchronizedShelvingRejectsEmptyAndSkuOnlySelection() {
+        assertThatThrownBy(() -> service.batchChangeStatus(syncCommand(List.of(), List.of(), CatalogEntityStatus.ACTIVE)))
+                .hasFieldOrPropertyWithValue("code", PRODUCT_BATCH_INPUT_INVALID.getCode());
+        assertThatThrownBy(() -> service.batchChangeStatus(syncCommand(List.of(), List.of("SKU_X"), CatalogEntityStatus.ACTIVE)))
+                .hasFieldOrPropertyWithValue("code", PRODUCT_BATCH_INPUT_INVALID.getCode());
+        verify(transactionManager, never()).getTransaction(any());
+    }
+
+    @Test
+    void synchronizedShelvingRecordsMissingArchivedAndNoSkuGroupsAsParentFailure() {
+        PlatformSpuDO archived = PlatformSpuDO.builder().id(2L).spuCode("SPU_ARCHIVED").status(CatalogEntityStatus.ARCHIVED.getCode()).build();
+        PlatformSpuDO empty = PlatformSpuDO.builder().id(3L).spuCode("SPU_EMPTY").status(CatalogEntityStatus.DRAFT.getCode()).build();
+        when(spuMapper.selectByCode("SPU_ARCHIVED")).thenReturn(archived);
+        when(spuMapper.selectByCodeForUpdate("SPU_ARCHIVED")).thenReturn(archived);
+        when(spuMapper.selectByCode("SPU_EMPTY")).thenReturn(empty);
+        when(spuMapper.selectByCodeForUpdate("SPU_EMPTY")).thenReturn(empty);
+        when(skuMapper.selectList(any())).thenReturn(List.of());
+        BatchStatusResult result = service.batchChangeStatus(syncCommand(List.of("SPU_ABSENT", "SPU_ARCHIVED", "SPU_EMPTY"), List.of(), CatalogEntityStatus.ACTIVE));
+        assertThat(result.succeeded()).isEmpty();
+        assertThat(result.failed()).extracting(BatchStatusFailedItem::errorCode).containsExactly(
+                PLATFORM_SPU_NOT_FOUND.getCode(), PLATFORM_SPU_NOT_FOUND.getCode(),
+                com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_SKU_REQUIRED.getCode());
+        assertThat(result.groups()).hasSize(3).allSatisfy(group -> {
+            assertThat(group.skuCodes()).isEmpty();
+            assertThat(group.succeeded()).isFalse();
+            assertThat(group.failedEntityType()).isEqualTo(CatalogEntityType.SPU);
+            assertThat(group.failedEntityCode()).isEqualTo(group.spuCode());
+        });
+        verify(spuMapper, never()).updateById(any(PlatformSpuDO.class));
+    }
+
+    @Test
+    void synchronizedShelvingDetectsMemberChangesBeforeWritingAnyEntity() {
+        PlatformSpuDO spu = PlatformSpuDO.builder().id(1L).spuCode("SPU_SYNC").status(CatalogEntityStatus.DRAFT.getCode()).build();
+        when(spuMapper.selectByCode("SPU_SYNC")).thenReturn(spu);
+        when(spuMapper.selectByCodeForUpdate("SPU_SYNC")).thenReturn(spu);
+        when(skuMapper.selectList(any())).thenReturn(List.of(syncSku(10L, "SKU_ONE", CatalogEntityStatus.DRAFT)),
+                List.of(syncSku(10L, "SKU_ONE", CatalogEntityStatus.DRAFT), syncSku(11L, "SKU_NEW", CatalogEntityStatus.DRAFT)));
+        BatchStatusResult result = service.batchChangeStatus(syncCommand(List.of("SPU_SYNC"), List.of(), CatalogEntityStatus.ACTIVE));
+        assertThat(result.failed()).singleElement().satisfies(item -> {
+            assertThat(item.errorCode()).isEqualTo(com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_CONCURRENT_UPDATE.getCode());
+            assertThat(item.failedEntityType()).isEqualTo(CatalogEntityType.SPU);
+        });
+        assertThat(result.groups().getFirst().skuCodes()).containsExactly("SKU_ONE");
+        verify(spuMapper, never()).updateById(any(PlatformSpuDO.class));
+    }
+
+    @Test
+    void synchronizedShelvingLocatesInvalidSchemaSkuAndValidatesAllBeforeWriting() {
+        PlatformSpuDO spu = PlatformSpuDO.builder().id(1L).spuCode("SPU_SYNC").status(CatalogEntityStatus.DRAFT.getCode()).build();
+        PlatformSkuDO bad = syncSku(11L, "SKU_BAD", CatalogEntityStatus.DRAFT);
+        bad.setResultSchemaCode("DEFAULT");
+        when(spuMapper.selectByCode("SPU_SYNC")).thenReturn(spu);
+        when(spuMapper.selectByCodeForUpdate("SPU_SYNC")).thenReturn(spu);
+        when(skuMapper.selectList(any())).thenReturn(List.of(syncSku(10L, "SKU_GOOD", CatalogEntityStatus.DRAFT), bad));
+        BatchStatusResult result = service.batchChangeStatus(syncCommand(List.of("SPU_SYNC"), List.of(), CatalogEntityStatus.ACTIVE));
+        assertThat(result.failed()).singleElement().satisfies(item -> {
+            assertThat(item.code()).isEqualTo("SPU_SYNC");
+            assertThat(item.entityType()).isEqualTo(CatalogEntityType.SPU);
+            assertThat(item.failedEntityType()).isEqualTo(CatalogEntityType.SKU);
+            assertThat(item.failedEntityCode()).isEqualTo("SKU_BAD");
+            assertThat(item.errorCode()).isEqualTo(com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_SCHEMA_INVALID.getCode());
+        });
+        assertThat(result.groups().getFirst().skuCodes()).containsExactly("SKU_GOOD", "SKU_BAD");
+        verify(spuMapper, never()).updateById(any(PlatformSpuDO.class));
+        verify(skuMapper, never()).updateById(any(PlatformSkuDO.class));
+        verify(transactionManager).rollback(transactionStatus);
     }
 
     private void stubActiveSpu(long id, String spuCode) {

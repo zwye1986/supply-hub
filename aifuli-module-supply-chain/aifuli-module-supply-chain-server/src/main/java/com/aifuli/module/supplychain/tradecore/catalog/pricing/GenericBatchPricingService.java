@@ -1,5 +1,6 @@
 package com.aifuli.module.supplychain.tradecore.catalog.pricing;
 
+import com.aifuli.module.supplychain.tradecore.supply.application.SupplierOfferEligibilityService;
 import com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock;
 import com.aifuli.module.supplychain.integration.system.TaxRateDictionaryAdapter;
 import com.aifuli.module.supplychain.tradecore.account.domain.Money;
@@ -31,6 +32,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.context.event.EventListener;
+import org.springframework.context.annotation.Import;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
@@ -39,6 +41,8 @@ import java.util.*;
 import static com.aifuli.framework.common.exception.util.ServiceExceptionUtil.exception;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PLATFORM_DEFAULT_PRICING_MISSING;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PLATFORM_SKU_NOT_FOUND;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PLATFORM_SPU_NOT_FOUND;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PLATFORM_SKU_PRICING_NOT_ALLOWED;
 
 /**
  * 商品默认、分销商与项目三层通用批量定价编排。写入前先完成整批试算，随后发布不可变版本并逐层切换当前指针。
@@ -47,6 +51,7 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
 @Slf4j
 @Service
 @RequiredArgsConstructor
+@Import(PlatformSkuPricingInputReader.class)
 public class GenericBatchPricingService {
     private static final String TX = "supplyChainTransactionManager";
     /** 单次批量定价允许的最大 SKU 数，与设计不变量及请求 {@code @Size(max)} 一致。 */
@@ -70,6 +75,8 @@ public class GenericBatchPricingService {
     private final TaxRateDictionaryAdapter taxDictionary;
     private final SupplyChainDatabaseClock clock;
     private final ObjectMapper objectMapper;
+    private final SupplierOfferEligibilityService eligibilityService;
+    private final PlatformSkuPricingInputReader pricingInputReader;
     private final GenericPricingCalculator calculator = new GenericPricingCalculator();
 
     /**
@@ -122,17 +129,22 @@ public class GenericBatchPricingService {
         return result;
     }
 
-    @Transactional(transactionManager = TX, rollbackFor = Exception.class)
+    @Transactional(transactionManager = TX, rollbackFor = Exception.class, isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public void savePlatform(List<String> skuCodes, PricingConfig config, Long operatorId) {
+        com.aifuli.module.supplychain.tradecore.supply.application.SupplierLifecycleTransactions.requireReadCommitted();
         List<String> codes = normalize(skuCodes);
         log.info("商品默认批量定价保存 skuCount={} operatorId={}", codes.size(), operatorId);
         TaxMetadata tax = taxDictionary.requireEnabled(config.taxMetadata().taxIncluded(),
                 config.taxMetadata().taxRateCode());
         PricingConfig normalized = withTax(config, tax);
         LocalDateTime now = clock.now();
+        // 先统一取得子主键升序锁，再按原请求顺序校验/发布，避免与整商品同步上架形成反序锁环。
+        // 设计见 docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#51-与整商品同步上架的多-sku-锁顺序2026-10-11-复审修正。
+        Map<String, PlatformSkuDO> lockedSkus = PlatformSkuBatchLock.lockByCodes(skuMapper, codes);
+        List<PlatformSkuDO> targets = codes.stream().map(code -> requireSku(code, lockedSkus.get(code))).toList();
+        lockPricingRoots(targets);
         List<CalculatedPlatform> calculated = new ArrayList<>();
-        for (String code : codes) {
-            PlatformSkuDO sku = requireSku(code, true);
+        for (PlatformSkuDO sku : targets) {
             PriceDependencies dependencies = dependencies(sku, now);
             calculated.add(new CalculatedPlatform(sku, dependencies,
                     calculator.calculate(normalized, dependencies)));
@@ -150,20 +162,28 @@ public class GenericBatchPricingService {
      * 设计见 {@code docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#5-版本继承与可售状态}。
      */
     @EventListener
-    @Transactional(transactionManager = TX, rollbackFor = Exception.class)
+    @Transactional(transactionManager = TX, rollbackFor = Exception.class, isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public void initializePlatformDefaults(PlatformSkuPricingInitializationEvent event) {
+        com.aifuli.module.supplychain.tradecore.supply.application.SupplierLifecycleTransactions.requireReadCommitted();
         List<String> skuCodes = event.platformSkuCodes().stream()
                 .filter(code -> code != null && !code.isBlank()).map(String::trim).distinct().toList();
         if (skuCodes.isEmpty()) return;
         log.info("复合保存初始化平台默认定价 skuCount={} operatorId={}", skuCodes.size(), event.operatorId());
+        Map<String, PlatformSkuDO> lockedSkus = PlatformSkuBatchLock.lockByCodes(skuMapper, skuCodes);
+        List<PlatformSkuDO> targets = skuCodes.stream().map(code -> {
+            PlatformSkuDO sku = lockedSkus.get(code);
+            if (sku == null) throw exception(PLATFORM_SKU_NOT_FOUND);
+            return sku;
+        }).toList();
+        Map<Long, PlatformSkuPricingDO> identities = lockPricingRoots(targets);
         List<PlatformSkuDO> unpricedSkus = new ArrayList<>();
         for (String skuCode : skuCodes) {
             // 复合保存允许创建草稿 SKU；默认定价是主数据完整性的一部分，不能沿用人工定价入口的“仅启用 SKU”限制。
-            PlatformSkuDO sku = skuMapper.selectByCodeForUpdate(skuCode);
+            PlatformSkuDO sku = lockedSkus.get(skuCode);
             if (sku == null) {
                 throw exception(PLATFORM_SKU_NOT_FOUND);
             }
-            PlatformSkuPricingDO identity = platformPricingMapper.selectBySkuIdForUpdate(sku.getId());
+            PlatformSkuPricingDO identity = identities.get(sku.getId());
             if (identity != null && identity.getCurrentVersionId() != null) {
                 log.info("跳过已有版本的平台默认定价初始化 skuCode={} currentVersionId={}",
                         sku.getSkuCode(), identity.getCurrentVersionId());
@@ -204,16 +224,19 @@ public class GenericBatchPricingService {
         return result;
     }
 
-    @Transactional(transactionManager = TX, rollbackFor = Exception.class)
+    @Transactional(transactionManager = TX, rollbackFor = Exception.class, isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public void saveBuyer(String buyerCode, List<String> productCodes, ProjectOverrides overrides, Long operatorId) {
+        com.aifuli.module.supplychain.tradecore.supply.application.SupplierLifecycleTransactions.requireReadCommitted();
         List<String> codes = normalize(productCodes);
         log.info("通用批量定价保存 buyerCode={} skuCount={} operatorId={}", buyerCode, codes.size(), operatorId);
         BuyerDO buyer = requireBuyer(buyerCode, true);
         ProjectOverrides normalized = normalizeTax(overrides);
         LocalDateTime now = clock.now();
+        List<ProductContext> targets = codes.stream().map(code -> requireProduct(buyer.getId(), code, true)).toList();
+        lockPricingRoots(targets.stream().map(ProductContext::sku).toList());
         List<CalculatedProduct> calculated = new ArrayList<>();
-        for (String code : codes) {
-            ProductContext item = requireProduct(buyer.getId(), code, true);
+        for (ProductContext item : targets) {
+            item = new ProductContext(item.product(), reloadPricingSku(item.sku().getId()));
             PlatformConfigSnapshot parent = requirePlatformConfig(item.sku().getId());
             PricingConfig effective = ProjectPricingConfigMerger.merge(parent.config(), normalized);
             PriceDependencies dependencies = dependencies(item.sku(), now);
@@ -247,17 +270,20 @@ public class GenericBatchPricingService {
         return result;
     }
 
-    @Transactional(transactionManager = TX, rollbackFor = Exception.class)
+    @Transactional(transactionManager = TX, rollbackFor = Exception.class, isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public void saveProject(String projectCode, List<String> listingCodes,
                             ProjectOverrides overrides, Long operatorId) {
+        com.aifuli.module.supplychain.tradecore.supply.application.SupplierLifecycleTransactions.requireReadCommitted();
         List<String> codes = normalize(listingCodes);
         log.info("项目通用批量定价保存 projectCode={} skuCount={} operatorId={}", projectCode, codes.size(), operatorId);
         BuyerProjectDO project = requireProject(projectCode, true);
         ProjectOverrides normalized = normalizeTax(overrides);
         LocalDateTime now = clock.now();
+        List<ListingContext> targets = codes.stream().map(code -> requireListing(project, code, true)).toList();
+        lockPricingRoots(targets.stream().map(ListingContext::sku).toList());
         List<CalculatedListing> calculated = new ArrayList<>();
-        for (String code : codes) {
-            ListingContext context = requireListing(project, code, true);
+        for (ListingContext context : targets) {
+            context = new ListingContext(context.listing(), context.product(), reloadPricingSku(context.sku().getId()));
             BuyerConfigSnapshot buyerConfig = requireBuyerConfig(context.product().getId());
             PricingConfig effective = ProjectPricingConfigMerger.merge(buyerConfig.config(), normalized);
             PriceDependencies dependencies = dependencies(context.sku(), now);
@@ -332,6 +358,7 @@ public class GenericBatchPricingService {
         LocalDateTime now = clock.now();
         PlatformSkuPricingDO identity = platformPricingMapper.selectBySkuIdForUpdate(platformSkuId);
         if (identity == null || identity.getCurrentVersionId() == null) return;
+        sku = reloadPricingSku(platformSkuId);
         PlatformSkuPricingVersionDO current = platformVersionMapper.selectById(identity.getCurrentVersionId());
         if (current == null) return;
         identity.setPricingStatus(PricingStatus.RECALCULATING.name());
@@ -349,16 +376,21 @@ public class GenericBatchPricingService {
      * 分销商品创建后按商品默认层同步生成继承版本。上游尚未定价时保留创建方写入的 UNPRICED 身份；
      * 监听失败向上传播并回滚目录关联，避免出现“目录已生效但继承版本缺失”的半完成状态。
      * 设计见 {@code docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#5-版本继承与可售状态}。
+     * 独立目录刷新也调用此入口，须先取得平台根锁再读取父版本；沿用关联批次RC，不新开事务。
+     * 见 docs/superpowers/specs/2026-10-11-supplier-offer-lifecycle-design.md#34-闭环四同步重算的锁顺序与并发事务规范。
      */
     @EventListener
-    @Transactional(transactionManager = TX, rollbackFor = Exception.class)
+    @Transactional(transactionManager = TX, rollbackFor = Exception.class,
+            isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public void initializeBuyerProduct(BuyerProductPricingInitializationEvent event) {
+        com.aifuli.module.supplychain.tradecore.supply.application.SupplierLifecycleTransactions.requireReadCommitted();
         BuyerProductDO product = buyerProductMapper.selectById(event.buyerProductId());
         if (product == null || product.getStatus() != BuyerProductStatus.ACTIVE.getCode()) return;
         PlatformSkuDO sku = skuMapper.selectById(product.getPlatformSkuId());
         if (sku == null) return;
-        PlatformSkuPricingDO platformIdentity = platformPricingMapper.selectById(sku.getId());
+        PlatformSkuPricingDO platformIdentity = platformPricingMapper.selectBySkuIdForUpdate(sku.getId());
         if (platformIdentity == null || platformIdentity.getCurrentVersionId() == null) return;
+        sku = reloadPricingSku(sku.getId());
         PlatformSkuPricingVersionDO platformVersion = platformVersionMapper.selectById(
                 platformIdentity.getCurrentVersionId());
         if (platformVersion == null) return;
@@ -380,20 +412,26 @@ public class GenericBatchPricingService {
      * 项目商品创建后按分销商层同步生成全继承版本。上游尚未定价时保留 UNPRICED；已存在项目覆盖的复活场景
      * 继续沿用原覆盖规则并生成新版本。
      * 设计见 {@code docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#5-版本继承与可售状态}。
+     * 先锁平台定价根再读取分销父版本，独立调用与关联批次使用同一RC事务契约。
+     * 见 docs/superpowers/specs/2026-10-11-supplier-offer-lifecycle-design.md#34-闭环四同步重算的锁顺序与并发事务规范。
      */
     @EventListener
-    @Transactional(transactionManager = TX, rollbackFor = Exception.class)
+    @Transactional(transactionManager = TX, rollbackFor = Exception.class,
+            isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public void initializeProjectListing(ProjectListingPricingInitializationEvent event) {
+        com.aifuli.module.supplychain.tradecore.supply.application.SupplierLifecycleTransactions.requireReadCommitted();
         ProjectListingDO listing = listingMapper.selectById(event.listingId());
         if (listing == null || listing.getStatus() != ProjectListingStatus.AVAILABLE.getCode()) return;
         BuyerProductDO product = buyerProductMapper.selectById(listing.getBuyerProductId());
         if (product == null || product.getStatus() != BuyerProductStatus.ACTIVE.getCode()) return;
+        PlatformSkuDO sku = skuMapper.selectById(product.getPlatformSkuId());
+        if (sku == null) return;
+        platformPricingMapper.selectBySkuIdForUpdate(sku.getId());
+        sku = reloadPricingSku(sku.getId());
         BuyerSkuPricingDO buyerIdentity = buyerPricingMapper.selectByBuyerProductId(product.getId());
         if (buyerIdentity == null || buyerIdentity.getCurrentVersionId() == null) return;
         BuyerSkuPricingVersionDO buyerVersion = buyerVersionMapper.selectById(buyerIdentity.getCurrentVersionId());
         if (buyerVersion == null) return;
-        PlatformSkuDO sku = skuMapper.selectById(product.getPlatformSkuId());
-        if (sku == null) return;
         ProjectSkuPricingDO projectIdentity = projectPricingMapper.selectByListingIdForUpdate(listing.getId());
         ProjectSkuPricingVersionDO current = projectIdentity == null || projectIdentity.getCurrentVersionId() == null
                 ? null : projectVersionMapper.selectById(projectIdentity.getCurrentVersionId());
@@ -432,6 +470,14 @@ public class GenericBatchPricingService {
         identity.setUnavailableReason(result.unavailableReason());
         identity.setUpdatedAt(now);
         platformPricingMapper.updateById(identity);
+        // READY的新身份必须显式清空旧依赖失效原因；普通updateById默认忽略NULL。
+        // 与指针切换同事务，限定新当前版本，不修改任何历史版本。
+        if (result.unavailableReason() == null) {
+            platformPricingMapper.update(null, new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<PlatformSkuPricingDO>()
+                    .eq(PlatformSkuPricingDO::getPlatformSkuId, identity.getPlatformSkuId())
+                    .eq(PlatformSkuPricingDO::getCurrentVersionId, version.getId())
+                    .set(PlatformSkuPricingDO::getUnavailableReason, null));
+        }
         return version;
     }
 
@@ -486,6 +532,14 @@ public class GenericBatchPricingService {
         identity.setUnavailableReason(result.unavailableReason());
         identity.setUpdatedAt(now);
         buyerPricingMapper.updateById(identity);
+        // READY的新身份必须显式清空旧依赖失效原因；普通updateById默认忽略NULL。
+        // 与指针切换同事务，限定新当前版本，不修改任何历史版本。
+        if (result.unavailableReason() == null) {
+            buyerPricingMapper.update(null, new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<BuyerSkuPricingDO>()
+                    .eq(BuyerSkuPricingDO::getId, identity.getId())
+                    .eq(BuyerSkuPricingDO::getCurrentVersionId, version.getId())
+                    .set(BuyerSkuPricingDO::getUnavailableReason, null));
+        }
         return version;
     }
 
@@ -532,6 +586,14 @@ public class GenericBatchPricingService {
         identity.setUnavailableReason(result.unavailableReason());
         identity.setUpdatedAt(now);
         projectPricingMapper.updateById(identity);
+        // READY的新身份必须显式清空旧依赖失效原因；普通updateById默认忽略NULL。
+        // 与指针切换同事务，限定新当前版本，不修改任何历史版本。
+        if (result.unavailableReason() == null) {
+            projectPricingMapper.update(null, new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<ProjectSkuPricingDO>()
+                    .eq(ProjectSkuPricingDO::getId, identity.getId())
+                    .eq(ProjectSkuPricingDO::getCurrentVersionId, version.getId())
+                    .set(ProjectSkuPricingDO::getUnavailableReason, null));
+        }
     }
 
     private ProjectOverrides normalizeTax(ProjectOverrides overrides) {
@@ -593,18 +655,39 @@ public class GenericBatchPricingService {
         return fromJson(version.getEffectiveConfigJson(), PricingConfig.class);
     }
 
+    /**
+     * 行内定价外层批次的共同根锁：编码预读只定位，仍由关联业务进行准入校验。
+     * 必须在逐行初始化/发布前对完整批次调用，加入外层RC，不另开事务。
+     * 设计见 docs/superpowers/specs/2026-10-11-supplier-offer-lifecycle-design.md#34-闭环四同步重算的锁顺序与并发事务规范。
+     */
+    @Transactional(transactionManager = TX, rollbackFor = Exception.class,
+            isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
+    public void lockPlatformPricingByCodes(List<String> codes) {
+        com.aifuli.module.supplychain.tradecore.supply.application.SupplierLifecycleTransactions.requireReadCommitted();
+        List<Long> ids = codes.stream().filter(Objects::nonNull).map(String::trim).filter(code -> !code.isEmpty())
+                .map(skuMapper::selectByCode).filter(Objects::nonNull).map(PlatformSkuDO::getId).toList();
+        PlatformSkuPricingBatchLock.lockByIds(platformPricingMapper, ids);
+    }
+
+    /**
+     * 跨SKU定价写入共用平台身份互斥锁，主键升序与生命周期事件一致。
+     * 商品/目录锁不能替代该锁，持有后才读取父配置与正式供给，禁止反向锁供应商。
+     * 设计见 docs/superpowers/specs/2026-10-11-supplier-offer-lifecycle-design.md#34-闭环四同步重算的锁顺序与并发事务规范。
+     */
+    private Map<Long, PlatformSkuPricingDO> lockPricingRoots(List<PlatformSkuDO> skus) {
+        return PlatformSkuPricingBatchLock.lockByIds(platformPricingMapper, skus.stream().map(PlatformSkuDO::getId).toList());
+    }
+
+    /**
+     * 锁前对象只定位，平台根锁等待结束后按RC普通读重新加载计算输入；不反向锁商品行。
+     * 设计见 docs/superpowers/specs/2026-10-11-supplier-offer-lifecycle-design.md#34-闭环四同步重算的锁顺序与并发事务规范。
+     */
+    private PlatformSkuDO reloadPricingSku(Long skuId) {
+        return Objects.requireNonNull(pricingInputReader.readAfterRootLock(skuId), "pricing SKU disappeared after root lock");
+    }
+
     private PriceDependencies dependencies(PlatformSkuDO sku, LocalDateTime now) {
-        Long minimum = null;
-        for (SupplierOfferDO offer : offerMapper.selectPublishedBySku(sku.getId())) {
-            SupplierDO supplier = supplierMapper.selectById(offer.getSupplierId());
-            SupplierOfferVersionDO version = offer.getCurrentVersionId() == null
-                    ? null : offerVersionMapper.selectById(offer.getCurrentVersionId());
-            Long price = EffectiveSupplyPrice.of(offer, supplier, version, sku.getSuggestedSalePrice(), now);
-            if (price == null) {
-                continue;
-            }
-            minimum = minimum == null ? price : Math.min(minimum, price);
-        }
+        Long minimum = eligibilityService.resolveMinimumSupplyPrices(List.of(sku.getId()), now).get(sku.getId());
         return new PriceDependencies(sku.getMarketPrice(), sku.getSuggestedSalePrice(), minimum);
     }
 
@@ -616,12 +699,27 @@ public class GenericBatchPricingService {
         return buyer;
     }
 
+    /**
+     * 人工默认定价的权威准入：SKU 与所属 SPU 必须同时启用；不存在与状态拒绝分别返回稳定业务错误。
+     * 预览只读，保存锁定 SKU 后对整批完成检查再发布版本；本层继续上抛，不重复记录异常堆栈。
+     * 此守卫不用于审计读取和复合保存首版自动初始化，不能把草稿的系统默认定价与人工定价混为一谈。
+     * 设计见 {@code docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#6-管理端接口}。
+     */
     private PlatformSkuDO requireSku(String code, boolean forUpdate) {
-        PlatformSkuDO sku = forUpdate ? skuMapper.selectByCodeForUpdate(code) : skuMapper.selectByCode(code);
-        PlatformSpuDO spu = sku == null ? null : spuMapper.selectById(sku.getSpuId());
-        if (sku == null || sku.getStatus() != CatalogEntityStatus.ACTIVE.getCode()
-                || spu == null || spu.getStatus() != CatalogEntityStatus.ACTIVE.getCode()) {
-            throw new IllegalArgumentException("active platform SKU not found");
+        return requireSku(code, forUpdate ? skuMapper.selectByCodeForUpdate(code) : skuMapper.selectByCode(code));
+    }
+
+    private PlatformSkuDO requireSku(String code, PlatformSkuDO sku) {
+        if (sku == null) {
+            throw exception(PLATFORM_SKU_NOT_FOUND);
+        }
+        PlatformSpuDO spu = spuMapper.selectById(sku.getSpuId());
+        if (spu == null) {
+            throw exception(PLATFORM_SPU_NOT_FOUND);
+        }
+        if (!Objects.equals(sku.getStatus(), CatalogEntityStatus.ACTIVE.getCode())
+                || !Objects.equals(spu.getStatus(), CatalogEntityStatus.ACTIVE.getCode())) {
+            throw exception(PLATFORM_SKU_PRICING_NOT_ALLOWED, code);
         }
         return sku;
     }

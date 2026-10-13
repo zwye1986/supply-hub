@@ -116,8 +116,10 @@ class SupplierCredentialAccessLogTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"/callbacks/suppliers/huasheng", "/callbacks/suppliers/huasheng/101"})
-    void huashengCallbackBodyResponseQueryAndFailureNeverEnterGatewayLogs(String path) {
+    @ValueSource(strings = {"/callbacks/suppliers/huasheng", "/callbacks/suppliers/huasheng/101",
+            "/open-api/supply-chain/project/v2/orders", "/open-api/supply-chain/project/v2/orders/query",
+            "/open-api/supply-chain/project/v2/orders/assets/query"})
+    void sensitiveTransportBodyResponseQueryAndFailureNeverEnterGatewayLogs(String path) {
         Logger logger = (Logger) LoggerFactory.getLogger(AccessLogFilter.class);
         ListAppender<ILoggingEvent> appender = new ListAppender<>();
         appender.start(); logger.addAppender(appender);

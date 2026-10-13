@@ -1,6 +1,9 @@
 package com.aifuli.module.supplychain.routing.application;
 
 import com.aifuli.module.supplychain.api.order.dto.SupplyChainOrderStatus;
+import com.aifuli.module.supplychain.tradecore.supply.application.SupplierOfferEligibilityService;
+import com.aifuli.module.supplychain.supplieradapter.metadata.SupplierConnectorCapabilityMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.StandardPricingQuoteService;
 import com.aifuli.module.supplychain.border.order.dal.mysql.SupplyChainOrderMapper;
 import com.aifuli.module.supplychain.border.order.domain.SupplyChainOrderTypes;
 import com.aifuli.module.supplychain.routing.dal.dataobject.StdRoutingCandidateDO;
@@ -128,13 +131,15 @@ public class SupplierRoutingApplicationService {
     private final SupplierConnectorMapper connectorMapper;
     private final SupplierConnectorVersionMapper connectorVersionMapper;
     private final InventorySourceMapper inventorySourceMapper;
+    private final SupplierOfferEligibilityService eligibilityService;
+    private final SupplierConnectorCapabilityMapper capabilityMapper;
 
     @Transactional(transactionManager = TRANSACTION_MANAGER, readOnly = true,
             noRollbackFor = SupplyQualificationUnavailableException.class)
     public RoutingSnapshot route(RoutingInput input) {
         log.debug("[routeEvaluate][标准商品路由入口] buyerId={}, projectId={}, platformSkuId={}, quantity={}, businessTime={}",
                 input.buyerId(), input.projectId(), input.platformSkuId(), input.quantity(), input.businessTime());
-        if (input.quantity() != 1) {
+        if (input.quantity() != StandardPricingQuoteService.SUPPORTED_QUANTITY) {
             throw new IllegalArgumentException("M1 standard-product routing only accepts quantity one");
         }
         requireActiveSubject(input);
@@ -442,8 +447,11 @@ public class SupplierRoutingApplicationService {
         }
         if (!Objects.equals(offer.getSupplierId(), supplier.getId())
                 || !Objects.equals(offer.getPlatformSkuId(), input.platformSkuId())
-                || offer.getCurrentVersionId() == null) {
+) {
             throw new IllegalStateException("Published offer has broken ownership or version pointer");
+        }
+        if (offer.getCurrentVersionId() == null) {
+            return null;
         }
         SupplierOfferVersionDO version = offerVersionMapper.selectById(offer.getCurrentVersionId());
         if (version == null || !offer.getId().equals(version.getOfferId())) {
@@ -471,16 +479,11 @@ public class SupplierRoutingApplicationService {
         }
         boundary.include(version.getValidFrom());
         boundary.include(version.getValidTo());
-        if (!effectiveAt(version.getValidFrom(), version.getValidTo(), input.businessTime())
-                || input.quantity() < version.getMinQuantity()
-                || input.quantity() > version.getMaxQuantity()
-                || (input.quantity() - version.getMinQuantity()) % version.getQuantityStep() != 0
-                || !Money.CURRENCY_CNY.equals(version.getCurrency())
-                || connectorVersion.getStatus() != ConnectorVersionStatus.PUBLISHED.getCode()
-                || connector.getStatus() != CONNECTOR_ACTIVE
-                || !connectorVersion.getId().equals(connector.getCurrentVersionId())
-                || inventory.getStatus() != InventorySourceStatus.ACTIVE.getCode()
-                || !INVENTORY_REMOTE_ON_DEMAND.equals(inventory.getSourceType())) {
+        PlatformSkuDO sku = skuMapper.selectById(input.platformSkuId());
+        PlatformSpuDO spu = sku == null ? null : spuMapper.selectById(sku.getSpuId());
+        if (!eligibilityService.isStructurallyEligible(offer, supplier, version, connector, connectorVersion,
+                inventory, sku, spu, capabilityMapper.selectByConnectorVersionId(connectorVersion.getId()),
+                input.businessTime()) || !SupplierOfferEligibilityService.isQuantityEligible(version, input.quantity())) {
             return null;
         }
         return new ResolvedOffer(offer, version);

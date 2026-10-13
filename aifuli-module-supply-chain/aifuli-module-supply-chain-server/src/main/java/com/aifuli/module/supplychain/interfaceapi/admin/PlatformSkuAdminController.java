@@ -20,6 +20,7 @@ import lombok.Data;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
+import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -108,7 +109,7 @@ public class PlatformSkuAdminController {
     @PostMapping("/pricing/preview")
     @PreAuthorize(PLATFORM_SKU_QUERY_EXPRESSION)
     @Operation(summary = "批量试算商品SKU默认定价",
-            description = "只读试算商品默认层五组配置；税务仅作结算展示。")
+            description = "只读试算商品默认层五组完整配置；SPU与SKU均须启用。税务仅作结算展示，不含税仍须提交NON_TAXABLE。")
     public CommonResult<List<PricingPreview>> previewPricing(
             @Valid @RequestBody PlatformSkuBatchPricingReqVO request) {
         return success(genericPricingService.previewPlatform(request.getPlatformSkuCodes(),
@@ -118,13 +119,19 @@ public class PlatformSkuAdminController {
     @PutMapping("/pricing")
     @PreAuthorize(PRODUCT_UPDATE_EXPRESSION)
     @Operation(summary = "批量保存商品SKU默认定价",
-            description = "单事务全量成功或回滚，保存后为继承的分销商和项目发布新版本。")
+            description = "SPU与SKU均须启用；单事务全量成功或回滚，保存后为继承的分销商和项目发布新版本。"
+                    + "税务仅作结算展示，不含税仍须提交NON_TAXABLE；未启用返回明确业务错误。")
     public CommonResult<Boolean> savePricing(@Valid @RequestBody PlatformSkuBatchPricingReqVO request) {
         genericPricingService.savePlatform(request.getPlatformSkuCodes(),
                 GenericPricingRequestMapper.toPlatformConfig(request), getLoginUserId());
         return success(true);
     }
 
+    /**
+     * 商品默认层无税务继承来源，两字段始终必填；不含税不是省略税率编码的条件。
+     * 仅用于结算展示，不替代 SKU 主数据的旧 tax_rate 字段，也不参与价格计算。
+     * 设计见 {@code docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#4-税务展示属性}。
+     */
     @Data
     @Schema(description = "平台商品SKU默认批量定价请求")
     public static class PlatformSkuBatchPricingReqVO {
@@ -141,9 +148,13 @@ public class PlatformSkuAdminController {
         private BigDecimal distributionHideThresholdPercent;
         @Schema(description = "默认销售区利润隐藏阈值")
         private BigDecimal salesHideThresholdPercent;
-        @Schema(description = "是否含税，须与税率编码同时提交", requiredMode = Schema.RequiredMode.REQUIRED)
+        @NotNull
+        @Schema(description = "是否含税，须与税率编码同时提交；不含税时编码为NON_TAXABLE；仅用于结算展示，不参与价格计算",
+                requiredMode = Schema.RequiredMode.REQUIRED)
         private Boolean taxIncluded;
-        @NotBlank @Schema(description = "system动态字典supply_chain_tax_rate的启用值")
+        @NotBlank
+        @Schema(description = "system动态字典supply_chain_tax_rate的启用编码；不含税仍必填NON_TAXABLE，含税时选择启用编码",
+                requiredMode = Schema.RequiredMode.REQUIRED)
         private String taxRateCode;
     }
 }

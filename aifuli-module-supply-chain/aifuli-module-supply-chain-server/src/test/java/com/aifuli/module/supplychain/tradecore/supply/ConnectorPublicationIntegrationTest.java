@@ -304,6 +304,7 @@ class ConnectorPublicationIntegrationTest {
         properties.put("aifuli.supply-chain.datasource.driver-class-name", "com.mysql.cj.jdbc.Driver");
         properties.put("aifuli.supply-chain.connector.allowed-hosts", "api.qinameng.com");
         properties.put("QNM_TEST_USERKEY", TEST_SECRET);
+        properties.put("aifuli.supply-chain.connector.allowed-adapter-types", "QNM_GAME_ORDER_V1");
         return new SpringApplicationBuilder(TestConfiguration.class)
                 .web(WebApplicationType.NONE).properties(properties).run();
     }
@@ -329,7 +330,7 @@ class ConnectorPublicationIntegrationTest {
             ClosedJsonSchemaValidator.class,
             EnvironmentCredentialProvider.class, SupplierEndpointPolicy.class,
             // SupplierOfferPublicationService 构造器依赖 AdapterTypeAllowList（B1 上架即发布 §6.8 白名单闸门）；
-            // 本测试只走 publish/createOffer，不触发 listOnShelf 的白名单校验，故仅需注册该 bean，无需配置 allowed-adapter-types。
+            // 正式发布与管理端上架共用白名单资格，本测试显式允许真实 QNM 适配器。
             AdapterTypeAllowList.class,
             SupplierConfigurationCommandService.class, ConnectorValidationRecordService.class,
             ConnectorValidationService.class, ConnectorPublicationService.class,

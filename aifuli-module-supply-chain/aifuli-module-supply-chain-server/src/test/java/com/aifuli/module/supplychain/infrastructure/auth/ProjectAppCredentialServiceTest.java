@@ -226,7 +226,7 @@ class ProjectAppCredentialServiceTest {
                 .thenReturn(null);
 
         ServiceException failure = catchThrowableOfType(
-                () -> service.requireCapability(20L, ProjectAppCredentialService.CAPABILITY_INSTORE),
+                () -> service.requireCapability(20L, ProjectAuthOperations.findByOperationCode("INSTORE_HOME_ENTRY").orElseThrow()),
                 ServiceException.class);
         assertThat(failure.getCode()).isEqualTo(BUYER_AUTH_INVALID.getCode());
         verify(secretResolver, never()).resolveAppKey(APP_ID, 1, SECRET_REF_SENTINEL);
@@ -238,7 +238,7 @@ class ProjectAppCredentialServiceTest {
                 .thenReturn(capability((short) 20));
 
         ServiceException failure = catchThrowableOfType(
-                () -> service.requireCapability(20L, ProjectAppCredentialService.CAPABILITY_INSTORE),
+                () -> service.requireCapability(20L, ProjectAuthOperations.findByOperationCode("INSTORE_HOME_ENTRY").orElseThrow()),
                 ServiceException.class);
         assertThat(failure.getCode()).isEqualTo(BUYER_AUTH_INVALID.getCode());
     }
@@ -248,7 +248,7 @@ class ProjectAppCredentialServiceTest {
         when(capabilityMapper.selectByProjectIdAndCode(20L, ProjectAppCredentialService.CAPABILITY_INSTORE))
                 .thenReturn(capability((short) 10));
 
-        service.requireCapability(20L, ProjectAppCredentialService.CAPABILITY_INSTORE);
+        service.requireCapability(20L, ProjectAuthOperations.findByOperationCode("INSTORE_HOME_ENTRY").orElseThrow());
     }
 
     @Test
@@ -324,7 +324,8 @@ class ProjectAppCredentialServiceTest {
                 .flatMap(status -> ProjectAuthOperations.OPERATIONS.stream().map(op -> Arguments.of(status,
                         op.operationCode(), ProjectAuthStatus.ENABLED.matches(status)
                                 || (ProjectAuthStatus.SUSPENDED.matches(status)
-                                && ProjectAuthOperations.STANDARD_ORDER_QUERY.equals(op.operationCode())))));
+                                && (ProjectAuthOperations.STANDARD_ORDER_QUERY.equals(op.operationCode())
+                                || ProjectAuthOperations.STANDARD_ORDER_QUERY_V2.equals(op.operationCode()))))));
     }
 
     @ParameterizedTest

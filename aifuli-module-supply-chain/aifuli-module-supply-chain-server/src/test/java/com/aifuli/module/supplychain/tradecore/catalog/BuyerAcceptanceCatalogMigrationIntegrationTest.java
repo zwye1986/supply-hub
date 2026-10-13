@@ -35,7 +35,7 @@ class BuyerAcceptanceCatalogMigrationIntegrationTest {
             assertThat(priceAfter.remove("commercial_snapshot_digest")).isNull();
             assertThat(priceAfter).isEqualTo(priceBefore);
             var checksums = jdbc.queryForList("SELECT ID,MD5SUM FROM DATABASECHANGELOG ORDER BY ORDEREXECUTED");
-            assertThat(checksums).hasSize(63);
+            assertThat(checksums).hasSize(64);
             update(source, null);
             assertThat(jdbc.queryForList("SELECT ID,MD5SUM FROM DATABASECHANGELOG ORDER BY ORDEREXECUTED")).isEqualTo(checksums);
             assertThatThrownBy(() -> jdbc.update("UPDATE sc_buyer_listing SET management_mode='AUTO_SELECTION' WHERE id=901"))

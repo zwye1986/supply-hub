@@ -10,6 +10,11 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.*;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.*;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.*;
 import com.aifuli.module.supplychain.border.order.dal.mysql.SupplyChainOrderMapper;
+import com.aifuli.module.supplychain.tradecore.supply.application.SupplierOfferEligibilityService;
+import com.aifuli.module.supplychain.infrastructure.security.AdapterTypeAllowList;
+import com.aifuli.module.supplychain.supplieradapter.metadata.*;
+import com.aifuli.module.supplychain.tradecore.catalog.application.ProductSellabilityService;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -51,6 +56,8 @@ class SupplierRoutingQualificationFailureTest {
     @Mock SupplierConnectorMapper connectorMapper;
     @Mock SupplierConnectorVersionMapper connectorVersionMapper;
     @Mock InventorySourceMapper inventorySourceMapper;
+    @Mock SupplierConnectorCapabilityMapper capabilityMapper;
+    @Mock AdapterTypeAllowList allowList;
     @InjectMocks SupplierRoutingApplicationService routing;
 
     private final LocalDateTime now = LocalDateTime.of(2026, 10, 9, 12, 0);
@@ -58,13 +65,20 @@ class SupplierRoutingQualificationFailureTest {
 
     @BeforeEach
     void activeSubjects() {
+        ReflectionTestUtils.setField(routing, "eligibilityService", new SupplierOfferEligibilityService(
+                supplierMapper, connectorMapper, connectorVersionMapper, capabilityMapper, inventorySourceMapper,
+                offerMapper, offerVersionMapper, skuMapper, spuMapper, new ProductSellabilityService(skuMapper, spuMapper),
+                allowList, new AdapterMetadataRegistry(List.of())));
+        when(allowList.isAllowed("TEST")).thenReturn(true);
+        when(capabilityMapper.selectByConnectorVersionId(40L)).thenReturn(List.of(
+                SupplierConnectorCapabilityDO.builder().connectorVersionId(40L).capabilityCode("CREATE_RECHARGE").enabled((short)1).build()));
         input = new RoutingInput(1L, null, 2L, "DIRECT_RECHARGE", 1, now, Map.of());
         lenient().when(buyerMapper.selectById(1L)).thenReturn(BuyerDO.builder().id(1L)
                 .buyerCode("BUYER").status((short) 10).build());
         lenient().when(skuMapper.selectById(2L)).thenReturn(PlatformSkuDO.builder().id(2L)
                 .spuId(3L).fulfillmentType("DIRECT_RECHARGE").status((short) 10).build());
         lenient().when(spuMapper.selectById(3L)).thenReturn(PlatformSpuDO.builder().id(3L)
-                .productType("EQUITY_PRODUCT").build());
+                .productType("EQUITY_PRODUCT").status((short)10).build());
     }
 
     @Test void missingPolicyIsRecoverable() { assertRecoverable("NO_ACTIVE_POLICY"); }
@@ -113,9 +127,9 @@ class SupplierRoutingQualificationFailureTest {
         assertTechnicalFailure();
     }
 
-    @Test void publishedOfferNullPointerRemainsTechnicalFailure() {
+    @Test void publishedOfferWithoutVersionIsNormalUnavailability() {
         offer().setCurrentVersionId(null);
-        assertTechnicalFailure();
+        assertThat(routing.route(input).decision().selected()).isFalse();
     }
 
     @Test void foreignOfferVersionRemainsTechnicalFailure() {
@@ -154,6 +168,17 @@ class SupplierRoutingQualificationFailureTest {
 
     @Test void inactiveInventoryIsNormalUnavailability() {
         dependencies().setStatus((short) 20);
+        assertThat(routing.route(input).decision().selected()).isFalse();
+    }
+
+    @Test void disabledPrimaryCapabilityIsNormalUnavailability() {
+        dependencies();
+        when(capabilityMapper.selectByConnectorVersionId(40L)).thenReturn(List.of());
+        assertThat(routing.route(input).decision().selected()).isFalse();
+    }
+    @Test void adapterOutsideAllowListIsNormalUnavailability() {
+        dependencies();
+        when(allowList.isAllowed("TEST")).thenReturn(false);
         assertThat(routing.route(input).decision().selected()).isFalse();
     }
 
@@ -244,6 +269,7 @@ class SupplierRoutingQualificationFailureTest {
         SupplierOfferVersionDO version = SupplierOfferVersionDO.builder().id(31L).offerId(30L)
                 .connectorVersionId(40L).inventorySourceId(60L).currency("CNY")
                 .supplierSettlementUnitPrice(100L).minQuantity(1L).maxQuantity(1L).quantityStep(1L)
+                .primaryCapabilityCode("CREATE_RECHARGE").completionMode("SYNCHRONOUS").unknownResultPolicy("MANUAL")
                 .fulfillmentConfigJson("{}").validFrom(now.minusDays(1)).build();
         when(offerVersionMapper.selectById(31L)).thenReturn(version);
         return version;
@@ -254,7 +280,7 @@ class SupplierRoutingQualificationFailureTest {
         when(connectorVersionMapper.selectById(40L)).thenReturn(SupplierConnectorVersionDO.builder()
                 .id(40L).connectorId(50L).status((short) 10).adapterConfigJson("{}").build());
         when(connectorMapper.selectById(50L)).thenReturn(SupplierConnectorDO.builder()
-                .id(50L).supplierId(20L).currentVersionId(40L).status((short) 10).build());
+                .id(50L).supplierId(20L).currentVersionId(40L).adapterType("TEST").status((short) 10).build());
         InventorySourceDO inventory = InventorySourceDO.builder().id(60L).supplierId(20L)
                 .platformSkuId(2L).sourceType("REMOTE_ON_DEMAND").status((short) 10).build();
         when(inventorySourceMapper.selectById(60L)).thenReturn(inventory);

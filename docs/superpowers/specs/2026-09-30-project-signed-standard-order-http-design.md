@@ -2,6 +2,8 @@
 
 日期：2026-09-30
 
+> **2026-10-12 新契约草案，尚未开放：** [平台SKU下单与历史兼容详细设计](2026-10-12-platform-sku-order-contract-design.md) 拟新增三个独立v2签名操作，创建只接收 `platformSkuCode`，查询仍以 `buyerOrderNo` 定位；本文v1路径、BPD／历史编码、格式2和签名字节保持。新旧共用项目永久键，创建跨版本同号冲突、查询版本互通；原状态／能力／no-store／敏感保护全部保留。须用户书面评审通过后实施，不能据草案调用当前v1提交SKU。
+
 状态：业务决策已确认，2026-10-02进入标准HTTP实施。三接口尚未完成；限频代码及其自动化审查已完成，实际环境验收按待办降低优先级。
 
 实施优先级（2026-10-01）：用户要求优先推进本设计三个HTTP接口的业务闭环。实际测试环境迁移、菜单部署、真实页面与供应商联调暂缓并降低优先级，记录于`docs/待办列表.md`；代码、数据库增量及自动化契约/事务/架构门禁按本设计推进。§8内部报价过渡方案须在真实下单开放前补齐，查单/资产查询及认证注册可以先实施；不得为提前联调绕过归属、报价、资产审计或限频覆盖门禁。
@@ -34,7 +36,7 @@
 - `POST /open-api/supply-chain/project/v1/orders/query`：`STANDARD_ORDER_QUERY`，项目可为 ACTIVE 或 SUSPENDED。
 - `POST /open-api/supply-chain/project/v1/orders/assets/query`：`STANDARD_ORDER_ASSET_QUERY`，项目必须 ACTIVE。
 
-三个操作均要求启用 `STANDARD_PRODUCT` 能力，使用项目 scope。应用未启用、凭证已吊销或过期、项目 CLOSED/ARCHIVED 时全部拒绝。SUSPENDED 只允许历史订单摘要查询，不允许新下单或读取卡密；卡密由管理端有权限的人员处理。
+三个操作均校验 `STANDARD_PRODUCT` 能力，使用项目 scope。2026-10-12 已确认的独立能力管理覆盖原“全部要求启用”规则：下单和卡密读取要求能力启用；订单摘要查询接受已开通且启用/停用的能力行，从未开通仍拒绝。应用未启用、凭证已吊销或过期、项目 CLOSED/ARCHIVED 时全部拒绝。SUSPENDED 只允许历史订单摘要查询，不允许新下单或读取卡密；卡密由管理端有权限的人员处理。管理入口、审计和关闭生效边界见 `2026-10-12-project-standard-product-capability-design.md`。
 
 `appId` 验签成功后产出可信 `projectId`、`buyerId` 和应用身份。请求体不接受 `projectId`、`projectCode`、`buyerId`、`sourceSystem`、`externalTenantId`；不得由普通请求头、调用方参数或外部租户映射覆盖项目归属。同一分销商的不同项目彼此隔离。
 

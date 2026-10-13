@@ -34,7 +34,8 @@ import java.util.Optional;
  *   <li>严格限制 Header Appid（16 字节）与 X-Sign（4096 字节），并校验 Appid 与商户账号一致；</li>
  *   <li>先对原密文文本字节执行 SHA512withRSA 验签，再执行 AES-CBC 解密；</li>
  *   <li>解密正文上限 1MiB，流式约束（最大字符串 16384、最大深度 32、重复 key 拒绝、尾随 token 拒绝）；</li>
- *   <li>严格语义校验（时间戳整数秒、nonce 最多 64 字符、num=1、双号非空、totalPrice、SUCCESS/FAILED）；</li>
+ *   <li>严格语义校验（时间戳整数秒、nonce 最多 64 字符、双号非空、totalPrice、SUCCESS/FAILED）；</li>
+ *   <li>交付数量按回调状态校验：SUCCESS 为 1，FAILED 为 0 或省略，不能混用原单订购数量；</li>
  *   <li>SUCCESS 仅接受恰好 1 张 Type 201 卡片（六型拒绝，复用 ResponseParser 校验），FAILED 仅接受空卡券；</li>
  *   <li>临时解密字节数组在 finally 块中擦除清零；</li>
  *   <li>零 Spring/MyBatis 依赖。</li>
@@ -257,17 +258,15 @@ public final class HuashengCallbackParser {
         }
         String outOrderSn = outOrderSnNode.asText();
 
-        // 4. num (必须且只能为 1)
+        // 4. num 原始存在性和整数类型；状态相关校验在读取 status 后执行。
+        // 设计：docs/superpowers/specs/2026-10-12-huasheng-fulfillment-hardening-design.md#21-订购数量与交付数量。
         JsonNode numNode = root.get("num");
-        if (numNode == null || !(numNode instanceof IntNode || numNode instanceof LongNode)) {
-            throw new HuashengCallbackParseException("缺少整数 token num");
-        }
-        if (!numNode.canConvertToInt()) {
-            throw new HuashengCallbackParseException("num 超出 int 范围");
-        }
-        int num = numNode.intValue();
-        if (num != 1) {
-            throw new HuashengCallbackParseException("num 必须严格等于 1: " + num);
+        Integer num = null;
+        if (numNode != null) {
+            if (!(numNode instanceof IntNode || numNode instanceof LongNode) || !numNode.canConvertToInt()) {
+                throw new HuashengCallbackParseException("num 必须为有效整数");
+            }
+            num = numNode.intValue();
         }
 
         // 5. totalPrice
@@ -295,6 +294,13 @@ public final class HuashengCallbackParser {
             status = HuashengOrderStatus.FAILED;
         } else {
             throw new HuashengCallbackParseException("status 必须为 SUCCESS 或 FAILED");
+        }
+
+        if (status == HuashengOrderStatus.SUCCESS && !Integer.valueOf(HuashengCallbackFact.SINGLE_CARD_DELIVERY_QUANTITY).equals(num)) {
+            throw new HuashengCallbackParseException("SUCCESS 的 num 必须严格等于 1");
+        }
+        if (status == HuashengOrderStatus.FAILED && num != null && num != HuashengCallbackFact.FAILED_DELIVERY_QUANTITY) {
+            throw new HuashengCallbackParseException("FAILED 的 num 必须为 0 或省略");
         }
 
         // 7. list & card 校验

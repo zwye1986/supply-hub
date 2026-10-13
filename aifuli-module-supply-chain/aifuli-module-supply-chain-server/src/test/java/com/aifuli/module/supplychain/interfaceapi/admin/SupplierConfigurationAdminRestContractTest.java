@@ -1,6 +1,10 @@
 package com.aifuli.module.supplychain.interfaceapi.admin;
 
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierConfigurationQueryService;
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.http.converter.json.MappingJackson2HttpMessageConverter;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierConfigurationQueryService.CredentialItemView;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierConfigurationQueryService.CredentialSetView;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierConfigurationQueryService.CredentialSlotView;
@@ -19,6 +23,10 @@ import java.util.Arrays;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
  * 供应商履约技术配置（A1）与合作商品上架即发布（B1）的管理端 REST 契约。
@@ -32,6 +40,33 @@ import static org.assertj.core.api.Assertions.assertThat;
  * {@code SupplyChainAdminPermissionContractTest} 与 {@code SupplyChainModuleArchitectureTest} 覆盖，本类不重复。</p>
  */
 class SupplierConfigurationAdminRestContractTest {
+
+    /** 首个草稿的未发布字段必须存在且为 null，即使部署 ObjectMapper 默认 NON_NULL。 */
+    @Test
+    void firstDraftMappingsHttpIncludesAllManagementFieldsWithExplicitNullPublishedVersion() throws Exception {
+        ObjectMapper mapper = new ObjectMapper().setSerializationInclusion(JsonInclude.Include.NON_NULL);
+        SupplierConfigurationQueryService service = mock(SupplierConfigurationQueryService.class);
+        var projection = new SupplierConfigurationQueryService.MappingsView(
+                List.of(), List.of(), 99L, 1, (short) 0, null, true, false, false, "华昇封闭模板");
+        when(service.getMappings(99L)).thenReturn(projection);
+        var controller = new SupplierConfigurationAdminController(null, service, null, null, null, null);
+        var mvc = MockMvcBuilders.standaloneSetup(controller)
+                .setMessageConverters(new MappingJackson2HttpMessageConverter(mapper)).build();
+        String response = mvc.perform(get("/supply-chain/supplier-config/connectors/versions/99/mappings"))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        var data = mapper.readTree(response).path("data");
+        assertThat(data.has("currentPublishedVersionId")).isTrue();
+        assertThat(data.path("currentPublishedVersionId").isNull()).isTrue();
+        assertThat(data.path("connectorVersionId").asLong()).isEqualTo(99L);
+        assertThat(data.path("versionNo").asInt()).isEqualTo(1);
+        assertThat(data.path("versionStatus").asInt()).isZero();
+        assertThat(data.path("initializeAllowed").asBoolean()).isTrue();
+        assertThat(data.path("statusAppendAllowed").asBoolean()).isFalse();
+        assertThat(data.path("errorAppendAllowed").asBoolean()).isFalse();
+        assertThat(data.path("mappingDescription").isTextual()).isTrue();
+        // DTO 的直接序列化同样保持该 null，防止 HTTP converter 外的调用发生契约漂移。
+        assertThat(mapper.valueToTree(projection).has("currentPublishedVersionId")).isTrue();
+    }
 
     /** T1–T6 只读 GET 面：路径与方法必须与设计 §6.1 表逐条一致，防路径漂移。 */
     @Test
@@ -106,7 +141,7 @@ class SupplierConfigurationAdminRestContractTest {
     @Test
     void adapterTypeViewExposesCapabilitiesAndCredentialKeys() {
         assertThat(recordComponentNames(SupplierConfigurationQueryService.AdapterTypeView.class))
-                .contains("adapterType", "capabilities", "credentialKeys");
+                .contains("adapterType", "capabilities", "capabilityDescriptions", "credentialKeys");
     }
 
     @Test

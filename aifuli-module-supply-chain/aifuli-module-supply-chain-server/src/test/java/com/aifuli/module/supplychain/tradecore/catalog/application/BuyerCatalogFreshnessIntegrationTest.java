@@ -2,6 +2,7 @@ package com.aifuli.module.supplychain.tradecore.catalog.application;
 
 import com.aifuli.framework.common.pojo.PageResult;
 import com.aifuli.module.supplychain.api.catalog.dto.BuyerCatalogItemRespDTO;
+import com.aifuli.module.supplychain.api.catalog.dto.BuyerCatalogChangesReqDTO;
 import com.aifuli.module.supplychain.api.catalog.dto.BuyerCatalogPageReqDTO;
 import com.aifuli.module.supplychain.infrastructure.configuration.SupplyChainDataSourceConfiguration;
 import com.aifuli.module.supplychain.infrastructure.identity.BusinessNoGenerator;
@@ -48,6 +49,8 @@ import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.CredentialSlotMa
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.InventorySourceMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierConnectorMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierConnectorVersionMapper;
+import com.aifuli.module.supplychain.supplieradapter.metadata.SupplierConnectorCapabilityDO;
+import com.aifuli.module.supplychain.supplieradapter.metadata.SupplierConnectorCapabilityMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferVersionMapper;
@@ -107,6 +110,7 @@ class BuyerCatalogFreshnessIntegrationTest {
         mysql.start();
         context = new SpringApplicationBuilder(TestConfiguration.class).web(WebApplicationType.NONE)
                 .properties(Map.of("aifuli.supply-chain.enabled", true,
+"aifuli.supply-chain.connector.allowed-adapter-types", "QNM_GAME_ORDER_V1",
                         "aifuli.supply-chain.datasource.url", mysql.getJdbcUrl(),
                         "aifuli.supply-chain.datasource.username", mysql.getUsername(),
                         "aifuli.supply-chain.datasource.password", mysql.getPassword(),
@@ -168,6 +172,120 @@ class BuyerCatalogFreshnessIntegrationTest {
         assertThat(page(false).getList()).extracting(BuyerCatalogItemRespDTO::getAvailabilityStatus)
                 .containsExactly(ListingAvailability.UNKNOWN.name());
         assertThat(page(true).getTotal()).isZero();
+    }
+
+    @Test
+    void realJsonSourceNotBasisCounterControlsRpcAvailabilityAndCount() {
+        buildFixture(); publishAuto();
+        jdbc.update("UPDATE sc_buyer_listing_availability SET basis_version=987 WHERE listing_id=?", listing.getId());
+        assertThat(page(true).getList()).extracting(BuyerCatalogItemRespDTO::getAvailabilityStatus)
+                .containsExactly("AVAILABLE");
+        assertThat(page(true).getTotal()).isEqualTo(1L);
+        jdbc.update("UPDATE sc_buyer_listing_availability SET basis_json=JSON_SET(basis_json, "
+                + "'$.sourceBuyerPricingVersionId', 999999) WHERE listing_id=?", listing.getId());
+        assertThat(page(false).getList()).extracting(BuyerCatalogItemRespDTO::getAvailabilityStatus)
+                .containsExactly("UNKNOWN");
+        assertThat(page(true).getList()).isEmpty();
+        assertThat(page(true).getTotal()).isZero();
+        BuyerCatalogChangesReqDTO changes = new BuyerCatalogChangesReqDTO();
+        changes.setSourceSystem("AIFULI_MALL"); changes.setExternalTenantId(tenantId); changes.setCursor(0L);
+        assertThat(queryService.getCatalogChanges(changes).getChanges()).isNotEmpty()
+                .allSatisfy(change -> assertThat(change.getItem().getAvailabilityStatus()).isEqualTo("UNKNOWN"));
+    }
+
+    @Test
+    void refreshBetweenListAndCountDoesNotSplitPageReadView() {
+        buildFixture(); publishAuto();
+        var factory = context.getBean("supplyChainSqlSessionFactory", org.apache.ibatis.session.SqlSessionFactory.class);
+        var hook = new PageRefreshInterleaving(() -> {
+            // 用独立线程/连接提交真实更新，在列表已读取、计数尚未读取的确定窗口完成，不依赖 sleep。
+            var write = java.util.concurrent.CompletableFuture.runAsync(() -> jdbc.update(
+                    "UPDATE sc_buyer_listing_availability SET valid_until=evaluated_at WHERE listing_id=?", listing.getId()));
+            write.orTimeout(5, java.util.concurrent.TimeUnit.SECONDS).join();
+        });
+        factory.getConfiguration().addInterceptor(hook);
+        try {
+            var page = page(true);
+            assertThat(page.getList()).extracting(BuyerCatalogItemRespDTO::getAvailabilityStatus).containsExactly("AVAILABLE");
+            assertThat(page.getTotal()).isEqualTo(1L);
+            assertThat(page(true).getList()).isEmpty();
+            assertThat(page(true).getTotal()).isZero();
+        } finally {
+            hook.afterPage.set(null);
+        }
+    }
+
+    /** 仅用于把独立提交插入两条真实读SQL之间，结果断言只验证公开分页的单视图契约。 */
+    @org.apache.ibatis.plugin.Intercepts(@org.apache.ibatis.plugin.Signature(type = org.apache.ibatis.executor.Executor.class,
+            method = "query", args = {org.apache.ibatis.mapping.MappedStatement.class, Object.class,
+            org.apache.ibatis.session.RowBounds.class, org.apache.ibatis.session.ResultHandler.class}))
+    static class PageRefreshInterleaving implements org.apache.ibatis.plugin.Interceptor {
+        private final java.util.concurrent.atomic.AtomicReference<Runnable> afterPage;
+        PageRefreshInterleaving(Runnable afterPage) { this.afterPage = new java.util.concurrent.atomic.AtomicReference<>(afterPage); }
+        @Override public Object intercept(org.apache.ibatis.plugin.Invocation invocation) throws Throwable {
+            Object result = invocation.proceed();
+            var statement = (org.apache.ibatis.mapping.MappedStatement) invocation.getArgs()[0];
+            if (statement.getId().equals("com.aifuli.module.supplychain.tradecore.catalog.dal.read.BuyerCatalogReadMapper.selectPage")) {
+                Runnable action = afterPage.getAndSet(null);
+                if (action != null) action.run();
+            }
+            return result;
+        }
+    }
+
+    @Test
+    void commercialPeriodAndMissingEvaluationExcludeFreshStoredProjection() {
+        buildFixture(); publishAuto();
+        jdbc.update("UPDATE sc_buyer_listing_version SET valid_from=DATE_ADD(NOW(3), INTERVAL 1 DAY) "
+                + "WHERE id=(SELECT current_version_id FROM sc_buyer_listing WHERE id=?)", listing.getId());
+        assertThat(page(false).getList()).extracting(BuyerCatalogItemRespDTO::getAvailabilityStatus)
+                .containsExactly("UNKNOWN");
+        assertThat(page(true).getList()).isEmpty();
+        assertThat(page(true).getTotal()).isZero();
+        jdbc.update("UPDATE sc_buyer_listing_version SET valid_from=DATE_SUB(NOW(3), INTERVAL 1 DAY), "
+                + "valid_to=NOW(3) WHERE id=(SELECT current_version_id FROM sc_buyer_listing WHERE id=?)", listing.getId());
+        assertThat(page(true).getTotal()).isZero();
+        jdbc.update("UPDATE sc_buyer_listing_version SET valid_to=NULL "
+                + "WHERE id=(SELECT current_version_id FROM sc_buyer_listing WHERE id=?)", listing.getId());
+        // 正式 DDL 的 evaluated_at 非空；未具备可验证评估用真实缺来源键表达，不放宽表约束。
+        jdbc.update("UPDATE sc_buyer_listing_availability SET basis_json=JSON_REMOVE(basis_json, "
+                + "'$.sourceBuyerPricingVersionId') WHERE listing_id=?", listing.getId());
+        assertThat(page(false).getList()).extracting(BuyerCatalogItemRespDTO::getAvailabilityStatus)
+                .containsExactly("UNKNOWN");
+        assertThat(page(true).getTotal()).isZero();
+    }
+
+    @Test
+    void jsonTypesAndOwnershipAreStrictAndGetDoesNotWrite() {
+        buildFixture(); publishAuto();
+        var before = snapshot();
+        page(false); page(true);
+        assertThat(snapshot()).usingRecursiveComparison().isEqualTo(before);
+        long current = jdbc.queryForObject("SELECT current_version_id FROM sc_buyer_sku_pricing WHERE buyer_product_id=?",
+                Long.class, product.getId());
+        for (String source : List.of("null", "\"" + current + "\"", "-1", "0", "9223372036854775808", "{}", "true", current + ".0")) {
+            jdbc.update("UPDATE sc_buyer_listing_availability SET basis_json=? WHERE listing_id=?",
+                    "{\"listingId\":" + listing.getId() + ",\"sourceBuyerPricingVersionId\":" + source + "}", listing.getId());
+            assertThat(page(true).getList()).as(source).isEmpty();
+            assertThat(page(true).getTotal()).as(source).isZero();
+            if (source.equals("null")) {
+                assertThat(page(false).getList()).extracting(BuyerCatalogItemRespDTO::getAvailabilityStatus)
+                        .containsExactly("UNKNOWN");
+            } else {
+                org.assertj.core.api.Assertions.assertThatThrownBy(() -> page(false))
+                        .as(source).isInstanceOf(IllegalStateException.class);
+            }
+        }
+        jdbc.update("UPDATE sc_buyer_listing_availability SET basis_json=? WHERE listing_id=?",
+                "{\"listingId\":999999,\"sourceBuyerPricingVersionId\":" + current + "}", listing.getId());
+        assertThat(page(true).getTotal()).isZero();
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> page(false)).isInstanceOf(IllegalStateException.class);
+    }
+
+    private List<List<Map<String, Object>>> snapshot() {
+        return List.of("sc_buyer_listing", "sc_buyer_listing_version", "sc_buyer_listing_availability",
+                "sc_buyer_catalog_change", "sc_outbox_event").stream()
+                .map(table -> jdbc.queryForList("SELECT * FROM " + table + " ORDER BY id")).toList();
     }
 
     @Test
@@ -323,6 +441,13 @@ class BuyerCatalogFreshnessIntegrationTest {
                 .validatedAt(now).validationExpiresAt(now.plusDays(1)).publishedAt(now).configDigest(new byte[32])
                 .status((short) 10).version(0L).createdAt(now).updatedAt(now).build();
         context.getBean(SupplierConnectorVersionMapper.class).insert(connectorVersion);
+        // 共享结构有效性守卫要求主能力及执行画像所需查询/回调能力启用（生命周期设计 §3.2）。
+        SupplierConnectorCapabilityMapper capabilityMapper = context.getBean(SupplierConnectorCapabilityMapper.class);
+        for (String capabilityCode : List.of("CREATE_RECHARGE", "QUERY_ORDER", "RECEIVE_CALLBACK")) {
+            capabilityMapper.insert(SupplierConnectorCapabilityDO.builder()
+                    .connectorVersionId(connectorVersion.getId()).capabilityCode(capabilityCode)
+                    .enabled((short) 1).metadataVersion(1).createdAt(now).build());
+        }
         jdbc.update("UPDATE sc_supplier_connector SET current_version_id=? WHERE id=?",
                 connectorVersion.getId(), connector.getId());
         InventorySourceDO inventory = InventorySourceDO.builder().sourceNo("IN" + unique).supplierId(created.getId())

@@ -19,7 +19,7 @@
 | **d7** | **状态值域明确与枚举命名对齐** | 严格对齐代码现有枚举：`CatalogEntityStatus` 包含 `DRAFT (0)`、`ACTIVE (10)`、`INACTIVE (20)`、`ARCHIVED (90)`。文档统一使用 `INACTIVE` 替代 `DISABLED`；同时说明 `sc_buyer_product` 与 `sc_project_listing` 仅包含 `(10, 90)` 两态，而供给与上架单包含 `(0, 10, 20, 90)` 四态。 | 消除命名与状态域歧义 |
 | **d8** | **跨模块 Mapper 依赖与验证收敛** | 新增/抽取独立商品删除校验器 `ProductDeletionValidator`，明确注入跨模块 Mapper：`SupplierOfferMapper`（属于 `tradecore.supply`）、`BuyerProductMapper` 与 `ProjectListingMapper`（属于 `tradecore.buyer`）、`BuyerListingMapper`（属于 `tradecore.catalog`），保持单向数据所有权并收敛强校验规则。 | 明确跨包依赖边界 |
 | **d9** | **存量主数据写接口统一收口** | `M1MasterDataAdminController` 的品牌、分类、SPU、SKU 创建及状态变更端点全部委托到新的统一领域服务；旧契约可保留兼容，但不得保留独立写实现。新旧入口必须共享动态类型、分类防重、Schema 成对校验、状态机与删除引用规则。 | 堵塞全部旧写接口旁路 |
-| **d10** | **SPU 与 SKU 状态解耦及全链路有效可售校验** | SPU 与 SKU 维持独立物理状态；SKU 的**有效可售状态（Effective Sellable State）**定义为双亲有效：`SPU.status == ACTIVE (10) && SKU.status == ACTIVE (10)`。新增 `ProductSellabilityService` 作为统一判断入口，商品池查询、供应商报价创建/发布、分销商品加入、采购商上架发布及履约受理均必须调用该校验。SPU 重新上架时绝不盲目恢复被运营单独置为 `INACTIVE` 的 SKU。 | 防止覆盖独立下架状态并封堵交易旁路 |
+| **d10** | **SPU 与 SKU 状态解耦及全链路有效可售校验** | SPU 与 SKU 维持独立物理状态；SKU 的**有效可售状态（Effective Sellable State）**定义为双亲有效：`SPU.status == ACTIVE (10) && SKU.status == ACTIVE (10)`。新增 `ProductSellabilityService` 作为统一判断入口，商品池查询、供应商报价创建/发布、分销商品加入、采购商上架发布及履约受理均必须调用该校验。单 SPU 状态操作不自动恢复独立下架 SKU；2026-10-11 用户明确商品列表“批量上架”应同步选中 SPU 与其 SKU，该显式同步模式已完成本地实现与自动化验证，见 §4.1.10.1，尚未部署。 | 保留独立状态，并补齐用户明确的整商品同步上架行为 |
 | **d11** | **复合表单契约、品牌唯一约束与 Schema 安全防线** | SPU+SKU 复合创建/编辑接口采用事务内原子保存；`sc_brand` 在 `028` DDL 中追加 `uk_sc_brand_name` 唯一索引；商品类型 `PT_` 保持原生成规则。新建 `SPU_`、`SKU_`、`BRD_`、`CAT_` 从 2026-09-27 起使用三位流水与父段规则，仍支持前端传入或缺省自动生成，见业务编码规范化设计。全部管理端 SKU 写请求只暴露业务字段 `fulfillmentType`，不得要求管理前端传递内部 `targetSchemaCode/targetSchemaVersion/resultSchemaCode/resultSchemaVersion`；应用层通过 `PlatformSkuSchemaRegistry` 将封闭履约类型映射为固定的目标与结果 Schema 编码、版本并持久化，避免产生任意组合。详情响应保留四个字段作为只读诊断信息。已废弃的 `M1MasterDataAdminController` 兼容写入口也必须复用同一派生规则，不得保留旁路。 | 防止前端误配内部协议导致商品创建成功但无法履约 |
 | **d12** | **详细 Swagger/OpenAPI 文档标准** | 所有管理端 Controller、方法、Query/Path 参数、Request/Response VO 必须提供完整的 OpenAPI/Swagger 3 注解（`@Tag`、`@Operation`、`@Parameter`、`@Schema`）。VO 字段描述必须与 DDL `COMMENT` 严格一致，参数注明枚举取值、单位（CNY分）、示例值与必填约束，并在操作描述中注明前置条件与错误码映射。 | 严格落实规范 |
 | **d13** | **权限兼容与菜单授权闭环** | 新增细粒度权限必须集中定义在 `SupplyChainAdminPermissions`，方法表达式统一使用 `hasAnyPermissions('supply-chain:admin', '<细权限>')`，保持旧管理员权限为超集；同步维护供应链菜单 SQL 与权限契约测试，使细权限可实际分配。 | 防止旧管理员升级后 403 |
@@ -391,6 +391,11 @@ ALTER TABLE sc_platform_sku
 
 
 ### 3.1 SPU 与 SKU 状态解耦与有效可售计算
+* **2026-10-11 用户明确的产品业务口径**：
+  * PRD 中“商品上架”指平台商品上架，涵盖 SPU 与 SKU，不指供应商 Offer 发布。建立后台供应商合作关系前，目标 SKU 与所属 SPU 必须均已上架。
+  * 草稿、主动下架商品均不允许建立后台合作关系；任一层为 `DRAFT`、`INACTIVE` 或 `ARCHIVED` 时，均不满足新增合作准入。已上架 SPU 下的草稿 SKU 仍不可关联。
+  * PRD 附件中“关联合作商品 → 商品上架”的流程顺序与本次明确的准入前置条件存在冲突；执行以用户本次确认为准，合作配置流程应表达为“平台 SPU 与目标 SKU 上架 → 关联合作商品”。用户随后补充确认商品列表“批量上架”应同步 SPU 与下属 SKU；该明确操作的方案见 §4.1.10.1，不改变单 SPU 状态接口的独立语义。
+  * 此项为业务口径确认，不表示选品查询和前端操作缺口已修复；当前实施差异与验收项记录在 `docs/集成测试.md#2026-10-11-华晟通新增合作商品选品为空排障真实只读数据库与-get-对照`。
 * **物理状态 (`status`)**：使用代码中现有标准枚举 [`CatalogEntityStatus`](file:///Users/mac/Documents/codeSpace/supply-hub/aifuli-module-supply-chain/aifuli-module-supply-chain-server/src/main/java/com/aifuli/module/supplychain/tradecore/catalog/domain/CatalogEntityStatus.java)：
   * `0`: `DRAFT`（草稿）
   * `10`: `ACTIVE`（启用 / 已上架）
@@ -404,7 +409,7 @@ ALTER TABLE sc_platform_sku
 * **上下架操作语义**：
   * **SPU 下架 (`INACTIVE`)**：仅修改 SPU 本身 `status=20`。下游加购与选品池判定有效可售性时自动熔断；下属各个 SKU 保留自身的 `status`，不进行强制覆写。
   * **SPU 上架 (`ACTIVE`)**：仅将 SPU 本身置为 `10`。此时原先处于 `10` 的 SKU 自动恢复可售；原先处于 `20`（被运营单独下架）的 SKU **继续保持停用**，绝不被盲目“复活”。
-  * **批量同步模式（可选）**：仅当操作人员显式勾选“同步上架下属全部 SKU”时，才将下属状态为 `20` 的 SKU 更新为 `10`。
+  * **商品列表批量同步上架（2026-10-11 用户明确预期，已本地实现）**：选中 SPU 点击“批量上架”即表达同步上架商品及全部未归档 SKU 的意图，无需额外勾选开关；涵盖草稿、已上架及主动下架 SKU，不恢复归档 SKU。确认框明确范围，接口用显式同步模式区分独立 SPU 操作；组内原子、组间独立的事务与回执契约见 §4.1.10.1。
 
 ### 3.2 删除强校验规则（4 表物理主键与关联路径检查）
 删除平台 SPU 或 SKU 前，通过其主键 `platform_sku_id`（对于 SPU 则是其包含的全部 SKU 的主键集）由 `ProductDeletionValidator` 执行联合扫描：
@@ -660,7 +665,14 @@ PRD 8.4.1 的列表 Tab 支持从 `GET /supply-chain/product-types` 动态拉取
 
 SKU 级条件 `status`、`fulfillmentType`、`marketPriceMin`、`marketPriceMax` 必须同时用于候选 SPU
 预过滤和返回 SKU 明细过滤。一个 SPU 只要存在至少一个符合全部 SKU 级条件的未归档 SKU 即可进入分页；响应中
-不得夹带不符合这些条件的兄弟 SKU。SPU 自身的 `status` 字段继续按原值返回，但不参与商品状态筛选。
+不得夹带不符合这些条件的兄弟 SKU。SPU 自身的 `status` 字段继续按原值返回，但不参与普通商品管理列表的 `status` 参数筛选。
+
+**新增供应商品选品准入（2026-10-11 用户确认，查询实现待修复）**：
+`excludeAddedSupplierOffers=true` 的场景只允许 `SPU.status == ACTIVE && SKU.status == ACTIVE` 的平台 SKU。
+该准入独立于调用方是否传入 `status=10`，不能依赖前端参数作为唯一保护；显式传入其它 SKU 状态时，与 ACTIVE 准入取交集，返回空页。
+所属 SPU 的 ACTIVE 条件必须在分页前参与查询，SKU 的 ACTIVE 条件必须同时用于候选与响应明细，避免返回不能建立合作关系的商品或在分页后丢弃数据而扭曲 total。
+普通商品管理列表仍展示符合行级筛选的全部未归档商品，不因新增供应商品的准入而隐藏待运营处理的草稿/下架商品。
+新增合作写入继续在后端复核两层状态，应能拒绝选品后、保存前商品被下架的请求；不得以查询命中替代写入校验。
 
 除 `excludeAddedSupplierOffers=true` 的新增供应商品选品外，候选 SPU 预过滤与返回 SKU 明细还必须同时满足：
 SKU 至少存在一条供应商状态为 `ACTIVE`、Offer 状态未退役的合作商品。该条件必须在 SPU 分页前参与候选集合，
@@ -682,6 +694,8 @@ system-server 通过追加变更集 `006-product-list-filter-dictionaries` 写�
 | `supply_chain_sku_status` | `20` | 下架 |
 
 #### 4.1.10 批量上下架接口：`PUT /supply-chain/products/batch-status`
+> 2026-10-11 用户补充明确商品列表“批量上架”要同步 SPU 与下属 SKU。下文原逐实体行为仅用于不启用同步模式的旧接口契约；同步模式的已实现扩展见 §4.1.10.1，前后端须同批发布后才能解决业务环境中只提交 SPU、SKU 保持草稿的问题。
+
 * **设计目的**：支撑商品列表页表头「批量上架」与「批量下架」按钮，支持多选 SPU 或多选 SKU 进行批量状态流转，并在下架时统一打上 `MANUAL_UNSHELVE` 标记。
 * **权限**：使用 `SupplyChainAdminPermissions.PRODUCT_UPDATE_STATUS_EXPRESSION`。
 * **请求体**：`ProductBatchStatusReqVO`
@@ -737,6 +751,12 @@ system-server 通过追加变更集 `006-product-list-filter-dictionaries` 写�
   * `ProductBatchStatusTransactionIntegrationTest`（集成，真实 MySQL + Testcontainers）证明数据库层面的隔离与回滚：失败项不回滚已成功项、已成功项不随外层事务回滚、整体拒绝前无任何写入。
     * 其中「已成功项不随外层事务回滚」是 `REQUIRES_NEW` 与 `REQUIRED` 的决定性区分，并已做**变异校验**：临时把传播行为改回 `PROPAGATION_REQUIRED` 后该用例失败，改回后恢复通过，证明它不是恒真断言。
 * **ArchUnit 兼容性**：本接口仍受 `admin_http_endpoints_have_pre_authorize`、`admin_controllers_do_not_depend_on_supplier_adapter` 等既有规则约束；service 不新增 DAL 依赖，仅引入 `TransactionTemplate` 显式控制独立事务边界，未触发任何新增依赖方向。
+
+##### 4.1.10.1 商品列表批量同步上架修复方案（2026-10-11）
+
+用户明确的页面行为为：批量上架选中 SPU 及其下属 SKU。本次采用现有接口新增 `syncSkuOnShelf=true` 模式，由服务端有界读取各选中 SPU 全部未归档 SKU，包含草稿与主动下架规格，并在“单 SPU + 全部 SKU”事务内完成上架；每组失败全部回滚，各 SPU 组之间独立。上限按展开后的实体总数检查；同步回执必须表达模式、组结果和处理规格范围，前端不能继续只凭旧 SPU 成功数组宣称全部规格成功。
+
+该模式覆盖本页面旧“只提交 SPU”的行为，保留单 SPU/单 SKU 状态接口及旧批量显式编码模式。完整范围、新增契约、事务/并发、回执/交互与门禁见 [平台商品批量上架同步 SPU 与 SKU 修复方案](./2026-10-11-platform-product-batch-shelf-sync-design.md)。前后端已完成本地实现，后端2291项门禁、前端165项回归及构建通过；全量前端类型检查有54项既有错误（基线55，无新增）。真实环境发布与页面验收尚未执行，详见 `docs/集成测试.md` 的本次实施记录。
 
 #### 4.1.11 SKU 税务元数据批量记录：`PUT /supply-chain/products/skus/tax-metadata`
 * **设计目的**：记录并回显商品管理原型中的「是否含税、税率」，不参与任何价格计算。

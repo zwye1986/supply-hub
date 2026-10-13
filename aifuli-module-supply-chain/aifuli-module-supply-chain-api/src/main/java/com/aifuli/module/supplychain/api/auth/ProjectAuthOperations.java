@@ -37,6 +37,14 @@ public final class ProjectAuthOperations {
     public static final String STANDARD_ORDER_CREATE = "STANDARD_ORDER_CREATE";
     public static final String STANDARD_ORDER_QUERY = "STANDARD_ORDER_QUERY";
     public static final String STANDARD_ORDER_ASSET_QUERY = "STANDARD_ORDER_ASSET_QUERY";
+    /**
+     * v2独立操作与签名字节合同，不借用v1操作码。
+     * 设计见 docs/superpowers/specs/2026-10-12-platform-sku-order-contract-design.md#31-三个明确-v2-操作。
+     */
+    public static final String STANDARD_ORDERS_V2_PATH = "/open-api/supply-chain/project/v2/orders";
+    public static final String STANDARD_ORDER_CREATE_V2 = "STANDARD_ORDER_CREATE_V2";
+    public static final String STANDARD_ORDER_QUERY_V2 = "STANDARD_ORDER_QUERY_V2";
+    public static final String STANDARD_ORDER_ASSET_QUERY_V2 = "STANDARD_ORDER_ASSET_QUERY_V2";
     public static final String CAPABILITY_STANDARD_PRODUCT = "STANDARD_PRODUCT";
 
     /**
@@ -83,7 +91,8 @@ public final class ProjectAuthOperations {
             ApiConstants.PREFIX + "/instore/channel-member",
             ApiConstants.PREFIX + "/instore/buyer-entry",
             ApiConstants.PREFIX + "/buyer/instore/payment",
-            STANDARD_ORDERS_PATH);
+            STANDARD_ORDERS_PATH,
+            STANDARD_ORDERS_V2_PATH);
 
     /** 当前契约版本；多传输形态出现时随规范化器一并升级。 */
     private static final String CONTRACT_VERSION = "1.0.0";
@@ -115,7 +124,13 @@ public final class ProjectAuthOperations {
             standardOperation(STANDARD_ORDER_QUERY, STANDARD_ORDERS_PATH + "/query",
                     ProjectStatePolicy.ACTIVE_OR_SUSPENDED),
             standardOperation(STANDARD_ORDER_ASSET_QUERY, STANDARD_ORDERS_PATH + "/assets/query",
-                    ProjectStatePolicy.ACTIVE_ONLY));
+                    ProjectStatePolicy.ACTIVE_ONLY),
+            new Operation(STANDARD_ORDER_CREATE_V2, "POST", STANDARD_ORDERS_V2_PATH, ScopeType.NONE,
+                    "2.0.0", CAPABILITY_STANDARD_PRODUCT, ProjectStatePolicy.ACTIVE_ONLY),
+            new Operation(STANDARD_ORDER_QUERY_V2, "POST", STANDARD_ORDERS_V2_PATH + "/query", ScopeType.NONE,
+                    "2.0.0", CAPABILITY_STANDARD_PRODUCT, ProjectStatePolicy.ACTIVE_OR_SUSPENDED),
+            new Operation(STANDARD_ORDER_ASSET_QUERY_V2, "POST", STANDARD_ORDERS_V2_PATH + "/assets/query", ScopeType.NONE,
+                    "2.0.0", CAPABILITY_STANDARD_PRODUCT, ProjectStatePolicy.ACTIVE_ONLY));
 
     /** operationCode 唯一不可变索引；重复键在类初始化阶段失败，禁止静默覆盖。 */
     private static final Map<String, Operation> OPERATIONS_BY_CODE = indexByOperationCode(OPERATIONS);

@@ -10,6 +10,11 @@ import java.util.List;
 
 @Mapper
 public interface SupplierMapper extends BaseMapperX<SupplierDO> {
+    /** 生命周期先锁供应商；设计见 docs/superpowers/specs/2026-10-11-supplier-offer-lifecycle-design.md#34-闭环四同步重算的锁顺序与并发事务规范。 */
+    default SupplierDO selectByIdForUpdate(Long id) {
+        return selectOneForUpdate(SupplierDO::getId, id);
+    }
+
     default SupplierDO selectByCode(String code) {
         return selectOne(SupplierDO::getSupplierCode, code);
     }

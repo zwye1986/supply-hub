@@ -13,41 +13,17 @@ import java.time.LocalDateTime;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * 最低有效供货价：当前报价版本优先，无有效版本时回退合作商品身份列。
- * 设计见 {@code docs/superpowers/specs/2026-09-22-effective-supply-price-identity-fallback-design.md}。
+ * 最低有效供货价：只采用当前有效发布版本，不再回退身份列。
+ * 设计见 {@code docs/superpowers/specs/2026-10-11-supplier-offer-lifecycle-design.md#1-核心业务规则}。
  */
 class EffectiveSupplyPriceTest {
 
     private static final LocalDateTime NOW = LocalDateTime.of(2026, 9, 22, 15, 0);
 
     @Test
-    void fixedIdentityPriceIsUsedWhenOfferHasNoVersion() {
+    void offerWithoutVersionReturnsNull() {
         Long price = EffectiveSupplyPrice.of(
                 publishedOffer(OfferPriceMode.FIXED, 20_000L, null),
-                activeSupplier(),
-                null,
-                9_800L,
-                NOW);
-
-        assertThat(price).isEqualTo(20_000L);
-    }
-
-    @Test
-    void discountIdentityPriceRoundsHalfUpToCents() {
-        Long price = EffectiveSupplyPrice.of(
-                publishedOffer(OfferPriceMode.DISCOUNT, null, 9_000),
-                activeSupplier(),
-                null,
-                2_014L,
-                NOW);
-
-        assertThat(price).isEqualTo(1_813L);
-    }
-
-    @Test
-    void realtimeIdentityIsNotACandidate() {
-        Long price = EffectiveSupplyPrice.of(
-                publishedOffer(OfferPriceMode.REALTIME, 20_000L, null),
                 activeSupplier(),
                 null,
                 9_800L,
@@ -57,12 +33,12 @@ class EffectiveSupplyPriceTest {
     }
 
     @Test
-    void effectiveVersionBeatsCheaperIdentityPrice() {
+    void effectiveVersionReturnsVersionPrice() {
         Long price = EffectiveSupplyPrice.of(
                 publishedOffer(OfferPriceMode.FIXED, 8_000L, null, 101L),
                 activeSupplier(),
                 SupplierOfferVersionDO.builder()
-                        .id(101L).supplierSettlementUnitPrice(18_000L)
+                        .id(101L).offerId(1L).supplierSettlementUnitPrice(18_000L)
                         .validFrom(NOW.minusDays(1)).build(),
                 9_800L,
                 NOW);
@@ -71,25 +47,71 @@ class EffectiveSupplyPriceTest {
     }
 
     @Test
-    void expiredVersionFallsBackToFixedIdentity() {
+    void expiredVersionReturnsNullInsteadOfFallingBack() {
         Long price = EffectiveSupplyPrice.of(
                 publishedOffer(OfferPriceMode.FIXED, 8_000L, null, 102L),
                 activeSupplier(),
                 SupplierOfferVersionDO.builder()
-                        .id(102L).supplierSettlementUnitPrice(900L)
+                        .id(102L).offerId(1L).supplierSettlementUnitPrice(900L)
                         .validFrom(NOW.minusDays(10)).validTo(NOW.minusDays(1)).build(),
                 9_800L,
                 NOW);
 
-        assertThat(price).isEqualTo(8_000L);
+        assertThat(price).isNull();
+    }
+
+    @Test
+    void futureVersionReturnsNull() {
+        Long price = EffectiveSupplyPrice.of(
+                publishedOffer(OfferPriceMode.FIXED, 8_000L, null, 103L),
+                activeSupplier(),
+                SupplierOfferVersionDO.builder()
+                        .id(103L).offerId(1L).supplierSettlementUnitPrice(12_000L)
+                        .validFrom(NOW.plusDays(1)).build(),
+                9_800L,
+                NOW);
+
+        assertThat(price).isNull();
+    }
+
+    @Test
+    void versionBelongingToDifferentOfferReturnsNull() {
+        Long price = EffectiveSupplyPrice.of(
+                publishedOffer(OfferPriceMode.FIXED, 8_000L, null, 101L),
+                activeSupplier(),
+                SupplierOfferVersionDO.builder()
+                        .id(101L).offerId(999L).supplierSettlementUnitPrice(18_000L)
+                        .validFrom(NOW.minusDays(1)).build(),
+                9_800L,
+                NOW);
+
+        assertThat(price).isNull();
     }
 
     @Test
     void suspendedSupplierIsNotACandidate() {
         Long price = EffectiveSupplyPrice.of(
-                publishedOffer(OfferPriceMode.FIXED, 9_000L, null),
+                publishedOffer(OfferPriceMode.FIXED, 9_000L, null, 101L),
                 SupplierDO.builder().id(4L).status(SupplierStatus.SUSPENDED.getCode()).build(),
-                null,
+                SupplierOfferVersionDO.builder()
+                        .id(101L).offerId(1L).supplierSettlementUnitPrice(18_000L)
+                        .validFrom(NOW.minusDays(1)).build(),
+                9_800L,
+                NOW);
+
+        assertThat(price).isNull();
+    }
+
+    @Test
+    void suspendedOfferIsNotACandidate() {
+        SupplierOfferDO offer = publishedOffer(OfferPriceMode.FIXED, 9_000L, null, 101L);
+        offer.setStatus(OfferStatus.SUSPENDED.getCode());
+        Long price = EffectiveSupplyPrice.of(
+                offer,
+                activeSupplier(),
+                SupplierOfferVersionDO.builder()
+                        .id(101L).offerId(1L).supplierSettlementUnitPrice(18_000L)
+                        .validFrom(NOW.minusDays(1)).build(),
                 9_800L,
                 NOW);
 
@@ -98,12 +120,14 @@ class EffectiveSupplyPriceTest {
 
     @Test
     void retiredOfferIsNotACandidate() {
-        SupplierOfferDO retired = publishedOffer(OfferPriceMode.FIXED, 9_000L, null);
+        SupplierOfferDO retired = publishedOffer(OfferPriceMode.FIXED, 9_000L, null, 101L);
         retired.setStatus(OfferStatus.RETIRED.getCode());
         Long price = EffectiveSupplyPrice.of(
                 retired,
                 activeSupplier(),
-                null,
+                SupplierOfferVersionDO.builder()
+                        .id(101L).offerId(1L).supplierSettlementUnitPrice(18_000L)
+                        .validFrom(NOW.minusDays(1)).build(),
                 9_800L,
                 NOW);
 
@@ -111,23 +135,13 @@ class EffectiveSupplyPriceTest {
     }
 
     @Test
-    void discountWithoutPositiveSuggestedPriceIsNotACandidate() {
+    void zeroSettlementPriceIsACandidate() {
         Long price = EffectiveSupplyPrice.of(
-                publishedOffer(OfferPriceMode.DISCOUNT, null, 9_000),
+                publishedOffer(OfferPriceMode.FIXED, 0L, null, 101L),
                 activeSupplier(),
-                null,
-                0L,
-                NOW);
-
-        assertThat(price).isNull();
-    }
-
-    @Test
-    void zeroFixedIdentityPriceIsACandidate() {
-        Long price = EffectiveSupplyPrice.of(
-                publishedOffer(OfferPriceMode.FIXED, 0L, null),
-                activeSupplier(),
-                null,
+                SupplierOfferVersionDO.builder()
+                        .id(101L).offerId(1L).supplierSettlementUnitPrice(0L)
+                        .validFrom(NOW.minusDays(1)).build(),
                 9_800L,
                 NOW);
 
@@ -142,6 +156,7 @@ class EffectiveSupplyPriceTest {
                                                   Long currentVersionId) {
         return SupplierOfferDO.builder()
                 .id(1L)
+                .supplierId(4L)
                 .status(OfferStatus.PUBLISHED.getCode())
                 .priceMode(mode.name())
                 .draftUnitPrice(draftUnitPrice)

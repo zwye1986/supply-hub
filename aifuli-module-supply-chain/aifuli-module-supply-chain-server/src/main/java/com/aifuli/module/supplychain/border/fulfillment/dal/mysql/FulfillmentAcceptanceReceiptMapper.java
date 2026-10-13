@@ -99,7 +99,7 @@ public interface FulfillmentAcceptanceReceiptMapper extends BaseMapperX<Fulfillm
                         (short) 2)
                 .set(FulfillmentAcceptanceReceiptDO::getUpdatedAt, updatedAt)
                 .eq(FulfillmentAcceptanceReceiptDO::getId, id)
-                // 只重建格式 0 历史回执；并发已被重建的行（格式 2）不重复覆盖。
-                .ne(FulfillmentAcceptanceReceiptDO::getFingerprintVersion, (short) 2));
+                // 只重建格式0历史回执，不覆盖任何已验证格式2/3。
+                .eq(FulfillmentAcceptanceReceiptDO::getFingerprintVersion, (short) 0));
     }
 }

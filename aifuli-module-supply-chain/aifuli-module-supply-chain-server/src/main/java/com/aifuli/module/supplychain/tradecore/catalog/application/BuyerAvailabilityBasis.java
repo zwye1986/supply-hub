@@ -2,6 +2,8 @@ package com.aifuli.module.supplychain.tradecore.catalog.application;
 
 import com.aifuli.module.supplychain.tradecore.catalog.domain.ListingAvailability;
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.nio.charset.StandardCharsets;
@@ -18,8 +20,46 @@ import java.util.Map;
  */
 public final class BuyerAvailabilityBasis {
 
+    private static final ObjectMapper SOURCE_READER = new ObjectMapper()
+            .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
+
     private BuyerAvailabilityBasis() {
     }
+
+    /**
+     * 读取评估实际使用的定价身份，绝不把 basisVersion 变化计数当作来源。
+     * 先校验已声明字段，再区分正常未评估与明确空来源；损坏引用必须传播系统失败。
+     * 设计见 {@code docs/superpowers/specs/2026-10-12-catalog-source-freshness-correction-design.md#3-字段语义与来源契约}。
+     */
+    public static PricingSource readPricingSource(String basisJson, Long listingId) {
+        if (basisJson == null) return new PricingSource(false, null);
+        final JsonNode basis;
+        try {
+            basis = SOURCE_READER.readTree(basisJson);
+        } catch (JsonProcessingException failure) {
+            throw new IllegalStateException("Catalog basis source cannot be parsed", failure);
+        }
+        if (basis == null || !basis.isObject()) {
+            throw new IllegalStateException("Catalog basis source must be an object");
+        }
+        JsonNode owner = basis.get("listingId");
+        if (owner != null && !positiveLong(owner).equals(listingId)) {
+            throw new IllegalStateException("Catalog basis source ownership is invalid");
+        }
+        JsonNode source = basis.get("sourceBuyerPricingVersionId");
+        Long sourceId = source == null || source.isNull() ? null : positiveLong(source);
+        return new PricingSource(owner != null && source != null, sourceId);
+    }
+
+    private static Long positiveLong(JsonNode value) {
+        if (!value.isIntegralNumber() || !value.canConvertToLong() || value.longValue() <= 0) {
+            throw new IllegalStateException("Catalog basis identity must be a positive Long integer");
+        }
+        return value.longValue();
+    }
+
+    /** verifiable=false 为正常缺失；true/null 表示评估时确实没有价格来源。 */
+    public record PricingSource(boolean verifiable, Long sourceBuyerPricingVersionId) { }
 
     /** SHA-256 摘要：basis 变化才递增 basisVersion；不含评估时间，避免无变化重评估产生游标风暴。 */
     public static byte[] digest(Long listingId, Long pricingVersionId, ListingAvailability availability,

@@ -147,21 +147,23 @@ public class SupplierConfigurationCommandService {
      *
      * <p>适配器无关：协议知识单一来源于各适配器元数据，新增适配器无需改动此方法。仅当版本仍为草稿、
      * 且尚未初始化过映射时执行；模板列表顺序即插入顺序。设计见
-     * docs/superpowers/specs/2026-10-03-supplier-offer-publication-admin-design.md#65-映射g2。</p>
+     * docs/superpowers/specs/2026-10-12-huasheng-fulfillment-hardening-design.md#31-后端元数据与查询。
+     * 两张表必须同时为空，避免仅错误表已有内容时重复播种；当前读锁与版本推进围栏保证验证期间映射不能悄然变化。</p>
      *
      * @return 初始化的映射总行数（状态映射 + 错误码映射）
      */
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public int initializeMappings(Long connectorVersionId, Long operatorId) {
-        SupplierConnectorVersionDO version = versionMapper.selectById(connectorVersionId);
-        if (version == null || version.getStatus() != ConnectorVersionStatus.DRAFT.getCode()) {
+        SupplierConnectorVersionDO version = versionMapper.selectByIdForUpdate(connectorVersionId);
+        if (version == null || !Short.valueOf(ConnectorVersionStatus.DRAFT.getCode()).equals(version.getStatus())) {
             throw new IllegalStateException("Only a draft connector version can initialize mappings");
         }
         SupplierConnectorDO connector = connectorMapper.selectById(version.getConnectorId());
         if (connector == null) {
             throw new IllegalStateException("Connector does not exist");
         }
-        if (!statusMappingMapper.selectByConnectorVersionId(connectorVersionId).isEmpty()) {
+        if (!statusMappingMapper.selectByConnectorVersionId(connectorVersionId).isEmpty()
+                || !errorCodeMapMapper.selectByConnectorVersionId(connectorVersionId).isEmpty()) {
             throw new IllegalStateException("Connector mappings have already been initialized");
         }
         MappingTemplates templates = metadataRegistry.require(connector.getAdapterType()).mappingTemplates();
@@ -187,6 +189,7 @@ public class SupplierConfigurationCommandService {
                     .createdBy(operatorId).createdAt(now).build());
             count++;
         }
+        touchMappingVersion(version, operatorId, now);
         return count;
     }
 
@@ -194,44 +197,87 @@ public class SupplierConfigurationCommandService {
      * 向草稿连接器版本追加单条状态映射（G2：模板初始化后运营按需补充）。
      *
      * <p>事实类型与业务阶段限定在封闭集合内，避免散落魔法值（AGENTS.md §7）。设计见
-     * docs/superpowers/specs/2026-10-03-supplier-offer-publication-admin-design.md#65-映射g2。</p>
+     * docs/superpowers/specs/2026-10-12-huasheng-fulfillment-hardening-design.md#31-后端元数据与查询。
+     * 写入前读取真实连接器元数据，封闭模板禁止追加，不能等发布校验才拒绝。</p>
      */
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public void addStatusMapping(AddStatusMappingCommand command) {
-        SupplierConnectorVersionDO version = versionMapper.selectById(command.connectorVersionId());
-        if (version == null || version.getStatus() != ConnectorVersionStatus.DRAFT.getCode()) {
+        SupplierConnectorVersionDO version = versionMapper.selectByIdForUpdate(command.connectorVersionId());
+        if (version == null || !Short.valueOf(ConnectorVersionStatus.DRAFT.getCode()).equals(version.getStatus())) {
             throw new IllegalStateException("Only a draft connector version can add status mappings");
         }
         if (!STATUS_FACTS.contains(command.factType()) || !BUSINESS_PHASES.contains(command.businessPhase())) {
             throw new IllegalArgumentException(
                     "Status mapping fact type or business phase is outside the closed set");
         }
+        if (!requireMappingMetadata(version).statusMappingAppendAllowed()) {
+            throw new IllegalStateException("该适配器采用封闭模板，不允许逐条追加状态映射");
+        }
+        LocalDateTime now = now();
         statusMappingMapper.insert(StatusMappingDefinitionDO.builder()
                 .connectorVersionId(version.getId()).mappingVersion(version.getVersionNo())
                 .externalStatus(command.externalStatus())
                 .externalSubStatus(command.externalSubStatus() == null ? "" : command.externalSubStatus())
                 .businessPhase(command.businessPhase()).factType(command.factType())
                 .terminalFlag((short) (command.terminal() ? 1 : 0)).priority(0)
-                .status((short) 0).createdBy(command.operatorId()).createdAt(now()).build());
+                .status((short) 0).createdBy(command.operatorId()).createdAt(now).build());
+        touchMappingVersion(version, command.operatorId(), now);
     }
 
+    /**
+     * 草稿错误映射须满足分类、动作与重试一致性，且适配器允许追加；在 insert 前拒绝封闭模板。
+     * 设计见 docs/superpowers/specs/2026-10-12-huasheng-fulfillment-hardening-design.md#31-后端元数据与查询。
+     */
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public void addErrorCodeMapping(AddErrorCodeMappingCommand command) {
-        SupplierConnectorVersionDO version = versionMapper.selectById(command.connectorVersionId());
-        if (version == null || version.getStatus() != ConnectorVersionStatus.DRAFT.getCode()) {
+        SupplierConnectorVersionDO version = versionMapper.selectByIdForUpdate(command.connectorVersionId());
+        if (version == null || !Short.valueOf(ConnectorVersionStatus.DRAFT.getCode()).equals(version.getStatus())) {
             throw new IllegalStateException("Only a draft connector version can add error mappings");
         }
         if (!ERROR_CLASSES.contains(command.errorClass()) || !ERROR_ACTIONS.contains(command.actionType())
                 || ("RETRY_SAFE".equals(command.actionType()) != command.retryable())) {
             throw new IllegalArgumentException("Error mapping class, action or retryability is inconsistent");
         }
+        if (!requireMappingMetadata(version).errorMappingAppendAllowed()) {
+            throw new IllegalStateException("该适配器采用封闭模板，不允许逐条追加错误映射");
+        }
+        LocalDateTime now = now();
         errorCodeMapMapper.insert(SupplierErrorCodeMapDO.builder()
                 .connectorVersionId(version.getId()).mappingVersion(version.getVersionNo())
                 .externalErrorCode(command.externalErrorCode())
                 .externalSubCode(command.externalSubCode() == null ? "" : command.externalSubCode())
                 .errorClass(command.errorClass()).actionType(command.actionType())
                 .retryableFlag((short) (command.retryable() ? 1 : 0)).status((short) 0)
-                .createdBy(command.operatorId()).createdAt(now()).build());
+                .createdBy(command.operatorId()).createdAt(now).build());
+        touchMappingVersion(version, command.operatorId(), now);
+    }
+
+    /**
+     * 映射变更必须推进连接器版本行的 @Version 乐观锁，使基于旧映射的验证 expectedVersion 失效。
+     * 已持当前读锁；MyBatis 乐观锁插件负责版本增量，更新不为一行则抛异常让同事务映射全部回滚。
+     * 设计见 docs/superpowers/specs/2026-10-12-huasheng-fulfillment-hardening-design.md#31-后端元数据与查询。
+     */
+    private void touchMappingVersion(SupplierConnectorVersionDO version, Long operatorId, LocalDateTime now) {
+        version.setUpdatedBy(operatorId);
+        version.setUpdatedAt(now);
+        if (versionMapper.updateById(version) != 1) {
+            throw new IllegalStateException("Connector mapping change lost optimistic lock");
+        }
+    }
+
+    /**
+     * 从持久化版本解析真实适配器身份，不接受客户端声明；缺身份时拒绝写入。
+     * 设计见 docs/superpowers/specs/2026-10-12-huasheng-fulfillment-hardening-design.md#31-后端元数据与查询。
+     */
+    private AdapterMetadata requireMappingMetadata(SupplierConnectorVersionDO version) {
+        if (version.getConnectorId() == null) {
+            throw new IllegalStateException("Connector identity does not exist");
+        }
+        SupplierConnectorDO connector = connectorMapper.selectById(version.getConnectorId());
+        if (connector == null) {
+            throw new IllegalStateException("Connector does not exist");
+        }
+        return metadataRegistry.require(connector.getAdapterType());
     }
 
     private SupplierDO requireActiveStandardSupplier(String supplierCode) {

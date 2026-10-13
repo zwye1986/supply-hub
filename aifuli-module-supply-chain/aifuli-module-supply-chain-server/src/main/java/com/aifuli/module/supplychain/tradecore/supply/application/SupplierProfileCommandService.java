@@ -38,6 +38,7 @@ import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.annotation.Isolation;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -212,9 +213,10 @@ public class SupplierProfileCommandService {
                 requireFileKeys(command.qualificationFileKeys(), command.qualificationFileKey()), now);
     }
 
-    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
+    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class, isolation = Isolation.READ_COMMITTED)
     public void changeStatus(String supplierCode, SupplierStatus target, Long operatorId) {
-        log.info("变更供应商状态 supplierCode={} target={} operatorId={}", supplierCode, target, operatorId);
+        SupplierLifecycleTransactions.requireReadCommitted();
+        log.info("[supplierStatusChange][供应商状态变更请求] supplierCode={}, target={}, operatorId={}", supplierCode, target, operatorId);
         SupplierDO supplier = requireForUpdate(supplierCode);
         SupplierStatus current = SupplierStatus.fromCode(supplier.getStatus());
         if (!current.canTransitionTo(target)) {
@@ -230,7 +232,9 @@ public class SupplierProfileCommandService {
         // 设计见 docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#3-供货价与利润隐藏。
         supplierOfferMapper.selectPublishedBySupplier(supplier.getId()).stream()
                 .map(offer -> offer.getPlatformSkuId())
+                .filter(java.util.Objects::nonNull)
                 .distinct()
+                .sorted()
                 .forEach(id -> eventPublisher.publishEvent(new PricingDependencyChangedEvent(id)));
     }
 

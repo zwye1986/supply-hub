@@ -11,7 +11,6 @@ import com.aifuli.module.supplychain.tradecore.catalog.domain.BuyerListingManage
 import com.aifuli.module.supplychain.tradecore.catalog.domain.BuyerListingStatus;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogRefreshReason;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.ListingAvailability;
-import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericPricingCalculator.PricingStatus;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
@@ -21,10 +20,10 @@ import java.time.LocalDateTime;
 import java.util.Objects;
 
 /**
- * 管理目录只读投影，BPD 始终为下单 canonical 编码；不调用发布/刷新、不持行锁。
+ * 管理目录只读投影，canonical 编码保持内部 BPD 身份；不调用发布/刷新、不持行锁。
  * AUTO 的投影期限、当前定价来源与商业有效期共同决定展示，不能作为某项目实时准入证明。
  * MANUAL 保留既有可用性读契约，不受 AUTO 来源规则影响。
- * 设计见 {@code docs/superpowers/specs/2026-10-09-catalog-business-minimum-design.md#7-管理可见性与显式重算}。
+ * 设计见 {@code docs/superpowers/specs/2026-10-12-catalog-source-freshness-correction-design.md#4-auto-判定顺序与时间边界}。
  */
 @Service
 @RequiredArgsConstructor
@@ -69,22 +68,15 @@ public class BuyerAcceptanceCatalogReadService {
             if (source != null && !Objects.equals(source.getBuyerProductId(), product.getId())) {
                 throw new IllegalStateException("Acceptance catalog pricing read ownership is invalid");
             }
-            if (state == BuyerListingStatus.SUSPENDED || state == BuyerListingStatus.RETIRED) {
-                status = ListingAvailability.UNKNOWN;
-                reason = state == BuyerListingStatus.SUSPENDED ? CatalogRefreshReason.SUSPENDED.name() : CatalogRefreshReason.RETIRED.name();
-            } else if (source == null || !PricingStatus.READY.name().equals(source.getPricingStatus())) {
-                status = ListingAvailability.UNKNOWN;
-                reason = CatalogRefreshReason.DEFERRED_PRICE.name();
-            } else if (!Objects.equals(projection.getBasisVersion(), source.getCurrentVersionId())
-                    || version != null && !Objects.equals(version.getSourceBuyerPricingVersionId(), source.getCurrentVersionId())) {
-                status = ListingAvailability.UNKNOWN;
-                reason = CatalogRefreshReason.SOURCE_CHANGED.name();
-            } else if (projection.getValidUntil() == null || !projection.getValidUntil().isAfter(now)
-                    || version != null && (version.getValidFrom() == null || version.getValidFrom().isAfter(now)
-                    || version.getValidTo() != null && !version.getValidTo().isAfter(now))) {
-                status = ListingAvailability.UNKNOWN;
-                reason = CatalogRefreshReason.PROJECTION_EXPIRED.name();
-            }
+            var decision = BuyerCatalogAutoReadPolicy.decide(new BuyerCatalogAutoReadPolicy.Input(
+                    listing.getId(), state, source == null ? null : source.getPricingStatus(),
+                    source == null ? null : source.getCurrentVersionId(), projection.getBasisJson(),
+                    projection.getEvaluatedAt(), projection.getValidUntil(), version != null,
+                    version == null ? null : version.getSourceBuyerPricingVersionId(),
+                    version == null ? null : version.getValidFrom(), version == null ? null : version.getValidTo(),
+                    status, reason), now);
+            status = decision.availability();
+            reason = decision.reason();
         }
         return new CatalogView(product.getBuyerProductCode(), listing.getListingNo(), mode.name(), state.name(),
                 status.name(), reason, version == null ? null : version.getSourceBuyerPricingVersionId(),

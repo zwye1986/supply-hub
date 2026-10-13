@@ -96,7 +96,12 @@ public final class HuashengCheckpoint {
             require(endpoint == HuashengEndpoint.PLACE || endpoint == HuashengEndpoint.CONFIRM
                     || endpoint == HuashengEndpoint.QUERY || endpoint == HuashengEndpoint.CALLBACK);
             text(orderSn, 128); text(outOrderSn, 32);
-            require(num == HuashengFlowCodes.TYPE201_ORDER_QUANTITY && status != null
+            // 新失败回调保留零交付；历史 V1 CALLBACK/FAILED/num=1 仅兼容读取。
+            // 其它端点仍是原单数量，禁止零数量观察混入订单恢复。
+            // 设计：docs/superpowers/specs/2026-10-12-huasheng-fulfillment-hardening-design.md#22-检查点与兼容。
+            boolean failedCallbackZero = endpoint == HuashengEndpoint.CALLBACK
+                    && status == HuashengOrderStatus.FAILED && num == HuashengFlowCodes.FAILED_CALLBACK_DELIVERY_QUANTITY;
+            require((num == HuashengFlowCodes.TYPE201_ORDER_QUANTITY || failedCallbackZero) && status != null
                     && refundStatus != null && isTake != null);
             // 只核持久值不变量；协议入口仍用 A parser，不引用其内部结果载体（设计 §4.2.1）。
             require(totalPriceRaw != null && totalPriceRaw.length() <= 32

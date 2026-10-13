@@ -75,8 +75,10 @@ public class ProjectListingCommandService {
     private final SettlementPriceResolver settlementPriceResolver;
     private final GenericBatchPricingService genericPricingService;
 
-    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
+    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class, isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public List<String> addProducts(String projectCode, List<ListingLine> lines, Long operatorId) {
+        // 行内定价加入同一个RC批次；设计见docs/superpowers/specs/2026-10-11-supplier-offer-lifecycle-design.md#34-闭环四同步重算的锁顺序与并发事务规范。
+        com.aifuli.module.supplychain.tradecore.supply.application.SupplierLifecycleTransactions.requireReadCommitted();
         if (lines == null || lines.isEmpty()) {
             throw new IllegalArgumentException("At least one SKU is required");
         }
@@ -88,6 +90,8 @@ public class ProjectListingCommandService {
         }
         log.info("发布项目商品 projectCode={} buyerCode={} skuCount={} operatorId={}",
                 projectCode, buyerCode, lines.size(), operatorId);
+        // 在任何单行初始化或定价前预锁整批SKU根，保持请求处理顺序与既有准入规则。
+        genericPricingService.lockPlatformPricingByCodes(lines.stream().map(line -> line.platformSkuCode()).toList());
         LocalDateTime now = databaseClock.now();
         List<String> codes = new ArrayList<>();
         for (ListingLine line : lines) {

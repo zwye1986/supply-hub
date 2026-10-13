@@ -119,7 +119,7 @@ class ConnectorCredentialSetIntegrationTest {
             assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_credential_item WHERE credential_set_id=?",Long.class,set)).isEqualTo(3L);
         } finally { snapshot.countDown(); executor.shutdownNow(); }
     }
-    @Test void publicationWithOldSnapshotRejectsSetDisabledWhileAwaitingSetLock() throws Exception {
+    @Test void publishRejectsRepeatableReadOuterContextBeforeReadingStaleSetSnapshot() throws Exception {
         String supplier=supplier(); Long set=createCompleteSet(supplier,"DISABLE_RACE",privatePem());
         var draft=draft(supplier,"DISABLE_RACE","{}"); validate(draft);
         var locked=new java.util.concurrent.CountDownLatch(1);var snapshot=new java.util.concurrent.CountDownLatch(1);
@@ -135,12 +135,15 @@ class ConnectorCredentialSetIntegrationTest {
             assertThat(locked.await(10,java.util.concurrent.TimeUnit.SECONDS)).isTrue();
             var publishing=executor.submit(()->{
                 try {transaction.executeWithoutResult(status->{
+                    // 旧RR快照仍读到启用状态；但生命周期发布在第一条业务读写前拒绝非READ_COMMITTED外层，
+                    // 不允许基于可能陈旧的历史快照发布（生命周期设计 §3.4）。
                     assertThat(jdbc.queryForObject("SELECT status FROM sc_credential_set WHERE id=?",Integer.class,set)).isEqualTo(10);
                     snapshot.countDown();publish(draft);
                 });return (Throwable)null;}catch(RuntimeException failure){return failure;}
             });
             assertThat(disabling.get(15,java.util.concurrent.TimeUnit.SECONDS)).isTrue();
-            assertThat(publishing.get(15,java.util.concurrent.TimeUnit.SECONDS)).isInstanceOf(IllegalArgumentException.class);
+            assertThat(publishing.get(15,java.util.concurrent.TimeUnit.SECONDS)).isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("READ_COMMITTED");
             assertThat(jdbc.queryForObject("SELECT current_version_id FROM sc_supplier_connector WHERE connector_no=?",Long.class,draft.connectorNo())).isNull();
         } finally {snapshot.countDown();executor.shutdownNow();}
     }

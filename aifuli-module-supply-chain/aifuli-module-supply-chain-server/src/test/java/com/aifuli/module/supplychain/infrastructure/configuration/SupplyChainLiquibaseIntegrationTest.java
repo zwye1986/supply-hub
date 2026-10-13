@@ -162,6 +162,7 @@ class SupplyChainLiquibaseIntegrationTest {
                         "sc_fulfillment_acceptance_receipt.fingerprint_version",
                         "sc_fulfillment_acceptance_receipt.target_schema_version",
                         "sc_fulfillment_acceptance_receipt.platform_sku_id",
+                        "sc_fulfillment_acceptance_receipt.requested_platform_sku_code",
                         "sc_fulfillment_acceptance_receipt.pricing_quote_id",
                         "sc_fulfillment_acceptance_receipt.standard_project_key",
                         "sc_fulfillment_acceptance_receipt.legacy_buyer_key",
@@ -179,9 +180,8 @@ class SupplyChainLiquibaseIntegrationTest {
                 "expire_at:DATETIME:-:3:NO");
         assertThat(firstStartup.projectAuthNoncePrimaryKeyColumns())
                 .containsExactly("app_id", "nonce");
-        // 062 华昇恢复字段后真实模式为 64 个变更集，启动重放不可重复执行。
-        // 设计见 docs/superpowers/specs/2026-10-09-huasheng-type201-production-closure-design.md#41-追加迁移。
-        assertThat(firstStartup.changeSetCount()).isEqualTo(64L);
+        // 064 追加平台SKU请求身份；原65个变更集保持，正式增量新增1个。
+        assertThat(firstStartup.changeSetCount()).isEqualTo(66L);
         assertThat(firstStartup.uniqueIndexes())
                 .contains("sc_instore_payment_flow.uk_sc_instore_flow_order",
                         "sc_instore_channel_user_binding.uk_sc_instore_user_binding_project",
@@ -253,15 +253,15 @@ class SupplyChainLiquibaseIntegrationTest {
                         FROM information_schema.COLUMNS
                         WHERE TABLE_SCHEMA = DATABASE()
                           AND TABLE_NAME LIKE 'sc\\_%'
-                        """)).isEqualTo(125L);
-                // 062 追加 lease/deadline/send 三个 DATETIME(3)，真实模式共 303 个 Asia/Shanghai DATETIME(3)。
+                        """)).isEqualTo(126L);
+                // 063 追加 occurred_at 一个 DATETIME(3)，真实模式共 304 个 Asia/Shanghai DATETIME(3)。
                 assertThat(queryLong(connection, """
                         SELECT COUNT(*)
                         FROM information_schema.COLUMNS
                         WHERE TABLE_SCHEMA = DATABASE()
                           AND TABLE_NAME LIKE 'sc\\_%'
                           AND DATA_TYPE = 'datetime'
-                        """)).isEqualTo(303L);
+                        """)).isEqualTo(304L);
                 assertThat(queryLong(connection, """
                         SELECT COUNT(*)
                         FROM information_schema.COLUMNS

@@ -14,6 +14,8 @@ public final class HuashengFlowCodes {
     /** 待核 case 摘要用途，不能复用资产指纹或回调身份用途。 */
     public static final String EXCEPTION_EVIDENCE_PURPOSE = "HUASHENG_EXCEPTION_EVIDENCE";
     public static final int TYPE201_ORDER_QUANTITY = 1;
+    /** 失败回调报告的是零交付，不能用原订单数量代替。 */
+    public static final int FAILED_CALLBACK_DELIVERY_QUANTITY = 0;
     public static final int EXPIRE_TIME_MIN_SECONDS = 60;
     public static final int EXPIRE_TIME_MAX_SECONDS = 1800;
     static final String INVALID_CHECKPOINT = "华昇恢复检查点无效";
