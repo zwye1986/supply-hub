@@ -36,6 +36,13 @@
 5. 新增代码禁止直接调用 `LocalDateTime.now()`、`LocalDateTime.now(ZoneOffset.UTC)` 或在持久化 SQL 中
    使用 `UTC_TIMESTAMP()`。
 
+2026-10-13 待评审补充：日期型数字订单号提案改为从Redis消费脚本的TIME取得编号前缀时刻，并转换为
+Asia/Shanghai，避免正常发号逐次查询MySQL。该提案只涉及订单号字符串前缀与号段日期校验，
+`created_at`/`updated_at`、准入、有效期、账本和Timer等数据库业务时间仍遵守本节数据库时钟规则。
+Redis取号故障不回退JVM时间。详细职责、跨日与回拨边界见
+[订单号Redis／MySQL协作发号详细设计](2026-10-13-supply-chain-order-number-design.md#21-格式)。
+本补充尚未获用户评审通过、未实施，不表示当前代码已切换编号时间来源。
+
 ### 2.3 失败语义与启动门禁
 
 `SupplyChainDatabaseClock` 是核心数据库依赖，读取失败必须保留异常因果并使当前业务失败，不允许回退
