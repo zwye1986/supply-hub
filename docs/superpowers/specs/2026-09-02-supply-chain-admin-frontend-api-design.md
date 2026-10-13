@@ -356,6 +356,8 @@ SPU / 供货范围写入的 `productClassification` 不走 `ClosedEnums`：类�
 
 行字段：平台 SPU/SKU 编码与名称、SPU 三码（`sellableCategory`/`productType`/`productClassification`）、`suggestPriceCents`（旧 L1 B 端结算价兼容）、`suggestedSalePriceCents`（SKU 销售建议价，取 `sc_platform_sku.suggested_sale_price`，0 为有效展示值）、`priceMode`（字典 `supply_chain_offer_price_mode`）、`unitPriceCents`、`discountBp`（10000=100%）、`offerSupplyMode`、`maxQuantity`、`minQuantity`、`status`。`FIXED` 单价>0；`DISCOUNT` 折扣 ∈[1,10000] 且建议价>0；`REALTIME` 禁止填固定价。必须按三码整体唯一命中一条供货配置。
 
+2026-10-13 合作商品列表标识展示：前端 `src/views/supplier/manage/detail/ProductList.vue` 的“商品名称”列分两行展示 `platformSpuName` 与平台 SPU 编码 `platformSpuCode`；“SKU规格”列分两行展示 `platformSkuName` 与平台 SKU 编码 `platformSkuCode`，移除独立“SKU编号”列。名称在上，编码以小号灰色文本在下，编码允许换行，各字段缺失或空串独立显示 `-`。直接使用现有 OfferListItem 返回字段，不拼装编码、不增加查询、不改变行粒度、筛选分页、价格、评分、上下架及其它操作；新增选品与改价对话框不在本次范围。
+
 2026-10-11 合作商品销售建议价修复：页面销售建议价、改价回填与 DISCOUNT 条款试算使用 `suggestedSalePriceCents`；新增选品读取 SKU `suggestedSalePrice`，不以市场价或旧 L1 代填。DISCOUNT 创建/改价校验使用服务端读取的 SKU 销售建议价，请求 `suggestedPriceCents` 仅保留兼容、不作为权威基数。供应价列表示当前商业条款，区别于履约版本冻结价。详见 `docs/superpowers/specs/2026-10-11-supplier-offer-sale-price-alignment-design.md`。
 
 SKU 未填供货上限时继承供货配置 `maxQuantity`；未填最低起购量时固定取 1。供货配置 `minQuantity` 是预留字段，不得被合作商品继承。
