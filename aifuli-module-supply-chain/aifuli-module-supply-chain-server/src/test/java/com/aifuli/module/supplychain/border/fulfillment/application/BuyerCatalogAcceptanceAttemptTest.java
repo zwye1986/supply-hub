@@ -50,6 +50,21 @@ class BuyerCatalogAcceptanceAttemptTest {
         });
     }
     @Test
+    void trustedReplayRejectsDifferentFingerprintBeforeSnapshotRead() {
+        var receipt = FulfillmentAcceptanceReceiptDO.builder().id(20L)
+                .status(AcceptanceReceiptStatus.ACCEPTED.getCode()).fingerprintVersion((short) 2)
+                .requestFingerprint(new byte[]{1}).build();
+        when(receiptMapper.selectById(20L)).thenReturn(receipt);
+        assertThatThrownBy(() -> lifecycle.tryReplayAccepted(20L, command(null)))
+                .isInstanceOf(FulfillmentAcceptanceLifecycle.IdempotencyConflictException.class);
+    }
+    @Test
+    void processingReceiptDoesNotGrantTrustedReplay() {
+        when(receiptMapper.selectById(20L)).thenReturn(FulfillmentAcceptanceReceiptDO.builder()
+                .id(20L).status(AcceptanceReceiptStatus.PROCESSING.getCode()).build());
+        assertThat(lifecycle.tryReplayAccepted(20L, command(null))).isNull();
+    }
+    @Test
     void bpdSchemaUsesApplicationResolverRatherThanOldCodeOnlyLookup() {
         when(skuMapper.selectById(3L)).thenReturn(PlatformSkuDO.builder().id(3L).targetSchemaCode("ACCOUNT").targetSchemaVersion(1).build());
         var snapshot = lifecycle.resolveTargetSchema(1L, "BPD_7");
@@ -89,7 +104,7 @@ class BuyerCatalogAcceptanceAttemptTest {
                 .id(20L).fingerprintVersion((short) 2).status(AcceptanceReceiptStatus.PROCESSING.getCode()).requestFingerprint(fingerprint).build());
         when(catalogResolver.lockResolvedIdentity(identity)).thenReturn(draft);
         when(skuMapper.selectByIdForUpdate(3L)).thenReturn(PlatformSkuDO.builder().id(3L).build());
-        assertThatThrownBy(() -> lifecycle.accept(20L, command(null, identity)))
+        assertThatThrownBy(() -> lifecycle.accept(20L, command(null, identity), com.aifuli.module.supplychain.testsupport.OrderNoTestConfiguration.numbers()))
                 .isInstanceOf(FulfillmentAcceptanceLifecycle.BusinessRejection.class);
         var order = inOrder(receiptMapper, catalogResolver, skuMapper);
         order.verify(receiptMapper).selectByIdForUpdate(20L);
@@ -115,10 +130,10 @@ class BuyerCatalogAcceptanceAttemptTest {
                 .id(20L).fingerprintVersion((short) 2).status(AcceptanceReceiptStatus.PROCESSING.getCode()).requestFingerprint(fingerprint).build());
         when(catalogResolver.lockResolvedIdentity(identity)).thenReturn(draft);
         when(skuMapper.selectByIdForUpdate(3L)).thenReturn(PlatformSkuDO.builder().id(3L).build());
-        assertThatThrownBy(() -> lifecycle.accept(20L, command(null, identity))).isExactlyInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(() -> lifecycle.accept(20L, command(null, identity), com.aifuli.module.supplychain.testsupport.OrderNoTestConfiguration.numbers())).isExactlyInstanceOf(IllegalStateException.class);
         when(listingVersionMapper.selectById(90L)).thenReturn(BuyerListingVersionDO.builder()
                 .id(90L).listingId(999L).versionNo(1).build());
-        assertThatThrownBy(() -> lifecycle.accept(20L, command(null, identity))).isExactlyInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(() -> lifecycle.accept(20L, command(null, identity), com.aifuli.module.supplychain.testsupport.OrderNoTestConfiguration.numbers())).isExactlyInstanceOf(IllegalStateException.class);
     }
     private FulfillmentAcceptanceLifecycle.PreparedAcceptance command(Long previous) {
         return command(previous, null);

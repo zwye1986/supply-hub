@@ -38,6 +38,7 @@ import static org.mockito.Mockito.when;
 class InstoreChannelCommandFacadeTest {
 
     @Mock private InstoreChannelLifecycle lifecycle;
+    @Mock private com.aifuli.module.supplychain.border.instore.application.InstoreOrderCreationCoordinator creationCoordinator;
     @Mock private BuyerIntegrationRouteResolver routeResolver;
     @Mock private BuyerCashierPort cashierPort;
     @Mock private InstorePaymentConvergenceService convergenceService;
@@ -48,7 +49,7 @@ class InstoreChannelCommandFacadeTest {
 
     @BeforeEach
     void setUp() {
-        facade = new InstoreChannelCommandFacade(lifecycle, routeResolver, cashierPort,
+        facade = new InstoreChannelCommandFacade(lifecycle, creationCoordinator, routeResolver, cashierPort,
                 convergenceService, refundConvergenceService, bindingResolver);
     }
 
@@ -56,7 +57,7 @@ class InstoreChannelCommandFacadeTest {
     void createsCashierOrderWithFrozenRouteAndOpaqueBuyerUserId() {
         BuyerIntegrationRoute route = cashierRoute();
         when(routeResolver.resolveFrozen(101L, 202L, BuyerIntegrationCapabilityCode.CASHIER)).thenReturn(route);
-        when(lifecycle.createPaymentOrder(any())).thenReturn(prepared(false, null,
+        when(creationCoordinator.create(any())).thenReturn(prepared(false, null,
                 InstorePaymentFlowStatus.PENDING.getCode()));
         when(lifecycle.claimPaymentPreparation("IOP_1", 0L))
                 .thenReturn(new InstoreChannelLifecycle.ClaimResult(true, 3L, 1L));
@@ -69,7 +70,7 @@ class InstoreChannelCommandFacadeTest {
 
         ArgumentCaptor<InstoreChannelLifecycle.CreatePaymentOrderCommand> lifecycleCommand =
                 ArgumentCaptor.forClass(InstoreChannelLifecycle.CreatePaymentOrderCommand.class);
-        verify(lifecycle).createPaymentOrder(lifecycleCommand.capture());
+        verify(creationCoordinator).create(lifecycleCommand.capture());
         assertThat(lifecycleCommand.getValue().projectId()).isEqualTo(101L);
         assertThat(lifecycleCommand.getValue().cashierProfileVersionId()).isEqualTo(202L);
         assertThat(lifecycleCommand.getValue().sourceSystem()).isEqualTo("AIFULI_MALL");
@@ -90,7 +91,7 @@ class InstoreChannelCommandFacadeTest {
     void idempotentReplayReturnsStoredUrlWithoutClaimOrExternalCall() {
         when(routeResolver.resolveFrozen(101L, 202L, BuyerIntegrationCapabilityCode.CASHIER))
                 .thenReturn(cashierRoute());
-        when(lifecycle.createPaymentOrder(any())).thenReturn(prepared(
+        when(creationCoordinator.create(any())).thenReturn(prepared(
                 true, "https://cashier/existing", InstorePaymentFlowStatus.PROCESSING.getCode()));
 
         InstoreChannelCommandFacade.PaymentTicket result = facade.createPayment(command());
@@ -105,7 +106,7 @@ class InstoreChannelCommandFacadeTest {
     void claimLossDoesNotCallCashierAgain() {
         when(routeResolver.resolveFrozen(101L, 202L, BuyerIntegrationCapabilityCode.CASHIER))
                 .thenReturn(cashierRoute());
-        when(lifecycle.createPaymentOrder(any())).thenReturn(prepared(false, null,
+        when(creationCoordinator.create(any())).thenReturn(prepared(false, null,
                 InstorePaymentFlowStatus.PENDING.getCode()));
         when(lifecycle.claimPaymentPreparation("IOP_1", 0L))
                 .thenReturn(new InstoreChannelLifecycle.ClaimResult(false, 3L, 1L));
@@ -121,7 +122,7 @@ class InstoreChannelCommandFacadeTest {
     void cashierFailureKeepsOriginalBusinessNumberForAuthoritativeRecovery() {
         when(routeResolver.resolveFrozen(101L, 202L, BuyerIntegrationCapabilityCode.CASHIER))
                 .thenReturn(cashierRoute());
-        when(lifecycle.createPaymentOrder(any())).thenReturn(prepared(false, null,
+        when(creationCoordinator.create(any())).thenReturn(prepared(false, null,
                 InstorePaymentFlowStatus.PENDING.getCode()));
         when(lifecycle.claimPaymentPreparation("IOP_1", 0L))
                 .thenReturn(new InstoreChannelLifecycle.ClaimResult(true, 3L, 1L));
@@ -145,7 +146,7 @@ class InstoreChannelCommandFacadeTest {
         // createPaymentOrder 委托既有 createPayment，其内部按 (projectId, profileVersionId) 冻结路由
         when(routeResolver.resolveFrozen(101L, 202L, BuyerIntegrationCapabilityCode.CASHIER))
                 .thenReturn(route);
-        when(lifecycle.createPaymentOrder(any())).thenReturn(prepared(false, null,
+        when(creationCoordinator.create(any())).thenReturn(prepared(false, null,
                 InstorePaymentFlowStatus.PENDING.getCode()));
         when(lifecycle.claimPaymentPreparation("IOP_1", 0L))
                 .thenReturn(new InstoreChannelLifecycle.ClaimResult(true, 3L, 1L));
@@ -160,7 +161,7 @@ class InstoreChannelCommandFacadeTest {
 
         ArgumentCaptor<InstoreChannelLifecycle.CreatePaymentOrderCommand> lifecycleCommand =
                 ArgumentCaptor.forClass(InstoreChannelLifecycle.CreatePaymentOrderCommand.class);
-        verify(lifecycle).createPaymentOrder(lifecycleCommand.capture());
+        verify(creationCoordinator).create(lifecycleCommand.capture());
         assertThat(lifecycleCommand.getValue().buyerId()).isEqualTo(1001L);
         assertThat(lifecycleCommand.getValue().projectId()).isEqualTo(101L);
         assertThat(lifecycleCommand.getValue().cashierProfileVersionId()).isEqualTo(202L);
@@ -197,7 +198,7 @@ class InstoreChannelCommandFacadeTest {
                 .isInstanceOf(ServiceException.class)
                 .extracting(error -> ((ServiceException) error).getCode())
                 .isEqualTo(INSTORE_CHANNEL_USER_BINDING_MISSING.getCode());
-        verify(lifecycle, never()).createPaymentOrder(any());
+        verify(creationCoordinator, never()).create(any());
         verify(cashierPort, never()).createCashierOrder(any());
     }
 
@@ -215,7 +216,7 @@ class InstoreChannelCommandFacadeTest {
                         101L, "RT_MART", "ORD001", "TRADE001", "opaque-user", 10_000L, 1,
                         10_000L, "COMPANY", "MERCHANT1", "SHOP1", "大润发门店", "到店购", "trace-1")))
                 .isInstanceOf(IllegalStateException.class);
-        verify(lifecycle, never()).createPaymentOrder(any());
+        verify(creationCoordinator, never()).create(any());
         verify(cashierPort, never()).createCashierOrder(any());
     }
 

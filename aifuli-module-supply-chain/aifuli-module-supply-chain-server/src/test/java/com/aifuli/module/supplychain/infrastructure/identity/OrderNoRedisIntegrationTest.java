@@ -60,7 +60,7 @@ class OrderNoRedisIntegrationTest {
   }
 
   @Test
-  void luaDeletionAndRollbackRepairFromFloorWithoutReissuing() {
+  void luaDeletionAndRollbackRepairFromFloorWithoutReissuing() throws Exception {
     var s = segment(10);
     String key = "test:{segment}:cursor";
     assertThat(redis.consume(key, s, 0, 2, TIMEOUT).endValue()).isEqualTo(2);
@@ -69,6 +69,11 @@ class OrderNoRedisIntegrationTest {
     client.getBucket(key, StringCodec.INSTANCE).set("1");
     assertThat(redis.consume(key, s, 4, 1, TIMEOUT).endValue()).isEqualTo(5);
     assertThat(client.getBucket(key, StringCodec.INSTANCE).get()).isEqualTo("5");
+    client.getBucket(key, StringCodec.INSTANCE).expire(Duration.ofMillis(1));
+    Thread.sleep(50);
+    // GET触发真实过期判定；DBSIZE可暂时计入尚未主动清理的过期键。
+    assertThat(client.getBucket(key, StringCodec.INSTANCE).get()).isNull();
+    assertThat(redis.consume(key, s, 5, 1, TIMEOUT).endValue()).isEqualTo(6);
   }
 
   @Test
@@ -131,15 +136,20 @@ class OrderNoRedisIntegrationTest {
   }
 
   @Test
-  void fiveHundredPairsPerformOneDatabaseReserve() {
+  void fiveHundredPairsPerformOneDatabaseReserve() throws Exception {
     var a = db.allocator(redis, 1000);
     var values = new HashSet<String>();
-    for (int i = 0; i < 500; i++) {
+    var first = a.prepare(OrderNoPurpose.ORDER_AND_BILL);
+    values.add(first.orderNo()); values.add(first.billno());
+    org.mockito.Mockito.verify(db.ds, org.mockito.Mockito.atLeastOnce()).getConnection();
+    org.mockito.Mockito.clearInvocations(db.ds);
+    for (int i = 1; i < 500; i++) {
       var n = a.prepare(OrderNoPurpose.ORDER_AND_BILL);
       values.add(n.orderNo());
       values.add(n.billno());
     }
     assertThat(values).hasSize(1000);
+    org.mockito.Mockito.verify(db.ds, org.mockito.Mockito.never()).getConnection();
     assertThat(db.jdbc.queryForObject("SELECT COUNT(*) FROM sc_order_no_segment", Integer.class))
         .isEqualTo(1);
     assertThat(

@@ -690,7 +690,7 @@ class ProjectStandardAcceptanceIntegrationTest {
     }
 
     @Configuration(proxyBeanMethods = false)
-    @Import({SupplyChainDataSourceConfiguration.class, UlidGenerator.class, BusinessNoGenerator.class,
+    @Import({com.aifuli.module.supplychain.testsupport.OrderNoTestConfiguration.class, SupplyChainDataSourceConfiguration.class, UlidGenerator.class, BusinessNoGenerator.class,
             OutboxEventRepository.class, BuyerCommandService.class, BuyerResolver.class,
             BuyerProjectAccessResolver.class,
             ProductCatalogCommandService.class, ProductCenterTestConfiguration.class, BuyerListingPublicationService.class,

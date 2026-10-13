@@ -78,5 +78,15 @@ class OrderNoIntegrationSupport implements AutoCloseable {
 
   @Configuration(proxyBeanMethods = false)
   @Import(SupplyChainDataSourceConfiguration.class)
-  static class Fixture {}
+  static class Fixture {
+    /** 观察真实共享数据源借用，不替换JDBC、事务或Mapper行为。 */
+    @org.springframework.context.annotation.Bean
+    static org.springframework.beans.factory.config.BeanPostProcessor observeDataSource() {
+      return new org.springframework.beans.factory.config.BeanPostProcessor() {
+        public Object postProcessAfterInitialization(Object bean, String name) {
+          return "supplyChainDataSource".equals(name) ? org.mockito.Mockito.spy(bean) : bean;
+        }
+      };
+    }
+  }
 }

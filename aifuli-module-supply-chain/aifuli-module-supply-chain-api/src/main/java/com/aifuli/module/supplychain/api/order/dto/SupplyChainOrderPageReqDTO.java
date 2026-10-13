@@ -26,7 +26,7 @@ public class SupplyChainOrderPageReqDTO extends PageParam {
     private String externalTenantId;
 
     /** 供应链总订单稳定业务编号 */
-    @Schema(description = "供应链总订单稳定业务编号", example = "SC_01K1XXXXXXXXXXXXXXXXXXXXXX")
+    @Schema(description = "供应链总订单稳定业务编号", example = "202610131530274200000001")
     @Size(max = 32)
     private String orderNo;
 

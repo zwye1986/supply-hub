@@ -240,7 +240,7 @@ aifuli-module-supply-chain-server/com.aifuli.module.supplychain
 
 - 内部数据库主键统一为 `BIGINT AUTO_INCREMENT`。
 - 对外业务编号使用“前缀 + 大写 ULID”，例如 `RCP_`、`ORD_`、`FR_`、`SO_`、`SREQ_`、`OP_`、`RR_`、`CASE_`、`EVT_`、`TMR_`；接口和日志不得暴露自增主键。
-- 2026-10-13 订单编号修订（用户已评审通过，实施中）：用户要求Redis参与防重、自增，否决专用连接池。新建总订单号与标准履约 `billno` 使用固定24位日期型数字编号：MySQL预留各实例互不重叠专属号段，Redis原子消费，正常取号不更新数据库流水行；编号时间取Redis TIME转上海时间，其它数据库业务时钟保持原规则。单一号段所有权、本地返回高水位和不确定时弃段共同防Redis回退重发，历史编号不改写。详见 [供应链日期型订单号与 Redis／MySQL 协作发号详细设计](2026-10-13-supply-chain-order-number-design.md)。实施与自动化证据按实现计划和联调文档维护，本条不表示已部署切换。
+- 2026-10-13 订单编号修订（用户已评审通过，已完成本地实现与自动化）：用户要求Redis参与防重、自增，否决专用连接池。新建总订单号与标准履约 `billno` 使用固定24位日期型数字编号：MySQL预留各实例互不重叠专属号段，Redis原子消费，正常取号不更新数据库流水行；编号时间取Redis TIME转上海时间，其它数据库业务时钟保持原规则。单一号段所有权、本地返回高水位和不确定时弃段共同防Redis回退重发，历史编号不改写。详见 [供应链日期型订单号与 Redis／MySQL 协作发号详细设计](2026-10-13-supply-chain-order-number-design.md)。实施与自动化证据按实现计划和联调文档维护，本条不表示已部署切换。
 - 外部系统的 `transactionId/refundNo/externalSupplierOrderNo/externalOperationNo` 按原始字符串保存。
 - 金额使用 `BIGINT` 最小货币单位和 `CHAR(3)` 币种；一期只允许 CNY，Java 领域值对象为 `Money(long amount, Currency currency)`。
 - 费率等未来精度值使用 `DECIMAL(18,8)`，禁止浮点数。

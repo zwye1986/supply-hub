@@ -26,7 +26,7 @@ public class SupplyChainOrderDetailQueryReqDTO implements Serializable {
 
     /** 供应链总订单稳定业务编号 */
     @Schema(description = "供应链总订单稳定业务编号", requiredMode = Schema.RequiredMode.REQUIRED,
-            example = "SC_01K1XXXXXXXXXXXXXXXXXXXXXX")
+            example = "202610131530274200000001")
     @NotBlank(message = "供应链中台订单号不能为空")
     @Size(max = 32)
     private String orderNo;

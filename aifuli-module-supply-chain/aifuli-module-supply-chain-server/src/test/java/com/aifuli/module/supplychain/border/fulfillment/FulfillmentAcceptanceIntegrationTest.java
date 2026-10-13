@@ -769,6 +769,12 @@ class FulfillmentAcceptanceIntegrationTest {
         assertThat(count(jdbc, "sc_supplier_routing_round")).isEqualTo(rounds);
         assertThat(count(jdbc, "sc_b_order")).isEqualTo(bOrders);
         assertThat(count(jdbc, "sc_fulfillment_operation")).isEqualTo(operations);
+        var orderNumbers = jdbc.queryForList("SELECT order_no FROM sc_supply_chain_order", String.class);
+        var billNumbers = jdbc.queryForList("SELECT billno FROM sc_b_order", String.class);
+        assertThat(orderNumbers).allSatisfy(value -> assertThat(value).matches("[0-9]{24}"));
+        assertThat(billNumbers).allSatisfy(value -> assertThat(value).matches("[0-9]{24}"));
+        var allNumbers = new ArrayList<>(orderNumbers); allNumbers.addAll(billNumbers);
+        assertThat(allNumbers).doesNotHaveDuplicates();
     }
 
     private static long count(JdbcTemplate jdbc, String table) {
@@ -877,7 +883,7 @@ class FulfillmentAcceptanceIntegrationTest {
     }
 
     @Configuration(proxyBeanMethods = false)
-    @Import({SupplyChainDataSourceConfiguration.class, UlidGenerator.class, BusinessNoGenerator.class,
+    @Import({com.aifuli.module.supplychain.testsupport.OrderNoTestConfiguration.class, SupplyChainDataSourceConfiguration.class, UlidGenerator.class, BusinessNoGenerator.class,
             OutboxEventRepository.class, BuyerCommandService.class, BuyerResolver.class,
             BuyerProjectAccessResolver.class,
             ProductCatalogCommandService.class, ProductCenterTestConfiguration.class, BuyerListingPublicationService.class,

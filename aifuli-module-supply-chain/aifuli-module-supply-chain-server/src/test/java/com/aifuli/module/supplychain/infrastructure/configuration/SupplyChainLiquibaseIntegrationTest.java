@@ -180,8 +180,8 @@ class SupplyChainLiquibaseIntegrationTest {
                 "expire_at:DATETIME:-:3:NO");
         assertThat(firstStartup.projectAuthNoncePrimaryKeyColumns())
                 .containsExactly("app_id", "nonce");
-        // 064 追加平台SKU请求身份；原65个变更集保持，正式增量新增1个。
-        assertThat(firstStartup.changeSetCount()).isEqualTo(66L);
+        // 065追加两张永久号段表；原66个变更集保持，正式增量新增1个。
+        assertThat(firstStartup.changeSetCount()).isEqualTo(67L);
         assertThat(firstStartup.uniqueIndexes())
                 .contains("sc_instore_payment_flow.uk_sc_instore_flow_order",
                         "sc_instore_channel_user_binding.uk_sc_instore_user_binding_project",
@@ -253,15 +253,15 @@ class SupplyChainLiquibaseIntegrationTest {
                         FROM information_schema.COLUMNS
                         WHERE TABLE_SCHEMA = DATABASE()
                           AND TABLE_NAME LIKE 'sc\\_%'
-                        """)).isEqualTo(126L);
-                // 063 追加 occurred_at 一个 DATETIME(3)，真实模式共 304 个 Asia/Shanghai DATETIME(3)。
+                        """)).isEqualTo(128L);
+                // 065追加三列时间与两张表，真实模式共307个Asia/Shanghai DATETIME(3)。
                 assertThat(queryLong(connection, """
                         SELECT COUNT(*)
                         FROM information_schema.COLUMNS
                         WHERE TABLE_SCHEMA = DATABASE()
                           AND TABLE_NAME LIKE 'sc\\_%'
                           AND DATA_TYPE = 'datetime'
-                        """)).isEqualTo(304L);
+                        """)).isEqualTo(307L);
                 assertThat(queryLong(connection, """
                         SELECT COUNT(*)
                         FROM information_schema.COLUMNS

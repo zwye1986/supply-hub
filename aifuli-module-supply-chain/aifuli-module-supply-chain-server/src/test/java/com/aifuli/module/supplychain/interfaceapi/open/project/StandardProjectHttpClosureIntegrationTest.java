@@ -171,6 +171,9 @@ class StandardProjectHttpClosureIntegrationTest {
 
     private static final String V2_PATH = "/open-api/supply-chain/project/v2/orders";
 
+    private static final org.testcontainers.containers.GenericContainer<?> ORDER_REDIS =
+            new org.testcontainers.containers.GenericContainer<>("redis:7.4").withExposedPorts(6379);
+    private static org.redisson.api.RedissonClient orderRedisClient;
     private static ConfigurableApplicationContext server;
     private static String baseUrl;
     private static JdbcTemplate jdbc;
@@ -184,6 +187,10 @@ class StandardProjectHttpClosureIntegrationTest {
             MYSQL.start();
         }
         MOCK_SUPPLIER.start();
+        ORDER_REDIS.start();
+        var redisConfig = new org.redisson.config.Config();
+        redisConfig.useSingleServer().setAddress("redis://" + ORDER_REDIS.getHost() + ":" + ORDER_REDIS.getMappedPort(6379));
+        orderRedisClient = org.redisson.Redisson.create(redisConfig);
         server = new SpringApplicationBuilder(SupplyChainServerApplication.class, TestOverrides.class)
                 .run(commandLineArguments());
         WebServerApplicationContext webContext = (WebServerApplicationContext) server;
@@ -209,6 +216,8 @@ class StandardProjectHttpClosureIntegrationTest {
             server.close();
         }
         MOCK_SUPPLIER.shutdown();
+        if (orderRedisClient != null) orderRedisClient.shutdown();
+        ORDER_REDIS.stop();
         if (EXTERNAL_JDBC_URL == null && MYSQL.isRunning()) {
             MYSQL.stop();
         }
@@ -2398,6 +2407,8 @@ class StandardProjectHttpClosureIntegrationTest {
                 "--spring.cloud.nacos.config.import-check.enabled=false",
                 "--spring.boot.admin.client.enabled=false",
                 "--aifuli.tenant.enable=false",
+                "--aifuli.supply-chain.order-no.env=test",
+                "--aifuli.supply-chain.order-no.scope=http-closure",
 "--aifuli.supply-chain.connector.allowed-adapter-types=QNM_GAME_ORDER_V1",
                 "--spring.data.redis.repositories.enabled=false",
                 "--spring.autoconfigure.exclude="
@@ -2453,6 +2464,10 @@ class StandardProjectHttpClosureIntegrationTest {
     @Profile("project-http-closure-it")
     @Configuration(proxyBeanMethods = false)
     static class TestOverrides {
+        /** 明确提供真实隔离Redis，生产发号配置仍复用此Bean；不加入生产降级。 */
+        @Bean
+        org.redisson.api.RedissonClient orderNoRedisClient() { return orderRedisClient; }
+
         @Bean
         AcceptanceLockProbe acceptanceLockProbe() { return new AcceptanceLockProbe(); }
         @Bean

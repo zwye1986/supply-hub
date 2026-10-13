@@ -17,7 +17,7 @@ public class FulfillmentResultRespDTO implements Serializable {
 
     /** 供应链总订单稳定业务编号 */
     @Schema(description = "供应链总订单稳定业务编号", requiredMode = Schema.RequiredMode.REQUIRED,
-            example = "SC_01K1XXXXXXXXXXXXXXXXXXXXXX")
+            example = "202610131530274200000001")
     private String orderNo;
 
     /** 采购商侧C端订单号，CARD场景必填 */
