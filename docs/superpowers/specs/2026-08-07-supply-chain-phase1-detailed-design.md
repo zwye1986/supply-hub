@@ -240,6 +240,7 @@ aifuli-module-supply-chain-server/com.aifuli.module.supplychain
 
 - 内部数据库主键统一为 `BIGINT AUTO_INCREMENT`。
 - 对外业务编号使用“前缀 + 大写 ULID”，例如 `RCP_`、`ORD_`、`FR_`、`SO_`、`SREQ_`、`OP_`、`RR_`、`CASE_`、`EVT_`、`TMR_`；接口和日志不得暴露自增主键。
+- 2026-10-13 订单编号变更提案（待详细设计评审、未实施）：用户已选择新建总订单号与标准履约 `billno` 使用固定24位日期型数字编号，由供应链独立MySQL分配共享每日流水；用户明确否决专用连接池。推荐在业务事务前使用现有连接池完成独立短事务批量取号，历史编号不改写。范围、事务边界与门禁见 [供应链日期型订单号与 MySQL 持久化流水详细设计](2026-10-13-supply-chain-order-number-design.md)。本条为待评审目标，不表示上述ULID实现已切换；其它编号仍遵守各自已生效设计。
 - 外部系统的 `transactionId/refundNo/externalSupplierOrderNo/externalOperationNo` 按原始字符串保存。
 - 金额使用 `BIGINT` 最小货币单位和 `CHAR(3)` 币种；一期只允许 CNY，Java 领域值对象为 `Money(long amount, Currency currency)`。
 - 费率等未来精度值使用 `DECIMAL(18,8)`，禁止浮点数。
