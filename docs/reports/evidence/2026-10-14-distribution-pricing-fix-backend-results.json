@@ -1,0 +1,30 @@
+{
+  "date": "2026-10-14",
+  "timezone": "Asia/Shanghai",
+  "status": "local-gates-passed-not-deployed",
+  "totalTests": 2434,
+  "gates": [
+    {
+      "scope": "ordinaryArchitecture",
+      "tests": 2411,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "log": "/tmp/supplyhub-hide-fix-backend-full-unit.log"
+    },
+    {
+      "scope": "integrationContract",
+      "tests": 23,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "log": "/tmp/supplyhub-hide-fix-backend-integration-gate.log"
+    }
+  ],
+  "newSuites": {
+    "BuyerProductQueryServiceTest": 27,
+    "BuyerProductPricingReadContractTest": 6,
+    "BuyerProductPricingRoundtripIntegrationTest": 4
+  },
+  "review": "spec-and-quality-approved;production-Jackson-contract-refinement-tested"
+}

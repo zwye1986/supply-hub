@@ -1,0 +1,253 @@
+{
+  "date": "2026-10-14",
+  "timezone": "Asia/Shanghai",
+  "repository": "/Users/mac/codespace/supplychainhubweb",
+  "baselineHead": "21602fddb8157169e3e98adba2982327adbaaaaa",
+  "status": "affected-gates-passed-existing-full-suite-and-type-failures-not-deployed",
+  "newRoundtripTests": 87,
+  "affectedTests": {
+    "tests": 112,
+    "passed": 112,
+    "failed": 0,
+    "log": "/tmp/supplyhub-hide-fix-frontend-green.log"
+  },
+  "fullSuite": {
+    "tests": 328,
+    "passed": 327,
+    "failed": 1,
+    "cancelled": 0,
+    "skipped": 0,
+    "log": "/tmp/supplyhub-hide-fix-frontend-final-full.log",
+    "baselineTests": 241,
+    "baselinePassed": 240,
+    "baselineFailed": 1,
+    "baselineLog": "/tmp/supplyhub-hide-fix-frontend-baseline.log",
+    "sameBaselineFailure": "tests/routing-scope.test.mjs imports missing src/views/supplier/routing/rule/utils/constants.ts"
+  },
+  "eslint": {
+    "scope": [
+      "src/api/supplier/distribution/index.ts",
+      "src/api/supplier/distribution/types.ts",
+      "src/views/supplier/distribution/distributor/detail/DistributionPriceForm.vue",
+      "src/views/supplier/distribution/distributor/detail/ProductList.vue",
+      "src/views/supplier/distribution/distributor/detail/distributionPrice.ts"
+    ],
+    "exitCode": 0,
+    "log": "/tmp/supplyhub-hide-fix-frontend-eslint.log"
+  },
+  "typeCheck": {
+    "baselineCount": 54,
+    "finalCount": 53,
+    "comparisonMethod": "按源码路径及 TypeScript 错误码计数，不等同于逐条消息完全一致",
+    "added": [],
+    "removed": [
+      {
+        "path": "src/views/supplier/distribution/distributor/detail/DistributionPriceForm.vue",
+        "code": "TS2769",
+        "count": 1
+      }
+    ],
+    "finalDiagnostics": [
+      {
+        "path": "src/api/pricing/mock/index.ts",
+        "code": "TS2322",
+        "count": 4
+      },
+      {
+        "path": "src/api/product/index.ts",
+        "code": "TS2305",
+        "count": 1
+      },
+      {
+        "path": "src/api/supplier/manage/types.ts",
+        "code": "TS2300",
+        "count": 4
+      },
+      {
+        "path": "src/components/ProductType/index.vue",
+        "code": "TS2322",
+        "count": 1
+      },
+      {
+        "path": "src/layout/components/Message/src/Message.vue",
+        "code": "TS6133",
+        "count": 2
+      },
+      {
+        "path": "src/router/modules/remaining.ts",
+        "code": "TS6133",
+        "count": 1
+      },
+      {
+        "path": "src/utils/directive.ts",
+        "code": "TS2339",
+        "count": 2
+      },
+      {
+        "path": "src/views/Login/components/LoginForm.vue",
+        "code": "TS6133",
+        "count": 3
+      },
+      {
+        "path": "src/views/ai/chat/index/components/conversation/ConversationList.vue",
+        "code": "TS2304",
+        "count": 2
+      },
+      {
+        "path": "src/views/bpm/oa/leave/index.vue",
+        "code": "TS2304",
+        "count": 1
+      },
+      {
+        "path": "src/views/fms/report/components/FmsReportFormulaForm.vue",
+        "code": "TS2345",
+        "count": 2
+      },
+      {
+        "path": "src/views/iot/alert/record/index.vue",
+        "code": "TS2304",
+        "count": 1
+      },
+      {
+        "path": "src/views/mes/wm/barcode/components/PrinterLabel.vue",
+        "code": "TS2304",
+        "count": 1
+      },
+      {
+        "path": "src/views/mes/wm/barcode/config/BarcodeConfigForm.vue",
+        "code": "TS2304",
+        "count": 1
+      },
+      {
+        "path": "src/views/mes/wm/warehouse/location/LocationForm.vue",
+        "code": "TS2304",
+        "count": 2
+      },
+      {
+        "path": "src/views/supplier/config/components/ConnectorPanel.vue",
+        "code": "TS6133",
+        "count": 2
+      },
+      {
+        "path": "src/views/supplier/manage/detail/ProductSelectDialog.vue",
+        "code": "TS6133",
+        "count": 1
+      },
+      {
+        "path": "src/views/supplier/manage/detail/index.vue",
+        "code": "TS2322",
+        "count": 1
+      },
+      {
+        "path": "src/views/supplier/manage/detail/index.vue",
+        "code": "TS2367",
+        "count": 1
+      },
+      {
+        "path": "src/views/supplier/manage/form/index.vue",
+        "code": "TS2322",
+        "count": 1
+      },
+      {
+        "path": "src/views/supplier/manage/index.vue",
+        "code": "TS2322",
+        "count": 1
+      },
+      {
+        "path": "src/views/supplier/manage/index.vue",
+        "code": "TS2339",
+        "count": 1
+      },
+      {
+        "path": "src/views/supplier/order/platform/index.vue",
+        "code": "TS2322",
+        "count": 1
+      },
+      {
+        "path": "src/views/supplier/order/supplier/index.vue",
+        "code": "TS2322",
+        "count": 1
+      },
+      {
+        "path": "src/views/supplier/pricing/components/DistPriceDialog.vue",
+        "code": "TS2322",
+        "count": 1
+      },
+      {
+        "path": "src/views/supplier/pricing/components/DistPriceDialog.vue",
+        "code": "TS2367",
+        "count": 2
+      },
+      {
+        "path": "src/views/supplier/pricing/components/FormulaInput.vue",
+        "code": "TS2339",
+        "count": 1
+      },
+      {
+        "path": "src/views/supplier/pricing/components/TemplateForm.vue",
+        "code": "TS2322",
+        "count": 2
+      },
+      {
+        "path": "src/views/supplier/product/category/CategoryForm.vue",
+        "code": "TS2367",
+        "count": 1
+      },
+      {
+        "path": "src/views/supplier/product/list/form/index.vue",
+        "code": "TS2322",
+        "count": 2
+      },
+      {
+        "path": "src/views/supplier/product/list/form/index.vue",
+        "code": "TS6133",
+        "count": 4
+      },
+      {
+        "path": "src/views/supplier/product/list/index.vue",
+        "code": "TS2322",
+        "count": 1
+      },
+      {
+        "path": "src/views/supplier/product/type/index.vue",
+        "code": "TS6133",
+        "count": 1
+      }
+    ],
+    "exitCode": 2,
+    "baselineLog": "/tmp/supplyhub-hide-fix-types-baseline.log",
+    "finalLog": "/tmp/supplyhub-hide-fix-types-final.log",
+    "changedSourceDiagnostics": []
+  },
+  "sourceSha256": {
+    "src/api/supplier/distribution/index.ts": "e3cde7881d4712dc3e9076aed7873468fcdcfb9a2ce44026d6d90800cab47607",
+    "src/api/supplier/distribution/types.ts": "0ef87807179f0ced8ea31a7094d616cc6a42dfa9808dd531f1fcbae89d7b7761",
+    "src/views/supplier/distribution/distributor/detail/DistributionPriceForm.vue": "e088bd5a83392208c93c0f752f0c0b058d92f47ed464b79a84f346a1ff53e54f",
+    "src/views/supplier/distribution/distributor/detail/ProductList.vue": "16cb7d66768dad5d3b96a08340b08b607df44411f6ead468e4b68ed5ea8f2c84",
+    "src/views/supplier/distribution/distributor/detail/distributionPrice.ts": "e73c9b2cc6a0f69dab50b0495dc75ce7db39eb46554b5c44f2ac2a82b70a0d25"
+  },
+  "redEvidence": [
+    {
+      "log": "/tmp/supplyhub-hide-fix-frontend-red.log",
+      "tests": 55,
+      "failed": 52
+    },
+    {
+      "log": "/tmp/supplyhub-hide-fix-frontend-race-red.log",
+      "tests": 58,
+      "failed": 1
+    },
+    {
+      "log": "/tmp/supplyhub-hide-fix-frontend-review-red.log",
+      "tests": 80,
+      "failed": 20
+    },
+    {
+      "log": "/tmp/supplyhub-hide-fix-frontend-precision-red.log",
+      "tests": 87,
+      "failed": 6
+    }
+  ],
+  "review": "spec-and-quality-approved;combined-PUT-contract-reviewed",
+  "testFidelity": "真实 Vue SFC、TypeScript 校验和 API；HTTP、字典、Element UI 壳被隔离；未执行真实浏览器或远端联调。"
+}
