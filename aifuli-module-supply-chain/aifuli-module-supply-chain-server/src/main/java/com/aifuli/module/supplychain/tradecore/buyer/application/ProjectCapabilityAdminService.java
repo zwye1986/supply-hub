@@ -142,7 +142,7 @@ public class ProjectCapabilityAdminService {
         if (affected != 1) throw exception(PROJECT_CAPABILITY_VERSION_CONFLICT);
     }
 
-    private enum CapabilityState { NOT_ENABLED, ENABLED, DISABLED }
+    public enum CapabilityState { NOT_ENABLED, ENABLED, DISABLED }
 
     /** 管理展示状态不等于商品可售；version 无行为空，用于首次开通的并发比较。 */
     public record CapabilityView(String capabilityCode, String status, Long version,

@@ -64,6 +64,10 @@ public final class SupplyChainAdminPermissions {
 
     public static final String ORDER_QUERY = "supply-chain:order:query";
     public static final String ORDER_EXPORT = "supply-chain:order:export";
+    /** 真实标准订单录入及候选查询，独立于只读权限；见 2026-10-14-admin-order-entry-design.md §2。 */
+    public static final String ORDER_CREATE = "supply-chain:order:create";
+    public static final String ORDER_CREATE_EXPRESSION =
+            "@ss.hasAnyPermissions('" + ADMIN + "', '" + ORDER_CREATE + "')";
 
     /** 履约异常 Case 人工核实与失败关单权限；核实与动账分开，不与直充释放权限互通。 */
     public static final String FULFILLMENT_CASE_QUERY = "supply-chain:fulfillment-case:query";

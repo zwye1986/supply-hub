@@ -68,10 +68,12 @@ class SupplierCredentialAccessLogTest {
     }
 
 
-    /** JSON 字符串 extraConfig 内的秘密不能依赖普通 JSON 递归脱敏，成功与异常都直接透传原字节。 */
+    /** 受保护正文不能依赖普通 JSON 递归脱敏；管理录入目标同样不得进日志，成功与异常都透传原字节。 */
     @ParameterizedTest
     @ValueSource(strings = {"/admin-api/supply-chain/supplier-config/connectors/drafts",
-            "/supply-chain/supplier-config/connectors/drafts/child"})
+            "/supply-chain/supplier-config/connectors/drafts/child",
+            "/admin-api/supply-chain/orders/entry/projects/PRJ_1",
+            "/supply-chain/orders/entry/projects/PRJ_1"})
     void draftExtraConfigBodyResponseQueryAndFailureNeverEnterGatewayLogs(String path) {
         Logger logger = (Logger) LoggerFactory.getLogger(AccessLogFilter.class);
         ListAppender<ILoggingEvent> appender = new ListAppender<>();

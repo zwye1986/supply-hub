@@ -8,6 +8,24 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class ApiAccessLogPathUtilsTest {
 
+    /** 管理录入与标准开放下单使用相同目标正文，保护完整路径段且不能隐藏相邻普通接口。 */
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "/supply-chain/orders/entry/projects",
+            "/admin-api/supply-chain/orders/entry/projects"
+    })
+    void adminOrderEntryReusesStandardProtection(String root) {
+        for (String path : new String[]{root, root + "/PRJ_1", root + "/PRJ_1/products"}) {
+            assertThat(ApiAccessLogPathUtils.isStandardOrdersPath(path, "")).isTrue();
+            assertThat(ApiAccessLogPathUtils.isSensitivePlatformPath(path)).isTrue();
+            assertThat(ApiAccessLogPathUtils.isSensitiveProtectionPath("/sc" + path, "/sc")).isTrue();
+        }
+        assertThat(ApiAccessLogPathUtils.safeStandardOrderUrl(root + "/13800138000", ""))
+                .isEqualTo(root + "/[protected]");
+        assertThat(ApiAccessLogPathUtils.isSensitivePlatformPath(root + "-other")).isFalse();
+        assertThat(ApiAccessLogPathUtils.isSensitiveProtectionPath(root + "foo", "")).isFalse();
+    }
+
     /** 项目应用认证四组路径都可能携带凭据或业务正文，非生产访问日志必须整体省略参数。 */
     @ParameterizedTest
     @ValueSource(strings = {

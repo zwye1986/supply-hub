@@ -40,9 +40,11 @@ class GlobalExceptionHandlerStandardOrderTest {
         RequestContextHolder.resetRequestAttributes();
     }
 
-    @Test
-    void standardOrderParameterErrorMaskedAndSetsNoStore() {
-        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/open-api/supply-chain/project/v1/orders");
+    @ParameterizedTest
+    @ValueSource(strings = {"/open-api/supply-chain/project/v1/orders",
+            "/admin-api/supply-chain/orders/entry/projects/PRJ_1"})
+    void standardOrderParameterErrorMaskedAndSetsNoStore(String path) {
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", path);
         MockHttpServletResponse response = new MockHttpServletResponse();
         RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request, response));
 
@@ -82,9 +84,10 @@ class GlobalExceptionHandlerStandardOrderTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"v1", "v2"})
-    void standardOrderDefaultExceptionSanitizesUrlAndOmitsParamsInLog(String version) {
-        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/open-api/supply-chain/project/" + version + "/orders/13800138000");
+    @ValueSource(strings = {"/open-api/supply-chain/project/v1/orders",
+            "/open-api/supply-chain/project/v2/orders", "/admin-api/supply-chain/orders/entry/projects"})
+    void standardOrderDefaultExceptionSanitizesUrlAndOmitsParamsInLog(String root) {
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", root + "/13800138000");
         request.setParameter("secret", "123456");
         request.setContent("{\"sensitive\":\"data\"}".getBytes());
         MockHttpServletResponse response = new MockHttpServletResponse();
@@ -100,7 +103,7 @@ class GlobalExceptionHandlerStandardOrderTest {
         verify(apiErrorLogApi).createApiErrorLogAsync(captor.capture());
         ApiErrorLogCreateReqDTO logDto = captor.getValue();
 
-        assertThat(logDto.getRequestUrl()).isEqualTo("/open-api/supply-chain/project/" + version + "/orders/[protected]");
+        assertThat(logDto.getRequestUrl()).isEqualTo(root + "/[protected]");
         assertThat(logDto.getRequestParams()).isEqualTo("{}");
         assertThat(logDto.getExceptionMessage()).doesNotContain("internal failure with secret");
     }

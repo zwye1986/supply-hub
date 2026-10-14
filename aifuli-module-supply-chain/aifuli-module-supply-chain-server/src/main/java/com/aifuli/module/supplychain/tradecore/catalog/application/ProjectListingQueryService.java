@@ -283,7 +283,9 @@ public class ProjectListingQueryService {
                 finalPriceCents,
                 genericCovered ? PriceSource.L3.name() : frozen == null ? null : frozen.getSettlementPriceLevel(),
                 covered,
-                savedOverrides == null ? null : ProjectPricingConfigView.from(savedOverrides));
+                savedOverrides == null ? null : ProjectPricingConfigView.from(savedOverrides),
+                sku == null ? null : sku.getTargetSchemaCode(),
+                sku == null ? null : sku.getTargetSchemaVersion());
     }
 
     /** 当前版本未发布时返回 null；已发布却无法解析时保留异常因果，禁止伪造全继承配置。 */
@@ -305,6 +307,8 @@ public class ProjectListingQueryService {
     /**
      * 项目商品列表行。金额单位 CNY 分。
      * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#72-项目商品}。
+     * 目标 Schema 仅投影平台 SKU 主数据，不按分类推测，见
+     * docs/superpowers/specs/2026-10-14-admin-order-entry-design.md#3-http-契约。
      */
     @Schema(name = "ProjectListingListItem", description = "项目商品列表行；金额均为 CNY 分")
     public record ProjectListingListItem(
@@ -327,7 +331,9 @@ public class ProjectListingQueryService {
             @Schema(description = "项目分销价覆盖或旧冻结版本的结算层级：L1、L2、L3") String priceSource,
             @Schema(description = "当前通用项目分销价显式覆盖，或旧冻结版本结算层级为 L3") boolean projectPriceCovered,
             @Schema(description = "当前项目综合定价版本保存的五组继承开关及覆盖规则；无当前版本时为空")
-            ProjectPricingConfigView projectPricingConfig) {
+            ProjectPricingConfigView projectPricingConfig,
+            @Schema(description = "履约目标封闭Schema编码") String targetSchemaCode,
+            @Schema(description = "履约目标Schema版本") Integer targetSchemaVersion) {
     }
 
     /**

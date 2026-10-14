@@ -31,6 +31,23 @@ public class BuyerProjectAccessResolver {
     private final BuyerProjectMapper projectMapper;
 
     /**
+     * 管理端按永久编码读取 ACTIVE 项目的真实归属；买方身份只来自 sc_* 主数据，不能由请求指定。
+     * 编排门面仍按主键再次检查归属，见
+     * docs/superpowers/specs/2026-10-14-admin-order-entry-design.md#2-身份权限与共享命令。
+     */
+    public ProjectSnapshot requireActiveByCode(String projectCode) {
+        if (projectCode == null || projectCode.isBlank()) {
+            throw exception(PROJECT_NOT_FOUND);
+        }
+        BuyerProjectDO project = projectMapper.selectByProjectCode(projectCode);
+        if (project == null || project.getBuyerId() == null || !isActiveAndMatchesBuyer(project, project.getBuyerId())) {
+            throw exception(PROJECT_NOT_FOUND);
+        }
+        return new ProjectSnapshot(project.getId(), project.getProjectCode(),
+                project.getProjectName(), project.getBuyerId());
+    }
+
+    /**
      * 校验项目存在、启用且属于指定采购商，返回项目快照。
      *
      * <p>只读操作，不推进项目状态；projectId/buyerId 缺失同样返回 001，

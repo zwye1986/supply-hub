@@ -192,6 +192,15 @@ class StandardProjectHttpClosureIntegrationTest {
         redisConfig.useSingleServer().setAddress("redis://" + ORDER_REDIS.getHost() + ":" + ORDER_REDIS.getMappedPort(6379));
         orderRedisClient = org.redisson.Redisson.create(redisConfig);
         server = new SpringApplicationBuilder(SupplyChainServerApplication.class, TestOverrides.class)
+                // 真实进程只扫描生产组件；其它测试的裸 @Configuration 不得污染 HTTP fixture。
+                .initializers(context -> context.getBeanFactory().registerSingleton("httpFixtureTypeExcludeFilter",
+                        new org.springframework.boot.context.TypeExcludeFilter() {
+                            @Override
+                            public boolean match(org.springframework.core.type.classreading.MetadataReader reader,
+                                                 org.springframework.core.type.classreading.MetadataReaderFactory factory) {
+                                return reader.getResource().toString().contains("/test-classes/");
+                            }
+                        }))
                 .run(commandLineArguments());
         WebServerApplicationContext webContext = (WebServerApplicationContext) server;
         int port = webContext.getWebServer().getPort();
@@ -232,6 +241,211 @@ class StandardProjectHttpClosureIntegrationTest {
     private static volatile String interruptBeforeAcceptance;
     /** 首冻独立事务已提交、最终受理事务执行时的一次性可重试拒绝标记，用于模拟最终受理阶段失败保留报价。 */
     private static volatile String failAcceptanceOnce;
+
+    private static final String ENTRY_PATH = "/admin-api/supply-chain/orders/entry/projects";
+    private static final long ENTRY_USER = 81L;
+    private static final long READ_USER = 82L;
+    private static final long ADMIN_USER = 83L;
+
+    /**
+     * 管理端沿真实 HTTP/方法权限及格式3受理链路，双向跨入口回放不重复冻结、资金与 Outbox。
+     * 设计见 docs/superpowers/specs/2026-10-14-admin-order-entry-design.md#6-验证与联调。
+     */
+    @Test
+    void adminEntryAcceptsAndSharesV2PermanentIdentity() {
+        String buyerOrderNo = "ADMIN-ENTRY-" + UNIQUE_SEQ.incrementAndGet();
+        String body = v2VoucherBody(buyerOrderNo, SKU_VOUCHER_CODE);
+        long reservationsBefore = jdbc.queryForObject("SELECT COUNT(*) FROM sc_fund_reservation", Long.class);
+        long outboxBefore = jdbc.queryForObject("SELECT COUNT(*) FROM sc_outbox_event", Long.class);
+        long quotesBefore = jdbc.queryForObject("SELECT COUNT(*) FROM sc_standard_pricing_quote", Long.class);
+        var first = adminHttp(HttpMethod.POST, ENTRY_PATH + "/" + PROJECT_A_CODE, body, ENTRY_USER);
+        assertThat(first.getCode()).isZero();
+        assertThat(first.getData().get("receiptStatus")).isEqualTo("ACCEPTED");
+        long reservations = jdbc.queryForObject("SELECT COUNT(*) FROM sc_fund_reservation", Long.class);
+        long outbox = jdbc.queryForObject("SELECT COUNT(*) FROM sc_outbox_event", Long.class);
+        long quotes = jdbc.queryForObject("SELECT COUNT(*) FROM sc_standard_pricing_quote", Long.class);
+        assertThat(reservations).isEqualTo(reservationsBefore + 1);
+        assertThat(outbox).isGreaterThan(outboxBefore);
+        assertThat(quotes).isEqualTo(quotesBefore + 1);
+        var replay = adminHttp(HttpMethod.POST, ENTRY_PATH + "/" + PROJECT_A_CODE, body, ENTRY_USER);
+        assertThat(replay.getCode()).isZero();
+        assertThat(replay.getData().get("idempotentReplay")).isEqualTo(true);
+        assertThat(replay.getData().get("requestId")).isEqualTo(first.getData().get("requestId"));
+        assertThat(postSignedForBody(V2_PATH, body, "admin-v2-" + UNIQUE_SEQ.incrementAndGet()).get("orderNo"))
+                .isEqualTo(first.getData().get("orderNo"));
+        var conflict = adminHttp(HttpMethod.POST, ENTRY_PATH + "/" + PROJECT_A_CODE,
+                body.replace("BUYER_ASSET_QUERY", "OTHER_DELIVERY"), ENTRY_USER);
+        assertThat(conflict.getCode()).isEqualTo(com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.IDEMPOTENCY_CONFLICT.getCode());
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_fund_reservation", Long.class)).isEqualTo(reservations);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_outbox_event", Long.class)).isEqualTo(outbox);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_standard_pricing_quote", Long.class)).isEqualTo(quotes);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_supply_chain_order WHERE project_id=? AND buyer_order_no=?",
+                Long.class, PROJECT_A_ID, buyerOrderNo)).isEqualTo(1);
+
+        String openBody = v2VoucherBody("OPEN-ADMIN-" + UNIQUE_SEQ.incrementAndGet(), SKU_VOUCHER_CODE);
+        var open = postSignedForBody(V2_PATH, openBody, "open-admin-" + UNIQUE_SEQ.incrementAndGet());
+        var adminReplay = adminHttp(HttpMethod.POST, ENTRY_PATH + "/" + PROJECT_A_CODE, openBody, ADMIN_USER);
+        assertThat(adminReplay.getCode()).isZero();
+        assertThat(adminReplay.getData().get("orderNo")).isEqualTo(open.get("orderNo"));
+        assertThat(adminReplay.getData().get("idempotentReplay")).isEqualTo(true);
+        String legacyNo = "LEGACY-ADMIN-" + UNIQUE_SEQ.incrementAndGet();
+        assertThat(postVoucherCreate(legacyNo, null).getCode()).isZero();
+        assertThat(adminHttp(HttpMethod.POST, ENTRY_PATH + "/" + PROJECT_A_CODE,
+                v2VoucherBody(legacyNo, SKU_VOUCHER_CODE), ENTRY_USER).getCode())
+                .isEqualTo(com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.IDEMPOTENCY_CONFLICT.getCode());
+        assertThat(adminHttp(HttpMethod.POST, ENTRY_PATH + "/" + PROJECT_A_CODE,
+                v2VoucherBody("SUPERSET-" + UNIQUE_SEQ.incrementAndGet(), SKU_VOUCHER_CODE), ADMIN_USER)
+                .getData().get("receiptStatus")).isEqualTo("ACCEPTED");
+    }
+
+    /** 独立结算只改变资金方，不改变项目关联分销商的目录、订单归属或永久键，见管理录入设计 §2、§6。 */
+    @Test
+    void adminEntryUsesProjectSettlementBuyerForFundsOnly() {
+        String settlementCode = server.getBean(BuyerCommandService.class).createBuyer(
+                new BuyerCommandService.CreateBuyerCommand(null, "录入独立结算方", "录入独立结算方", null, null,
+                        SOURCE_SYSTEM, "admin-settlement-" + UNIQUE_SEQ.incrementAndGet(), LocalDateTime.now(ZoneOffset.UTC), 1L));
+        Long settlementId = server.getBean(BuyerMapper.class).selectByBuyerCode(settlementCode).getId();
+        server.getBean(BuyerAccountOpeningService.class).open(new BuyerAccountOpeningService.OpeningBalanceCommand(
+                settlementCode, Money.cny(25_000L), 1L, "evidence://admin-entry", new byte[32],
+                "管理录入独立结算方测试", "trace-admin-settlement", null));
+        long buyerFrozen = jdbc.queryForObject("SELECT frozen FROM sc_buyer_account WHERE buyer_id=?", Long.class, BUYER_ID);
+        jdbc.update("UPDATE sc_buyer_project SET settlement_buyer_id=? WHERE id=?", settlementId, PROJECT_B_ID);
+        try {
+            String body = v2VoucherBody("ADMIN-SETTLE-" + UNIQUE_SEQ.incrementAndGet(), SKU_VOUCHER_CODE);
+            var result = adminHttp(HttpMethod.POST, ENTRY_PATH + "/" + PROJECT_B_CODE, body, ENTRY_USER);
+            assertThat(result.getCode()).isZero();
+            assertThat(result.getData().get("receiptStatus")).isEqualTo("ACCEPTED");
+            String orderNo = (String) result.getData().get("orderNo");
+            assertThat(jdbc.queryForObject("SELECT buyer_id FROM sc_supply_chain_order WHERE order_no=?", Long.class, orderNo)).isEqualTo(BUYER_ID);
+            var request = jdbc.queryForMap("SELECT r.request_no,r.settlement_buyer_id FROM sc_fulfillment_request r JOIN sc_supply_chain_order o ON o.id=r.order_id WHERE o.order_no=?", orderNo);
+            assertThat(((Number) request.get("settlement_buyer_id")).longValue()).isEqualTo(settlementId);
+            var reservation = jdbc.queryForMap("SELECT buyer_id,total_amount FROM sc_fund_reservation WHERE reference_no=?", request.get("request_no"));
+            assertThat(((Number) reservation.get("buyer_id")).longValue()).isEqualTo(settlementId);
+            long amount = ((Number) reservation.get("total_amount")).longValue();
+            assertThat(amount).isPositive();
+            assertThat(jdbc.queryForObject("SELECT frozen FROM sc_buyer_account WHERE buyer_id=?", Long.class, settlementId)).isEqualTo(amount);
+            assertThat(jdbc.queryForObject("SELECT frozen FROM sc_buyer_account WHERE buyer_id=?", Long.class, BUYER_ID)).isEqualTo(buyerFrozen);
+            var replay = adminHttp(HttpMethod.POST, ENTRY_PATH + "/" + PROJECT_B_CODE, body, ENTRY_USER);
+            assertThat(replay.getData().get("idempotentReplay")).isEqualTo(true);
+            assertThat(jdbc.queryForObject("SELECT frozen FROM sc_buyer_account WHERE buyer_id=?", Long.class, settlementId)).isEqualTo(amount);
+            var page = adminHttp(HttpMethod.GET, ENTRY_PATH + "?projectName=" + PROJECT_B_CODE, null, ENTRY_USER);
+            assertThat(((Map<?, ?>) ((List<?>) page.getData().get("list")).getFirst()).get("settlementBuyerCode")).isEqualTo(settlementCode);
+        } finally {
+            jdbc.update("UPDATE sc_buyer_project SET settlement_buyer_id=NULL WHERE id=?", PROJECT_B_ID);
+        }
+    }
+
+    @Test
+    void adminEntryCandidatesRequireCreatePermissionAndUseRealSkuSchemas() {
+        for (Long user : new Long[]{null, READ_USER}) {
+            int expected = user == null ? 401 : 403;
+            assertThat(adminHttp(HttpMethod.GET, ENTRY_PATH, null, user).getCode()).isEqualTo(expected);
+            assertThat(adminHttp(HttpMethod.GET, ENTRY_PATH + "/" + PROJECT_A_CODE + "/products", null, user).getCode()).isEqualTo(expected);
+            assertThat(adminHttp(HttpMethod.POST, ENTRY_PATH + "/" + PROJECT_A_CODE,
+                    v2VoucherBody("DENIED-" + UNIQUE_SEQ.incrementAndGet(), SKU_VOUCHER_CODE), user).getCode()).isEqualTo(expected);
+        }
+        jdbc.update("UPDATE sc_buyer_project SET status=20 WHERE id=?", PROJECT_B_ID);
+        try {
+            var page = adminHttp(HttpMethod.GET, ENTRY_PATH + "?projectName=PRJ_CLOSURE&pageNo=1&pageSize=1", null, ENTRY_USER);
+            assertThat(page.getCode()).isZero();
+            assertThat(((Number) page.getData().get("total")).intValue()).isEqualTo(1);
+            var rows = (List<?>) page.getData().get("list");
+            assertThat(rows).hasSize(1);
+            assertThat(((Map<?, ?>) rows.getFirst()).get("projectCode")).isEqualTo(PROJECT_A_CODE);
+            assertThat(((Map<?, ?>) rows.getFirst()).get("status")).isEqualTo("ACTIVE");
+        } finally {
+            jdbc.update("UPDATE sc_buyer_project SET status=10 WHERE id=?", PROJECT_B_ID);
+        }
+        var second = adminHttp(HttpMethod.GET, ENTRY_PATH + "?projectName=PRJ_CLOSURE&pageNo=2&pageSize=1", null, ENTRY_USER);
+        assertThat(((Number) second.getData().get("total")).intValue()).isEqualTo(2);
+        assertThat((List<?>) second.getData().get("list")).hasSize(1);
+        var products = adminHttp(HttpMethod.GET, ENTRY_PATH + "/" + PROJECT_A_CODE + "/products?pageNo=1&pageSize=20", null, ENTRY_USER);
+        assertThat(products.getCode()).isZero();
+        assertThat((List<?>) products.getData().get("list")).hasSize(2);
+        for (Object row : (List<?>) products.getData().get("list")) {
+            Map<?, ?> item = (Map<?, ?>) row;
+            var sku = server.getBean(PlatformSkuMapper.class).selectByCode((String) item.get("platformSkuCode"));
+            assertThat(item.get("targetSchemaCode")).isEqualTo(sku.getTargetSchemaCode());
+            assertThat(((Number) item.get("targetSchemaVersion")).intValue()).isEqualTo(sku.getTargetSchemaVersion());
+            for (String secret : List.of("appId", "appKey", "secretRef")) {
+                assertThat(item.containsKey(secret)).isFalse();
+            }
+        }
+        // 同商品 classification 不同目标 Schema：直充不能从分类 VIRTUAL_CARD 猜成卡券。
+        assertThat(server.getBean(PlatformSkuMapper.class).selectByCode(SKU_DIRECT_CODE).getTargetSchemaCode())
+                .isEqualTo("DIRECT_RECHARGE_TARGET");
+        assertThat(adminHttp(HttpMethod.GET, "/admin-api/supply-chain/projects", null, ENTRY_USER).getCode()).isEqualTo(403);
+    }
+
+    @Test
+    void adminEntryRejectsInactiveProjectAndDisabledOrMissingCapability() {
+        String body = v2VoucherBody("ADMIN-STATE-" + UNIQUE_SEQ.incrementAndGet(), SKU_VOUCHER_CODE);
+        String path = ENTRY_PATH + "/" + PROJECT_A_CODE;
+        jdbc.update("UPDATE sc_buyer_project SET status=20 WHERE id=?", PROJECT_A_ID);
+        try {
+            assertThat(adminHttp(HttpMethod.POST, path, body, ENTRY_USER).getCode()).isEqualTo(
+                    com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PROJECT_NOT_FOUND.getCode());
+            assertThat(adminHttp(HttpMethod.GET, path + "/products", null, ENTRY_USER).getCode()).isEqualTo(
+                    com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PROJECT_NOT_FOUND.getCode());
+        } finally {
+            jdbc.update("UPDATE sc_buyer_project SET status=10 WHERE id=?", PROJECT_A_ID);
+        }
+        jdbc.update("UPDATE sc_project_capability SET status=20 WHERE project_id=? AND capability_code='STANDARD_PRODUCT'", PROJECT_A_ID);
+        try {
+            assertThat(adminHttp(HttpMethod.POST, path, body, ENTRY_USER).getCode()).isEqualTo(BUYER_AUTH_INVALID.getCode());
+            assertThat(adminHttp(HttpMethod.GET, path + "/products", null, ENTRY_USER).getCode()).isEqualTo(BUYER_AUTH_INVALID.getCode());
+            jdbc.update("DELETE FROM sc_project_capability WHERE project_id=? AND capability_code='STANDARD_PRODUCT'", PROJECT_A_ID);
+            assertThat(adminHttp(HttpMethod.POST, path, body, ENTRY_USER).getCode()).isEqualTo(BUYER_AUTH_INVALID.getCode());
+        } finally {
+            jdbc.update("DELETE FROM sc_project_capability WHERE project_id=? AND capability_code='STANDARD_PRODUCT'", PROJECT_A_ID);
+            jdbc.update("INSERT INTO sc_project_capability(project_id,capability_code,status,version,created_at,updated_at) VALUES (?,'STANDARD_PRODUCT',10,0,NOW(3),NOW(3))", PROJECT_A_ID);
+        }
+    }
+
+    @Test
+    void adminEntryStrictJsonRejectsBeforeClaimOrFreeze() {
+        String body = v2VoucherBody("ADMIN-JSON-" + UNIQUE_SEQ.incrementAndGet(), SKU_VOUCHER_CODE);
+        long receipts = jdbc.queryForObject("SELECT COUNT(*) FROM sc_fulfillment_acceptance_receipt", Long.class);
+        long quotes = jdbc.queryForObject("SELECT COUNT(*) FROM sc_standard_pricing_quote", Long.class);
+        for (String invalid : List.of(
+                body.replace("\"quantity\":1", "\"quantity\":\"1\""),
+                body.replace("\"quantity\":1", "\"quantity\":2"),
+                body.replace("\"quantity\":1", "\"quantity\":1.0"),
+                body.replace("\"quantity\":1", "\"quantity\":1,\"quantity\":1"),
+                body.replace("\"quantity\":1", "\"quantity\":1,\"buyerId\":9500001"),
+                body.replace("\"platformSkuCode\"", "\"buyerSkuCode\""),
+                body.replace("\"quantity\":1", "\"quantity\":1,\"previousReceiptVersion\":\"1\""),
+                body.replace("\"quantity\":1", "\"quantity\":1,\"previousReceiptVersion\":0"),
+                body.replace("\"BUYER_ASSET_QUERY\"", "null"),
+                body.replace("\"deliveryMode\":\"BUYER_ASSET_QUERY\"", "\"deliveryMode\":\"BUYER_ASSET_QUERY\",\"deliveryMode\":\"BUYER_ASSET_QUERY\""),
+                body + "{}", body.replace("\"BUYER_ASSET_QUERY\"", "123"))) {
+            assertThat(adminHttp(HttpMethod.POST, ENTRY_PATH + "/" + PROJECT_A_CODE, invalid, ENTRY_USER).getCode())
+                    .as(invalid).isEqualTo(400);
+        }
+        assertThat(adminHttp(HttpMethod.POST, ENTRY_PATH + "/" + PROJECT_A_CODE + "?unexpected=1", body, ENTRY_USER).getCode()).isEqualTo(400);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_fulfillment_acceptance_receipt", Long.class)).isEqualTo(receipts);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_standard_pricing_quote", Long.class)).isEqualTo(quotes);
+    }
+
+    /** 经真实认证 Filter 读取网关透传管理员，租户相同且由真实 ss 组件执行 RBAC，不能用跨租户免权限。 */
+    private static CommonResult<Map<String, Object>> adminHttp(HttpMethod method, String path, String body, Long userId) {
+        HttpHeaders headers = httpHeadersWithJsonOnly();
+        if (userId != null) {
+            String login = "{\"id\":" + userId + ",\"userType\":2,\"tenantId\":1,\"visitTenantId\":1}";
+            headers.set("login-user", java.net.URLEncoder.encode(login, StandardCharsets.UTF_8));
+        }
+        try {
+            return REST.exchange(baseUrl + path, method,
+                    new HttpEntity<>(body == null ? null : body.getBytes(StandardCharsets.UTF_8), headers),
+                    new ParameterizedTypeReference<CommonResult<Map<String, Object>>>() {}).getBody();
+        } catch (org.springframework.web.client.HttpStatusCodeException ex) {
+            try {
+                return objectMapper.readValue(ex.getResponseBodyAsByteArray(), new com.fasterxml.jackson.core.type.TypeReference<>() {});
+            } catch (java.io.IOException parseFailure) {
+                throw new IllegalStateException("无法解析管理端HTTP响应", parseFailure);
+            }
+        }
+    }
 
     @Test
     void platformSkuV2FreezesIdentityAndSharesPermanentKeyWithV1() {
@@ -2464,6 +2678,21 @@ class StandardProjectHttpClosureIntegrationTest {
     @Profile("project-http-closure-it")
     @Configuration(proxyBeanMethods = false)
     static class TestOverrides {
+        @Bean
+        @Primary
+        com.aifuli.framework.common.biz.system.permission.PermissionCommonApi adminPermissions() {
+            var api = mock(com.aifuli.framework.common.biz.system.permission.PermissionCommonApi.class);
+            when(api.hasAnyPermissions(anyLong(), org.mockito.ArgumentMatchers.any(String[].class)))
+                    .thenAnswer(invocation -> {
+                        long id = invocation.getArgument(0, Long.class);
+                        String grant = id == ENTRY_USER ? "supply-chain:order:create"
+                                : id == ADMIN_USER ? "supply-chain:admin" : "supply-chain:order:query";
+                        return CommonResult.success(java.util.Arrays.stream((String[]) invocation.getRawArguments()[1])
+                                .anyMatch(grant::equals));
+                    });
+            return api;
+        }
+
         /** 明确提供真实隔离Redis，生产发号配置仍复用此Bean；不加入生产降级。 */
         @Bean
         org.redisson.api.RedissonClient orderNoRedisClient() { return orderRedisClient; }

@@ -111,6 +111,8 @@ public class ProjectAdminController {
                   "finalPriceCents": 9800,
                   "priceSource": "L3",
                   "projectPriceCovered": true,
+                  "targetSchemaCode": "VOUCHER_DELIVERY_TARGET",
+                  "targetSchemaVersion": 1,
                   "projectPricingConfig": {
                     "distributionInherited": false,
                     "distributionRule": {

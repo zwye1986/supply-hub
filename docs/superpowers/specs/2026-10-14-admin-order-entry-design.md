@@ -18,6 +18,8 @@
 
 共享编排内部改接收项目和分销商 ID；开放接口仍先校验原 StandardProductContext 操作码，再取其 ID。管理端使用独立 `createFromAdmin(ProjectSnapshot, request)` 入口，不构造假 appId/keyVersion，不把管理员伪装为项目应用，也不在 Facade 访问 DAL。控制器记录管理员 ID、项目编码、项目订单号及受理结果，不记录账号明文、密钥或资产。
 
+管理录入的正文与开放标准订单相同，必须进入共享 `ApiAccessLogPathUtils` 标准订单保护根集合，包含 `/supply-chain/orders/entry/projects` 与 `/admin-api/supply-chain/orders/entry/projects` 的精确根及子路径。复用现有请求/响应正文省略、no-store、安全异常与安全 URL 规则；相似 `projects-other` 不命中，不调整其它业务的敏感策略。共享 common、web 与网关直接受影响回归纳入验证。
+
 最终受理复用现有目录准备、首次报价独立短事务、受理事务、限购/限频、路由、资金预留及 Outbox。永久键仍为 `(projectId,buyerOrderNo)`，同平台 SKU 契约的开放接口与管理端同参回放、异参冲突；旧格式2订单同键冲突。ACCEPTED 仅为已受理，PROCESSING 及两类拒绝保留真实回执，不能显示履约成功。
 
 ## 3. HTTP 契约
@@ -43,6 +45,8 @@
 项目订单号打开弹窗时使用浏览器 UUID 生成 `ADMIN_` 前缀值，可修改、可重新生成；提交或网络失败后不自动换号，不因刷新产生第二单。切换项目清空商品、账号及回执；候选异步返回以当前项目/请求序号裁决，旧响应不能覆盖新项目。
 
 数量只读1。VOUCHER_DELIVERY_TARGET 自动发送 BUYER_ASSET_QUERY，无账号输入；DIRECT_RECHARGE_TARGET 与 ACCOUNT_BOUND_BENEFIT_TARGET 展示 MOBILE/EXTERNAL_ACCOUNT 类型和账号输入。Schema 版本仅支持1。提交前明确确认“真实资金预留与供应商履约”，取消不发请求；提交期间禁止重复点击或关闭。
+
+项目订单号最多128字符，履约账号沿严格 HTTP parser 的128字符上限（即使底层 Schema 的上限更大，也不能在录入页放宽当前 HTTP 契约）。可重试回执版本必须为正整数。CAS 尝试超时后清除旧回执并保留请求身份，普通同号重发读取当前权威回执，不携带可能过期的旧 CAS。
 
 已受理刷新平台列表并保留订单号供打开详情。未受理显示真实状态与拒绝码，表单保留。可重试拒绝使用明确按钮携带当前 receiptVersion 做 CAS 原单重试，不自动重试或更换订单号；处理中新提交同号查询/续跑，不宣称成功。提交抛出网络/系统错误提示结果可能未知、应保留同号重试或查单。用户修改商品/目标/订单号后清空旧回执，避免携带旧 CAS。
 

@@ -90,7 +90,7 @@ public class ProjectStandardOrderCommandFacade {
      */
     public ProjectStandardOrderCreateRespDTO create(StandardProductContext context, ProjectStandardOrderCreateReqDTO request) {
         validateContext(context);
-        return createPrepared(context, request, null);
+        return createPrepared(context.projectId(), context.buyerId(), request, null);
     }
 
     /**
@@ -101,26 +101,41 @@ public class ProjectStandardOrderCommandFacade {
         if (context == null || !ProjectAuthOperations.STANDARD_ORDER_CREATE_V2.equals(context.operationCode())) {
             throw exception(BUYER_AUTH_INVALID);
         }
+        return createPlatformSku(context.projectId(), context.buyerId(), request);
+    }
+
+    /**
+     * 管理端独立身份入口：仅接收服务端解析的项目快照，不伪造应用凭证；共享编排再次校验归属与分销商状态。
+     * 永久格式3幂等、首冻与受理事务不区分入口，见
+     * docs/superpowers/specs/2026-10-14-admin-order-entry-design.md#2-身份权限与共享命令。
+     */
+    public ProjectStandardOrderCreateRespDTO createFromAdmin(ProjectSnapshot project, ProjectPlatformSkuOrderCreateReqDTO request) {
+        if (project == null) { throw exception(BUYER_AUTH_INVALID); }
+        return createPlatformSku(project.projectId(), project.buyerId(), request);
+    }
+
+    private ProjectStandardOrderCreateRespDTO createPlatformSku(Long projectId, Long buyerId,
+                                                               ProjectPlatformSkuOrderCreateReqDTO request) {
         if (request == null) { throw exception(GlobalErrorCodeConstants.BAD_REQUEST); }
         ProjectStandardOrderCreateReqDTO internal = new ProjectStandardOrderCreateReqDTO();
         internal.setBuyerOrderNo(request.getBuyerOrderNo());
         internal.setQuantity(request.getQuantity());
         internal.setTarget(request.getTarget());
         internal.setPreviousReceiptVersion(request.getPreviousReceiptVersion());
-        return createPrepared(context, internal, request.getPlatformSkuCode());
+        return createPrepared(projectId, buyerId, internal, request.getPlatformSkuCode());
     }
 
-    private ProjectStandardOrderCreateRespDTO createPrepared(StandardProductContext context,
+    private ProjectStandardOrderCreateRespDTO createPrepared(Long projectId, Long buyerId,
             ProjectStandardOrderCreateReqDTO request, String requestedPlatformSkuCode) {
         if (request == null) {
             throw exception(GlobalErrorCodeConstants.BAD_REQUEST);
         }
 
-        log.info("[标准下单][facade] create 入口 projectId={}, buyerId={}, buyerOrderNo={}, buyerSkuCode={}, quantity={}",
-                context.projectId(), context.buyerId(), request.getBuyerOrderNo(), request.getBuyerSkuCode(), request.getQuantity());
+        log.info("[standardOrderCreate][标准下单入口] projectId={}, buyerId={}, buyerOrderNo={}, buyerSkuCode={}, quantity={}",
+                projectId, buyerId, request.getBuyerOrderNo(), request.getBuyerSkuCode(), request.getQuantity());
 
-        ProjectSnapshot project = projectAccessResolver.requireActive(context.projectId(), context.buyerId());
-        BuyerSnapshot buyer = buyerResolver.requireActiveById(context.buyerId());
+        ProjectSnapshot project = projectAccessResolver.requireActive(projectId, buyerId);
+        BuyerSnapshot buyer = buyerResolver.requireActiveById(buyerId);
         // 当前Schema/目录解析前先读冻结回执身份：已受理同参与PROCESSING/可重试续跑均用冻结SKU/Schema
         // 计算各自格式2/3指纹，不因当前商品删除、Schema/价格变化、目录暂停或供给变化变成冲突。
         // 设计见 docs/superpowers/specs/2026-10-12-platform-sku-order-contract-design.md#41-冻结优先。

@@ -178,6 +178,18 @@ class SupplyChainAdminPermissionContractTest {
         assertThat(ORDER_QUERY_EXPRESSION).contains("supply-chain:admin", "supply-chain:order:query");
     }
 
+    /** 录入及候选查询只认独立 create 权限，不要求项目 query；见管理录入设计 §2。 */
+    @Test
+    void orderEntryMethodsUseCreatePermissionWithAdminFallback() {
+        assertMethodPermissions(OrderEntryAdminController.class, Map.of(
+                "projects", SupplyChainAdminPermissions.ORDER_CREATE_EXPRESSION,
+                "products", SupplyChainAdminPermissions.ORDER_CREATE_EXPRESSION,
+                "create", SupplyChainAdminPermissions.ORDER_CREATE_EXPRESSION));
+        assertThat(SupplyChainAdminPermissions.ORDER_CREATE_EXPRESSION)
+                .contains("supply-chain:admin", "supply-chain:order:create")
+                .doesNotContain("supply-chain:order:query", "supply-chain:project:query");
+    }
+
     @Test
     void unseparatedControllersRemainAdminOnly() {
         assertThat(BuyerAccountAdminController.class.getAnnotation(PreAuthorize.class).value())

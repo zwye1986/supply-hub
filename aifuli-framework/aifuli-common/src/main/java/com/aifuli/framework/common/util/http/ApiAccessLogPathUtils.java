@@ -22,7 +22,15 @@ public final class ApiAccessLogPathUtils {
      * 设计见 docs/superpowers/specs/2026-10-12-platform-sku-order-contract-design.md#7-端到端安全接线。
      */
     public static final String STANDARD_ORDERS_V2_PATH = "/open-api/supply-chain/project/v2/orders";
-    private static final String[] STANDARD_ORDER_ROOTS = {STANDARD_ORDERS_PATH, STANDARD_ORDERS_V2_PATH};
+
+    /** 管理录入复用标准订单正文与异常保护；不得因没有应用签名而记录履约账号。
+     * 设计见 docs/superpowers/specs/2026-10-14-admin-order-entry-design.md#2-身份权限与共享命令。
+     */
+    public static final String ADMIN_ORDER_ENTRY_PATH = "/supply-chain/orders/entry/projects";
+    private static final String[] STANDARD_ORDER_ROOTS = {
+            STANDARD_ORDERS_PATH, STANDARD_ORDERS_V2_PATH,
+            ADMIN_ORDER_ENTRY_PATH, "/admin-api" + ADMIN_ORDER_ENTRY_PATH
+    };
 
     /**
      * 华昇供应商回调根路径。
