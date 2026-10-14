@@ -82,6 +82,14 @@ public class SupplyChainOrderSummaryRespDTO implements Serializable {
     @Schema(description = "公共主状态：0已创建，10处理中，20部分成功，30成功，40失败，50已取消，90人工处理", requiredMode = Schema.RequiredMode.REQUIRED, example = "PROCESSING")
     private SupplyChainOrderStatus orderStatus;
 
+    /** 履约失败稳定原因码；历史缺失为空，不改变受理状态 */
+    @Schema(description = "履约失败稳定原因码；可选")
+    private String failureReasonCode;
+
+    /** 履约失败脱敏说明；不包含供应商价格、账号、凭据或内部Case */
+    @Schema(description = "履约失败脱敏说明；可选")
+    private String failureReasonNote;
+
     /** 售后状态：0无售后，10处理中，20部分退款，30全部退款，90人工处理 */
     @Schema(description = "售后状态：0无售后，10处理中，20部分退款，30全部退款，90人工处理", requiredMode = Schema.RequiredMode.REQUIRED, example = "NONE")
     private SupplyChainAftersaleStatus aftersaleStatus;

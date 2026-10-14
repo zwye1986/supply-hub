@@ -2,6 +2,7 @@ package com.aifuli.module.supplychain.border.fulfillment.application.huashengflo
 
 import com.aifuli.module.supplychain.border.fulfillment.domain.FulfillmentInternalOnlySerializer;
 import com.aifuli.module.supplychain.border.fulfillment.domain.FulfillmentProtocolFact;
+import com.aifuli.module.supplychain.supplieradapter.huasheng.protocol.HuashengSecurityReason;
 import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 
 import java.util.List;
@@ -70,6 +71,12 @@ public final class HuashengStepFact implements FulfillmentProtocolFact {
     private final IsTake isTake;
     private final byte[] protectedAssetPayload;
     private final List<AttemptObservation> attempts;
+    /** 本次调用最终业务错误码；无业务响应（HTTP/网络/解析/准备失败）时为 null。设计：2026-10-13 华昇错误分类设计 §4.1。 */
+    private final Integer rawErrorCode;
+    /** 66 安全校验拒绝的受控原因分类；仅匹配官方固定提示，未匹配为 null。 */
+    private final HuashengSecurityReason securityReason;
+    /** 供应商诊断编号；仅接收无控制字符且不超过128字符的合法编号，不替换平台 traceId。 */
+    private final String supplierTraceId;
 
     public HuashengStepFact(
             Endpoint endpoint,
@@ -85,6 +92,27 @@ public final class HuashengStepFact implements FulfillmentProtocolFact {
             byte[] protectedAssetPayload,
             List<AttemptObservation> attempts
     ) {
+        this(endpoint, resultClass, outOrderSn, orderSn, num, totalPriceRaw, totalPriceMinorUnits,
+                status, refundStatus, isTake, protectedAssetPayload, attempts, null, null, null);
+    }
+
+    public HuashengStepFact(
+            Endpoint endpoint,
+            StepResult resultClass,
+            String outOrderSn,
+            String orderSn,
+            int num,
+            String totalPriceRaw,
+            Long totalPriceMinorUnits,
+            Status status,
+            RefundStatus refundStatus,
+            IsTake isTake,
+            byte[] protectedAssetPayload,
+            List<AttemptObservation> attempts,
+            Integer rawErrorCode,
+            HuashengSecurityReason securityReason,
+            String supplierTraceId
+    ) {
         this.endpoint = Objects.requireNonNull(endpoint, "endpoint is required");
         this.resultClass = Objects.requireNonNull(resultClass, "resultClass is required");
         this.outOrderSn = Objects.requireNonNull(outOrderSn, "outOrderSn is required");
@@ -97,6 +125,12 @@ public final class HuashengStepFact implements FulfillmentProtocolFact {
         this.isTake = isTake == null ? IsTake.ABSENT : isTake;
         this.protectedAssetPayload = protectedAssetPayload == null ? null : protectedAssetPayload.clone();
         this.attempts = attempts == null ? List.of() : List.copyOf(attempts);
+        if (rawErrorCode != null && rawErrorCode == 0) {
+            throw new IllegalArgumentException("rawErrorCode不允许为0");
+        }
+        this.rawErrorCode = rawErrorCode;
+        this.securityReason = securityReason;
+        this.supplierTraceId = supplierTraceId == null || supplierTraceId.isEmpty() ? null : supplierTraceId;
     }
 
     public Endpoint endpoint() { return endpoint; }
@@ -111,6 +145,9 @@ public final class HuashengStepFact implements FulfillmentProtocolFact {
     public IsTake isTake() { return isTake; }
     public byte[] protectedAssetPayload() { return protectedAssetPayload == null ? null : protectedAssetPayload.clone(); }
     public List<AttemptObservation> attempts() { return attempts; }
+    public Integer rawErrorCode() { return rawErrorCode; }
+    public HuashengSecurityReason securityReason() { return securityReason; }
+    public String supplierTraceId() { return supplierTraceId; }
 
     @Override
     public String toString() {

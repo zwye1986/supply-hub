@@ -19,7 +19,21 @@ public enum BOrderFulfillmentStatus {
     PROCESSING((short) 20, "履约中"),
     SUCCEEDED((short) 40, "履约成功"),
     FAILED((short) 50, "履约失败"),
+    /** 可信供应商取消且零交付的专属终态；不复用公共订单的取消码。设计：2026-10-13 华昇错误分类设计 §3.2。 */
+    CANCELLED((short) 60, "已取消"),
     MANUAL((short) 90, "人工处理");
+
+    /**
+     * 是否为不可逆业务终态（含可信取消 60）；用于终态判断、筛选、管理 DTO 及迟到回调防重。
+     */
+    public static boolean isTerminal(short code) {
+        return code == SUCCEEDED.code || code == FAILED.code || code == CANCELLED.code || code == MANUAL.code;
+    }
+
+    /** 业务收敛终态（不含人工 90）；失败/取消/成功三态均代表供应商侧订单已终结。 */
+    public static boolean isConvergedTerminal(short code) {
+        return code == SUCCEEDED.code || code == FAILED.code || code == CANCELLED.code;
+    }
 
     private final short code;
     private final String chineseName;

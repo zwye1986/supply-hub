@@ -48,6 +48,40 @@ log()  { echo -e "${GREEN}[deploy]${NC} $*"; }
 warn() { echo -e "${YELLOW}[warn]${NC} $*"; }
 err()  { echo -e "${RED}[error]${NC} $*" >&2; }
 
+# 先只读校验实际 .env，避免更新镜像后才因编号域缺失进入重启循环。
+# 不推断共享发号域、不 source 含秘密的配置、不取号；只诊断必填键名。
+# 设计：docs/superpowers/specs/2026-10-13-supply-chain-order-number-design.md#91-pro143-部署前编号域门禁。
+log "部署前置: 只读检查 pro143 订单编号 env/scope"
+ssh "${SSH_OPTS[@]}" "${REMOTE_HOST}" bash -s -- "${REMOTE_DIR}" <<'ORDER_NO_PREFLIGHT'
+set -euo pipefail
+python3 - "$1/.env" <<'PY'
+from pathlib import Path
+import re
+import shlex
+import sys
+
+path = Path(sys.argv[1])
+if not path.is_file():
+    sys.exit("[remote] 缺少部署 .env，未执行部署")
+keys = ("AIFULI_SUPPLY_CHAIN_ORDER_NO_ENV", "AIFULI_SUPPLY_CHAIN_ORDER_NO_SCOPE")
+values = {key: [] for key in keys}
+for line in path.read_text().splitlines():
+    key, separator, value = line.partition("=")
+    if separator and key.strip() in values:
+        values[key.strip()].append(value)
+for key in keys:
+    if len(values[key]) != 1:
+        sys.exit(f"[remote] {key} 必须在 .env 中显式配置且仅出现一次，未执行部署")
+    try:
+        tokens = shlex.split(values[key][0], comments=True)
+    except ValueError:
+        tokens = []
+    if len(tokens) != 1 or re.fullmatch(r"[A-Za-z0-9_-]{1,64}", tokens[0]) is None:
+        sys.exit(f"[remote] {key} 须为1至64位字母数字下划线或连字符，未执行部署")
+print("[remote] 订单编号域配置通过只读校验（未取号）")
+PY
+ORDER_NO_PREFLIGHT
+
 # 获取 commit hash 或使用当前代码库最新代码
 cd "${MONOREPO_ROOT}"
 if [[ $# -ge 1 ]]; then

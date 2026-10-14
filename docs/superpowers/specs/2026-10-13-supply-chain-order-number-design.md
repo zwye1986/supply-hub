@@ -239,6 +239,16 @@ MySQL号段事务继续走现有预算数据源，不通过裸池、自建连接
 
 回退保留两张MySQL预留表及高水位，不删除、不回减；Redis旧段键可等TTL清理，但重启后的新应用不能恢复消费它们。旧应用继续生成ULID的前提是验证其能读取、执行已产生的数字单，否则停止新建后修复，不改写历史号。再次启用申请新owner的新区间。灰度期间旧版本仍可能新建ULID；全平台数字号切换需全部写节点更新，不能以单节点证明。
 
+### 9.1 pro143 部署前编号域门禁
+
+2026-10-13 实机启动日志确认：`OrderNoProperties.validate()` 因 env 未配置终止启动，容器反复重启；运行容器及 `/data/aifuli-test/supply-chain/.env` 均缺少两项编号域变量。既有部署脚本只更新镜像与 Nacos 等配置，未落实本章的显式编号域前置。这是部署配置遗漏，不放宽应用失败关闭规则，也不从 profile、主机名或库名自动推断编号域。
+
+本仓 pro143 一键部署脚本要求远端 `.env` 显式提供 `AIFULI_SUPPLY_CHAIN_ORDER_NO_ENV` 与 `AIFULI_SUPPLY_CHAIN_ORDER_NO_SCOPE`，在 checkout、构建、传输及任何远端写入或停服前只读校验。二者各出现一次，值满足 `[A-Za-z0-9_-]{1,64}`；支持 dotenv 单／双引号与行尾注释，不执行或 source 配置。缺失、空值、非法字符或重复配置均终止部署，只输出出错的键名，绝不输出其它配置或秘密。仓库 `.env.example` 补齐必填项但保持空值，不能将示例值默认为共享环境配置。
+
+本次只读确认目标库名为 `supply-chain-test`、profile 为 `test`，可提出 `env=test / scope=supply-chain-test` 的受控配置候选，但实际写入及重建容器须另获授权；同库写实例保持同域。scope 不是跨系统数字号防重方案，§2.2 的供应商商户编号唯一作用域前置仍须核实。启动会执行 Liquibase 并恢复现有 Timer／Outbox，不能把重启当作无业务副作用的本地验证；未获授权前不改共享配置、不重启、不发号或查询供应商。
+
+**执行结果（2026-10-13 22:40，用户授权后）。** pro143 在既有供应链容器单实例重建时写入 `env=test / scope=supply-chain-test`：先备份 `.env` 原文与 130 张 `sc_*` 表一致性导出，再仅追加两个键、未动其它键，`.env` 保持 0600 root:root。重建后 Spring 启动自动执行 065（72ms）与 066（274ms），`Previously run:66 / Run:2 / Total change sets:68`；新表与新 CHECK 就位，存量行新列全为 NULL，未回填安全事实。运行镜像内 release changelog 与 065／066 SQL 的 SHA-256 与仓库工作树逐字节一致，避免仅凭镜像标签推测制品。健康验证：容器 healthy、`restart=0`、Timer／Outbox 已启动、启动完成后 0 ERROR／0 WARN，无签名探针在直连与公网均返回 `1050001001`；本轮未发号（`sc_order_no_sequence`／`sc_order_no_segment` 均 0 行、Redis 无 `order-no` 键）。§2.2 的跨系统商户编号唯一作用域仍未取得独立证据：只核到没有其它运行容器、宿主机进程或 Nginx vhost 引用华昇配置，不能据此断言供应商账户侧不存在其它 24 位数字写方。执行、比对与回退边界见 `docs/集成测试.md` 2026-10-13 对应章节。
+
 ## 10. 评审关注点与本轮交付
 
 请评审以下具体决策：

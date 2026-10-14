@@ -19,6 +19,44 @@ class HuashengFlowPolicyTest {
     private static final String PRICE_RAW = "9.99";
     private static final LocalDateTime NOW = LocalDateTime.of(2026, 10, 9, 12, 0, 0);
 
+    @Test
+    void missingUntakenProofAndHistoricalSuccessBlockFailureEvenWithRefundSuccess() {
+        var cp = checkpointWithOrderSn();
+        var missingTake = new HuashengStepFact(HuashengStepFact.Endpoint.QUERY, HuashengStepFact.StepResult.ACCEPTED,
+                OUT_ORDER_SN, ORDER_SN, 1, PRICE_RAW, EXPECTED_COST, HuashengStepFact.Status.CANCEL,
+                HuashengStepFact.RefundStatus.SUCCESS, HuashengStepFact.IsTake.ABSENT, null, List.of());
+        assertThat(HuashengFlowPolicy.decide(cp, missingTake, EXPECTED_COST, NOW)).isEqualTo(HuashengFlowDecision.MANUAL);
+        var old = cp.observation();
+        var success = new HuashengCheckpoint.Observation(old.endpoint(), old.orderSn(), old.outOrderSn(), old.num(),
+                old.totalPriceRaw(), old.totalPriceMinorUnits(),
+                com.aifuli.module.supplychain.supplieradapter.huasheng.protocol.HuashengOrderStatus.SUCCESS,
+                old.refundStatus(), old.isTake());
+        var historical = new HuashengCheckpoint(cp.binding(), cp.placeParameters(), cp.orderSn(), success, cp.progress(), null);
+        var cancelled = new HuashengStepFact(HuashengStepFact.Endpoint.QUERY, HuashengStepFact.StepResult.ACCEPTED,
+                OUT_ORDER_SN, ORDER_SN, 1, PRICE_RAW, EXPECTED_COST, HuashengStepFact.Status.CANCEL,
+                HuashengStepFact.RefundStatus.SUCCESS, HuashengStepFact.IsTake.N, null, List.of());
+        assertThat(HuashengFlowPolicy.decide(historical, cancelled, EXPECTED_COST, NOW)).isEqualTo(HuashengFlowDecision.MANUAL);
+    }
+
+    @Test
+    void fourthNotCreatedQueryCannotBypassOriginalIdentityOrKnownOrder() {
+        var cp = initialCheckpoint();
+        var candidate = new HuashengCheckpoint.NotCreatedCandidate(7010, NOW.minusMinutes(2), 3,
+                NOW.minusSeconds(60), NOW, false);
+        var active = new HuashengCheckpoint(cp.binding(), cp.placeParameters(), null, null, cp.progress(), null, candidate);
+        var fourth = new HuashengStepFact(HuashengStepFact.Endpoint.QUERY, HuashengStepFact.StepResult.RESULT_UNKNOWN,
+                OUT_ORDER_SN, null, 1, null, null, HuashengStepFact.Status.UNKNOWN, null, null, null, List.of(), 7014, null, null);
+        assertThat(HuashengFlowPolicy.decide(active, fourth, EXPECTED_COST, NOW)).isEqualTo(HuashengFlowDecision.FINAL_NOT_CREATED);
+        var wrong = new HuashengStepFact(HuashengStepFact.Endpoint.QUERY, HuashengStepFact.StepResult.RESULT_UNKNOWN,
+                "wrong-original-order", null, 1, null, null, HuashengStepFact.Status.UNKNOWN, null, null, null, List.of(), 7014, null, null);
+        assertThat(HuashengFlowPolicy.decide(active, wrong, EXPECTED_COST, NOW)).isEqualTo(HuashengFlowDecision.MANUAL);
+
+        // 配额在认领时已消耗：第20次合法QUERY仍能提供第4份有效证据，只禁止第21次认领。
+        var lastClaim = new HuashengCheckpoint(active.binding(), active.placeParameters(), null, null,
+                new HuashengCheckpoint.Progress(20, 0, 0, NOW.minusMinutes(10), NOW.plusMinutes(20), "trace"), null, candidate);
+        assertThat(HuashengFlowPolicy.decide(lastClaim, fourth, EXPECTED_COST, NOW)).isEqualTo(HuashengFlowDecision.FINAL_NOT_CREATED);
+    }
+
     private HuashengCheckpoint initialCheckpoint() {
         return initialCheckpoint(0, 0, 0, null, null);
     }
@@ -157,7 +195,7 @@ class HuashengFlowPolicyTest {
     }
 
     @Test
-    @DisplayName("CANCEL显式退款SUCCESS -> FINAL_REJECTION")
+    @DisplayName("CANCEL显式退款SUCCESS且未提卡 -> FINAL_CANCELLATION")
     void queryCancelWithRefundSuccessProceedsToRejection() {
         var checkpoint = checkpointWithOrderSn();
         var fact = new HuashengStepFact(
@@ -171,7 +209,7 @@ class HuashengFlowPolicyTest {
         );
 
         var decision = HuashengFlowPolicy.decide(checkpoint, fact, EXPECTED_COST, NOW);
-        assertThat(decision).isEqualTo(HuashengFlowDecision.FINAL_REJECTION);
+        assertThat(decision).isEqualTo(HuashengFlowDecision.FINAL_CANCELLATION);
     }
 
     @Test
@@ -253,8 +291,8 @@ class HuashengFlowPolicyTest {
     }
 
     @Test
-    @DisplayName("金额不符 -> MANUAL")
-    void moneyMismatchProceedsToManual() {
+    @DisplayName("合法价差WAIT -> 仅QUERY保护")
+    void moneyMismatchWaitOnlyQueriesOriginalOrder() {
         var checkpoint = initialCheckpoint();
         // 期望999分，返回1000分
         var fact = new HuashengStepFact(
@@ -268,7 +306,7 @@ class HuashengFlowPolicyTest {
         );
 
         var decision = HuashengFlowPolicy.decide(checkpoint, fact, EXPECTED_COST, NOW);
-        assertThat(decision).isEqualTo(HuashengFlowDecision.MANUAL);
+        assertThat(decision).isEqualTo(HuashengFlowDecision.WAIT_QUERY);
     }
 
     @Test
@@ -417,5 +455,16 @@ class HuashengFlowPolicyTest {
                 HuashengStepFact.IsTake.ABSENT, null, List.of());
         assertThat(HuashengFlowPolicy.decide(held, fact, EXPECTED_COST, NOW))
                 .isEqualTo(HuashengFlowDecision.MANUAL);
+    }
+
+    @Test
+    void requestExpiryAllowsOneReconstructionOnlyWithCompletePreCreationProof() {
+        var fact = new HuashengStepFact(HuashengStepFact.Endpoint.PLACE, HuashengStepFact.StepResult.RESULT_UNKNOWN,
+                OUT_ORDER_SN, null, 1, null, null, HuashengStepFact.Status.UNKNOWN, null, null, null, List.of(),
+                66, com.aifuli.module.supplychain.supplieradapter.huasheng.protocol.HuashengSecurityReason.REQUEST_EXPIRED, null);
+        var cp = initialCheckpoint();
+        assertThat(HuashengFlowPolicy.decide(cp, fact, EXPECTED_COST, NOW, true, 1)).isEqualTo(HuashengFlowDecision.RETRY_PRE_SEND);
+        assertThat(HuashengFlowPolicy.decide(cp, fact, EXPECTED_COST, NOW, true, 2)).isEqualTo(HuashengFlowDecision.MANUAL);
+        assertThat(HuashengFlowPolicy.decide(cp, fact, EXPECTED_COST, NOW, false, 1)).isEqualTo(HuashengFlowDecision.WAIT_QUERY);
     }
 }

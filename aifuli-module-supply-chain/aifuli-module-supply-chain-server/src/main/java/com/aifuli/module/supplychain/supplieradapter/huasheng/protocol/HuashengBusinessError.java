@@ -24,8 +24,13 @@ public final class HuashengBusinessError {
     private final int rawCode;
     private final HuashengErrorCode knownErrorKind;
     private final Optional<HuashengExchangeEvidence> safeExchangeEvidence;
+    /** 66 安全校验拒绝的受控原因分类；仅匹配官方固定提示，未匹配为空。设计：2026-10-13 华昇错误分类设计 §4.3。 */
+    private final Optional<HuashengSecurityReason> controlledSecurityReason;
+    /** 供应商诊断编号；仅接受无控制字符且不超过128字符的合法编号。 */
+    private final Optional<String> supplierTraceId;
 
-    HuashengBusinessError(int rawCode, HuashengErrorCode knownErrorKind, Optional<HuashengExchangeEvidence> safeExchangeEvidence) {
+    HuashengBusinessError(int rawCode, HuashengErrorCode knownErrorKind, Optional<HuashengExchangeEvidence> safeExchangeEvidence,
+                          Optional<HuashengSecurityReason> controlledSecurityReason, Optional<String> supplierTraceId) {
         if (rawCode == 0) {
             throw new IllegalArgumentException("HuashengBusinessError不允许rawCode为0");
         }
@@ -35,6 +40,24 @@ public final class HuashengBusinessError {
         this.rawCode = rawCode;
         this.knownErrorKind = Objects.requireNonNull(knownErrorKind, "缺少knownErrorKind");
         this.safeExchangeEvidence = Objects.requireNonNull(safeExchangeEvidence, "缺少safeExchangeEvidence");
+        this.controlledSecurityReason = Objects.requireNonNull(controlledSecurityReason, "缺少controlledSecurityReason");
+        this.supplierTraceId = Objects.requireNonNull(supplierTraceId, "缺少supplierTraceId");
+        if (supplierTraceId.isPresent() && !isValidTraceId(supplierTraceId.get())) {
+            throw new IllegalArgumentException("supplierTraceId非法");
+        }
+    }
+
+    /** 供应商 traceID 仅接收无控制字符、最多128字符的诊断编号；非法编号由调用方丢弃后传入空。 */
+    private static boolean isValidTraceId(String traceId) {
+        if (traceId == null || traceId.isEmpty() || traceId.length() > 128) {
+            return false;
+        }
+        for (int i = 0; i < traceId.length(); i++) {
+            if (Character.isISOControl(traceId.charAt(i))) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**
@@ -74,6 +97,32 @@ public final class HuashengBusinessError {
      */
     public Optional<HuashengExchangeEvidence> safeExchangeEvidence() {
         return safeExchangeEvidence;
+    }
+
+    /**
+     * 获取 66 安全校验拒绝的受控原因分类。
+     *
+     * <p>职责：仅当 rawCode 为 66 且官方固定提示匹配成功时给出受控分类，供错误分类决策使用。
+     * <p>不变量：保证非 null；未匹配官方提示时为空，决策层不得据此猜测副作用。
+     * <p>设计路径与章节锚点：docs/superpowers/specs/2026-10-13-huasheng-error-classification-and-failure-closure-design.md#43-61-与-66。
+     *
+     * @return 受控安全原因容器
+     */
+    public Optional<HuashengSecurityReason> controlledSecurityReason() {
+        return controlledSecurityReason;
+    }
+
+    /**
+     * 获取合法的供应商诊断编号。
+     *
+     * <p>职责：单独关联供应商侧诊断，不替换平台 traceId。
+     * <p>不变量：保证非 null；仅含无控制字符、不超过128字符的合法编号，非法编号由解析层丢弃。
+     * <p>设计路径与章节锚点：docs/superpowers/specs/2026-10-13-huasheng-error-classification-and-failure-closure-design.md#82-日志与诊断。
+     *
+     * @return 合法供应商诊断编号容器
+     */
+    public Optional<String> supplierTraceId() {
+        return supplierTraceId;
     }
 
     /**

@@ -84,6 +84,8 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
 @Service
 @RequiredArgsConstructor
 public class OrderViewQueryService {
+    private final OrderFailureViewQuery failureViews;
+    private final com.aifuli.module.supplychain.border.order.dal.mysql.OrderStatusLogMapper statusLogs;
 
     private static final String TRANSACTION_MANAGER = "supplyChainTransactionManager";
     private static final int DEFAULT_PAGE_NO = 1;
@@ -315,7 +317,7 @@ public class OrderViewQueryService {
                     userId == null ? OrderAssets.EMPTY : loadAssets(order, userId));
             List<SupplierOrderView> supplierOrders = attempts.stream()
                     .map(attempt -> toSupplierOrderView(attempt,
-                            attempt.getSupplierId() == null ? null : suppliers.get(attempt.getSupplierId())))
+                            attempt.getSupplierId() == null ? null : suppliers.get(attempt.getSupplierId()), userId != null))
                     .toList();
             rows.add(new OrderView(
                     order.getOrderNo(),
@@ -343,7 +345,7 @@ public class OrderViewQueryService {
                     supplierOrders,
                     List.of(),
                     order.getCreatedAt(),
-                    null, null, null));
+                    null, null, null, userId == null ? null : terminalReason(order)));
         }
         return rows;
     }
@@ -351,14 +353,25 @@ public class OrderViewQueryService {
     /** source=SUPPLIER 视图回填：总单号关联、供货模式、单条供应商尝试。 */
     private OrderView withSupplierView(OrderView view, SupplyChainOrderDO order, BOrderDO attempt,
                                        String supplyMode, List<SupplierOrderView> supplierOrders) {
-        return new OrderView(view.orderNo(), order.getOrderNo(), view.bizType(), view.status(),
+        return new OrderView(view.orderNo(), order.getOrderNo(), view.bizType(),
+                OrderViewMappings.supplierStatus(BOrderFulfillmentStatus.fromCode(attempt.getFulfillmentStatus())),
                 view.amount(), view.qty(), view.supplierName(), view.distributorName(), view.projectName(),
                 view.buyerMobile(), view.buyerName(), view.payMethod(), view.payTradeNo(),
                 view.receiverName(), view.receiverPhone(), view.receiverAddress(),
                 view.couponAmount(), view.freightAmount(), view.goodsAmount(), view.serviceFee(),
                 view.salePrice(), view.distPrice(), view.distributorPayAmount(), view.projectPayAmount(),
                 view.items(), supplierOrders, view.traces(), view.createdAt(),
-                supplyMode, null, null);
+                supplyMode, null, null, view.terminalReasonCode());
+    }
+
+    /** 平台终结原因来自平台状态日志，不以某个供应商尝试替代总单状态真相。 */
+    private String terminalReason(SupplyChainOrderDO order) {
+        if (!java.util.Objects.equals(SupplyChainOrderStatus.FAILED.getCode(), order.getOrderStatus())) return null;
+        var rows = statusLogs.selectList(new LambdaQueryWrapper<com.aifuli.module.supplychain.border.order.dal.dataobject.OrderStatusLogDO>()
+                .eq(com.aifuli.module.supplychain.border.order.dal.dataobject.OrderStatusLogDO::getOrderId, order.getId())
+                .eq(com.aifuli.module.supplychain.border.order.dal.dataobject.OrderStatusLogDO::getToOrderStatus, order.getOrderStatus())
+                .orderByDesc(com.aifuli.module.supplychain.border.order.dal.dataobject.OrderStatusLogDO::getId));
+        return rows.isEmpty() ? null : rows.getFirst().getReasonCode();
     }
 
     private OrderItemView toItemView(SupplyChainOrderDO order, StandardPricingQuoteDO quote,
@@ -376,6 +389,10 @@ public class OrderViewQueryService {
     }
 
     private SupplierOrderView toSupplierOrderView(BOrderDO attempt, SupplierDO supplier) {
+        return toSupplierOrderView(attempt, supplier, true);
+    }
+
+    private SupplierOrderView toSupplierOrderView(BOrderDO attempt, SupplierDO supplier, boolean detail) {
         BOrderFulfillmentStatus status = BOrderFulfillmentStatus.fromCode(attempt.getFulfillmentStatus());
         return new SupplierOrderView(
                 attempt.getBOrderNo(),
@@ -383,7 +400,7 @@ public class OrderViewQueryService {
                 OrderViewMappings.supplierStatus(status),
                 attempt.getExpectedSupplierSettlementAmount(),
                 attempt.getRequestedQuantity(),
-                attempt.getCreatedAt());
+                attempt.getCreatedAt(), detail ? failureViews.read(attempt) : null);
     }
 
     private RouteStep toStep(BOrderDO attempt, Map<Long, SupplierDO> suppliers,
@@ -650,8 +667,8 @@ public class OrderViewQueryService {
                     codes.add(SupplyChainOrderStatus.CREATED.getCode());
                     codes.add(SupplyChainOrderStatus.PROCESSING.getCode());
                     codes.add(SupplyChainOrderStatus.PARTIALLY_SUCCEEDED.getCode());
-                    codes.add(SupplyChainOrderStatus.MANUAL.getCode());
                 }
+                case OrderViewMappings.PLATFORM_MANUAL -> codes.add(SupplyChainOrderStatus.MANUAL.getCode());
                 case OrderViewMappings.PLATFORM_SUCCESS -> codes.add(SupplyChainOrderStatus.SUCCEEDED.getCode());
                 case OrderViewMappings.PLATFORM_FAILED -> codes.add(SupplyChainOrderStatus.FAILED.getCode());
                 case OrderViewMappings.PLATFORM_CLOSED -> codes.add(SupplyChainOrderStatus.CANCELLED.getCode());
@@ -906,7 +923,7 @@ public class OrderViewQueryService {
             @Schema(description = "供应链中台订单号") String orderNo,
             @Schema(description = "source=SUPPLIER时的关联平台总单号") String relatedPlatformOrderNo,
             @Schema(description = "业务类型：VIRTUAL_CARD/VIRTUAL_RECHARGE/DINING/MOVIE/HEMA/INSTORE") String bizType,
-            @Schema(description = "平台订单状态：WAIT_PAY/PROCESSING/SUCCESS/FAILED/CLOSED") String status,
+            @Schema(description = "平台订单状态：WAIT_PAY/PROCESSING/SUCCESS/FAILED/CLOSED/MANUAL；供应商视图保留MANUAL/CANCELLED") String status,
             @Schema(description = "采购商应结算订单金额，单位为分") Long amount,
             @Schema(description = "数量") Long qty,
             @Schema(description = "供应商名称快照") String supplierName,
@@ -933,7 +950,8 @@ public class OrderViewQueryService {
             @Schema(description = "订单受理时间") LocalDateTime createdAt,
             @Schema(description = "供货模式；source=SUPPLIER时按供货范围配置解析") String supplyMode,
             @Schema(description = "发货时间；本期为空") LocalDateTime shipTime,
-            @Schema(description = "交付方式；本期为空") String deliveryMode) {
+            @Schema(description = "交付方式；本期为空") String deliveryMode,
+            @Schema(description = "平台终结原因码；仅失败详情返回可靠事实") String terminalReasonCode) {
     }
 
     /** 前端商品行；资产字段仅在详情接口返回明文（TODO(安全)：过渡方案）。 */
@@ -975,10 +993,11 @@ public class OrderViewQueryService {
     public record SupplierOrderView(
             @Schema(description = "B端履约尝试编号") String supplierOrderNo,
             @Schema(description = "供应商名称") String supplierName,
-            @Schema(description = "供应商订单状态：WAIT_SHIP/SHIPPED/FINISHED/FAILED") String status,
+            @Schema(description = "供应商订单状态：WAIT_SHIP/SHIPPED/FINISHED/FAILED/MANUAL/CANCELLED") String status,
             @Schema(description = "预计供应商结算金额，单位为分") Long amount,
             @Schema(description = "请求履约数量") Long qty,
-            @Schema(description = "尝试创建时间") LocalDateTime createdAt) {
+            @Schema(description = "尝试创建时间") LocalDateTime createdAt,
+            @Schema(description = "失败处置详情；列表为空") OrderFailureViewQuery.View failureClosure) {
     }
 
     /** 前端 OrderRouteRecordVO 对齐视图。 */

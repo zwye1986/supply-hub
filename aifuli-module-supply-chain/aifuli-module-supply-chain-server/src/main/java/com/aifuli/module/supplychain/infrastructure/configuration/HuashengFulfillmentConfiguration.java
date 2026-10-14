@@ -142,4 +142,17 @@ public class HuashengFulfillmentConfiguration {
     public HuashengPreparationWatchdogHandler huashengPreparationWatchdogHandler(ObjectProvider<HuashengFulfillmentRunner> runner) {
         return new HuashengPreparationWatchdogHandler(runner);
     }
+
+    /** 人工 Case 原单核实与租约收尾 Timer 处理器（2026-10-13 华昇错误分类设计 §6.2）。 */
+    @Bean
+    public HuashengCaseVerifyTimerHandler huashengCaseVerifyTimerHandler(
+            ObjectProvider<com.aifuli.module.supplychain.border.fulfillment.application.FulfillmentCaseVerifyExecutionService> serviceProvider) {
+        return new HuashengCaseVerifyTimerHandler(serviceProvider);
+    }
+
+    @Bean
+    public HuashengCaseVerifyFinalizeTimerHandler huashengCaseVerifyFinalizeTimerHandler(
+            ObjectProvider<com.aifuli.module.supplychain.border.fulfillment.application.FulfillmentCaseVerifyExecutionService> serviceProvider) {
+        return new HuashengCaseVerifyFinalizeTimerHandler(serviceProvider);
+    }
 }

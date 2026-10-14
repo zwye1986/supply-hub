@@ -47,6 +47,7 @@ public class SupplierOrderAdminQueryService {
     private final BOrderMapper bOrderMapper;
     private final SupplyChainOrderMapper orderMapper;
     private final SupplierMapper supplierMapper;
+    private final OrderFailureViewQuery failureViews;
 
     /**
      * 分页查询供应商履约尝试。总单与供应商档案批量补齐，禁止列表 N+1。
@@ -96,7 +97,7 @@ public class SupplierOrderAdminQueryService {
         Map<Long, SupplyChainOrderDO> orders = loadOrders(page.getList());
         Map<Long, SupplierDO> suppliers = loadSuppliers(page.getList());
         return new PageResult<>(page.getList().stream()
-                .map(attempt -> toView(attempt, orders, suppliers))
+                .map(attempt -> toView(attempt, orders, suppliers, null))
                 .toList(), page.getTotal());
     }
 
@@ -121,7 +122,7 @@ public class SupplierOrderAdminQueryService {
         if (supplier != null && supplier.getId() != null) {
             suppliers.put(supplier.getId(), supplier);
         }
-        return toView(attempt, orders, suppliers);
+        return toView(attempt, orders, suppliers, failureViews.read(attempt));
     }
 
     private Long resolveSingleOrderId(String orderNo, String buyerCode) {
@@ -177,7 +178,7 @@ public class SupplierOrderAdminQueryService {
     }
 
     private static SupplierOrderView toView(BOrderDO attempt, Map<Long, SupplyChainOrderDO> orders,
-                                            Map<Long, SupplierDO> suppliers) {
+                                            Map<Long, SupplierDO> suppliers, OrderFailureViewQuery.View failureClosure) {
         SupplyChainOrderDO order = attempt.getOrderId() == null ? null : orders.get(attempt.getOrderId());
         if (order == null) {
             throw new IllegalStateException("Supplier attempt is missing its platform order: " + attempt.getBOrderNo());
@@ -208,7 +209,7 @@ public class SupplierOrderAdminQueryService {
                 attempt.getCreatedAt(),
                 attempt.getUpdatedAt(),
                 attempt.getStartedAt(),
-                attempt.getCompletedAt());
+                attempt.getCompletedAt(), failureClosure);
     }
 
     private static PageResult<SupplierOrderView> emptyPage() {
@@ -249,13 +250,14 @@ public class SupplierOrderAdminQueryService {
             @Schema(description = "冻结的供应商履约结算单价，单位为分") Long supplierSettlementUnitPrice,
             @Schema(description = "预计供应商结算金额，单位为分") Long expectedSupplierSettlementAmount,
             @Schema(description = "供应商结算币种，一期固定CNY") String currency,
-            @Schema(description = "对外枚举名：WAITING=0待执行、PENDING=10执行中、PROCESSING=20查询中、SUCCEEDED=40成功、FAILED=50确定失败、MANUAL=90人工处理")
+            @Schema(description = "对外枚举名：WAITING=0待执行、PENDING=10执行中、PROCESSING=20查询中、SUCCEEDED=40成功、FAILED=50确定失败、CANCELLED=60已取消、MANUAL=90人工处理")
             BOrderFulfillmentStatus fulfillmentStatus,
             @Schema(description = "对外枚举名：PENDING=0待报告、MATCHED=10已匹配、MISMATCH=20有差异、MANUAL=90人工处理")
             BOrderSettlementStatus settlementStatus,
             @Schema(description = "B端履约尝试创建时间") LocalDateTime createdAt,
             @Schema(description = "B端履约尝试最后更新时间") LocalDateTime updatedAt,
             @Schema(description = "首次开始外部履约时间") LocalDateTime startedAt,
-            @Schema(description = "履约尝试进入终态时间") LocalDateTime completedAt) {
+            @Schema(description = "履约尝试进入终态时间") LocalDateTime completedAt,
+            @Schema(description = "失败处置详情；列表为空") OrderFailureViewQuery.View failureClosure) {
     }
 }

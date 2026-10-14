@@ -27,6 +27,12 @@ public class ProjectStandardOrderQueryRespDTO {
     /** 拒绝原因稳定错误码，处理中或已受理时为空 */
     private String rejectionCode;
 
+    /** 履约失败稳定原因码；不改变已受理回执，不含内部供应商或资金证据 */
+    private String failureReasonCode;
+
+    /** 履约失败脱敏说明；无可靠事实时为空 */
+    private String failureReasonNote;
+
     /** 供应链总订单稳定业务编号 */
     private String orderNo;
 

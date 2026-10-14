@@ -270,13 +270,19 @@ class HuashengSettlementIntegrationTest {
     @DisplayName("4. 受控 releaseHuashengRejection：合法 permit 与可信失败释放资金且无资产")
     void releaseHuashengRejectionReleasesFundsAndDeliversNoAsset() {
         var fixture = seedAggregate("HS_RELEASE_01", AdapterStepCode.PLACE_ORDER, 1000L);
+        storeCheckpoint(fixture, null);
         HuashengExecutionPermit permit = createPermit(fixture.operation(), 1L, AdapterStepCode.PLACE_ORDER);
 
         OperationOutcome outcome = OperationOutcome.builder()
                 .outcomeClass(OperationOutcomeClass.REJECTED)
-                .externalErrorCode("REFUND_SUCCESS")
+                .externalOrderNo(fixture.bOrder().getBillno()).reportedSettlementAmount(1000L)
+                .protocolFact(new HuashengStepFact(HuashengStepFact.Endpoint.QUERY, HuashengStepFact.StepResult.ACCEPTED,
+                        fixture.bOrder().getBillno(), fixture.bOrder().getBillno(), 1, "10.00", 1000L,
+                        HuashengStepFact.Status.FAILED, HuashengStepFact.RefundStatus.SUCCESS, HuashengStepFact.IsTake.N, null, List.of()))
                 .build();
 
+        assertThat(context.getBean(HuashengFulfillmentLifecycle.class).apply(permit, outcome, "trace-release").decision())
+                .isEqualTo(HuashengFlowDecision.FINAL_REJECTION);
         SupplierOrderLifecycle.TransitionResult result = lifecycle.releaseHuashengRejection(permit, outcome, "trace-release");
 
         assertThat(result.isTerminal()).isTrue();
@@ -331,6 +337,41 @@ class HuashengSettlementIntegrationTest {
         assertFunds(fixture, "COMMIT", 1);
         assertThat(assetMapper.selectList(new LambdaQueryWrapper<FulfillmentAssetDO>()
                 .eq(FulfillmentAssetDO::getBOrderId, fixture.bOrder().getId()))).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("TAKE 无业务错误码的未知结果留证并安排原单恢复，不交付或处置预留")
+    void unknownTakeWithoutBusinessCodePersistsEvidenceAndKeepsReservation() {
+        var fixture = seedAggregate("HS_TAKE_UNKNOWN", AdapterStepCode.TAKE_CARD, 20000L);
+        storeCheckpoint(fixture, null);
+        var fact = new HuashengStepFact(HuashengStepFact.Endpoint.TAKE, HuashengStepFact.StepResult.RESULT_UNKNOWN,
+                fixture.bOrder().getBillno(), null, 1, null, null, HuashengStepFact.Status.UNKNOWN,
+                HuashengStepFact.RefundStatus.ABSENT, HuashengStepFact.IsTake.ABSENT, null,
+                List.of(new HuashengStepFact.AttemptObservation("TAKE", 200, null, 73, 64, 128, 1, true)));
+        var outcome = OperationOutcome.builder().outcomeClass(OperationOutcomeClass.RESULT_UNKNOWN)
+                .protocolFact(fact).build();
+
+        var result = context.getBean(HuashengFulfillmentLifecycle.class)
+                .apply(createPermit(fixture.operation(), 1L, AdapterStepCode.TAKE_CARD), outcome, "trace-take-unknown");
+
+        assertThat(result.decision()).isEqualTo(HuashengFlowDecision.WAIT_QUERY);
+        var operation = operationMapper.selectById(fixture.operation().getId());
+        assertThat(operation.getStatus()).isEqualTo(SupplierOrderOperationStatus.RESULT_UNKNOWN.getCode());
+        assertThat(operation.getNextRecoverAt()).isNotNull();
+        var evidence = jdbcTemplate.queryForMap("SELECT remote_code, result_class, evidence_ciphertext "
+                + "FROM sc_fulfillment_call_log WHERE operation_id=?", operation.getId());
+        assertThat(evidence.get("remote_code")).isNull();
+        assertThat(evidence.get("result_class")).isEqualTo("RESULT_UNKNOWN");
+        assertThat((byte[]) evidence.get("evidence_ciphertext")).isNotEmpty();
+        var reservation = reservationMapper.selectByReferenceForUpdate(testBuyerId,
+                FundReferenceType.CARD_ORDER.code(), fixture.request().getRequestNo());
+        assertThat(reservation.getRemainingAmount()).isEqualTo(20000L);
+        assertThat(reservation.getCommittedAmount()).isZero();
+        assertThat(reservation.getReleasedAmount()).isZero();
+        assertThat(orderMapper.selectById(fixture.order().getId()).getOrderStatus())
+                .isEqualTo(SupplyChainOrderStatus.PROCESSING.getCode());
+        assertThat(assetMapper.selectList(new LambdaQueryWrapper<FulfillmentAssetDO>()
+                .eq(FulfillmentAssetDO::getBOrderId, fixture.bOrder().getId()))).isEmpty();
     }
 
     @Test

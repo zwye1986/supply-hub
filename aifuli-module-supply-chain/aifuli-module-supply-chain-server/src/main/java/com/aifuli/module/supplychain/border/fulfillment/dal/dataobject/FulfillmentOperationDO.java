@@ -50,6 +50,13 @@ public class FulfillmentOperationDO {
     private LocalDateTime recoveryDeadlineAt;
     /** 本操作首次可能发送业务请求的时间，Asia/Shanghai。 */
     private LocalDateTime businessSendPossibleAt;
+    /**
+     * 本操作无业务副作用证明：1=全部历史发送均为明确建单前拒绝或从未发送业务请求，
+     * 0=可能存在业务副作用，NULL=未知（历史行或尚无结果）。
+     * 证明必须覆盖本单全部相关历史尝试；缺失即无法证明安全拒绝，不默认无副作用。
+     * 设计：docs/superpowers/specs/2026-10-13-huasheng-error-classification-and-failure-closure-design.md#41-决策输入与所有权。
+     */
+    private Boolean sideEffectFree;
     private LocalDateTime createdAt;
     private LocalDateTime completedAt;
     private LocalDateTime updatedAt;

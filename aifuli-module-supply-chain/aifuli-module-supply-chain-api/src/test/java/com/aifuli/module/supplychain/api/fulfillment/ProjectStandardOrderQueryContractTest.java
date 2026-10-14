@@ -34,6 +34,8 @@ class ProjectStandardOrderQueryContractTest {
                         "receiptStatus",
                         "receiptVersion",
                         "rejectionCode",
+                        "failureReasonCode",
+                        "failureReasonNote",
                         "orderNo",
                         "orderStatus",
                         "fulfillmentStatus",

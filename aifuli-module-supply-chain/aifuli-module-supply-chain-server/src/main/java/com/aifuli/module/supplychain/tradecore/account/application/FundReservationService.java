@@ -34,9 +34,9 @@ public class FundReservationService {
     private static final Set<String> REFERENCE_TYPES = Arrays.stream(FundReferenceType.values())
             .map(FundReferenceType::code)
             .collect(Collectors.toUnmodifiableSet());
-    private static final short RESERVED = 10;
-    private static final short COMMITTED = 30;
-    private static final short RELEASED = 40;
+    public static final short RESERVED = 10;
+    public static final short COMMITTED = 30;
+    public static final short RELEASED = 40;
 
     private final BuyerAccountMapper accountMapper;
     private final FundReservationMapper reservationMapper;
@@ -135,6 +135,26 @@ public class FundReservationService {
         requireTrace(traceId);
         FundReservationDO reservation = requireReservationForUpdate(reservationNo);
         return releaseInternal(reservation, orderNo, traceId, causationId);
+    }
+
+    /**
+     * 管理端只读预留快照（不加行锁）；不能作为关单事务内的动账前检查。
+     * 设计：docs/superpowers/specs/2026-10-13-huasheng-error-classification-and-failure-closure-design.md#52-可信取消失败的锁后检查。
+     */
+    public ReservationSnapshot findSnapshotByReference(Long buyerId, String referenceType, String referenceNo) {
+        FundReservationDO reservation = reservationMapper.selectByReference(buyerId, referenceType, referenceNo);
+        return reservation == null ? null : snapshot(reservation);
+    }
+
+    /**
+     * 关单事务内锁定预留并读取最新组合，锁持有至订单与释放共同提交；禁止脱离调用者事务。
+     * 设计：docs/superpowers/specs/2026-10-13-huasheng-error-classification-and-failure-closure-design.md#7-持久化与协议兼容。
+     */
+    @Transactional(transactionManager = TRANSACTION_MANAGER,
+            propagation = org.springframework.transaction.annotation.Propagation.MANDATORY)
+    public ReservationSnapshot lockSnapshotByReference(Long buyerId, String referenceType, String referenceNo) {
+        FundReservationDO reservation = reservationMapper.selectByReferenceForUpdate(buyerId, referenceType, referenceNo);
+        return reservation == null ? null : snapshot(reservation);
     }
 
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)

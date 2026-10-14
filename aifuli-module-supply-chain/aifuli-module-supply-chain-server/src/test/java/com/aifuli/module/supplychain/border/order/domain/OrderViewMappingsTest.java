@@ -53,7 +53,7 @@ class OrderViewMappingsTest {
 
     @Test
     void platformStatusGroupsProcessingLikeStates() {
-        // 决策3：90 人工 → PROCESSING（人工处理中非终态）
+        // 人工状态独立展示，不混入处理中。
         assertThat(OrderViewMappings.platformStatus(SupplyChainOrderStatus.CREATED))
                 .isEqualTo("PROCESSING");
         assertThat(OrderViewMappings.platformStatus(SupplyChainOrderStatus.PROCESSING))
@@ -61,7 +61,7 @@ class OrderViewMappingsTest {
         assertThat(OrderViewMappings.platformStatus(SupplyChainOrderStatus.PARTIALLY_SUCCEEDED))
                 .isEqualTo("PROCESSING");
         assertThat(OrderViewMappings.platformStatus(SupplyChainOrderStatus.MANUAL))
-                .isEqualTo("PROCESSING");
+                .isEqualTo("MANUAL");
     }
 
     @Test
@@ -81,7 +81,9 @@ class OrderViewMappingsTest {
         assertThat(OrderViewMappings.supplierStatus(BOrderFulfillmentStatus.WAITING))
                 .isEqualTo("WAIT_SHIP");
         assertThat(OrderViewMappings.supplierStatus(BOrderFulfillmentStatus.MANUAL))
-                .isEqualTo("WAIT_SHIP");
+                .isEqualTo("MANUAL");
+        assertThat(OrderViewMappings.supplierStatus(BOrderFulfillmentStatus.CANCELLED))
+                .isEqualTo("CANCELLED");
     }
 
     @Test

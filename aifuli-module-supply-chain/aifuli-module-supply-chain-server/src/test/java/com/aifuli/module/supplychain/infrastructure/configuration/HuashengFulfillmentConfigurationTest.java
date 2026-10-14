@@ -104,6 +104,11 @@ class HuashengFulfillmentConfigurationTest {
         }
 
         @Bean
+        com.aifuli.module.supplychain.border.order.dal.mysql.OrderStatusLogMapper statusLogMapper() {
+            return mock(com.aifuli.module.supplychain.border.order.dal.mysql.OrderStatusLogMapper.class);
+        }
+
+        @Bean
         FulfillmentOperationTicketFactory ticketFactory() {
             return mock(FulfillmentOperationTicketFactory.class);
         }

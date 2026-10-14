@@ -177,10 +177,27 @@ public final class HuashengResponseParser {
         }
 
         if (code != 0) {
+            // 66 受控安全原因只匹配官方固定提示，未匹配保持空；traceID 仅接收合法编号。
+            // 设计：docs/superpowers/specs/2026-10-13-huasheng-error-classification-and-failure-closure-design.md#43-61-与-66、#82-日志与诊断。
+            Optional<HuashengSecurityReason> securityReason = Optional.empty();
+            if (code == 66 && root.has("message")) {
+                securityReason = Optional.ofNullable(
+                        HuashengSecurityReason.fromOfficialMessage(root.get("message").asText()));
+            }
+            Optional<String> supplierTraceId = Optional.empty();
+            if (root.has("traceID")) {
+                String traceId = root.get("traceID").asText();
+                if (traceId != null && !traceId.isEmpty() && traceId.length() <= 128
+                        && traceId.chars().noneMatch(Character::isISOControl)) {
+                    supplierTraceId = Optional.of(traceId);
+                }
+            }
             HuashengBusinessError businessError = new HuashengBusinessError(
                     code,
                     HuashengErrorCode.fromRawCode(code),
-                    Optional.empty()
+                    Optional.empty(),
+                    securityReason,
+                    supplierTraceId
             );
             return HuashengInternalAttempt.parsed(new HuashengParseFact.Business<>(businessError));
         }

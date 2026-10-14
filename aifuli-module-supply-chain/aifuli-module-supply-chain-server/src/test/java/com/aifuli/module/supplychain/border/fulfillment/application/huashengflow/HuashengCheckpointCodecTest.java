@@ -27,6 +27,18 @@ class HuashengCheckpointCodecTest {
     private final ObjectMapper json = new ObjectMapper();
 
     @Test
+    void fourthManualNotCreatedResultRoundTripsAsVersionTwo() {
+        var old = checkpoint();
+        var time = LocalDateTime.of(2026, 10, 13, 12, 0);
+        var candidate = new HuashengCheckpoint.NotCreatedCandidate(7010, time.minusMinutes(2),
+                4, time, time.plusSeconds(60), false);
+        var value = new HuashengCheckpoint(binding(), place(), null, null, old.progress(), null, candidate);
+        var stored = codec.encrypt(value);
+        assertThat(stored.schemaVersion()).isEqualTo(2);
+        assertThat(codec.decrypt(stored, binding()).notCreatedCandidate()).isEqualTo(candidate);
+    }
+
+    @Test
     void roundTripsFailedCallbackZeroDeliveryWithoutChangingFrozenOrderQuantity() {
         var old = checkpoint();
         var observation = new HuashengCheckpoint.Observation(HuashengEndpoint.CALLBACK,

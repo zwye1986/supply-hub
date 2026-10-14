@@ -42,6 +42,7 @@ public class ProjectStandardOrderQueryService {
     private final BOrderMapper bOrders;
     private final FulfillmentOperationMapper operations;
     private final SupplyChainDatabaseClock clock;
+    private final com.aifuli.module.supplychain.border.order.dal.mysql.OrderStatusLogMapper statusLogs;
 
     /** 独立事务避免外层较低隔离级别改变该读视图；不加行锁。 */
     @Transactional(
@@ -221,6 +222,23 @@ public class ProjectStandardOrderQueryService {
                         .thenComparing(FulfillmentAssetDO::getSequenceNo));
         dto.setOrderNo(order.getOrderNo());
         dto.setOrderStatus(orderStatus);
+        // 公共失败原因只读平台终态日志；不返回供应商金额、账号、Case 或原始报文。
+        // 设计：docs/superpowers/specs/2026-10-13-huasheng-error-classification-and-failure-closure-design.md#7-持久化与协议兼容。
+        if (orderStatus == SupplyChainOrderStatus.FAILED) {
+            var reasons = statusLogs.selectList(new LambdaQueryWrapper<com.aifuli.module.supplychain.border.order.dal.dataobject.OrderStatusLogDO>()
+                    .eq(com.aifuli.module.supplychain.border.order.dal.dataobject.OrderStatusLogDO::getOrderId, order.getId())
+                    .eq(com.aifuli.module.supplychain.border.order.dal.dataobject.OrderStatusLogDO::getToOrderStatus, orderStatus.getCode())
+                    .orderByDesc(com.aifuli.module.supplychain.border.order.dal.dataobject.OrderStatusLogDO::getId));
+            if (!reasons.isEmpty()) {
+                dto.setFailureReasonCode(reasons.getFirst().getReasonCode());
+                try {
+                    dto.setFailureReasonNote(com.aifuli.module.supplychain.border.fulfillment.application.huashengflow.HuashengStableFailureReason
+                            .valueOf(dto.getFailureReasonCode()).chineseDescription());
+                } catch (IllegalArgumentException | NullPointerException ignored) {
+                    // 历史未知原因不拼接自由文本；说明缺失即未知。
+                }
+            }
+        }
         dto.setFulfillmentStatus(map(requestStatus));
         dto.setRequestedQuantity(request.getRequestedQuantity());
         dto.setDeliveredQuantity(request.getFulfilledQuantity());

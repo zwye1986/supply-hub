@@ -48,7 +48,8 @@ class SupplierOrderAdminQueryServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new SupplierOrderAdminQueryService(bOrderMapper, orderMapper, supplierMapper);
+        service = new SupplierOrderAdminQueryService(bOrderMapper, orderMapper, supplierMapper,
+                mock(OrderFailureViewQuery.class));
     }
 
     @Test

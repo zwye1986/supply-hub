@@ -139,6 +139,31 @@ class HuashengContinuationIntegrationTest {
     }
 
     @Test
+    void recoveryClaimPreservesNotCreatedCandidateAndManualHoldDoesNotEraseIt() {
+        var fixture = seedOrderAggregate("HS_CANDIDATE", AdapterStepCode.PLACE_ORDER, 1);
+        var op = operationMapper.selectById(fixture.operation().getId());
+        var binding = new HuashengCheckpoint.Binding(fixture.bOrder().getId(), fixture.bOrder().getBOrderNo(),
+                op.getOperationNo(), 1, AdapterStepCode.PLACE_ORDER, fixture.bOrder().getConnectorVersionId(),
+                fixture.bOrder().getOfferVersionId(), op.getConfigDigest());
+        var codec = context.getBean(HuashengCheckpointCodec.class);
+        var cp = codec.decrypt(new HuashengCheckpointCodec.Stored(op.getCheckpointSchemaVersion(),
+                op.getCheckpointKeyVersion(), op.getCheckpointCiphertext()), binding);
+        var now = databaseClock.now();
+        var candidate = new HuashengCheckpoint.NotCreatedCandidate(7010, now.minusMinutes(2), 2,
+                now.minusSeconds(60), now.minusSeconds(1), false);
+        var stored = codec.encrypt(new HuashengCheckpoint(binding, cp.placeParameters(), null, null,
+                cp.progress(), null, candidate));
+        op.setCheckpointSchemaVersion(stored.schemaVersion()); op.setCheckpointKeyVersion(stored.keyVersion());
+        op.setCheckpointCiphertext(stored.ciphertext()); op.setStatus(SupplierOrderOperationStatus.RESULT_UNKNOWN.getCode());
+        operationMapper.updateById(op);
+        var permit = lifecycle.claimForRecovery(op.getOperationNo());
+        assertThat(permit).isNotNull();
+        op = operationMapper.selectById(op.getId());
+        assertThat(codec.decrypt(new HuashengCheckpointCodec.Stored(op.getCheckpointSchemaVersion(),
+                op.getCheckpointKeyVersion(), op.getCheckpointCiphertext()), binding).notCreatedCandidate()).isEqualTo(candidate);
+    }
+
+    @Test
     @DisplayName("1. claimForExecution：原子认领 PENDING，generation 从 0 增至 1，写 marker 与 watchdog Timer")
     void claimForExecutionIncrementsGenerationAndSetsLeaseAndWatchdog() {
         var fixture = seedOrderAggregate("HS_CLAIM_01", AdapterStepCode.PLACE_ORDER, 1);

@@ -25,6 +25,7 @@ public final class OrderViewMappings {
     /** 前端平台订单状态枚举值；见设计 §4.2。 */
     public static final String PLATFORM_WAIT_PAY = "WAIT_PAY";
     public static final String PLATFORM_PROCESSING = "PROCESSING";
+    public static final String PLATFORM_MANUAL = "MANUAL";
     public static final String PLATFORM_SUCCESS = "SUCCESS";
     public static final String PLATFORM_FAILED = "FAILED";
     public static final String PLATFORM_CLOSED = "CLOSED";
@@ -34,6 +35,8 @@ public final class OrderViewMappings {
     public static final String SUPPLIER_SHIPPED = "SHIPPED";
     public static final String SUPPLIER_FINISHED = "FINISHED";
     public static final String SUPPLIER_FAILED = "FAILED";
+    public static final String SUPPLIER_MANUAL = "MANUAL";
+    public static final String SUPPLIER_CANCELLED = "CANCELLED";
 
     /** 前端路由失败原因枚举值；见设计 §4.4。 */
     public static final String FAIL_API_TIMEOUT = "API_TIMEOUT";
@@ -77,15 +80,16 @@ public final class OrderViewMappings {
     }
 
     /**
-     * 平台订单状态映射（设计 §4.2，评审决策：90 人工 → PROCESSING，人工处理中非终态）。
+     * 平台订单状态映射；人工独立展示，见 2026-10-13 失败关单设计 §8.1。
      * WAIT_PAY 在供应链域永不出现（受理即已支付），保留给前端展示位。
      */
     public static String platformStatus(SupplyChainOrderStatus status) {
         return switch (status) {
             case SUCCEEDED -> PLATFORM_SUCCESS;
             case FAILED -> PLATFORM_FAILED;
+            case MANUAL -> PLATFORM_MANUAL;
             case CANCELLED -> PLATFORM_CLOSED;
-            // CREATED(0)/PROCESSING(10)/PARTIALLY_SUCCEEDED(20)/MANUAL(90) 均视为处理中
+            // CREATED(0)/PROCESSING(10)/PARTIALLY_SUCCEEDED(20) 均视为处理中
             default -> PLATFORM_PROCESSING;
         };
     }
@@ -98,9 +102,11 @@ public final class OrderViewMappings {
         return switch (status) {
             case SUCCEEDED -> SUPPLIER_FINISHED;
             case FAILED -> SUPPLIER_FAILED;
+            case MANUAL -> SUPPLIER_MANUAL;
+            case CANCELLED -> SUPPLIER_CANCELLED;
             // PENDING(10 执行中)/PROCESSING(20 查询中) 视为已提交供应商执行
             case PENDING, PROCESSING -> SUPPLIER_SHIPPED;
-            // WAITING(0 待执行)/MANUAL(90 人工) 视为待供应商执行
+            // WAITING(0 待执行) 视为待供应商执行
             default -> SUPPLIER_WAIT_SHIP;
         };
     }

@@ -17,6 +17,22 @@ import java.util.List;
 
 class ProjectStandardOrderQueryServiceTest {
     @Test
+    void acceptedReceiptFailureUsesPlatformReasonWithoutReclassifyingAcceptance() {
+        var f = new Fixture();
+        f.order.setOrderStatus((short) 40);
+        f.request.setStatus((short) 50);
+        when(f.statusLogs.selectList(any(com.baomidou.mybatisplus.core.conditions.Wrapper.class)))
+                .thenReturn(List.of(com.aifuli.module.supplychain.border.order.dal.dataobject.OrderStatusLogDO.builder()
+                        .reasonCode("HUASHENG_NOT_CREATED").build()));
+        var result = f.service.query(f.context, "ord");
+        assertThat(result.getReceiptStatus()).isEqualTo(com.aifuli.module.supplychain.api.fulfillment.dto.FulfillmentReceiptStatus.ACCEPTED);
+        assertThat(result.getRejectionCode()).isNull();
+        assertThat(result.getFailureReasonCode()).isEqualTo("HUASHENG_NOT_CREATED");
+        assertThat(result.getFailureReasonNote()).isEqualTo("供应商未建单，订单履约失败");
+        assertThat(result.getAssetAvailable()).isFalse();
+    }
+
+    @Test
     void processingReceiptReturnsTrueReceiptAndNullOrderFieldsWithoutDecrypt() {
         var receipts = mock(FulfillmentAcceptanceReceiptMapper.class);
         var orders = mock(SupplyChainOrderMapper.class);
@@ -48,7 +64,7 @@ class ProjectStandardOrderQueryServiceTest {
                         mock(FulfillmentAssetMapper.class),
                         mock(BOrderMapper.class),
                         mock(FulfillmentOperationMapper.class),
-                        clock);
+                        clock, mock(com.aifuli.module.supplychain.border.order.dal.mysql.OrderStatusLogMapper.class));
         var result =
                 service.query(
                         new StandardProductContext(
@@ -140,6 +156,8 @@ class ProjectStandardOrderQueryServiceTest {
         final BOrderMapper borders = mock(BOrderMapper.class);
         final FulfillmentOperationMapper operations = mock(FulfillmentOperationMapper.class);
         final SupplyChainDatabaseClock clock = mock(SupplyChainDatabaseClock.class);
+        final com.aifuli.module.supplychain.border.order.dal.mysql.OrderStatusLogMapper statusLogs =
+                mock(com.aifuli.module.supplychain.border.order.dal.mysql.OrderStatusLogMapper.class);
         final FulfillmentAcceptanceReceiptDO receipt =
                 FulfillmentAcceptanceReceiptDO.builder()
                         .id(1L)
@@ -201,7 +219,8 @@ class ProjectStandardOrderQueryServiceTest {
                         3L, 2L, "app", 1, ProjectAuthOperations.STANDARD_ORDER_QUERY);
         final ProjectStandardOrderQueryService service =
                 new ProjectStandardOrderQueryService(
-                        receipts, orders, requests, assets, borders, operations, clock);
+                        receipts, orders, requests, assets, borders, operations, clock,
+                        statusLogs);
 
         Fixture() {
             when(receipts.selectList(any(com.baomidou.mybatisplus.core.conditions.Wrapper.class)))

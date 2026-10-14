@@ -21,6 +21,16 @@ class HuashengResponseParserTest {
     private static final String SECRET_SENTINEL = "MALICIOUS_SENTINEL_TOKEN_XYZ";
 
     @Test
+    void security66ClassifiesOnlyTheOfficialFixedMessages() {
+        assertEquals(HuashengSecurityReason.MISSING_FIELD, HuashengSecurityReason.fromOfficialMessage("缺少签名"));
+        assertEquals(HuashengSecurityReason.KEY_CONFIG_ERROR, HuashengSecurityReason.fromOfficialMessage("RSA公钥解析失败"));
+        assertEquals(HuashengSecurityReason.REQUEST_EXPIRED, HuashengSecurityReason.fromOfficialMessage("请求已过期"));
+        assertEquals(HuashengSecurityReason.DUPLICATE_NONCE, HuashengSecurityReason.fromOfficialMessage("重复请求"));
+        assertNull(HuashengSecurityReason.fromOfficialMessage("未知业务错误，含签名、密钥与nonce关键词"));
+        assertNull(HuashengSecurityReason.fromOfficialMessage("签名验证失败\n"));
+    }
+
+    @Test
     void envelopeParsingBusinessErrorKnownAndUnknownCodes() {
         // code=61 应当解析为 Business(TOKEN_UNAUTHORIZED)
         String json61 = "{\"code\":61,\"message\":\"token unauthorized\",\"data\":{\"sensitive\":\"do_not_parse\"}}";

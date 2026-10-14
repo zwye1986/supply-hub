@@ -379,6 +379,9 @@ class HuashengRestartIntegrationTest {
         runner1.runExecute(opNo, "trace-p-timeout");
 
         // 步骤 2: Recovery 认领了代次 2 (generation 2, EXECUTING)
+        currentContext.getBean(FulfillmentOperationMapper.class).update(null, new LambdaUpdateWrapper<FulfillmentOperationDO>()
+                .eq(FulfillmentOperationDO::getOperationNo, opNo)
+                .set(FulfillmentOperationDO::getNextRecoverAt, currentContext.getBean(SupplyChainDatabaseClock.class).now().minusSeconds(1)));
         HuashengFulfillmentLifecycle lifecycle1 = currentContext.getBean(HuashengFulfillmentLifecycle.class);
         HuashengExecutionPermit permit2 = lifecycle1.claimForRecovery(opNo);
         assertThat(permit2).isNotNull();

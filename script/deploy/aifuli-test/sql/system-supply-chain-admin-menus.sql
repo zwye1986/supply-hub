@@ -411,3 +411,21 @@ SET name = '供应商履约技术配置', permission = 'supply-chain:admin', typ
     status = 0, visible = b'1', keep_alive = b'1', always_show = b'1',
     updater = @sc_creator, update_time = NOW()
 WHERE id = @sc_fulfillment_config_page_id;
+
+-- 人工异常 Case 两步命令：复用订单页面与现有 RBAC，不新增部门权限模型、不自动赋予角色。
+-- 设计：docs/superpowers/specs/2026-10-13-huasheng-error-classification-and-failure-closure-design.md#6-存量人工单的受控入口
+INSERT INTO system_menu
+    (application_code, name, permission, type, sort, parent_id, path, icon, component, component_name,
+     status, visible, keep_alive, always_show, creator, create_time, updater, update_time, deleted)
+SELECT @sc_app, buttons.name, buttons.permission, 3, buttons.sort, @sc_order_page_id, '', '', '', NULL,
+       0, b'1', b'0', b'0', @sc_creator, NOW(), @sc_creator, NOW(), b'0'
+FROM (
+    SELECT '异常Case查询' AS name, 'supply-chain:fulfillment-case:query' AS permission, 20 AS sort
+    UNION ALL SELECT '核实原单', 'supply-chain:fulfillment-case:verify', 21
+    UNION ALL SELECT '确认失败关单', 'supply-chain:fulfillment-case:confirm-failure', 22
+) buttons
+WHERE @sc_order_page_id IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM system_menu existing
+    WHERE BINARY existing.application_code = BINARY @sc_app
+      AND BINARY existing.permission = BINARY buttons.permission AND existing.deleted = b'0'
+);

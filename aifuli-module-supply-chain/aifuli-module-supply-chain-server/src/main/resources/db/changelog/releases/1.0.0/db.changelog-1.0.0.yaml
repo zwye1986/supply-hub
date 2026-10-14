@@ -842,3 +842,13 @@ databaseChangeLog:
             encoding: UTF-8
             splitStatements: true
             stripComments: false
+  - changeSet:
+      id: 066-huasheng-error-classification-and-case-action
+      author: supply-chain
+      changes:
+        - sqlFile:
+            path: 066-huasheng-error-classification-and-case-action.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false

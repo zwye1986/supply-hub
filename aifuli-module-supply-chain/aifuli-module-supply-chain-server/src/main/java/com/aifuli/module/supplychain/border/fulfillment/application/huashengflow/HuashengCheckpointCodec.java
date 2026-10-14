@@ -40,7 +40,7 @@ public final class HuashengCheckpointCodec {
     private static final DateTimeFormatter TIME = DateTimeFormatter.ISO_LOCAL_DATE_TIME;
     private static final ObjectMapper CANONICAL_JSON = new ObjectMapper();
     private static final Set<String> ROOT_FIELDS = Set.of("schemaVersion", "binding", "placeParameters",
-            "placeParametersDigest", "orderSn", "observation", "progress", "pendingAssetPayload");
+            "placeParametersDigest", "orderSn", "observation", "progress", "pendingAssetPayload", "notCreatedCandidate");
     private final EnvelopeCryptoPort crypto;
     private final ObjectMapper json;
 
@@ -55,17 +55,19 @@ public final class HuashengCheckpointCodec {
                 .build());
     }
 
-    /** 固定顺序编码后加密成组返回；任何调用路径均擦除临时明文。设计同 §4.2.1。 */
+    /** 固定顺序编码后加密成组返回；携带未建单候选时输出 V2，否则保持 V1。设计同 §4.2.1。 */
     public Stored encrypt(HuashengCheckpoint checkpoint) {
         byte[] plaintext = null;
         try {
             require(checkpoint != null);
             plaintext = encode(checkpoint);
             require(plaintext.length <= HuashengFlowCodes.CHECKPOINT_MAX_BYTES);
-            var encrypted = crypto.encrypt(plaintext, aad(checkpoint.binding()));
+            int schemaVersion = checkpoint.notCreatedCandidate() != null
+                    ? HuashengFlowCodes.CHECKPOINT_SCHEMA_VERSION_2 : HuashengFlowCodes.CHECKPOINT_SCHEMA_VERSION;
+            var encrypted = crypto.encrypt(plaintext, aad(checkpoint.binding(), schemaVersion));
             require(encrypted != null && encrypted.keyVersion() != null && !encrypted.keyVersion().isBlank()
                     && encrypted.keyVersion().length() <= 64 && encrypted.ciphertext().length > 0);
-            return new Stored(HuashengFlowCodes.CHECKPOINT_SCHEMA_VERSION, encrypted.keyVersion(), encrypted.ciphertext());
+            return new Stored(schemaVersion, encrypted.keyVersion(), encrypted.ciphertext());
         } catch (IOException | RuntimeException rejected) {
             throw invalid();
         } finally {
@@ -75,21 +77,25 @@ public final class HuashengCheckpointCodec {
 
     /**
      * 解密并验证锁后绑定；Stored 空/残缺也拒绝，不能退回首次下单。
+     * V1 与 V2 密文均按各自持久 schemaVersion 构造 AAD；V1 缺失候选字段兼容读取为无候选。
      * 原 Operation 步骤提供 AAD，即使外呼端点是 QUERY 也不替换。设计同 §4.1、§4.2。
      */
     public HuashengCheckpoint decrypt(Stored stored, HuashengCheckpoint.Binding expectedBinding) {
         byte[] plaintext = null;
         try {
             require(stored != null && expectedBinding != null
-                    && Objects.equals(stored.schemaVersion(), HuashengFlowCodes.CHECKPOINT_SCHEMA_VERSION)
+                    && (Objects.equals(stored.schemaVersion(), HuashengFlowCodes.CHECKPOINT_SCHEMA_VERSION)
+                        || Objects.equals(stored.schemaVersion(), HuashengFlowCodes.CHECKPOINT_SCHEMA_VERSION_2))
                     && stored.keyVersion() != null && !stored.keyVersion().isBlank()
                     && stored.keyVersion().length() <= 64 && stored.ciphertext() != null);
             byte[] ciphertext = stored.ciphertext();
             // 当前 Envelope AES-GCM 有固定 12 字节 IV/16 字节 tag；留出有界信封余量。
             require(ciphertext.length > 0 && ciphertext.length <= HuashengFlowCodes.CHECKPOINT_MAX_BYTES + 1024);
-            plaintext = crypto.decrypt(ciphertext, stored.keyVersion(), aad(expectedBinding));
+            plaintext = crypto.decrypt(ciphertext, stored.keyVersion(), aad(expectedBinding, stored.schemaVersion()));
             require(plaintext != null && plaintext.length > 0 && plaintext.length <= HuashengFlowCodes.CHECKPOINT_MAX_BYTES);
             HuashengCheckpoint checkpoint = decodePlaintext(plaintext);
+            require(stored.schemaVersion() == (checkpoint.notCreatedCandidate() == null
+                    ? HuashengFlowCodes.CHECKPOINT_SCHEMA_VERSION : HuashengFlowCodes.CHECKPOINT_SCHEMA_VERSION_2));
             require(sameBinding(checkpoint.binding(), expectedBinding));
             return checkpoint;
         } catch (RuntimeException rejected) {
@@ -110,7 +116,8 @@ public final class HuashengCheckpointCodec {
                 root = object(json.readTree(parser), ROOT_FIELDS);
                 require(parser.nextToken() == null);
             }
-            require(integer(root, "schemaVersion") == HuashengFlowCodes.CHECKPOINT_SCHEMA_VERSION);
+            require(integer(root, "schemaVersion") == HuashengFlowCodes.CHECKPOINT_SCHEMA_VERSION
+                    || integer(root, "schemaVersion") == HuashengFlowCodes.CHECKPOINT_SCHEMA_VERSION_2);
             var binding = readBinding(root.get("binding"));
             var place = readPlace(root.get("placeParameters"));
             require(placeDigest(place).equals(text(root, "placeParametersDigest")));
@@ -119,8 +126,11 @@ public final class HuashengCheckpointCodec {
             var progress = readProgress(root.get("progress"));
             byte[] pending = root.has("pendingAssetPayload") ? Base64.getDecoder()
                     .decode(text(root, "pendingAssetPayload", HuashengFlowCodes.CHECKPOINT_MAX_BYTES)) : null;
+            var candidate = root.has("notCreatedCandidate") ? readNotCreatedCandidate(root.get("notCreatedCandidate")) : null;
+            require(integer(root, "schemaVersion") == (candidate == null
+                    ? HuashengFlowCodes.CHECKPOINT_SCHEMA_VERSION : HuashengFlowCodes.CHECKPOINT_SCHEMA_VERSION_2));
             try {
-                return new HuashengCheckpoint(binding, place, orderSn, observation, progress, pending);
+                return new HuashengCheckpoint(binding, place, orderSn, observation, progress, pending, candidate);
             } finally {
                 if (pending != null) Arrays.fill(pending, (byte) 0);
             }
@@ -143,7 +153,8 @@ public final class HuashengCheckpointCodec {
 
     private byte[] encode(HuashengCheckpoint checkpoint) throws IOException {
         ObjectNode root = json.createObjectNode();
-        root.put("schemaVersion", HuashengFlowCodes.CHECKPOINT_SCHEMA_VERSION);
+        root.put("schemaVersion", checkpoint.notCreatedCandidate() != null
+                ? HuashengFlowCodes.CHECKPOINT_SCHEMA_VERSION_2 : HuashengFlowCodes.CHECKPOINT_SCHEMA_VERSION);
         var b = checkpoint.binding();
         ObjectNode binding = root.putObject("binding");
         binding.put("bOrderId", b.bOrderId()); binding.put("bOrderNo", b.bOrderNo());
@@ -171,6 +182,17 @@ public final class HuashengCheckpointCodec {
             progress.put("recoveryDeadlineAt", TIME.format(p.recoveryDeadlineAt()));
         }
         if (p.originTraceId() != null) progress.put("originTraceId", p.originTraceId());
+        var candidate = checkpoint.notCreatedCandidate();
+        if (candidate != null) {
+            ObjectNode node = root.putObject("notCreatedCandidate");
+            node.put("earliestRejectionCode", candidate.earliestRejectionCode());
+            node.put("firstRejectionAt", TIME.format(candidate.firstRejectionAt()));
+            node.put("validNotCreatedQueryCount", candidate.validNotCreatedQueryCount());
+            node.put("queryResultCount", candidate.queryResultCount());
+            if (candidate.lastQueryAt() != null) node.put("lastQueryAt", TIME.format(candidate.lastQueryAt()));
+            node.put("nextQueryAt", TIME.format(candidate.nextQueryAt()));
+            node.put("exited", candidate.exited());
+        }
         byte[] pending = checkpoint.pendingAssetPayload();
         try {
             if (pending != null) root.put("pendingAssetPayload", Base64.getEncoder().encodeToString(pending));
@@ -202,9 +224,9 @@ public final class HuashengCheckpointCodec {
         return place;
     }
 
-    private static byte[] aad(HuashengCheckpoint.Binding b) {
+    private static byte[] aad(HuashengCheckpoint.Binding b, int schemaVersion) {
         return String.join("|", HuashengFlowCodes.CHECKPOINT_AAD_PURPOSE,
-                Integer.toString(HuashengFlowCodes.CHECKPOINT_SCHEMA_VERSION), Long.toString(b.bOrderId()),
+                Integer.toString(schemaVersion), Long.toString(b.bOrderId()),
                 b.operationNo(), Integer.toString(b.sequenceNo()), b.step().name(),
                 Long.toString(b.connectorVersionId()), Long.toString(b.offerVersionId())).getBytes(StandardCharsets.UTF_8);
     }
@@ -248,6 +270,21 @@ public final class HuashengCheckpointCodec {
         return new HuashengCheckpoint.Progress(integer(node, "queryCount"), integer(node, "confirmCount"),
                 integer(node, "takeCount"), first == null ? null : LocalDateTime.parse(first, TIME),
                 deadline == null ? null : LocalDateTime.parse(deadline, TIME), optionalText(node, "originTraceId"));
+    }
+
+    /** 未建单候选固定字段白名单读取；V1 密文无该节点，兼容读取为无候选。 */
+    private static HuashengCheckpoint.NotCreatedCandidate readNotCreatedCandidate(JsonNode value) {
+        ObjectNode node = object(value, Set.of("earliestRejectionCode", "firstRejectionAt",
+                "validNotCreatedQueryCount", "lastQueryAt", "nextQueryAt", "exited", "queryResultCount"));
+        require(node.has("exited") && node.get("exited").isBoolean());
+        String last = optionalText(node, "lastQueryAt");
+        return new HuashengCheckpoint.NotCreatedCandidate(integer(node, "earliestRejectionCode"),
+                LocalDateTime.parse(text(node, "firstRejectionAt"), TIME),
+                integer(node, "validNotCreatedQueryCount"),
+                last == null ? null : LocalDateTime.parse(last, TIME),
+                LocalDateTime.parse(text(node, "nextQueryAt"), TIME),
+                node.get("exited").asBoolean(),
+                integer(node, node.has("queryResultCount") ? "queryResultCount" : "validNotCreatedQueryCount"));
     }
 
     private static <E extends Enum<E>> void writeField(ObjectNode node, String name, HuashengField<E> field) {

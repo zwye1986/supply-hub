@@ -26,10 +26,17 @@ public final class HuashengCheckpoint {
     private final Observation observation;
     private final Progress progress;
     private final byte[] pendingAssetPayload;
+    private final NotCreatedCandidate notCreatedCandidate;
 
     /** 核内部原单身份；缺金额保持缺省，不用配置成本补值。设计同 §4.2.1。 */
     public HuashengCheckpoint(Binding binding, PlaceParameters placeParameters, String orderSn,
             Observation observation, Progress progress, byte[] pendingAssetPayload) {
+        this(binding, placeParameters, orderSn, observation, progress, pendingAssetPayload, null);
+    }
+
+    /** V2 完整构造：在 V1 事实之上携带可信未建单候选（可为 null 表示无候选，兼容 V1 读取）。 */
+    public HuashengCheckpoint(Binding binding, PlaceParameters placeParameters, String orderSn,
+            Observation observation, Progress progress, byte[] pendingAssetPayload, NotCreatedCandidate notCreatedCandidate) {
         require(binding != null && placeParameters != null && progress != null);
         // outOrderSn 来自冻结 billno，不等同 bOrderNo；锁后 billno 核验由 lifecycle 承担（设计 §3.3）。
         if (orderSn != null) text(orderSn, 128);
@@ -45,6 +52,7 @@ public final class HuashengCheckpoint {
         this.observation = observation;
         this.progress = progress;
         this.pendingAssetPayload = pendingAssetPayload == null ? null : pendingAssetPayload.clone();
+        this.notCreatedCandidate = notCreatedCandidate;
     }
 
     public Binding binding() { return binding; }
@@ -54,6 +62,8 @@ public final class HuashengCheckpoint {
     public Observation observation() { return observation; }
     public Progress progress() { return progress; }
     public byte[] pendingAssetPayload() { return pendingAssetPayload == null ? null : pendingAssetPayload.clone(); }
+    /** 可信未建单候选事实；null 表示未进入或 V1 兼容读取。 */
+    public NotCreatedCandidate notCreatedCandidate() { return notCreatedCandidate; }
     @Override public String toString() { return "HuashengCheckpoint[redacted]"; }
 
     /** 锁后实体提供的绑定；AAD 不能取密文内自报值。数组双向复制。设计同 §4.2。 */
@@ -130,6 +140,46 @@ public final class HuashengCheckpoint {
             if (originTraceId != null) text(originTraceId, 128);
         }
         @Override public String toString() { return "HuashengCheckpoint.Progress[redacted]"; }
+    }
+
+    /**
+     * 可信未建单候选的不可变恢复事实（V2 新增；V1 缺失字段兼容读取为无候选）。
+     *
+     * <p>职责：持久化首次创建拒绝后的退避查单状态——最早拒绝码、首次拒绝时间、
+     * 有效 7014 累计次数、最近查询时间与永久退出标记；与结果状态及 Timer 意图同事务更新，
+     * 不能仅保存在内存、重启清零或由客户端传次数。
+     *
+     * <p>不变量：次数为 0～4（人工第4次核实持久化后等待独立确认，不自动动账）；
+     * 时间毫秒精度与 Progress 对齐；exited=true 表示已查到订单或产生成功/交付事实，
+     * 永久退出该候选分支，不得被后续 7014 覆盖。
+     *
+     * <p>设计路径与章节锚点：
+     * docs/superpowers/specs/2026-10-13-huasheng-error-classification-and-failure-closure-design.md#54-可信未建单的最终失败。
+     */
+    @JsonSerialize(using = HuashengInternalOnlySerializer.class)
+    public record NotCreatedCandidate(int earliestRejectionCode, LocalDateTime firstRejectionAt,
+                                      int validNotCreatedQueryCount, LocalDateTime lastQueryAt,
+                                      LocalDateTime nextQueryAt, boolean exited, int queryResultCount) {
+        /** 兼容缺少查询序次的V2：已有有效次数是已终止查询次数的下界，不补造有效证据。设计 §7。 */
+        public NotCreatedCandidate(int earliestRejectionCode, LocalDateTime firstRejectionAt,
+                                   int validNotCreatedQueryCount, LocalDateTime lastQueryAt,
+                                   LocalDateTime nextQueryAt, boolean exited) {
+            this(earliestRejectionCode, firstRejectionAt, validNotCreatedQueryCount, lastQueryAt,
+                    nextQueryAt, exited, validNotCreatedQueryCount);
+        }
+
+        public NotCreatedCandidate {
+            require(HuashengErrorClassification.isPlaceCreationRejection(earliestRejectionCode));
+            require(firstRejectionAt != null && nextQueryAt != null);
+            require(validNotCreatedQueryCount >= 0
+                    && validNotCreatedQueryCount <= HuashengErrorClassification.REQUIRED_VALID_NOT_CREATED_QUERIES);
+            require(queryResultCount >= validNotCreatedQueryCount);
+            require(firstRejectionAt.getNano() % 1_000_000 == 0 && nextQueryAt.getNano() % 1_000_000 == 0);
+            if (lastQueryAt != null) {
+                require(lastQueryAt.getNano() % 1_000_000 == 0);
+            }
+        }
+        @Override public String toString() { return "HuashengCheckpoint.NotCreatedCandidate[redacted]"; }
     }
 
     static void require(boolean valid) {

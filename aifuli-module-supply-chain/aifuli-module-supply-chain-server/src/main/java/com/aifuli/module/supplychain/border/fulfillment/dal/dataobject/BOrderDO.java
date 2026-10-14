@@ -36,6 +36,10 @@ public class BOrderDO {
     private String currency;
     private Short fulfillmentStatus;
     private Short settlementStatus;
+    /** 供应商侧订单终结的稳定原因码，如 HUASHENG_SUPPLIER_CANCELLED；未终结或历史单为 NULL。设计：2026-10-13 华昇错误分类设计 §3.3。 */
+    private String terminalReasonCode;
+    /** 供应商终结的脱敏说明，不含凭据、私钥或原始报文。 */
+    private String terminalReasonNote;
     private Boolean activeFlag;
     @Version
     private Long version;

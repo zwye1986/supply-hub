@@ -86,6 +86,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -227,6 +229,7 @@ class HuashengRecoveryIntegrationTest {
         recPayload.put("expectedGeneration", opAfterTimeout.getExecutionGeneration());
         recPayload.put("trigger", HuashengFlowTrigger.RECOVER.name());
 
+        markRecoveryDue(opNo);
         String recoveryResult = recoveryHandler.handle(new TimerTaskContext("TASK_01", 1L, 1, 1L, "worker-1"), recPayload);
         assertThat(recoveryResult).isEqualTo("NEXT_CONFIRM");
 
@@ -269,6 +272,7 @@ class HuashengRecoveryIntegrationTest {
         when(mockFacade.query(any(), any(), any(), any()))
                 .thenReturn(new HuashengCallResult.Parsed<>(waitResponse, List.of(), true));
 
+        markRecoveryDue(opNo);
         String recoveryResult = runner.runRecovery(opNo, 1L, "trace-rec-confirm");
         assertThat(recoveryResult).isEqualTo("NEXT_CONFIRM");
 
@@ -310,6 +314,7 @@ class HuashengRecoveryIntegrationTest {
         when(mockFacade.query(any(), any(), any(), any()))
                 .thenReturn(new HuashengCallResult.Parsed<>(querySuccessResp, List.of(), true));
 
+        markRecoveryDue(opNo);
         String recoveryResult = runner.runRecovery(opNo, 1L, "trace-rec-take");
         assertThat(recoveryResult).isEqualTo("NEXT_TAKE");
 
@@ -361,6 +366,7 @@ class HuashengRecoveryIntegrationTest {
         when(mockFacade.query(any(), any(), any(), any()))
                 .thenReturn(new HuashengCallResult.BusinessError<>(err7014, List.of(), true));
 
+        markRecoveryDue(opNo);
         String recResult = runner.runRecovery(opNo, 1L, "trace-rec-7014");
         assertThat(recResult).isEqualTo("WAIT_QUERY");
 
@@ -368,15 +374,18 @@ class HuashengRecoveryIntegrationTest {
         FulfillmentOperationDO op = operationMapper.selectOne(
                 new LambdaQueryWrapper<FulfillmentOperationDO>().eq(FulfillmentOperationDO::getOperationNo, opNo));
         assertThat(op.getStatus()).isEqualTo(SupplierOrderOperationStatus.RESULT_UNKNOWN.getCode());
-        Mockito.verifyNoInteractions(supplierOrderLifecycle);
+        assertThat(operationMapper.selectList(new LambdaQueryWrapper<FulfillmentOperationDO>()
+                .eq(FulfillmentOperationDO::getBOrderId, fixture.bOrder().getId()))).hasSize(1);
 
         // 步骤 3: 模拟持续 7014 查询累积至 20 次（MAX_QUERY_COUNT）
         for (int i = 2; i < 20; i++) {
             // 每次递增代次进行恢复
+            markRecoveryDue(opNo);
             runner.runRecovery(opNo, (long) i, "trace-query-" + i);
         }
 
         // 第 20 次查询仍为 7014 -> 触发到限 MANUAL
+        markRecoveryDue(opNo);
         String manualResult = runner.runRecovery(opNo, 20L, "trace-query-20");
         assertThat(manualResult).isEqualTo("MANUAL");
 
@@ -385,7 +394,9 @@ class HuashengRecoveryIntegrationTest {
         assertThat(manualOp.getStatus()).isEqualTo(SupplierOrderOperationStatus.MANUAL.getCode());
 
         // 资金绝不释放，聚合进入 MANUAL 并保留唯一 case。
-        Mockito.verifyNoInteractions(supplierOrderLifecycle);
+        verify(supplierOrderLifecycle, never()).closeHuashengTrustedFailure(any(), any(), any(), any());
+        verify(supplierOrderLifecycle, never()).commitHuashengSuccess(any(), any(), any());
+        verify(mockFacade, times(1)).place(any(), any(), any(), any());
         BOrderDO bOrder = bOrderMapper.selectById(fixture.bOrder().getId());
         assertThat(bOrder.getFulfillmentStatus()).isEqualTo(BOrderFulfillmentStatus.MANUAL.getCode());
     }
@@ -430,7 +441,8 @@ class HuashengRecoveryIntegrationTest {
         FulfillmentOperationDO op4Final = operationMapper.selectOne(
                 new LambdaQueryWrapper<FulfillmentOperationDO>().eq(FulfillmentOperationDO::getOperationNo, op4.getOperationNo()));
         assertThat(op4Final.getStatus()).isEqualTo(SupplierOrderOperationStatus.MANUAL.getCode());
-        Mockito.verifyNoInteractions(supplierOrderLifecycle);
+        verify(supplierOrderLifecycle, never()).closeHuashengTrustedFailure(any(), any(), any(), any());
+        verify(supplierOrderLifecycle, never()).commitHuashengSuccess(any(), any(), any());
     }
 
     @Test
@@ -505,6 +517,13 @@ class HuashengRecoveryIntegrationTest {
     }
 
     private static final AtomicLong RECEIPT_SEQ = new AtomicLong(30000L);
+
+    /** 非候选恢复场景将独立测试库的 Timer 前置置为到期，不绕过生产的退避检查。 */
+    private void markRecoveryDue(String operationNo) {
+        operationMapper.update(null, new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<FulfillmentOperationDO>()
+                .eq(FulfillmentOperationDO::getOperationNo, operationNo)
+                .set(FulfillmentOperationDO::getNextRecoverAt, databaseClock.now().minusSeconds(1)));
+    }
 
     private TestAggregateFixture seedOrderAggregate(String prefix, AdapterStepCode step, int sequenceNo, String orderSn) {
         LocalDateTime now = databaseClock.now();

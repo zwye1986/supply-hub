@@ -25,4 +25,10 @@ public final class FulfillmentTimerTaskTypes {
 
     /** 华昇即时/定时恢复 Timer 任务类型。 */
     public static final String HUASHENG_RECOVERY = "HS_RECOVERY";
+
+    /** 华昇人工 Case 原单核实 Timer 任务类型。 */
+    public static final String HUASHENG_CASE_VERIFY = "HS_CASE_VERIFY";
+
+    /** 华昇人工 Case 核实租约到期收尾 Timer 任务类型。 */
+    public static final String HUASHENG_CASE_VERIFY_FINALIZE = "HS_CASE_VERIFY_FINALIZE";
 }

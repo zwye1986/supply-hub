@@ -117,7 +117,8 @@ public class HuashengOperationExecutor implements OperationExecutorPort {
             return handleOrderResult(HuashengStepFact.Endpoint.PLACE, ticket, result);
         } catch (Exception e) {
             log.warn("[华昇执行器][PLACE异常] operationNo={}, error={}", ticket.operationNo(), e.getMessage());
-            return buildUnknownOutcome(HuashengStepFact.Endpoint.PLACE, ticket, null, e.getMessage(), List.of());
+            return buildUnknownOutcome(HuashengStepFact.Endpoint.PLACE, ticket, null, e.getMessage(), List.of(),
+                    e instanceof HuashengProtocolException pe ? pe : null);
         }
     }
 
@@ -134,7 +135,8 @@ public class HuashengOperationExecutor implements OperationExecutorPort {
             return handleOrderResult(HuashengStepFact.Endpoint.CONFIRM, ticket, result);
         } catch (Exception e) {
             log.warn("[华昇执行器][CONFIRM异常] operationNo={}, error={}", ticket.operationNo(), e.getMessage());
-            return buildUnknownOutcome(HuashengStepFact.Endpoint.CONFIRM, ticket, null, e.getMessage(), List.of());
+            return buildUnknownOutcome(HuashengStepFact.Endpoint.CONFIRM, ticket, null, e.getMessage(), List.of(),
+                    e instanceof HuashengProtocolException pe ? pe : null);
         }
     }
 
@@ -152,7 +154,8 @@ public class HuashengOperationExecutor implements OperationExecutorPort {
             return handleOrderResult(HuashengStepFact.Endpoint.QUERY, ticket, result);
         } catch (Exception e) {
             log.warn("[华昇执行器][QUERY异常] operationNo={}, error={}", ticket.operationNo(), e.getMessage());
-            return buildUnknownOutcome(HuashengStepFact.Endpoint.QUERY, ticket, null, e.getMessage(), List.of());
+            return buildUnknownOutcome(HuashengStepFact.Endpoint.QUERY, ticket, null, e.getMessage(), List.of(),
+                    e instanceof HuashengProtocolException pe ? pe : null);
         }
     }
 
@@ -169,7 +172,8 @@ public class HuashengOperationExecutor implements OperationExecutorPort {
             return handleTakeResult(ticket, result);
         } catch (Exception e) {
             log.warn("[华昇执行器][TAKE异常] operationNo={}, error={}", ticket.operationNo(), e.getMessage());
-            return buildUnknownOutcome(HuashengStepFact.Endpoint.TAKE, ticket, null, e.getMessage(), List.of());
+            return buildUnknownOutcome(HuashengStepFact.Endpoint.TAKE, ticket, null, e.getMessage(), List.of(),
+                    e instanceof HuashengProtocolException pe ? pe : null);
         }
     }
 
@@ -309,10 +313,20 @@ public class HuashengOperationExecutor implements OperationExecutorPort {
     ) {
         String errorCode = null;
         String errorMessage = null;
+        Integer rawErrorCode = null;
+        HuashengSecurityReason securityReason = null;
+        String supplierTraceId = null;
 
         if (result instanceof HuashengCallResult.BusinessError<?> be) {
+            rawErrorCode = be.error().rawCode();
             errorCode = String.valueOf(be.error().rawCode());
             errorMessage = be.error().knownErrorKind().name();
+            if (be.error().controlledSecurityReason().isPresent()) {
+                securityReason = be.error().controlledSecurityReason().get();
+            }
+            if (be.error().supplierTraceId().isPresent()) {
+                supplierTraceId = be.error().supplierTraceId().get();
+            }
         } else if (result instanceof HuashengCallResult.HttpFailure<?> hf) {
             errorCode = "HTTP_" + hf.diagnostics().reasonCode().name();
         } else if (result instanceof HuashengCallResult.TransportFailure<?> tf) {
@@ -335,7 +349,10 @@ public class HuashengOperationExecutor implements OperationExecutorPort {
                 HuashengStepFact.RefundStatus.ABSENT,
                 HuashengStepFact.IsTake.ABSENT,
                 null,
-                attempts
+                attempts,
+                rawErrorCode,
+                securityReason,
+                supplierTraceId
         );
 
         return OperationOutcome.builder()
@@ -355,6 +372,43 @@ public class HuashengOperationExecutor implements OperationExecutorPort {
             String errorMessage,
             List<HuashengStepFact.AttemptObservation> attempts
     ) {
+        return buildUnknownOutcome(endpoint, ticket, errorCode, errorMessage, attempts, null);
+    }
+
+    /**
+     * 异常路径投影：HuashengProtocolException 的诊断证据（含 TOKEN 端点业务拒绝码）不再丢失，
+     * 转为受控错误事实供错误分类决策使用；无证据时保持无码未知，关闭无副作用快捷路径。
+     * 设计：docs/superpowers/specs/2026-10-13-huasheng-error-classification-and-failure-closure-design.md#41-决策输入与所有权。
+     */
+    private OperationOutcome buildUnknownOutcome(
+            HuashengStepFact.Endpoint endpoint,
+            OperationTicket ticket,
+            String errorCode,
+            String errorMessage,
+            List<HuashengStepFact.AttemptObservation> attempts,
+            HuashengProtocolException protocolException
+    ) {
+        Integer rawErrorCode = null;
+        List<HuashengStepFact.AttemptObservation> mergedAttempts = attempts;
+        if (protocolException != null && protocolException.diagnostics().evidence().isPresent()) {
+            var evidence = protocolException.diagnostics().evidence().get();
+            if (evidence.rawBusinessCode().isPresent()) {
+                rawErrorCode = evidence.rawBusinessCode().getAsInt();
+            }
+            if (!evidence.wasBusinessCallStarted()) {
+                mergedAttempts = new java.util.ArrayList<>(attempts);
+                mergedAttempts.add(new HuashengStepFact.AttemptObservation(
+                        evidence.endpoint() != null ? evidence.endpoint().name() : null,
+                        evidence.httpStatus().isPresent() ? evidence.httpStatus().getAsInt() : null,
+                        evidence.rawBusinessCode().isPresent() ? evidence.rawBusinessCode().getAsInt() : null,
+                        evidence.durationMs(),
+                        evidence.requestBytes(),
+                        evidence.responseBytes(),
+                        evidence.physicalSendCount(),
+                        evidence.wasBusinessCallStarted()
+                ));
+            }
+        }
         HuashengStepFact stepFact = new HuashengStepFact(
                 endpoint,
                 HuashengStepFact.StepResult.RESULT_UNKNOWN,
@@ -367,13 +421,16 @@ public class HuashengOperationExecutor implements OperationExecutorPort {
                 HuashengStepFact.RefundStatus.ABSENT,
                 HuashengStepFact.IsTake.ABSENT,
                 null,
-                attempts
+                mergedAttempts,
+                rawErrorCode,
+                null,
+                null
         );
 
         return OperationOutcome.builder()
                 .outcomeClass(OperationOutcomeClass.RESULT_UNKNOWN)
                 .externalOrderNo(ticket.externalOrderNo())
-                .externalErrorCode(errorCode)
+                .externalErrorCode(errorCode != null ? errorCode : (rawErrorCode != null ? String.valueOf(rawErrorCode) : null))
                 .externalErrorMessage(errorMessage)
                 .protocolFact(stepFact)
                 .build();

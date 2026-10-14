@@ -65,6 +65,17 @@ public final class SupplyChainAdminPermissions {
     public static final String ORDER_QUERY = "supply-chain:order:query";
     public static final String ORDER_EXPORT = "supply-chain:order:export";
 
+    /** 履约异常 Case 人工核实与失败关单权限；核实与动账分开，不与直充释放权限互通。 */
+    public static final String FULFILLMENT_CASE_QUERY = "supply-chain:fulfillment-case:query";
+    public static final String FULFILLMENT_CASE_VERIFY = "supply-chain:fulfillment-case:verify";
+    public static final String FULFILLMENT_CASE_CONFIRM_FAILURE = "supply-chain:fulfillment-case:confirm-failure";
+    public static final String FULFILLMENT_CASE_QUERY_EXPRESSION =
+            "@ss.hasAnyPermissions('" + ADMIN + "', '" + FULFILLMENT_CASE_QUERY + "')";
+    public static final String FULFILLMENT_CASE_VERIFY_EXPRESSION =
+            "@ss.hasAnyPermissions('" + ADMIN + "', '" + FULFILLMENT_CASE_VERIFY + "')";
+    public static final String FULFILLMENT_CASE_CONFIRM_FAILURE_EXPRESSION =
+            "@ss.hasAnyPermissions('" + ADMIN + "', '" + FULFILLMENT_CASE_CONFIRM_FAILURE + "')";
+
     public static final String ROUTING_RULE_QUERY = "supply-chain:routing-rule:query";
     public static final String ROUTING_RULE_CREATE = "supply-chain:routing-rule:create";
     public static final String ROUTING_RULE_UPDATE = "supply-chain:routing-rule:update";
