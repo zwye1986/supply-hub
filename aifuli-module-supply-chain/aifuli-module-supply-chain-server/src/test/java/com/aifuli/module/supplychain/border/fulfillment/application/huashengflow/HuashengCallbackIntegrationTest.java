@@ -452,8 +452,8 @@ class HuashengCallbackIntegrationTest {
     }
 
     @Test
-    @DisplayName("10. 恢复到限 Case 遭遇金额冲突回调后升级为 HUASHENG_FACT_CONFLICT，后续合法回调绝不自动终结")
-    void recoveryLimitCaseWithAmountConflictUpgradesToFactConflict_neverAutoFinalizedBySubsequentCallback() {
+    @DisplayName("10. 身份冲突升级Case；后续合法成功记供应商成功，但不能绕过冲突完成平台交付")
+    void recoveryLimitCaseWithIdentityConflictBlocksPlatformDeliveryButRetainsSupplierSuccess() {
         var fixture = seedOrderAggregate("HS_CB_UPG", AdapterStepCode.PLACE_ORDER, 1);
         claimPlaceToProduceMarker(fixture);
 
@@ -467,6 +467,13 @@ class HuashengCallbackIntegrationTest {
         BOrderDO bo = bOrderMapper.selectById(fixture.bOrder().getId());
         bo.setFulfillmentStatus(BOrderFulfillmentStatus.MANUAL.getCode());
         bOrderMapper.updateById(bo);
+        var binding = new HuashengCheckpoint.Binding(bo.getId(), bo.getBOrderNo(), op.getOperationNo(),
+                op.getSequenceNo(), AdapterStepCode.PLACE_ORDER, CONNECTOR_VER_ID, 100L, op.getConfigDigest());
+        var cp = checkpointCodec.decrypt(new HuashengCheckpointCodec.Stored(op.getCheckpointSchemaVersion(),
+                op.getCheckpointKeyVersion(), op.getCheckpointCiphertext()), binding);
+        var stored = checkpointCodec.encrypt(new HuashengCheckpoint(cp.binding(), cp.placeParameters(),
+                "HS_ORD_FROZEN", cp.observation(), cp.progress(), null));
+        op.setCheckpointCiphertext(stored.ciphertext()); operationMapper.updateById(op);
 
         String evidenceRef = "HUASHENG_CHECKPOINT:" + op.getOperationNo();
         byte[] evidence = evidenceRef.getBytes(StandardCharsets.UTF_8);
@@ -483,7 +490,7 @@ class HuashengCallbackIntegrationTest {
                 .activeCaseFlag(1)
                 .createdAt(now).updatedAt(now).version(0L).build());
 
-        // 回调 1：金额冲突（期望 1000 分，上报 12.00 元）
+        // 回调1：供应商单号与冻结身份冲突；不是以价格差异制造人工状态。
         HuashengCallbackFact conflictFact = createSuccessFact(
                 "NONCE_UPG_001", fixture.bOrder().getBillno(), "HS_ORD_UPG_1", nowSec,
                 "CD_UPG_1", "SEC_UPG_1", "12.00"
@@ -495,21 +502,22 @@ class HuashengCallbackIntegrationTest {
         assertThat(activeCase).isNotNull();
         assertThat(activeCase.getReasonCode()).isEqualTo(FulfillmentExceptionReasonCodes.HUASHENG_FACT_CONFLICT);
 
-        // 回调 2：后续发来合法金额（10.00 元）与完整卡密的回调（相同卡密证据，但此前已被置为 HUASHENG_FACT_CONFLICT）
+        // 回调2：身份正确且完整卡密相同，供应商成功事实必须留存，平台仍待人工核实。
         HuashengCallbackFact validFact = createSuccessFact(
-                "NONCE_UPG_002", fixture.bOrder().getBillno(), "HS_ORD_UPG_1", nowSec + 1,
+                "NONCE_UPG_002", fixture.bOrder().getBillno(), "HS_ORD_FROZEN", nowSec + 1,
                 "CD_UPG_1", "SEC_UPG_1", "10.00"
         );
         callbackService.handleCallbackFact(SUPPLIER_ID, CONNECTOR_VER_ID, validFact, "trace-upg-2");
 
-        // 验证：BOrder 依然保持 MANUAL 状态，绝不自动终结为 SUCCEEDED
+        // 供应商成功与平台人工态并存，不误报卡密已保存交付。
         BOrderDO boFinal = bOrderMapper.selectById(fixture.bOrder().getId());
-        assertThat(boFinal.getFulfillmentStatus()).isEqualTo(BOrderFulfillmentStatus.MANUAL.getCode());
+        assertThat(boFinal.getFulfillmentStatus()).isEqualTo(BOrderFulfillmentStatus.SUCCEEDED.getCode());
+        assertThat(orderMapper.selectById(fixture.order().getId()).getOrderStatus()).isEqualTo(SupplyChainOrderStatus.MANUAL.getCode());
     }
 
     @Test
-    @DisplayName("11. 首次回调成功终结后，再次收到同分异额回调识别为终态矛盾转 MANUAL")
-    void subsequentCallbackWithDifferentRawPriceThrowsConflictAndTransitionsToManual() {
+    @DisplayName("11. 同一完整卡密的成功回调不因金额变化制造履约冲突")
+    void subsequentCallbackWithDifferentRawPriceDoesNotInvalidateDeliveredSuccess() {
         var fixture = seedOrderAggregate("HS_CB_DIFF_RAW", AdapterStepCode.PLACE_ORDER, 1);
         claimPlaceToProduceMarker(fixture);
 
@@ -532,10 +540,10 @@ class HuashengCallbackIntegrationTest {
         );
         callbackService.handleCallbackFact(SUPPLIER_ID, CONNECTOR_VER_ID, fact2, "trace-raw-2");
 
-        // 验证：生成了 SUPPLIER_TERMINAL_CONTRADICTION 冲突 case，保留原终态资金
+        // 本夹具的资金／平台提交是替身；这里只验证供应商事实与Case，不冒充平台交付门禁。
         FulfillmentExceptionCaseDO contradictionCase = exceptionCaseMapper.selectActiveByOperationId(fixture.operation().getId());
-        assertThat(contradictionCase).isNotNull();
-        assertThat(contradictionCase.getReasonCode()).isEqualTo(FulfillmentExceptionReasonCodes.SUPPLIER_TERMINAL_CONTRADICTION);
+        assertThat(contradictionCase).isNull();
+        assertThat(bOrderMapper.selectById(fixture.bOrder().getId()).getFulfillmentStatus()).isEqualTo(BOrderFulfillmentStatus.SUCCEEDED.getCode());
     }
 
     @Test
@@ -572,9 +580,10 @@ class HuashengCallbackIntegrationTest {
                 new LambdaQueryWrapper<FulfillmentAssetDO>().eq(FulfillmentAssetDO::getBOrderId, fixture2.bOrder().getId()));
         assertThat(assets2).isEmpty();
 
-        // 验证：订单 2 在独立事务中被转为 MANUAL，并开启了 HUASHENG_FACT_CONFLICT 的 case
+        // 供应商成功独立留存，平台未保存本单卡密，保持MANUAL并开启冲突Case。
         BOrderDO bo2 = bOrderMapper.selectById(fixture2.bOrder().getId());
-        assertThat(bo2.getFulfillmentStatus()).isEqualTo(BOrderFulfillmentStatus.MANUAL.getCode());
+        assertThat(bo2.getFulfillmentStatus()).isEqualTo(BOrderFulfillmentStatus.SUCCEEDED.getCode());
+        assertThat(orderMapper.selectById(fixture2.order().getId()).getOrderStatus()).isEqualTo(SupplyChainOrderStatus.MANUAL.getCode());
         FulfillmentExceptionCaseDO conflictCase = exceptionCaseMapper.selectActiveByOperationId(fixture2.operation().getId());
         assertThat(conflictCase).isNotNull();
         assertThat(conflictCase.getReasonCode()).isEqualTo(FulfillmentExceptionReasonCodes.HUASHENG_FACT_CONFLICT);

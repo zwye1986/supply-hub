@@ -80,6 +80,20 @@ class HuashengAssetQueryContractTest {
                         .containsEntry("project_id", 4L).containsEntry("result_status", 20));
     }
 
+    @Test void bothAuthorizedOutputsReadType202SingleCredentialFromEncryptedAsset() throws Exception {
+        save("""
+                {"payloadSchemaVersion":1,"assetType":"CARD_CODE_SECRET","cardCode":" C202 ","cardSecret":" C202 ",
+                "supplierPayload":{"adapterType":"HUA_SHENG_ORDER_V1","type":202,"code":" C202 ","pass":"","validTime":null}}
+                """);
+        var project = db.assets().query(db.assetContext(3, 2), "order").getAssets().getFirst();
+        var adminCard = adminAssets().path("cardInfos").get(0);
+        assertThat(project.getCardCode()).isEqualTo(" C202 ");
+        assertThat(project.getCardSecret()).isEqualTo(" C202 ");
+        assertThat(adminCard.path("cardCode").textValue()).isEqualTo(" C202 ");
+        assertThat(adminCard.path("cardSecret").textValue()).isEqualTo(" C202 ");
+        assertThat(plaintexts).hasSize(2).allSatisfy(bytes -> assertThat(bytes).containsOnly((byte) 0));
+    }
+
     @ParameterizedTest
     @ValueSource(strings = {",\"validTime\":[]", ",\"validTime\":{}", ",\"validTime\":201",
             ",\"validTime\":false", ",\"validTime\":null,\"validTime\":\"长期有效\"",

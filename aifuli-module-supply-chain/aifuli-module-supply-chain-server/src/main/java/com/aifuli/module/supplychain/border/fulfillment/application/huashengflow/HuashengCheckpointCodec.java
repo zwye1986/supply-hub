@@ -231,7 +231,7 @@ public final class HuashengCheckpointCodec {
                 Long.toString(b.connectorVersionId()), Long.toString(b.offerVersionId())).getBytes(StandardCharsets.UTF_8);
     }
 
-    private static boolean sameBinding(HuashengCheckpoint.Binding a, HuashengCheckpoint.Binding b) {
+    static boolean sameBinding(HuashengCheckpoint.Binding a, HuashengCheckpoint.Binding b) {
         return a.bOrderId() == b.bOrderId() && a.bOrderNo().equals(b.bOrderNo())
                 && a.operationNo().equals(b.operationNo()) && a.sequenceNo() == b.sequenceNo() && a.step() == b.step()
                 && a.connectorVersionId() == b.connectorVersionId() && a.offerVersionId() == b.offerVersionId()

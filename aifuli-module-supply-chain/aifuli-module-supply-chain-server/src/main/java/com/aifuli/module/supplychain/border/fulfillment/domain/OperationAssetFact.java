@@ -58,7 +58,7 @@ public record OperationAssetFact(
         }
     }
 
-    /** 华昇type201专用纯事实工厂；不trim，不承担资金授权。设计见 docs/superpowers/specs/2026-10-09-huasheng-type201-production-closure-design.md#71-task2桥接与持久基础边界。 */
+    /** 华昇201／202标准双字段纯事实工厂，保留历史入口名；卡型与原字段投影由codec验证，不trim、不承担资金授权。设计见 docs/superpowers/specs/2026-10-09-huasheng-type201-production-closure-design.md#73-201202卡号卡密兼容与新单成功闭环。 */
     public static OperationAssetFact huashengType201(String code, String pass, byte[] protectedPayload) {
         if (code == null || code.isBlank() || pass == null || pass.isBlank()
                 || protectedPayload == null || protectedPayload.length == 0) {

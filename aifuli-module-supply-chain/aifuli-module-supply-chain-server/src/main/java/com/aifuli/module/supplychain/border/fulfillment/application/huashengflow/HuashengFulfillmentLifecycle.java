@@ -35,10 +35,13 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -81,6 +84,9 @@ public class HuashengFulfillmentLifecycle {
     private final HmacFingerprintPort hmacFingerprint;
     @org.springframework.beans.factory.annotation.Autowired
     private com.aifuli.module.supplychain.border.order.dal.mysql.OrderStatusLogMapper statusLogMapper;
+    @org.springframework.beans.factory.annotation.Autowired
+    @org.springframework.beans.factory.annotation.Qualifier(TRANSACTION_MANAGER)
+    private PlatformTransactionManager transactionManager;
 
     public HuashengFulfillmentLifecycle(
             RechargeFrequencyLifecycle frequencyLifecycle,
@@ -341,6 +347,7 @@ public class HuashengFulfillmentLifecycle {
                 && !Arrays.equals(checkpoint.pendingAssetPayload(), fact.protectedAssetPayload())) {
             decision = HuashengFlowDecision.MANUAL;
         }
+        recordSupplierTakenSuccess(locked, checkpoint, fact, now);
         HuashengStableFailureReason closureReason = switch (decision) {
             case FINAL_REJECTION -> rejectionReason(fact);
             case FINAL_CANCELLATION -> HuashengStableFailureReason.HUASHENG_SUPPLIER_CANCELLED;
@@ -365,9 +372,10 @@ public class HuashengFulfillmentLifecycle {
             case NEXT_CONFIRM, NEXT_TAKE -> advanceToNextStep(currentOperation, currentBOrder, checkpoint, fact, outcome, decision, traceId, now);
             case WAIT_QUERY -> scheduleQueryRecovery(currentOperation, currentBOrder, checkpoint, fact, decision, traceId, now, sideEffectFreeProven);
             case FINAL_SUCCESS -> {
-                // TAKE 本身无金额；只在锁后使用已核历史金额，绝不从冻结成本兜底（设计 §6.3）。
+                // TAKE没有金额，历史金额也可能缺失；只留存已有事实，不作为履约成功门槛（设计 §7.3）。
                 Long amount = fact.endpoint() == HuashengStepFact.Endpoint.TAKE
-                        ? checkpoint.observation().totalPriceMinorUnits() : fact.totalPriceMinorUnits();
+                        ? checkpoint.observation() == null ? null : checkpoint.observation().totalPriceMinorUnits()
+                        : fact.totalPriceMinorUnits();
                 supplierOrderLifecycle.commitHuashengSuccess(permit, terminalOutcome(outcome, OperationOutcomeClass.SUCCEEDED, amount), traceId);
                 yield new HuashengApplyResult(decision, null, true, "Final success committed");
             }
@@ -583,7 +591,7 @@ public class HuashengFulfillmentLifecycle {
      * 3. 唯一下一步仍 PENDING 且 marker 为空不阻断回调，依据首 PLACE 的持久 marker 收敛原单；
      * 4. 递增当前操作 generation，使在途同步或恢复 permit 失格；
      * 5. 校验 outOrderSn 与 billno 一致，经 HuashengFlowPolicy 纯决策；
-     * 6. FINAL_SUCCESS 时核验完整资产与金额，提交资金；FINAL_REJECTION 且无资产时释放资金；
+     * 6. 供应商已取卡成功独立留存；FINAL_SUCCESS须保存完整卡密，金额不作履约门槛（§7.3）；
      * 7. 终态幂等安全收敛。
      *
      * <p>设计详见 {@code docs/superpowers/specs/2026-10-09-huasheng-type201-production-closure-design.md#8-回调协议}。
@@ -665,10 +673,11 @@ public class HuashengFulfillmentLifecycle {
         boolean succeeded = currentBOrder.getFulfillmentStatus() == BOrderFulfillmentStatus.SUCCEEDED.getCode();
         boolean failed = currentBOrder.getFulfillmentStatus() == BOrderFulfillmentStatus.FAILED.getCode();
         boolean cancelled = currentBOrder.getFulfillmentStatus() == BOrderFulfillmentStatus.CANCELLED.getCode();
-        if (succeeded || failed || cancelled) {
+        // 供应商成功不等于本地交付完成；未保存卡密时必须允许后续有效回调补齐（设计 §7.3）。
+        if ((succeeded && locked.request().getStatus() == FulfillmentRequestStatus.SUCCEEDED.getCode()) || failed || cancelled) {
             boolean same = Objects.equals(fact.outOrderSn(), currentBOrder.getBillno())
                     && Objects.equals(fact.orderSn(), currentBOrder.getExternalOrderNo())
-                    && (checkpoint.observation() == null || isPriceRawEquivalent(checkpoint.observation().totalPriceRaw(), fact.totalPriceRaw()))
+                    && (succeeded || checkpoint.observation() == null || isPriceRawEquivalent(checkpoint.observation().totalPriceRaw(), fact.totalPriceRaw()))
                     && (succeeded && decision == HuashengFlowDecision.FINAL_SUCCESS
                         && supplierOrderLifecycle.matchesHuashengDeliveredAsset(currentOperation.getOperationNo(), assets)
                         || failed && decision == HuashengFlowDecision.FINAL_REJECTION
@@ -677,6 +686,8 @@ public class HuashengFulfillmentLifecycle {
             holdManual(locked, checkpoint, fact, FulfillmentExceptionReasonCodes.SUPPLIER_TERMINAL_CONTRADICTION, true, now);
             return new HuashengApplyResult(HuashengFlowDecision.MANUAL, null, true, "Terminal conflict registered");
         }
+        // 在递增回调代次前留存原围栏，资产写入回滚后仅保留已核实的供应商成功（设计 §7.3）。
+        recordSupplierTakenSuccess(locked, checkpoint, fact, now);
         if (checkpoint.pendingAssetPayload() != null && fact.protectedAssetPayload() != null
                 && !Arrays.equals(checkpoint.pendingAssetPayload(), fact.protectedAssetPayload())) {
             // 首期仅一个证据槽；不同卡密不能覆盖，也不能绕过证据直接交付。
@@ -817,6 +828,62 @@ public class HuashengFulfillmentLifecycle {
         }
     }
 
+    /**
+     * 正常随结果事务保存供应商成功；若本地交付回滚，仅在原围栏仍有效时独立保存供应商事实。
+     * 必须等原事务回滚释放聚合锁后再开启REQUIRES_NEW，避免持锁嵌套事务自锁。
+     * 不在独立事务保存资产、资金或Inbox成功；不重复注册回滚处理。
+     * 设计：docs/superpowers/specs/2026-10-09-huasheng-type201-production-closure-design.md#73-201202卡号卡密兼容与新单成功闭环。
+     */
+    private void recordSupplierTakenSuccess(RechargeFrequencyLifecycle.LockedExecution locked,
+                                            HuashengCheckpoint checkpoint, HuashengStepFact fact, LocalDateTime now) {
+        if (!recordSupplierTakenSuccess(locked.bOrder(), checkpoint, fact, now)) return;
+        String operationNo = locked.operation().getOperationNo();
+        Long generation = locked.operation().getExecutionGeneration();
+        Short operationStatus = locked.operation().getStatus();
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override public void afterCompletion(int status) {
+                if (status != STATUS_ROLLED_BACK) return;
+                var tx = new TransactionTemplate(transactionManager);
+                tx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+                tx.executeWithoutResult(ignored -> {
+                    var current = frequencyLifecycle.lockForResult(operationNo);
+                    if (current == null || !Objects.equals(current.operation().getExecutionGeneration(), generation)
+                            || !Objects.equals(current.operation().getStatus(), operationStatus)) return;
+                    var currentCheckpoint = decryptCheckpoint(current.operation(), current.bOrder());
+                    if (!HuashengCheckpointCodec.sameBinding(currentCheckpoint.binding(), checkpoint.binding())) return;
+                    recordSupplierTakenSuccess(current.bOrder(), currentCheckpoint, fact, databaseClock.now());
+                });
+            }
+        });
+    }
+
+    /**
+     * 保存可信“履约成功且已取卡”事实，不等待本地交付或金额核对。
+     * activeFlag暂留作原单补卡占位；不得因本地缺卡转人工而抹掉供应商成功。
+     * 设计：docs/superpowers/specs/2026-10-09-huasheng-type201-production-closure-design.md#73-201202卡号卡密兼容与新单成功闭环。
+     */
+    private boolean recordSupplierTakenSuccess(BOrderDO bOrder, HuashengCheckpoint checkpoint, HuashengStepFact fact, LocalDateTime now) {
+        if (fact.resultClass() != HuashengStepFact.StepResult.ACCEPTED || fact.status() != HuashengStepFact.Status.SUCCESS
+                || fact.num() != checkpoint.placeParameters().num()
+                || !Objects.equals(fact.outOrderSn(), bOrder.getBillno())
+                || fact.orderSn() == null || fact.orderSn().isBlank()
+                || checkpoint.orderSn() != null && !Objects.equals(checkpoint.orderSn(), fact.orderSn())
+                || bOrder.getExternalOrderNo() != null && !Objects.equals(bOrder.getExternalOrderNo(), fact.orderSn())
+                || bOrder.getFulfillmentStatus() == BOrderFulfillmentStatus.FAILED.getCode()
+                || bOrder.getFulfillmentStatus() == BOrderFulfillmentStatus.CANCELLED.getCode()
+                || bOrder.getFulfillmentStatus() == BOrderFulfillmentStatus.SUCCEEDED.getCode()) return false;
+        boolean taken = fact.isTake() == HuashengStepFact.IsTake.Y || fact.endpoint() == HuashengStepFact.Endpoint.TAKE
+                || fact.endpoint() == HuashengStepFact.Endpoint.CALLBACK && HuashengFlowPolicy.isValidType201Payload(fact.protectedAssetPayload());
+        if (!taken) return false;
+        bOrder.setFulfillmentStatus(BOrderFulfillmentStatus.SUCCEEDED.getCode());
+        bOrder.setFulfilledQuantity(bOrder.getRequestedQuantity());
+        bOrder.setExternalOrderNo(fact.orderSn());
+        bOrder.setCompletedAt(now); bOrder.setUpdatedAt(now);
+        if (bOrderMapper.updateById(bOrder) != 1) throw new IllegalStateException("Supplier success CAS failed");
+        logAfterCommit("[华昇生命周期][供应商履约成功] bOrderNo={}, endpoint={}", bOrder.getBOrderNo(), fact.endpoint());
+        return true;
+    }
+
     /** 同事务隔离资产证据与唯一 case，不交付、不动资金、不覆盖既有终态；设计 §6.3、§8.2。 */
     private void holdManual(RechargeFrequencyLifecycle.LockedExecution locked, HuashengCheckpoint checkpoint,
                             HuashengStepFact fact, String reason, boolean preserveTerminal, LocalDateTime now) {
@@ -843,7 +910,9 @@ public class HuashengFulfillmentLifecycle {
         if (!preserveTerminal) {
             operation.setStatus(SupplierOrderOperationStatus.MANUAL.getCode());
             operation.setResultClass(OperationOutcomeClass.MANUAL_REQUIRED.name());
-            locked.bOrder().setFulfillmentStatus(BOrderFulfillmentStatus.MANUAL.getCode());
+            if (locked.bOrder().getFulfillmentStatus() != BOrderFulfillmentStatus.SUCCEEDED.getCode()) {
+                locked.bOrder().setFulfillmentStatus(BOrderFulfillmentStatus.MANUAL.getCode());
+            }
             locked.bOrder().setUpdatedAt(now);
             if (bOrderMapper.updateById(locked.bOrder()) != 1) throw new IllegalStateException("Manual BOrder CAS failed");
             locked.request().setStatus(FulfillmentRequestStatus.MANUAL.getCode()); locked.request().setUpdatedAt(now);
@@ -1230,6 +1299,7 @@ public class HuashengFulfillmentLifecycle {
                 locked.bOrder(), currentOperation, locked.relatedBOrders(), locked.relatedOperations(), locked.waitingHeadId());
         LocalDateTime now = databaseClock.now();
         HuashengCheckpoint checkpoint = decryptCheckpoint(currentOperation, locked.bOrder());
+        recordSupplierTakenSuccess(locked, checkpoint, fact, now);
         holdManual(locked, checkpoint, fact, FulfillmentExceptionReasonCodes.HUASHENG_FACT_CONFLICT, false, now);
         log.warn("[华昇生命周期][跨单卡密冲突留证] bOrderId={}, operationNo={}, traceId={}",
                 bOrderId, currentOperation.getOperationNo(), traceId);

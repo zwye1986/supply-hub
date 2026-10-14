@@ -148,7 +148,8 @@ public class SupplierOrderLifecycle {
     }
 
     /**
-     * 华昇受控成功提交入口：仅允许携带有效 permit、完整 type201 资产及与冻结成本一致的金额。
+     * 华昇平台成功提交：有效permit和完整201／202卡密同事务保存后才完成平台交付。
+     * 金额只留存事实，不作为履约成功门槛；设计见生产闭环设计 §7.3。
      */
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public TransitionResult commitHuashengSuccess(HuashengExecutionPermit permit, OperationOutcome outcome, String traceId) {
@@ -188,14 +189,7 @@ public class SupplierOrderLifecycle {
                     + ", current=" + operation.getExecutionGeneration());
         }
 
-        // Guard 2: 金额一致性
-        if (outcome.reportedSettlementAmount() == null
-                || !outcome.reportedSettlementAmount().equals(bOrder.getExpectedSupplierSettlementAmount())) {
-            throw new IllegalStateException("Reported settlement amount mismatch: expected="
-                    + bOrder.getExpectedSupplierSettlementAmount() + ", reported=" + outcome.reportedSettlementAmount());
-        }
-
-        // Guard 3: 资产载荷与 type201 严格合法性
+        // Guard 2: 资产载荷与201／202投影严格合法性；不将仅供应商成功视为平台已交付。
         if (outcome.assets() == null || outcome.assets().size() != 1) {
             throw new IllegalStateException("Huasheng commit requires exactly one asset");
         }
@@ -224,13 +218,17 @@ public class SupplierOrderLifecycle {
         bOrder.setFulfillmentStatus(BOrderFulfillmentStatus.SUCCEEDED.getCode());
         bOrder.setFulfilledQuantity(bOrder.getRequestedQuantity());
         bOrder.setActiveFlag(null);
-        bOrder.setReportedSupplierSettlementAmount(outcome.reportedSettlementAmount());
-        bOrder.setConfirmedSupplierSettlementAmount(outcome.reportedSettlementAmount());
-        bOrder.setSettlementStatus(BOrderSettlementStatus.MATCHED.getCode());
+        // 实报金额缺失不能伪造结算已匹配；差异不阻断本地卡密交付（生产闭环设计 §7.3）。
+        if (outcome.reportedSettlementAmount() != null) {
+            bOrder.setReportedSupplierSettlementAmount(outcome.reportedSettlementAmount());
+            boolean matched = Objects.equals(outcome.reportedSettlementAmount(), bOrder.getExpectedSupplierSettlementAmount());
+            if (matched) bOrder.setConfirmedSupplierSettlementAmount(outcome.reportedSettlementAmount());
+            bOrder.setSettlementStatus(matched ? BOrderSettlementStatus.MATCHED.getCode() : BOrderSettlementStatus.MISMATCH.getCode());
+        }
         if (outcome.externalOrderNo() != null && !outcome.externalOrderNo().isBlank()) {
             bOrder.setExternalOrderNo(outcome.externalOrderNo());
         }
-        bOrder.setCompletedAt(now);
+        if (bOrder.getCompletedAt() == null) bOrder.setCompletedAt(now);
         bOrder.setUpdatedAt(now);
         if (updateBOrderState(bOrder, false) != 1) {
             throw new IllegalStateException("BOrder CAS update lost optimistic lock: " + bOrder.getBOrderNo());

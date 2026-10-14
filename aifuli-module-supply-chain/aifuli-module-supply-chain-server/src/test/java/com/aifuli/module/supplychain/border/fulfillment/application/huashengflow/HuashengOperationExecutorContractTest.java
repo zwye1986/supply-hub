@@ -198,6 +198,22 @@ class HuashengOperationExecutorContractTest {
     }
 
     @Test
+    void executesType202TakeAsCompleteSingleCredentialAssetWithoutInventingPrice() {
+        var card = HuashengType201AssetCodecTest.card("{\"type\":202,\"code\":\" TAKE_202 \",\"pass\":\"\"}");
+        var response = Mockito.mock(HuashengTakeResponse.class);
+        Mockito.when(response.orderSn()).thenReturn("HS_ORDER_999");
+        Mockito.when(response.num()).thenReturn(1);
+        Mockito.when(response.list()).thenReturn(List.of(card));
+        mockDispatcher.takeResultToReturn = new HuashengCallResult.Parsed<>(response, List.of(), true);
+        var outcome = executor.execute(createValidTicket(AdapterStepCode.TAKE_CARD));
+        assertThat(outcome.outcomeClass()).isEqualTo(OperationOutcomeClass.ACCEPTED);
+        assertThat(outcome.reportedSettlementAmount()).isNull();
+        assertThat(outcome.assets()).hasSize(1);
+        assertThat(outcome.assets().getFirst().cardNo()).isEqualTo(" TAKE_202 ");
+        assertThat(outcome.assets().getFirst().cardSecret()).isEqualTo(" TAKE_202 ");
+    }
+
+    @Test
     @DisplayName("执行TAKE端点返回非T201或多卡：降级为RESULT_UNKNOWN，不伪造成功交付")
     void executeTakeInvalidCardProducesResultUnknown() {
         OperationTicket ticket = createValidTicket(AdapterStepCode.TAKE_CARD);

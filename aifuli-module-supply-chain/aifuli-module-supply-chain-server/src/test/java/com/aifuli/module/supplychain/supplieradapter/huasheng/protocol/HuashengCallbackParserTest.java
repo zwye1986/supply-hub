@@ -332,8 +332,8 @@ class HuashengCallbackParserTest {
     }
 
     @ParameterizedTest
-    @ValueSource(ints = {202, 203, 301, 302, 303, 304})
-    @DisplayName("六型拒绝：非 Type 201 卡片类型在回调中均被拒绝")
+    @ValueSource(ints = {203, 301, 302, 303, 304})
+    @DisplayName("拒绝201／202以外的卡型")
     void rejectsOtherCardTypesForSuccess(int cardType) {
         String otherCardJson = "{\n" +
                 "  \"timestamp\": 1700000000,\n" +
@@ -509,6 +509,19 @@ class HuashengCallbackParserTest {
                 APP_SECRET
         )).isInstanceOf(HuashengCallbackParseException.class)
                 .hasMessageContaining("pass");
+    }
+
+    @Test
+    void acceptsAuthenticatedType202WithSingleCredentialAndPreservesMissingPass() {
+        String plain = validSuccessPlainJson(null).replace("\"type\": 201", "\"type\": 202")
+                .replace(",\n      \"pass\": \"CARD_PASS_002\"", "");
+        String cipher = encrypt(plain);
+        var fact = HuashengCallbackParser.parse(cipher.getBytes(StandardCharsets.UTF_8), APP_ID,
+                sign(cipher), APP_ID, publicKey, APP_SECRET);
+        assertThat(fact.card()).isPresent();
+        assertThat(fact.card().orElseThrow().type()).isEqualTo(HuashengCardType.T202);
+        assertThat(fact.card().orElseThrow().code().asOptional()).contains("CARD_CODE_001");
+        assertThat(fact.card().orElseThrow().pass().isPresent()).isFalse();
     }
 
     @Test

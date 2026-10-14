@@ -245,7 +245,8 @@ public class HuashengOperationExecutor implements OperationExecutorPort {
         if (result instanceof HuashengCallResult.Parsed<HuashengTakeResponse> parsed) {
             HuashengTakeResponse res = parsed.data();
             List<HuashengProtocolCard> cards = res.list();
-            if (cards != null && cards.size() == 1 && cards.get(0).type() == HuashengCardType.T201) {
+            if (cards != null && cards.size() == 1 && (cards.get(0).type() == HuashengCardType.T201
+                    || cards.get(0).type() == HuashengCardType.T202)) {
                 try {
                     OperationAssetFact assetFact = assetCodec.toFact(cards.get(0));
                     HuashengStepFact stepFact = new HuashengStepFact(
@@ -276,7 +277,7 @@ public class HuashengOperationExecutor implements OperationExecutorPort {
                 }
             }
 
-            // 非T201或多卡或资产转换失败，转 RESULT_UNKNOWN
+            // 非201／202、多卡或资产转换失败，转RESULT_UNKNOWN；生产闭环设计 §7.3。
             HuashengStepFact stepFact = new HuashengStepFact(
                     HuashengStepFact.Endpoint.TAKE,
                     HuashengStepFact.StepResult.RESULT_UNKNOWN,
@@ -295,7 +296,7 @@ public class HuashengOperationExecutor implements OperationExecutorPort {
             return OperationOutcome.builder()
                     .outcomeClass(OperationOutcomeClass.RESULT_UNKNOWN)
                     .externalOrderNo(res.orderSn())
-                    .externalErrorMessage("TAKE响应未提供唯一有效type201卡片")
+                    .externalErrorMessage("TAKE响应未提供唯一有效201／202卡片")
                     .protocolFact(stepFact)
                     .callDigest(digest)
                     .build();

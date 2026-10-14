@@ -17,14 +17,15 @@ import com.aifuli.module.supplychain.api.fulfillment.dto.SupplierValidTimeState;
 import java.util.Set;
 
 /**
- * type201协议卡片到标准受保护payload的唯一封闭桥接，不访问DAL或资金、不给业务终结许可。
+ * 201／202协议卡片到标准受保护payload的唯一封闭桥接，保留历史类名；不访问DAL或资金。
  * 字段三态与原字符串保真；id只进入payload，不用日期解析有效期。
- * 设计：docs/superpowers/specs/2026-10-09-huasheng-type201-production-closure-design.md#71-task2桥接与持久基础边界。
+ * 设计：docs/superpowers/specs/2026-10-09-huasheng-type201-production-closure-design.md#73-201202卡号卡密兼容与新单成功闭环。
  */
 public final class HuashengType201AssetCodec {
     public static final int PAYLOAD_SCHEMA_VERSION = 1;
-    // A枚举的rawValue为协议包内部接口；此封闭schema固定201，不为接线放宽A访问范围。
+    // A枚举的rawValue为协议包内部接口；封闭schema明确白名单，不放宽A访问范围。
     public static final int CARD_TYPE = 201;
+    public static final int SINGLE_CREDENTIAL_CARD_TYPE = 202;
     public static final String ADAPTER_TYPE = "HUA_SHENG_ORDER_V1";
     public static final String FINGERPRINT_PURPOSE = "FULFILLMENT_ASSET";
     private static final String INVALID = "华昇type201资产无效";
@@ -36,12 +37,14 @@ public final class HuashengType201AssetCodec {
             .streamReadConstraints(StreamReadConstraints.builder().maxNestingDepth(32).maxStringLength(16384)
                     .maxNumberLength(32).build()).build());
 
-    /** 仅桥接经A parser校验的单张T201，拒绝其他型非空载荷。设计同 §7.1。 */
+    /** 201保留独立双字段；202与卡管一致将原单值投影为同值卡号／卡密。设计同 §7.3。 */
     public OperationAssetFact toFact(HuashengProtocolCard card) {
-        check(card != null && card.type() == HuashengCardType.T201);
-        String code = value(card.code()); String pass = value(card.pass());
+        check(card != null && (card.type() == HuashengCardType.T201 || card.type() == HuashengCardType.T202));
+        String code = card.code().asOptional().orElse(null); String pass = card.pass().asOptional().orElse(null);
+        int type = card.type() == HuashengCardType.T201 ? CARD_TYPE : SINGLE_CREDENTIAL_CARD_TYPE;
+        if (type == SINGLE_CREDENTIAL_CARD_TYPE) code = pass = singleCredential(code, pass);
         ObjectNode supplier = JSON.createObjectNode();
-        supplier.put("adapterType", ADAPTER_TYPE); supplier.put("type", CARD_TYPE);
+        supplier.put("adapterType", ADAPTER_TYPE); supplier.put("type", type);
         field(supplier, "id", card.id()); field(supplier, "code", card.code()); field(supplier, "pass", card.pass());
         field(supplier, "crc", card.crc()); field(supplier, "url", card.url()); field(supplier, "urlPass", card.urlPass());
         field(supplier, "validTime", card.validTime());
@@ -111,10 +114,16 @@ public final class HuashengType201AssetCodec {
             String code = text(parsed, "cardCode"); String pass = text(parsed, "cardSecret");
             check(!code.isBlank() && !pass.isBlank());
             ObjectNode source = object(parsed.get("supplierPayload"), SUPPLIER_KEYS);
-            check(ADAPTER_TYPE.equals(text(source, "adapterType")) && number(source, "type") == CARD_TYPE);
-            check(code.equals(text(source, "code")) && pass.equals(text(source, "pass")));
+            long type = number(source, "type");
+            check(ADAPTER_TYPE.equals(text(source, "adapterType")) && (type == CARD_TYPE || type == SINGLE_CREDENTIAL_CARD_TYPE));
+            if (type == CARD_TYPE) check(code.equals(text(source, "code")) && pass.equals(text(source, "pass")));
+            else {
+                String selected = singleCredential(source.hasNonNull("code") ? text(source, "code") : null,
+                        source.hasNonNull("pass") ? text(source, "pass") : null);
+                check(code.equals(selected) && pass.equals(selected));
+            }
             ObjectNode supplier = JSON.createObjectNode();
-            supplier.put("adapterType", ADAPTER_TYPE); supplier.put("type", CARD_TYPE);
+            supplier.put("adapterType", ADAPTER_TYPE); supplier.put("type", type);
             if (source.has("id")) {
                 if (source.get("id").isNull()) supplier.putNull("id");
                 else { long id = number(source, "id"); check(id >= 0); supplier.put("id", id); }
@@ -140,7 +149,7 @@ public final class HuashengType201AssetCodec {
         byte[] verified = validate(fact);
         try {
             ObjectNode input = JSON.createObjectNode();
-            input.put("supplierId", supplierId); input.put("type", CARD_TYPE);
+            input.put("supplierId", supplierId); input.put("type", canonicalPayload(verified).get("supplierPayload").get("type").intValue());
             input.put("code", fact.cardNo()); input.put("pass", fact.cardSecret());
             return bytes(input);
         } finally { Arrays.fill(verified, (byte) 0); }
@@ -160,9 +169,10 @@ public final class HuashengType201AssetCodec {
             else throw new IllegalArgumentException(INVALID);
         }
     }
-    private static String value(HuashengField<String> field) {
-        check(field instanceof HuashengField.Value<String>);
-        return ((HuashengField.Value<String>) field).value();
+    private static String singleCredential(String code, String pass) {
+        String selected = code != null && !code.isBlank() ? code : pass;
+        check(selected != null && !selected.isBlank());
+        return selected;
     }
     private static ObjectNode object(JsonNode node, Set<String> keys) {
         check(node instanceof ObjectNode); node.fieldNames().forEachRemaining(k -> check(keys.contains(k)));

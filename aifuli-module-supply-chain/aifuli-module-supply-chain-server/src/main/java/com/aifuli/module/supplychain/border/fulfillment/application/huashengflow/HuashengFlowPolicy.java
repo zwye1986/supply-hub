@@ -112,8 +112,8 @@ public final class HuashengFlowPolicy {
             return HuashengFlowDecision.MANUAL;
         }
 
-        // 原元数值连续性独立于分值舍入：9.99 与9.9900等价，9.994虽同分仍是冲突（设计 §4.2）。
-        if (fact.totalPriceRaw() != null && checkpoint.observation() != null) {
+        // 成功履约不以金额核对为门槛；其它事实仍保留原购买／失败安全规则（生产闭环设计 §7.3）。
+        if (fact.status() != HuashengStepFact.Status.SUCCESS && fact.totalPriceRaw() != null && checkpoint.observation() != null) {
             try {
                 if (new BigDecimal(fact.totalPriceRaw()).compareTo(new BigDecimal(checkpoint.observation().totalPriceRaw())) != 0) {
                     return HuashengFlowDecision.MANUAL;
@@ -277,7 +277,7 @@ public final class HuashengFlowPolicy {
     private static HuashengFlowDecision decidePlace(HuashengCheckpoint checkpoint, HuashengStepFact fact,
                                                     long expectedSettlementAmountMinorUnits) {
         MoneyCheck money = checkMoney(fact, expectedSettlementAmountMinorUnits);
-        if (money == MoneyCheck.INVALID) {
+        if (money == MoneyCheck.INVALID && fact.status() != HuashengStepFact.Status.SUCCESS) {
             return HuashengFlowDecision.MANUAL;
         }
         boolean priceMismatch = money == MoneyCheck.MISMATCHED;
@@ -294,10 +294,7 @@ public final class HuashengFlowPolicy {
                 yield HuashengFlowDecision.NEXT_CONFIRM;
             }
             case SUCCESS -> {
-                // 超报价资产不能自动获取，转人工（设计 §5.1）。
-                if (priceMismatch) {
-                    yield HuashengFlowDecision.MANUAL;
-                }
+                // 已履约成功后只取原单卡密，不再以金额差异阻断交付（生产闭环设计 §7.3）。
                 if (checkpoint.progress().takeCount() >= MAX_TAKE_COUNT) {
                     yield HuashengFlowDecision.MANUAL;
                 }
@@ -326,7 +323,7 @@ public final class HuashengFlowPolicy {
     private static HuashengFlowDecision decideConfirm(HuashengCheckpoint checkpoint, HuashengStepFact fact,
                                                       long expectedSettlementAmountMinorUnits) {
         MoneyCheck money = checkMoney(fact, expectedSettlementAmountMinorUnits);
-        if (money == MoneyCheck.INVALID) {
+        if (money == MoneyCheck.INVALID && fact.status() != HuashengStepFact.Status.SUCCESS) {
             return HuashengFlowDecision.MANUAL;
         }
         boolean priceMismatch = money == MoneyCheck.MISMATCHED;
@@ -342,9 +339,6 @@ public final class HuashengFlowPolicy {
                 yield HuashengFlowDecision.NEXT_CONFIRM;
             }
             case SUCCESS -> {
-                if (priceMismatch) {
-                    yield HuashengFlowDecision.MANUAL;
-                }
                 if (checkpoint.progress().takeCount() >= MAX_TAKE_COUNT) {
                     yield HuashengFlowDecision.MANUAL;
                 }
@@ -371,7 +365,7 @@ public final class HuashengFlowPolicy {
     private static HuashengFlowDecision decideQuery(HuashengCheckpoint checkpoint, HuashengStepFact fact,
                                                     long expectedSettlementAmountMinorUnits) {
         MoneyCheck money = checkMoney(fact, expectedSettlementAmountMinorUnits);
-        if (money == MoneyCheck.INVALID) {
+        if (money == MoneyCheck.INVALID && fact.status() != HuashengStepFact.Status.SUCCESS) {
             return HuashengFlowDecision.MANUAL;
         }
         boolean priceMismatch = money == MoneyCheck.MISMATCHED;
@@ -395,10 +389,7 @@ public final class HuashengFlowPolicy {
                 yield HuashengFlowDecision.NEXT_CONFIRM;
             }
             case SUCCESS -> {
-                // SUCCESS：超报价资产不能自动获取（设计 §5.1）；匹配时 TAKE，Y 仍可重取同套卡密。
-                if (priceMismatch) {
-                    yield HuashengFlowDecision.MANUAL;
-                }
+                // SUCCESS/isTake=Y独立记供应商成功；本地仍须获取并保存原单卡密（生产闭环设计 §7.3）。
                 if (checkpoint.progress().takeCount() >= MAX_TAKE_COUNT) {
                     yield HuashengFlowDecision.MANUAL;
                 }
@@ -426,14 +417,6 @@ public final class HuashengFlowPolicy {
 
     private static HuashengFlowDecision decideTake(HuashengCheckpoint checkpoint, HuashengStepFact fact,
                                                    long expectedSettlementAmountMinorUnits) {
-        // TAKE 没有总价，核对 checkpoint 中记录的已观察金额
-        if (checkpoint.observation() == null) {
-            return HuashengFlowDecision.WAIT_QUERY;
-        }
-        if (checkpoint.observation().totalPriceMinorUnits() != expectedSettlementAmountMinorUnits) {
-            return HuashengFlowDecision.MANUAL;
-        }
-
         if (fact.status() != HuashengStepFact.Status.SUCCESS) {
             if (checkpoint.progress().queryCount() >= MAX_QUERY_COUNT) {
                 return HuashengFlowDecision.MANUAL;
@@ -453,16 +436,12 @@ public final class HuashengFlowPolicy {
     private static HuashengFlowDecision decideCallback(HuashengCheckpoint checkpoint, HuashengStepFact fact,
                                                        long expectedSettlementAmountMinorUnits) {
         MoneyCheck money = checkMoney(fact, expectedSettlementAmountMinorUnits);
-        if (money == MoneyCheck.INVALID) {
+        if (money == MoneyCheck.INVALID && fact.status() != HuashengStepFact.Status.SUCCESS) {
             return HuashengFlowDecision.MANUAL;
         }
 
         return switch (fact.status()) {
             case SUCCESS -> {
-                // 超报价资产不能自动获取（设计 §5.1）。
-                if (money == MoneyCheck.MISMATCHED) {
-                    yield HuashengFlowDecision.MANUAL;
-                }
                 byte[] payload = fact.protectedAssetPayload();
                 if (payload == null || !isValidType201Payload(payload)) {
                     yield HuashengFlowDecision.MANUAL;
@@ -498,7 +477,7 @@ public final class HuashengFlowPolicy {
     }
 
     /**
-     * 严格校验载荷是否为合法 type 201 资产。
+     * 严格校验201／202资产，保留历史方法名；唯一schema校验由资产codec负责（生产闭环设计 §7.3）。
      */
     public static boolean isValidType201Payload(byte[] payload) {
         if (payload == null || payload.length == 0 || payload.length > HuashengFlowCodes.CHECKPOINT_MAX_BYTES) {
@@ -522,9 +501,6 @@ public final class HuashengFlowPolicy {
                 return false;
             }
             if (!HuashengType201AssetCodec.ADAPTER_TYPE.equals(supplier.path("adapterType").asText())) {
-                return false;
-            }
-            if (supplier.path("type").asInt() != HuashengType201AssetCodec.CARD_TYPE) {
                 return false;
             }
             var fact = OperationAssetFact.huashengType201(code, pass, payload);

@@ -92,12 +92,12 @@ class HuashengFlowPolicyTest {
     }
 
     @Test
-    void rawYuanContinuityRejectsDifferentValuesEvenWhenRoundedCentsMatch() {
+    void successfulFulfillmentDoesNotRequireRawYuanContinuity() {
         var cp = checkpointWithOrderSn();
         var changed = new HuashengStepFact(HuashengStepFact.Endpoint.QUERY, HuashengStepFact.StepResult.ACCEPTED,
                 OUT_ORDER_SN, ORDER_SN, 1, "9.994", EXPECTED_COST, HuashengStepFact.Status.SUCCESS,
                 HuashengStepFact.RefundStatus.NONE, HuashengStepFact.IsTake.N, null, List.of());
-        assertThat(HuashengFlowPolicy.decide(cp, changed, EXPECTED_COST, NOW)).isEqualTo(HuashengFlowDecision.MANUAL);
+        assertThat(HuashengFlowPolicy.decide(cp, changed, EXPECTED_COST, NOW)).isEqualTo(HuashengFlowDecision.NEXT_TAKE);
         var sameValue = new HuashengStepFact(HuashengStepFact.Endpoint.QUERY, HuashengStepFact.StepResult.ACCEPTED,
                 OUT_ORDER_SN, ORDER_SN, 1, "9.9900", EXPECTED_COST, HuashengStepFact.Status.SUCCESS,
                 HuashengStepFact.RefundStatus.NONE, HuashengStepFact.IsTake.N, null, List.of());

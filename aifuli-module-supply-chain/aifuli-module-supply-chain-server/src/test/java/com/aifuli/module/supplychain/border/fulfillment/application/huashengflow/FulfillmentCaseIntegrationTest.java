@@ -146,7 +146,7 @@ class FulfillmentCaseIntegrationTest {
         var b = context.getBean(BOrderMapper.class).selectById(fixture.bOrder.getId());
         assertThat(b.getFulfillmentStatus()).isEqualTo((short) 60);
         assertThat(b.getReportedSupplierSettlementAmount()).isEqualTo(20000L);
-        assertThat(b.getExternalOrderNo()).isEqualTo("supplier-order");
+        assertThat(b.getExternalOrderNo()).isEqualTo(fixture.bOrder.getBillno());
         var c = context.getBean(FulfillmentExceptionCaseMapper.class).selectById(fixture.caseDo.getId());
         assertThat(c.getOperatorId()).isEqualTo(7L);
         assertThat(c.getActiveCaseFlag()).isNull();
@@ -206,7 +206,7 @@ class FulfillmentCaseIntegrationTest {
                 op.getCheckpointCiphertext()), binding);
         var observation = new HuashengCheckpoint.Observation(
                 com.aifuli.module.supplychain.supplieradapter.huasheng.protocol.HuashengEndpoint.QUERY,
-                "supplier-order", fixture.bOrder.getBillno(), 1, "200.00", 20000L,
+                fixture.bOrder.getBillno(), fixture.bOrder.getBillno(), 1, "200.00", 20000L,
                 com.aifuli.module.supplychain.supplieradapter.huasheng.protocol.HuashengOrderStatus.SUCCESS,
                 com.aifuli.module.supplychain.supplieradapter.huasheng.protocol.HuashengField.absent(),
                 com.aifuli.module.supplychain.supplieradapter.huasheng.protocol.HuashengField.absent());
@@ -261,15 +261,16 @@ class FulfillmentCaseIntegrationTest {
         long generation = actions.selectByActionNo(old).getActualGeneration();
         jdbc.update("UPDATE sc_fulfillment_operation SET business_send_possible_at=CURRENT_TIMESTAMP(3) WHERE id=?", fixture.operation.getId());
         var callback = new HuashengStepFact(HuashengStepFact.Endpoint.CALLBACK, HuashengStepFact.StepResult.ACCEPTED,
-                fixture.bOrder.getBillno(), "supplier-order", 1, "200.00", 20000L, HuashengStepFact.Status.SUCCESS,
+                fixture.bOrder.getBillno(), fixture.bOrder.getBillno(), 1, "200.00", 20000L, HuashengStepFact.Status.SUCCESS,
                 HuashengStepFact.RefundStatus.ABSENT, HuashengStepFact.IsTake.Y, null, List.of());
         context.getBean(HuashengFulfillmentLifecycle.class).applyCallback(fixture.bOrder.getId(), callback, "callback");
+        assertThat(context.getBean(BOrderMapper.class).selectById(fixture.bOrder.getId()).getFulfillmentStatus())
+                .isEqualTo(com.aifuli.module.supplychain.border.order.domain.BOrderFulfillmentStatus.SUCCEEDED.getCode());
         assertThat(operations.selectById(fixture.operation.getId()).getExecutionGeneration()).isGreaterThan(generation);
         assertThat(admin.getCaseDetail(fixture.caseDo.getCaseNo()).canConfirmFailure()).isFalse();
         assertThatThrownBy(() -> confirm(old)).isInstanceOf(IllegalStateException.class);
-        String next = submit(); verify.markVerifyStarted(next); verify.completeVerify(next, fact(HuashengStepFact.IsTake.N));
-        assertThat(admin.getCaseDetail(fixture.caseDo.getCaseNo()).canConfirmFailure()).isFalse();
-        assertThatThrownBy(() -> confirm(next)).isInstanceOf(IllegalStateException.class);
+        // 供应商已成功，不再具备人工失败核实资格；不能用新命令重新取得释放入口。
+        assertThatThrownBy(this::submit).isInstanceOf(IllegalStateException.class);
         assertThat(jdbc.queryForObject("SELECT remaining_amount FROM sc_fund_reservation WHERE reference_no=?", Long.class, fixture.request.getRequestNo())).isEqualTo(9600L);
     }
 
@@ -408,7 +409,7 @@ class FulfillmentCaseIntegrationTest {
     }
     HuashengStepFact fact(HuashengStepFact.IsTake take) {
         return new HuashengStepFact(HuashengStepFact.Endpoint.QUERY, HuashengStepFact.StepResult.ACCEPTED,
-                fixture.bOrder.getBillno(), "supplier-order", 1, "200.00", 20000L, HuashengStepFact.Status.CANCEL,
+                fixture.bOrder.getBillno(), fixture.bOrder.getBillno(), 1, "200.00", 20000L, HuashengStepFact.Status.CANCEL,
                 HuashengStepFact.RefundStatus.SUCCESS, take, null, List.of());
     }
     static String id() { return UUID.randomUUID().toString().replace("-", ""); }
@@ -446,7 +447,7 @@ class FulfillmentCaseIntegrationTest {
         var binding = new HuashengCheckpoint.Binding(b.getId(), b.getBOrderNo(), op.getOperationNo(), 1,
                 AdapterStepCode.PLACE_ORDER, 200L, 100L, new byte[32]);
         var cp = new HuashengCheckpoint(binding, new HuashengCheckpoint.PlaceParameters(b.getBillno(), 1L, 1, 600,
-                null, "https://fixture.invalid/callback"), "supplier-order", null,
+                null, "https://fixture.invalid/callback"), b.getBillno(), null,
                 new HuashengCheckpoint.Progress(0, 0, 0, null, null, "fixture"), null);
         var stored = context.getBean(HuashengCheckpointCodec.class).encrypt(cp);
         op.setCheckpointSchemaVersion(stored.schemaVersion()); op.setCheckpointKeyVersion(stored.keyVersion());

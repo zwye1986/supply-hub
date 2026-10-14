@@ -109,6 +109,11 @@ class HuashengFulfillmentConfigurationTest {
         }
 
         @Bean
+        org.springframework.transaction.PlatformTransactionManager supplyChainTransactionManager() {
+            return mock(org.springframework.transaction.PlatformTransactionManager.class);
+        }
+
+        @Bean
         FulfillmentOperationTicketFactory ticketFactory() {
             return mock(FulfillmentOperationTicketFactory.class);
         }

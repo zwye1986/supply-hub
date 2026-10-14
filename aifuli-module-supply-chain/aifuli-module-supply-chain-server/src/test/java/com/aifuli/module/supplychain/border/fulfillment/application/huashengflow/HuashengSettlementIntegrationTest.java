@@ -309,6 +309,93 @@ class HuashengSettlementIntegrationTest {
     }
 
     @Test
+    void supplierTakenSuccessPrecedesPlatformDeliveryAndAllowsLaterCallback() {
+        var fixture = seedAggregate("HS_SPLIT_SUCCESS", AdapterStepCode.PLACE_ORDER, 1000L);
+        storeCheckpoint(fixture, null);
+        var fact = new HuashengStepFact(HuashengStepFact.Endpoint.QUERY, HuashengStepFact.StepResult.ACCEPTED,
+                fixture.bOrder().getBillno(), fixture.bOrder().getBillno(), 1, "12.00", 1200L,
+                HuashengStepFact.Status.SUCCESS, HuashengStepFact.RefundStatus.NONE, HuashengStepFact.IsTake.Y, null, List.of());
+        var flow = context.getBean(HuashengFulfillmentLifecycle.class);
+        var result = flow.apply(createPermit(fixture.operation(), 1L, AdapterStepCode.PLACE_ORDER),
+                OperationOutcome.builder().outcomeClass(OperationOutcomeClass.ACCEPTED).protocolFact(fact)
+                        .externalOrderNo(fixture.bOrder().getBillno()).reportedSettlementAmount(1200L).build(), "trace-split");
+        assertThat(bOrderMapper.selectById(fixture.bOrder().getId()).getFulfillmentStatus())
+                .isEqualTo(BOrderFulfillmentStatus.SUCCEEDED.getCode());
+        assertThat(orderMapper.selectById(fixture.order().getId()).getOrderStatus()).isEqualTo(SupplyChainOrderStatus.PROCESSING.getCode());
+        assertThat(assetMapper.selectList(new LambdaQueryWrapper<FulfillmentAssetDO>()
+                .eq(FulfillmentAssetDO::getBOrderId, fixture.bOrder().getId()))).isEmpty();
+        assertThat(result.decision()).isEqualTo(HuashengFlowDecision.NEXT_TAKE);
+        assertFunds(fixture, "COMMIT", 0);
+        // 卡密写库失败不得提前完成平台交付，也不能撤销已提交的供应商成功事实。
+        jdbcTemplate.execute("ALTER TABLE sc_fulfillment_asset ADD CONSTRAINT ck_hs_asset_save_failure CHECK (b_order_id <> "
+                + fixture.bOrder().getId() + ")");
+        try {
+            assertThatThrownBy(() -> callback(fixture, "split-save-failed", "13.00", "SPLIT_CARD", "长期有效", true))
+                    .isInstanceOf(org.springframework.dao.DataAccessException.class);
+            assertThat(orderMapper.selectById(fixture.order().getId()).getOrderStatus()).isEqualTo(SupplyChainOrderStatus.PROCESSING.getCode());
+            assertThat(bOrderMapper.selectById(fixture.bOrder().getId()).getFulfillmentStatus()).isEqualTo(BOrderFulfillmentStatus.SUCCEEDED.getCode());
+            assertFunds(fixture, "COMMIT", 0);
+        } finally { jdbcTemplate.execute("ALTER TABLE sc_fulfillment_asset DROP CHECK ck_hs_asset_save_failure"); }
+        callback(fixture, "split-card", "13.00", "SPLIT_CARD", "长期有效", true);
+        assertThat(orderMapper.selectById(fixture.order().getId()).getOrderStatus()).isEqualTo(SupplyChainOrderStatus.SUCCEEDED.getCode());
+        assertThat(assetMapper.selectList(new LambdaQueryWrapper<FulfillmentAssetDO>()
+                .eq(FulfillmentAssetDO::getBOrderId, fixture.bOrder().getId()))).hasSize(1);
+        assertFunds(fixture, "COMMIT", 1);
+    }
+
+    @Test
+    void firstTakenSuccessSurvivesAssetSaveRollbackAndCanRetryDelivery() {
+        for (boolean callback : new boolean[]{false, true}) {
+            String source = callback ? "CALLBACK" : "TAKE";
+            var fixture = seedAggregate("HS_FIRST_" + source, AdapterStepCode.TAKE_CARD, 1000L);
+            storeCheckpoint(fixture, null);
+            var asset = new HuashengType201AssetCodec().toFact(HuashengType201AssetCodecTest.card(
+                    "{\"type\":202,\"code\":\"FIRST_" + source + "\",\"pass\":\"\"}"));
+            var fact = new HuashengStepFact(HuashengStepFact.Endpoint.TAKE, HuashengStepFact.StepResult.ACCEPTED,
+                    fixture.bOrder().getBillno(), fixture.bOrder().getBillno(), 1, null, null,
+                    HuashengStepFact.Status.SUCCESS, HuashengStepFact.RefundStatus.ABSENT, HuashengStepFact.IsTake.ABSENT,
+                    asset.protectedPayload(), List.of());
+            Runnable attempt = callback
+                    ? () -> callback(fixture, "first-save-retry", "12.00", "FIRST_CALLBACK", "长期有效", true)
+                    : () -> context.getBean(HuashengFulfillmentLifecycle.class).apply(
+                            createPermit(fixture.operation(), 1L, AdapterStepCode.TAKE_CARD),
+                            OperationOutcome.builder().outcomeClass(OperationOutcomeClass.ACCEPTED).protocolFact(fact)
+                                    .externalOrderNo(fixture.bOrder().getBillno()).assets(List.of(asset)).build(), "trace-first-take");
+            jdbcTemplate.execute("ALTER TABLE sc_fulfillment_asset ADD CONSTRAINT ck_hs_first_save_failure CHECK (b_order_id <> "
+                    + fixture.bOrder().getId() + ")");
+            try {
+                assertThatThrownBy(attempt::run).isInstanceOf(org.springframework.dao.DataAccessException.class);
+                assertThat(bOrderMapper.selectById(fixture.bOrder().getId()).getFulfillmentStatus())
+                        .isEqualTo(BOrderFulfillmentStatus.SUCCEEDED.getCode());
+                assertThat(orderMapper.selectById(fixture.order().getId()).getOrderStatus())
+                        .isEqualTo(SupplyChainOrderStatus.PROCESSING.getCode());
+                assertThat(assetMapper.selectList(new LambdaQueryWrapper<FulfillmentAssetDO>()
+                        .eq(FulfillmentAssetDO::getBOrderId, fixture.bOrder().getId()))).isEmpty();
+                assertFunds(fixture, "COMMIT", 0);
+            } finally { jdbcTemplate.execute("ALTER TABLE sc_fulfillment_asset DROP CHECK ck_hs_first_save_failure"); }
+            attempt.run();
+            assertThat(orderMapper.selectById(fixture.order().getId()).getOrderStatus())
+                    .isEqualTo(SupplyChainOrderStatus.SUCCEEDED.getCode());
+            assertThat(assetMapper.selectList(new LambdaQueryWrapper<FulfillmentAssetDO>()
+                    .eq(FulfillmentAssetDO::getBOrderId, fixture.bOrder().getId()))).hasSize(1);
+            assertFunds(fixture, "COMMIT", 1);
+        }
+    }
+
+    @Test
+    void querySuccessWithoutTakenProofDoesNotMarkSupplierOrderSucceeded() {
+        var fixture = seedAggregate("HS_NOT_TAKEN", AdapterStepCode.PLACE_ORDER, 1000L);
+        storeCheckpoint(fixture, null);
+        var fact = new HuashengStepFact(HuashengStepFact.Endpoint.QUERY, HuashengStepFact.StepResult.ACCEPTED,
+                fixture.bOrder().getBillno(), fixture.bOrder().getBillno(), 1, "10.00", 1000L,
+                HuashengStepFact.Status.SUCCESS, HuashengStepFact.RefundStatus.NONE, HuashengStepFact.IsTake.N, null, List.of());
+        context.getBean(HuashengFulfillmentLifecycle.class).apply(createPermit(fixture.operation(), 1L, AdapterStepCode.PLACE_ORDER),
+                OperationOutcome.builder().outcomeClass(OperationOutcomeClass.ACCEPTED).protocolFact(fact).build(), "trace-not-taken");
+        assertThat(bOrderMapper.selectById(fixture.bOrder().getId()).getFulfillmentStatus()).isEqualTo(BOrderFulfillmentStatus.PROCESSING.getCode());
+        assertThat(orderMapper.selectById(fixture.order().getId()).getOrderStatus()).isEqualTo(SupplyChainOrderStatus.PROCESSING.getCode());
+    }
+
+    @Test
     void executorTakeWithoutPriceMergesTrustedCheckpointAndCommitsRealLedger() throws Exception {
         var fixture = seedAggregate("HS_TAKE_MERGE", AdapterStepCode.TAKE_CARD, 1000L);
         storeCheckpoint(fixture, "10.0000");
@@ -424,9 +511,9 @@ class HuashengSettlementIntegrationTest {
     }
 
     @Test
-    void mismatchedAmountRetainsEncryptedAssetEvidenceAndUniqueManualCase() {
+    void conflictingOrderIdentityRetainsEncryptedAssetEvidenceAndUniqueManualCase() {
         var fixture = seedAggregate("HS_MANUAL_EVIDENCE", AdapterStepCode.PLACE_ORDER, 1000L);
-        storeCheckpoint(fixture, null);
+        storeConflictingOrderIdentity(fixture);
         callback(fixture, "manual-1", "11.00", "CB_HOLD", "长期有效", true);
         var operation = operationMapper.selectById(fixture.operation().getId());
         assertThat(operation.getStatus()).isEqualTo(SupplierOrderOperationStatus.MANUAL.getCode());
@@ -436,7 +523,7 @@ class HuashengSettlementIntegrationTest {
         assertThat(caseCount(fixture)).isEqualTo(1);
         assertFunds(fixture, "COMMIT", 0);
         assertFunds(fixture, "RELEASE", 0);
-        // 金额修正的新回调不能无视已有冲突自动扣款；旧证据保持不变。
+        // 价格变化不能无视已有身份冲突自动交付；旧证据保持不变。
         byte[] evidence = readCheckpoint(fixture).pendingAssetPayload();
         callback(fixture, "manual-2", "10.00", "CB_HOLD", "长期有效", true);
         assertThat(readCheckpoint(fixture).pendingAssetPayload()).isEqualTo(evidence);
@@ -447,7 +534,7 @@ class HuashengSettlementIntegrationTest {
     @Test
     void manualCaseInsertFailureRollsBackCheckpointAndInboxTogether() {
         var fixture = seedAggregate("HS_MANUAL_ATOMIC", AdapterStepCode.PLACE_ORDER, 1000L);
-        storeCheckpoint(fixture, null);
+        storeConflictingOrderIdentity(fixture);
         byte[] checkpoint = operationMapper.selectById(fixture.operation().getId()).getCheckpointCiphertext();
         // 仅此 Testcontainers 库添加拒绝约束，避免依赖创建触发器的 SUPER 权限。
         jdbcTemplate.execute("ALTER TABLE sc_fulfillment_exception_case ADD CONSTRAINT ck_hs_case_test_failure CHECK (operation_id <> "
@@ -480,7 +567,7 @@ class HuashengSettlementIntegrationTest {
     @Test
     void differentPendingAssetCannotOverwriteEvidenceAndInboxRollsBack() {
         var fixture = seedAggregate("HS_EVIDENCE_SLOT", AdapterStepCode.PLACE_ORDER, 1000L);
-        storeCheckpoint(fixture, null);
+        storeConflictingOrderIdentity(fixture);
         callback(fixture, "slot-first", "11.00", "SLOT_FIRST", "长期有效", true);
         byte[] evidence = readCheckpoint(fixture).pendingAssetPayload();
         assertThatThrownBy(() -> callback(fixture, "slot-second", "11.00", "SLOT_SECOND", "长期有效", true))
@@ -493,11 +580,11 @@ class HuashengSettlementIntegrationTest {
     }
 
     @Test
-    void takeWithoutHistoricalAmountQueriesAndRetainsAssetInsteadOfInventingPrice() {
+    void type202TakeWithoutHistoricalAmountDeliversWithoutInventingPrice() {
         var fixture = seedAggregate("HS_NO_PRICE", AdapterStepCode.TAKE_CARD, 1000L);
         storeCheckpoint(fixture, null);
         var asset = new HuashengType201AssetCodec().toFact(HuashengType201AssetCodecTest.card(
-                "{\"type\":201,\"code\":\"NO_PRICE_CODE\",\"pass\":\"NO_PRICE_PASS\"}"));
+                "{\"type\":202,\"code\":\"NO_PRICE_CODE\",\"pass\":\"\"}"));
         var fact = new HuashengStepFact(HuashengStepFact.Endpoint.TAKE, HuashengStepFact.StepResult.ACCEPTED,
                 fixture.bOrder().getBillno(), fixture.bOrder().getBillno(), 1, null, null, HuashengStepFact.Status.SUCCESS,
                 HuashengStepFact.RefundStatus.ABSENT, HuashengStepFact.IsTake.Y, asset.protectedPayload(), List.of());
@@ -505,14 +592,14 @@ class HuashengSettlementIntegrationTest {
                 .externalOrderNo(fixture.bOrder().getBillno()).protocolFact(fact).build();
         var result = context.getBean(HuashengFulfillmentLifecycle.class)
                 .apply(createPermit(fixture.operation(), 1L, AdapterStepCode.TAKE_CARD), outcome, "trace-no-price");
-        assertThat(result.decision()).isEqualTo(HuashengFlowDecision.WAIT_QUERY);
-        assertThat(readCheckpoint(fixture).pendingAssetPayload()).isEqualTo(asset.protectedPayload());
+        assertThat(result.decision()).isEqualTo(HuashengFlowDecision.FINAL_SUCCESS);
+        assertThat(orderMapper.selectById(fixture.order().getId()).getOrderStatus()).isEqualTo(SupplyChainOrderStatus.SUCCEEDED.getCode());
+        assertThat(assetMapper.selectList(new LambdaQueryWrapper<FulfillmentAssetDO>()
+                .eq(FulfillmentAssetDO::getBOrderId, fixture.bOrder().getId()))).hasSize(1);
         assertThat(bOrderMapper.selectById(fixture.bOrder().getId()).getReportedSupplierSettlementAmount()).isNull();
-        assertFunds(fixture, "COMMIT", 0);
+        assertThat(bOrderMapper.selectById(fixture.bOrder().getId()).getSettlementStatus()).isEqualTo(BOrderSettlementStatus.PENDING.getCode());
+        assertFunds(fixture, "COMMIT", 1);
         assertFunds(fixture, "RELEASE", 0);
-        assertThatThrownBy(() -> callback(fixture, "pending-drift", "10.00", "OTHER_CARD", "长期有效", true))
-                .isInstanceOf(HuashengCallbackConflictException.class);
-        assertFunds(fixture, "COMMIT", 0);
         callback(fixture, "pending-failed", "10.00", "", "", false);
         assertFunds(fixture, "RELEASE", 0);
         assertThat(caseCount(fixture)).isEqualTo(1);
@@ -570,7 +657,7 @@ class HuashengSettlementIntegrationTest {
     }
 
     @Test
-    void successQueryAtTakeLimitIsRecoverableByCallbackButMoneyConflictIsNot() {
+    void successQueryAtTakeLimitIsRecoverableByCallbackRegardlessOfMoneyDifference() {
         for (boolean mismatch : new boolean[]{false, true}) {
             var fixture = seedAggregate(mismatch ? "HS_LIMIT_MONEY" : "HS_LIMIT_SUCCESS", AdapterStepCode.PLACE_ORDER, 1000L);
             storeCheckpoint(fixture, null);
@@ -581,11 +668,15 @@ class HuashengSettlementIntegrationTest {
             var fact = new HuashengStepFact(HuashengStepFact.Endpoint.QUERY, HuashengStepFact.StepResult.ACCEPTED,
                     fixture.bOrder().getBillno(), fixture.bOrder().getBillno(), 1, mismatch ? "11.00" : "10.00",
                     mismatch ? 1100L : 1000L, HuashengStepFact.Status.SUCCESS, HuashengStepFact.RefundStatus.NONE,
-                    HuashengStepFact.IsTake.N, null, List.of());
+                    HuashengStepFact.IsTake.Y, null, List.of());
             context.getBean(HuashengFulfillmentLifecycle.class).apply(createPermit(fixture.operation(), 1L, AdapterStepCode.QUERY_ORDER),
                     OperationOutcome.builder().outcomeClass(OperationOutcomeClass.ACCEPTED).protocolFact(fact).build(), "trace-limit");
+            assertThat(bOrderMapper.selectById(fixture.bOrder().getId()).getFulfillmentStatus()).isEqualTo(BOrderFulfillmentStatus.SUCCEEDED.getCode());
+            assertThat(orderMapper.selectById(fixture.order().getId()).getOrderStatus()).isEqualTo(SupplyChainOrderStatus.MANUAL.getCode());
+            assertThat(assetMapper.selectList(new LambdaQueryWrapper<FulfillmentAssetDO>()
+                    .eq(FulfillmentAssetDO::getBOrderId, fixture.bOrder().getId()))).isEmpty();
             callback(fixture, mismatch ? "limit-money" : "limit-success", "10.00", mismatch ? "CONFLICT" : "LIMIT_OK", "长期有效", true);
-            assertFunds(fixture, "COMMIT", mismatch ? 0 : 1);
+            assertFunds(fixture, "COMMIT", 1);
         }
     }
 
@@ -698,9 +789,18 @@ class HuashengSettlementIntegrationTest {
                 op.getCheckpointSchemaVersion(), op.getCheckpointKeyVersion(), op.getCheckpointCiphertext()), binding(fixture));
     }
 
+    private void storeConflictingOrderIdentity(AggregateFixture fixture) {
+        storeCheckpoint(fixture, null);
+        var cp = readCheckpoint(fixture);
+        var stored = context.getBean(HuashengCheckpointCodec.class).encrypt(new HuashengCheckpoint(cp.binding(),
+                cp.placeParameters(), "OTHER_SUPPLIER_ORDER", null, cp.progress(), null));
+        fixture.operation().setCheckpointCiphertext(stored.ciphertext());
+        operationMapper.updateById(fixture.operation());
+    }
+
     @Test
-    @DisplayName("5. 金额不匹配时 Guard 拦截并回滚资金")
-    void commitHuashengSuccessRollsBackOnAmountMismatch() {
+    @DisplayName("5. 金额差异独立留存，不阻断完整卡密的本地交付")
+    void commitHuashengSuccessKeepsAmountMismatchWithoutBlockingDelivery() {
         var fixture = seedAggregate("HS_MISMATCH_01", AdapterStepCode.TAKE_CARD, 1000L);
         HuashengExecutionPermit permit = createPermit(fixture.operation(), 1L, AdapterStepCode.TAKE_CARD);
 
@@ -714,20 +814,21 @@ class HuashengSettlementIntegrationTest {
                 .reportedSettlementAmount(2000L)
                 .build();
 
-        assertThatThrownBy(() -> lifecycle.commitHuashengSuccess(permit, outcome, "trace-mismatch"))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("Reported settlement amount mismatch");
+        assertThat(lifecycle.commitHuashengSuccess(permit, outcome, "trace-mismatch").orderStatus())
+                .isEqualTo(SupplyChainOrderStatus.SUCCEEDED.getCode());
+        assertThat(bOrderMapper.selectById(fixture.bOrder().getId()).getSettlementStatus()).isEqualTo(BOrderSettlementStatus.MISMATCH.getCode());
+        assertThat(bOrderMapper.selectById(fixture.bOrder().getId()).getConfirmedSupplierSettlementAmount()).isNull();
 
-        // 验证资金仍保持预占 RESERVED，未被实扣
+        // 原买方预留金额不因供应商实报价差改变。
         FundReservationDO reservation = reservationMapper.selectByReferenceForUpdate(
                 testBuyerId, FundReferenceType.CARD_ORDER.code(), fixture.request().getRequestNo());
-        assertThat(reservation.getStatus()).isEqualTo((short) 10);
-        assertThat(reservation.getRemainingAmount()).isEqualTo(1000L);
+        assertThat(reservation.getCommittedAmount()).isEqualTo(1000L);
+        assertThat(reservation.getRemainingAmount()).isZero();
 
-        // 验证无资产落库
+        // 完整卡密落库后平台成功。
         List<FulfillmentAssetDO> assets = assetMapper.selectList(new LambdaQueryWrapper<FulfillmentAssetDO>()
                 .eq(FulfillmentAssetDO::getBOrderId, fixture.bOrder().getId()));
-        assertThat(assets).isEmpty();
+        assertThat(assets).hasSize(1);
     }
 
     @Test

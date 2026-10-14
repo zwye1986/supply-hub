@@ -19,6 +19,29 @@ class HuashengType201AssetCodecTest {
     private final HuashengType201AssetCodec codec = new HuashengType201AssetCodec();
 
     @Test
+    void projectsType202SingleCredentialWithoutChangingSupplierFields() throws Exception {
+        for (String fields : List.of("\"code\":\" C202 \",\"pass\":\"\"", "\"code\":null,\"pass\":\" C202 \"",
+                "\"pass\":\" C202 \"", "\"code\":\" C202 \",\"pass\":\"OTHER\"")) {
+            var fact = codec.toFact(card("{\"type\":202," + fields + ",\"validTime\":null}"));
+            assertThat(fact.cardNo()).isEqualTo(" C202 ");
+            assertThat(fact.cardSecret()).isEqualTo(" C202 ");
+            var source = json.readTree(codec.validate(fact)).get("supplierPayload");
+            assertThat(source).isEqualTo(json.readTree("{\"adapterType\":\"HUA_SHENG_ORDER_V1\",\"type\":202,"
+                    + fields + ",\"validTime\":null}"));
+            var stored = codec.readStoredPayload(fact.protectedPayload(), 1, "CARD_CODE_SECRET", null, null, null);
+            assertThat(stored.cardCode()).isEqualTo(" C202 ");
+            assertThat(stored.cardSecret()).isEqualTo(" C202 ");
+            assertThat(new String(codec.fingerprintInput(7, fact), StandardCharsets.UTF_8))
+                    .isEqualTo("{\"supplierId\":7,\"type\":202,\"code\":\" C202 \",\"pass\":\" C202 \"}");
+        }
+        var fact = codec.toFact(card("{\"type\":202,\"code\":\"C202\"}"));
+        var forged = (ObjectNode) json.readTree(fact.protectedPayload());
+        forged.put("cardSecret", "OTHER");
+        assertThatThrownBy(() -> codec.validate(withPayload(fact, json.writeValueAsBytes(forged))))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
     void preservesWhitespaceAndAllValidTimeStatesWithoutInventingDates() throws Exception {
         for (String suffix : List.of("", ",\"validTime\":null", ",\"validTime\":\"\"", ",\"validTime\":\" 长期有效 \"")) {
             var fact = codec.toFact(card("{\"type\":201,\"code\":\" CODE_SECRET \",\"pass\":\" PASS_SECRET \"" + suffix + "}"));
@@ -56,7 +79,7 @@ class HuashengType201AssetCodecTest {
 
     @Test
     void rejectsAllOtherCardTypesEvenWhenProtocolParserAcceptsThem() {
-        for (String fields : List.of("\"type\":202,\"code\":\"C\"", "\"type\":203,\"code\":\"C\",\"pass\":\"P\",\"crc\":\"R\"",
+        for (String fields : List.of("\"type\":203,\"code\":\"C\",\"pass\":\"P\",\"crc\":\"R\"",
                 "\"type\":301,\"url\":\"U\"", "\"type\":302,\"url\":\"U\",\"urlPass\":\"P\"",
                 "\"type\":303,\"code\":\"C\",\"url\":\"U\",\"urlPass\":\"P\"", "\"type\":304,\"code\":\"C\",\"url\":\"U\"")) {
             assertThatThrownBy(() -> codec.toFact(card("{" + fields + "}")))

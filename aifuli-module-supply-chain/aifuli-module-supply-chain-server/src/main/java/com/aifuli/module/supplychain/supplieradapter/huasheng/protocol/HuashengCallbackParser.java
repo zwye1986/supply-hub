@@ -36,12 +36,12 @@ import java.util.Optional;
  *   <li>解密正文上限 1MiB，流式约束（最大字符串 16384、最大深度 32、重复 key 拒绝、尾随 token 拒绝）；</li>
  *   <li>严格语义校验（时间戳整数秒、nonce 最多 64 字符、双号非空、totalPrice、SUCCESS/FAILED）；</li>
  *   <li>交付数量按回调状态校验：SUCCESS 为 1，FAILED 为 0 或省略，不能混用原单订购数量；</li>
- *   <li>SUCCESS 仅接受恰好 1 张 Type 201 卡片（六型拒绝，复用 ResponseParser 校验），FAILED 仅接受空卡券；</li>
+ *   <li>SUCCESS 接受恰好1张201／202卡片，复用ResponseParser严格校验；FAILED仅接受空卡券；</li>
  *   <li>临时解密字节数组在 finally 块中擦除清零；</li>
  *   <li>零 Spring/MyBatis 依赖。</li>
  * </ul>
  *
- * <p>设计见 docs/superpowers/specs/2026-10-09-huasheng-type201-production-closure-design.md#81-冻结身份认证。
+ * <p>设计见 docs/superpowers/specs/2026-10-09-huasheng-type201-production-closure-design.md#81-冻结身份认证、#73-201202卡号卡密兼容与新单成功闭环。
  */
 public final class HuashengCallbackParser {
 
@@ -336,19 +336,21 @@ public final class HuashengCallbackParser {
             if (typeNode == null || !(typeNode instanceof IntNode || typeNode instanceof LongNode)) {
                 throw new HuashengCallbackParseException("卡片缺少整数 token type");
             }
-            if (!typeNode.canConvertToInt() || typeNode.intValue() != 201) {
-                throw new HuashengCallbackParseException("回调仅支持 Type 201");
+            var cardType = typeNode.canConvertToInt() ? HuashengCardType.fromRawValue(typeNode.intValue()).orElse(null) : null;
+            if (cardType != HuashengCardType.T201 && cardType != HuashengCardType.T202) {
+                throw new HuashengCallbackParseException("回调仅支持 Type 201／202");
             }
 
             JsonNode codeNode = cardNode.get("code");
-            if (codeNode == null || !codeNode.isTextual() || codeNode.asText().isBlank()) {
+            if (cardType == HuashengCardType.T201 && (codeNode == null || !codeNode.isTextual() || codeNode.asText().isBlank())) {
                 throw new HuashengCallbackParseException("T201缺少code必填字段");
             }
             JsonNode passNode = cardNode.get("pass");
-            if (passNode == null || !passNode.isTextual() || passNode.asText().isBlank()) {
+            if (cardType == HuashengCardType.T201 && (passNode == null || !passNode.isTextual() || passNode.asText().isBlank())) {
                 throw new HuashengCallbackParseException("T201缺少pass必填字段");
             }
 
+            // 202至少一个原字段非空白，其余字段类型／三态仍由共享parser严格验证；生产闭环设计 §7.3。
             var cardAttempt = HuashengResponseParser.parseCard(cardNode);
             if (cardAttempt instanceof HuashengInternalAttempt.Failed<HuashengProtocolCard> failedCard) {
                 throw new HuashengCallbackParseException("卡片校验失败");
