@@ -329,14 +329,14 @@ public class ProjectAdminController {
         return new CreateProjectCommand(
                 request.getProjectName(), request.getBuyerCode(), request.getProjectType(),
                 request.getStartDate(), request.getEndDate(), request.getSettlementPartyType(),
-                request.getDescription(), request.getStatus(), getLoginUserId());
+                request.getDescription(), request.getStatus(), getLoginUserId(), request.getSettlementBuyerCode());
     }
 
     private UpdateProjectCommand toUpdateCommand(String projectCode, ProjectSaveReqVO request) {
         return new UpdateProjectCommand(
                 projectCode, request.getProjectName(), request.getBuyerCode(), request.getProjectType(),
                 request.getStartDate(), request.getEndDate(), request.getSettlementPartyType(),
-                request.getDescription(), request.getStatus(), getLoginUserId());
+                request.getDescription(), request.getStatus(), getLoginUserId(), request.getSettlementBuyerCode());
     }
 
     /**
@@ -409,6 +409,10 @@ public class ProjectAdminController {
         private LocalDate endDate;
         @Schema(description = "结算方，本期仅DISTRIBUTOR")
         private String settlementPartyType;
+        /** 采购商永久业务编码；选择已启用结算方，启动后不可修改。 */
+        @Size(max = 32)
+        @Schema(description = "采购商永久业务编码（结算方）；创建省略默认关联分销商，更新省略保持原值")
+        private String settlementBuyerCode;
         @Size(max = 500)
         @Schema(description = "项目说明")
         private String description;

@@ -155,7 +155,7 @@ public class FulfillmentCaseAdminService {
 
     public CaseDetailView getCaseDetail(String caseNo) {
         var ctx = loadCaseContext(caseNo);
-        var snapshot = fundReservationService.findSnapshotByReference(ctx.request().getBuyerId(),
+        var snapshot = fundReservationService.findSnapshotByReference(ctx.request().fundsBuyerId(),
                 FundReferenceType.CARD_ORDER.code(), ctx.request().getRequestNo());
         FundDispositionSummary fund = snapshot == null ? null : new FundDispositionSummary(
                 fundStatusName(snapshot.status()), snapshot.totalAmount(), snapshot.committedAmount(),

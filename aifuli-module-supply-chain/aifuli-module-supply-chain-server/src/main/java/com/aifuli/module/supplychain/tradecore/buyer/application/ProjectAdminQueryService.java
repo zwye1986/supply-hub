@@ -131,6 +131,7 @@ public class ProjectAdminQueryService {
             throw exception(PROJECT_NOT_FOUND);
         }
         BuyerDO buyer = project.getBuyerId() == null ? null : buyerMapper.selectById(project.getBuyerId());
+        BuyerDO settlementBuyer = settlementBuyer(project, buyer);
         ListingStats stats = listingStats(List.of(project.getId()))
                 .getOrDefault(project.getId(), new ListingStats(0, 0));
         return new ProjectDetail(
@@ -148,7 +149,9 @@ public class ProjectAdminQueryService {
                 project.getCatalogMode(),
                 stats.skuCount(),
                 stats.projectPriceSkuCount(),
-                buyer == null ? List.of() : productTypes(buyer.getId()));
+                buyer == null ? List.of() : productTypes(buyer.getId()),
+                settlementBuyer == null ? null : settlementBuyer.getBuyerCode(),
+                settlementBuyer == null ? null : settlementBuyer.getBuyerName());
     }
 
     /**
@@ -175,8 +178,16 @@ public class ProjectAdminQueryService {
                 .toList();
     }
 
+    /** 历史 NULL 回退关联方，仅投影名称/编码；不读取结算方目录或鉴权配置。
+     * 设计：docs/superpowers/specs/2026-10-14-project-settlement-buyer-design.md#2-保存与兼容契约。 */
+    private BuyerDO settlementBuyer(BuyerProjectDO project, BuyerDO buyer) {
+        return project.getSettlementBuyerId() == null || java.util.Objects.equals(project.getSettlementBuyerId(), project.getBuyerId())
+                ? buyer : buyerMapper.selectById(project.getSettlementBuyerId());
+    }
+
     private ProjectListItem toListItem(BuyerProjectDO project, ListingStats stats) {
         BuyerDO buyer = project.getBuyerId() == null ? null : buyerMapper.selectById(project.getBuyerId());
+        BuyerDO settlementBuyer = settlementBuyer(project, buyer);
         return new ProjectListItem(
                 project.getId(),
                 project.getProjectCode(),
@@ -190,7 +201,9 @@ public class ProjectAdminQueryService {
                 project.getSettlementPartyType(),
                 project.getUpdatedAt(),
                 stats.skuCount(),
-                stats.projectPriceSkuCount());
+                stats.projectPriceSkuCount(),
+                settlementBuyer == null ? null : settlementBuyer.getBuyerCode(),
+                settlementBuyer == null ? null : settlementBuyer.getBuyerName());
     }
 
     /**
@@ -320,7 +333,9 @@ public class ProjectAdminQueryService {
             @Schema(description = "结算方，本期仅DISTRIBUTOR") String settlementPartyType,
             @Schema(description = "最后修改时间，Asia/Shanghai") LocalDateTime updatedAt,
             @Schema(description = "未移除项目商品数量") int skuCount,
-            @Schema(description = "当前项目商品中通用分销价覆盖或旧 L3 冻结覆盖的数量，去重") int projectPriceSkuCount) {
+            @Schema(description = "当前项目商品中通用分销价覆盖或旧 L3 冻结覆盖的数量，去重") int projectPriceSkuCount,
+            @Schema(description = "采购商永久业务编码（结算方）") String settlementBuyerCode,
+            @Schema(description = "采购商标准名称（结算方）") String settlementBuyerName) {
     }
 
     /**
@@ -343,6 +358,8 @@ public class ProjectAdminQueryService {
             @Schema(description = "未移除项目商品数量") int skuCount,
             @Schema(description = "当前 listing 中项目通用分销价覆盖或旧 L3 冻结覆盖的数量") int projectPriceSkuCount,
             @Schema(description = "关联分销商档案配置的商品类型，id 为类型业务编码，name 为类型名称")
-            List<ProductTypeItem> productTypes) {
+            List<ProductTypeItem> productTypes,
+            @Schema(description = "采购商永久业务编码（结算方）") String settlementBuyerCode,
+            @Schema(description = "采购商标准名称（结算方）") String settlementBuyerName) {
     }
 }

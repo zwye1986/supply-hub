@@ -64,6 +64,8 @@ class ProjectAdminCommandServiceTest {
                 1L, 1, null, 1L)).thenReturn(new com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService.Allocation(PROJECT_CODE, 1));
         when(buyerMapper.selectByBuyerCode(BUYER_A)).thenReturn(activeBuyer(1L, BUYER_A));
         when(buyerMapper.selectByBuyerCode(BUYER_B)).thenReturn(activeBuyer(2L, BUYER_B));
+        when(buyerMapper.selectById(1L)).thenReturn(activeBuyer(1L, BUYER_A));
+        when(buyerMapper.selectById(2L)).thenReturn(activeBuyer(2L, BUYER_B));
         when(projectMapper.insert(any(BuyerProjectDO.class))).thenAnswer(inv -> {
             stored = inv.getArgument(0);
             stored.setId(9L);
@@ -197,6 +199,72 @@ class ProjectAdminCommandServiceTest {
                 .isInstanceOf(ServiceException.class)
                 .extracting(ex -> ((ServiceException) ex).getCode())
                 .isEqualTo(BUYER_PROFILE_NOT_FOUND.getCode());
+    }
+
+    @Test
+    void independentSettlementBuyerIsStoredAndMayChangeWhileDraft() {
+        service.create(withSettlement(create(BUYER_A, null, null, null), BUYER_B));
+        assertThat(stored.getSettlementBuyerId()).isEqualTo(2L);
+        service.update(withSettlement(update(BUYER_A), BUYER_A));
+        assertThat(stored.getSettlementBuyerId()).isEqualTo(1L);
+    }
+
+    @Test
+    void settlementBuyerMustExistAndBeEnabled() {
+        assertThatThrownBy(() -> service.create(withSettlement(create(BUYER_A, null, null, null), "MISSING")))
+                .isInstanceOf(ServiceException.class)
+                .extracting(ex -> ((ServiceException) ex).getCode()).isEqualTo(BUYER_PROFILE_NOT_FOUND.getCode());
+        for (BuyerStatus status : BuyerStatus.values()) {
+            if (status == BuyerStatus.ACTIVE) continue;
+            when(buyerMapper.selectByBuyerCode(BUYER_B)).thenReturn(BuyerDO.builder()
+                    .id(2L).buyerCode(BUYER_B).status(status.getCode()).build());
+            assertThatThrownBy(() -> service.create(withSettlement(create(BUYER_A, null, null, null), BUYER_B)))
+                    .isInstanceOf(ServiceException.class)
+                    .extracting(ex -> ((ServiceException) ex).getCode()).isEqualTo(BUYER_STATUS_CONFLICT.getCode());
+        }
+        assertThatThrownBy(() -> service.create(withSettlement(create(BUYER_A, null, null, null), " ")))
+                .isInstanceOf(ServiceException.class);
+    }
+
+    @Test
+    void startedProjectKeepsSettlementBuyerOnOmissionOrSameValueButRejectsChange() {
+        service.create(withSettlement(create(BUYER_A, "ACTIVE", null, null), BUYER_B));
+        when(buyerMapper.selectByBuyerCode(BUYER_B)).thenReturn(BuyerDO.builder()
+                .id(2L).buyerCode(BUYER_B).status(BuyerStatus.BLACKLIST.getCode()).build());
+        for (BuyerProjectStatus status : java.util.List.of(BuyerProjectStatus.ACTIVE,
+                BuyerProjectStatus.SUSPENDED, BuyerProjectStatus.CLOSED, BuyerProjectStatus.ARCHIVED)) {
+            stored.setStatus(status.getCode());
+            service.update(update(BUYER_A));
+            service.update(withSettlement(update(BUYER_A), BUYER_B));
+            assertThat(stored.getSettlementBuyerId()).isEqualTo(2L);
+            assertThatThrownBy(() -> service.update(withSettlement(update(BUYER_A), BUYER_A)))
+                    .isInstanceOf(ServiceException.class).hasMessageContaining("结算方");
+        }
+    }
+
+    @Test
+    void bothStartEntrypointsRecheckDraftSettlementBuyerAndFullUpdateMayChooseThenStart() {
+        service.create(withSettlement(create(BUYER_A, null, null, null), BUYER_B));
+        when(buyerMapper.selectById(2L)).thenReturn(BuyerDO.builder()
+                .id(2L).buyerCode(BUYER_B).status(BuyerStatus.BLACKLIST.getCode()).build());
+        assertThatThrownBy(() -> service.changeStatus(PROJECT_CODE, BuyerProjectStatus.ACTIVE, 1L))
+                .isInstanceOf(ServiceException.class);
+        assertThatThrownBy(() -> service.update(update(BUYER_A, "ACTIVE")))
+                .isInstanceOf(ServiceException.class);
+        service.update(withSettlement(update(BUYER_A, "ACTIVE"), BUYER_A));
+        assertThat(stored.getStatus()).isEqualTo(BuyerProjectStatus.ACTIVE.getCode());
+    }
+
+    private static CreateProjectCommand withSettlement(CreateProjectCommand command, String code) {
+        return new CreateProjectCommand(command.projectName(), command.buyerCode(), command.projectType(),
+                command.startDate(), command.endDate(), command.settlementPartyType(), command.description(),
+                command.status(), command.operatorId(), code);
+    }
+
+    private static UpdateProjectCommand withSettlement(UpdateProjectCommand command, String code) {
+        return new UpdateProjectCommand(command.projectCode(), command.projectName(), command.buyerCode(),
+                command.projectType(), command.startDate(), command.endDate(), command.settlementPartyType(),
+                command.description(), command.status(), command.operatorId(), code);
     }
 
     private static CreateProjectCommand create(String buyerCode, String status,

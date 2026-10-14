@@ -129,7 +129,8 @@ public class BuyerAdminController {
             @Parameter(description = "页码，从 1 开始") @RequestParam(required = false) Integer pageNo,
             @Parameter(description = "每页条数") @RequestParam(required = false) Integer pageSize) {
         if (VIEW_SIMPLE.equals(view)) {
-            return success(queryService.listSimple(buyerName, buyerCode));
+            return success(queryService.listSimple(buyerName, buyerCode, status == null ? List.of()
+                    : status.stream().map(BuyerAdminController::parseBuyerStatus).toList()));
         }
         if (VIEW_PARENT_OPTIONS.equals(view)) {
             return success(queryService.listParentOptions(excludeBuyerCode, forLevel));

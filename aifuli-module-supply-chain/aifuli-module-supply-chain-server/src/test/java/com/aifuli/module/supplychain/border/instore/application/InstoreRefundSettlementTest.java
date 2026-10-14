@@ -100,7 +100,8 @@ class InstoreRefundSettlementTest {
                 InstorePaymentFlowDO.builder().id(3L).instoreOrderId(7L).orderId(11L)
                         .channelCode("RT_MART").tradeId("T1").outTradeNo("OT1")
                         .payAmount(1000L).payStatus(InstorePaymentFlowStatus.PAID.getCode())
-                        .version(0L).build());
+                        .fundReservationNo("FR_ORIGINAL").version(0L).build());
+        lenient().when(fundReservationService.requireBuyerIdForReservation("FR_ORIGINAL")).thenReturn(6L);
         lenient().when(instoreOrderMapper.selectById(7L)).thenReturn(head);
         lenient().when(orderMapper.selectById(11L)).thenReturn(order);
     }
@@ -142,6 +143,7 @@ class InstoreRefundSettlementTest {
         ArgumentCaptor<BuyerAccountReturnService.ReturnCommand> returnCaptor =
                 ArgumentCaptor.forClass(BuyerAccountReturnService.ReturnCommand.class);
         verify(accountReturnService).returnFunds(returnCaptor.capture());
+        assertThat(returnCaptor.getValue().buyerId()).isEqualTo(6L);
         assertThat(returnCaptor.getValue().refundCaseNo()).isEqualTo("IRC_9");
         assertThat(returnCaptor.getValue().amountCny()).isEqualTo(300L);
         assertThat(returnCaptor.getValue().orderNo()).isEqualTo("SC_1");

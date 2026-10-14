@@ -17,6 +17,14 @@ public class FulfillmentRequestDO {
     private String requestNo;
     private Long orderId;
     private Long buyerId;
+    /** 结算方分销商内部主键，逻辑引用sc_buyer.id；随首次资金预留冻结。
+     * 设计：docs/superpowers/specs/2026-10-14-project-settlement-buyer-design.md#3-数据与资金。 */
+    private Long settlementBuyerId;
+
+    /** 历史 NULL 预留归属于原 Buyer；新请求必须使用首次冻结的资金身份。 */
+    public Long fundsBuyerId() {
+        return settlementBuyerId == null ? buyerId : settlementBuyerId;
+    }
     private Long listingId;
     private Long listingVersionId;
     private Long platformSkuId;

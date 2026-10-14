@@ -150,8 +150,8 @@ class InstoreRefundFlowIntegrationTest {
                     SERIAL.projectId(), first.refundCaseNo(), 30_000L, "CRF_RFD_A1", "trace-cb-a1"));
             assertThat(refundStatusOf(jdbc, first.refundCaseNo()))
                     .isEqualTo(InstoreRefundStatus.SUCCESS.getCode());
-            assertThat(accountBalance(jdbc, SERIAL.buyerId())).isEqualTo(30_000L);
-            Map<String, Object> firstEntry = refundLedgerEntry(jdbc, SERIAL.accountId(),
+            assertThat(accountBalance(jdbc, SERIAL.settlementBuyerId())).isEqualTo(30_000L);
+            Map<String, Object> firstEntry = refundLedgerEntry(jdbc, SERIAL.settlementAccountId(),
                     "REFUND_RETURN:" + first.refundCaseNo());
             assertThat(firstEntry.get("entry_type")).isEqualTo("REFUND");
             assertThat(firstEntry.get("balance_delta")).isEqualTo(30_000L);
@@ -179,8 +179,9 @@ class InstoreRefundFlowIntegrationTest {
                     SERIAL.projectId(), second.refundCaseNo(), 20_000L, "CRF_RFD_A2", "trace-cb-a2"));
             assertThat(refundStatusOf(jdbc, second.refundCaseNo()))
                     .isEqualTo(InstoreRefundStatus.SUCCESS.getCode());
-            assertThat(accountBalance(jdbc, SERIAL.buyerId())).isEqualTo(50_000L);
-            assertThat(refundLedgerCount(jdbc, SERIAL.accountId())).isEqualTo(2L);
+            assertThat(accountBalance(jdbc, SERIAL.settlementBuyerId())).isEqualTo(50_000L);
+            assertThat(accountBalance(jdbc, SERIAL.buyerId())).isZero();
+            assertThat(refundLedgerCount(jdbc, SERIAL.settlementAccountId())).isEqualTo(2L);
             assertThat(refundTotals(jdbc, SERIAL.instoreOrderId()))
                     .containsExactly(50_000L, 50_000L, 50_000L);
             assertThat(activeRefundCaseId(jdbc, SERIAL.instoreOrderId())).isNull();
@@ -191,8 +192,9 @@ class InstoreRefundFlowIntegrationTest {
             // 场景 5：终态回调幂等回放——无二次返还、无二次账本、无重复派发、无状态冲突异常
             callbackFacade.confirmRefund(new InstoreBuyerCashierCallbackFacade.RefundCallbackCommand(
                     SERIAL.projectId(), first.refundCaseNo(), 30_000L, "CRF_RFD_A1", "trace-cb-a1b"));
-            assertThat(accountBalance(jdbc, SERIAL.buyerId())).isEqualTo(50_000L);
-            assertThat(refundLedgerCount(jdbc, SERIAL.accountId())).isEqualTo(2L);
+            assertThat(accountBalance(jdbc, SERIAL.settlementBuyerId())).isEqualTo(50_000L);
+            assertThat(accountBalance(jdbc, SERIAL.buyerId())).isZero();
+            assertThat(refundLedgerCount(jdbc, SERIAL.settlementAccountId())).isEqualTo(2L);
             assertThat(cashierPort.refundCommands()).hasSize(2);
             assertThat(refundStatusOf(jdbc, first.refundCaseNo()))
                     .isEqualTo(InstoreRefundStatus.SUCCESS.getCode());
@@ -230,8 +232,8 @@ class InstoreRefundFlowIntegrationTest {
                     .isEqualTo("REFUND_AMOUNT_MISMATCH");
 
             // 不返还、不累计：账户余额与账本保持不变，活动指针释放
-            assertThat(accountBalance(jdbc, MISMATCH.buyerId())).isEqualTo(0L);
-            assertThat(refundLedgerCount(jdbc, MISMATCH.accountId())).isEqualTo(0L);
+            assertThat(accountBalance(jdbc, MISMATCH.settlementBuyerId())).isEqualTo(0L);
+            assertThat(refundLedgerCount(jdbc, MISMATCH.settlementAccountId())).isEqualTo(0L);
             assertThat(refundTotals(jdbc, MISMATCH.instoreOrderId()))
                     .containsExactly(0L, 0L, 0L);
             assertThat(activeRefundCaseId(jdbc, MISMATCH.instoreOrderId())).isNull();
@@ -273,8 +275,8 @@ class InstoreRefundFlowIntegrationTest {
             // 与回调路径共用收敛：账户返还、三项累计、售后投影与活动指针释放
             assertThat(refundStatusOf(jdbc, accepted.refundCaseNo()))
                     .isEqualTo(InstoreRefundStatus.SUCCESS.getCode());
-            assertThat(accountBalance(jdbc, QUERY_FALLBACK.buyerId())).isEqualTo(40_000L);
-            assertThat(refundLedgerCount(jdbc, QUERY_FALLBACK.accountId())).isEqualTo(1L);
+            assertThat(accountBalance(jdbc, QUERY_FALLBACK.settlementBuyerId())).isEqualTo(40_000L);
+            assertThat(refundLedgerCount(jdbc, QUERY_FALLBACK.settlementAccountId())).isEqualTo(1L);
             assertThat(refundTotals(jdbc, QUERY_FALLBACK.instoreOrderId()))
                     .containsExactly(40_000L, 40_000L, 40_000L);
             assertThat(activeRefundCaseId(jdbc, QUERY_FALLBACK.instoreOrderId())).isNull();
@@ -328,6 +330,11 @@ class InstoreRefundFlowIntegrationTest {
                             long versionId, long bindingId, long supplierBindingId,
                             long orderId, long instoreOrderId, long paymentFlowId,
                             String suffix) {
+
+        // 独立结算方 fixture，原关联方账户必须保持零变动。
+        long settlementBuyerId() { return buyerId + 1000L; }
+        long settlementAccountId() { return accountId + 1000L; }
+        String reservationNo() { return "FR_RFD_" + suffix; }
 
         String buyerCode() {
             return "BUYER_RFD_" + suffix;
@@ -404,6 +411,16 @@ class InstoreRefundFlowIntegrationTest {
                 VALUES (?, ?, ?, ?, 'INDEPENDENT', 10, 0, UTC_TIMESTAMP(3), UTC_TIMESTAMP(3))
                 """, scenario.projectId(), scenario.projectCode(),
                 "退款流程项目" + scenario.suffix(), scenario.buyerId());
+        jdbc.update("""
+                INSERT INTO sc_buyer(id,buyer_code,buyer_name,short_name,buyer_type,status,version,created_at,updated_at)
+                VALUES (?, ?, '独立结算方', '结算方', 'SAAS_MALL', 10, 0, NOW(3), NOW(3))
+                """, scenario.settlementBuyerId(), "BYR_SETTLE_" + scenario.suffix());
+        jdbc.update("""
+                INSERT INTO sc_buyer_account(id,account_no,buyer_id,currency,balance,frozen,status,version,created_at,updated_at)
+                VALUES (?, ?, ?, 'CNY', 0, 0, 10, 0, NOW(3), NOW(3))
+                """, scenario.settlementAccountId(), "BAC_SETTLE_" + scenario.suffix(), scenario.settlementBuyerId());
+        jdbc.update("UPDATE sc_buyer_project SET settlement_buyer_id=? WHERE id=?",
+                scenario.settlementBuyerId(), scenario.projectId());
         insertCashierRoute(jdbc, scenario);
         jdbc.update("""
                 INSERT INTO sc_instore_channel_user_binding(
@@ -453,14 +470,21 @@ class InstoreRefundFlowIntegrationTest {
                 INSERT INTO sc_instore_payment_flow(
                     id, payment_flow_no, instore_order_id, order_id, flow_sequence,
                     channel_code, trade_id, user_code, pay_amount, order_type, pay_status,
-                    out_trade_no, buyer_paid_amount, external_transaction_id,
+                    out_trade_no, buyer_paid_amount, external_transaction_id, fund_reservation_no,
                     request_fingerprint, version, created_at, updated_at)
-                VALUES (?, ?, ?, ?, 1, 'RT_MART', ?, ?, ?, 1, 20, ?, ?, ?,
+                VALUES (?, ?, ?, ?, 1, 'RT_MART', ?, ?, ?, 1, 20, ?, ?, ?, ?,
                         UNHEX(SHA2(?, 256)), 0, UTC_TIMESTAMP(3), UTC_TIMESTAMP(3))
                 """, scenario.paymentFlowId(), scenario.paymentFlowNo(),
                 scenario.instoreOrderId(), scenario.orderId(), scenario.tradeId(),
                 scenario.buyerUser(), PAY_AMOUNT, scenario.outTradeNo(), PAY_AMOUNT,
-                "TXN_RFD_" + scenario.suffix(), "rfd-payment-" + scenario.suffix());
+                "TXN_RFD_" + scenario.suffix(), scenario.reservationNo(), "rfd-payment-" + scenario.suffix());
+        // PAID fixture 必须包含原始已扣预留，退款从其资金身份返还，不从项目归属猜测。
+        jdbc.update("""
+                INSERT INTO sc_fund_reservation(reservation_no,account_id,buyer_id,reference_type,reference_no,
+                    total_amount,committed_amount,released_amount,remaining_amount,currency,status,version,created_at,updated_at)
+                VALUES (?, ?, ?, 'INSTORE_ORDER', ?, ?, ?, 0, 0, 'CNY', 30, 0, NOW(3), NOW(3))
+                """, scenario.reservationNo(), scenario.settlementAccountId(), scenario.settlementBuyerId(),
+                scenario.paymentFlowNo(), PAY_AMOUNT, PAY_AMOUNT);
     }
 
     /** 插入 ACTIVE 档案、PUBLISHED 当前版本和启用 CASHIER 能力，形成可解析的收银台路由。 */

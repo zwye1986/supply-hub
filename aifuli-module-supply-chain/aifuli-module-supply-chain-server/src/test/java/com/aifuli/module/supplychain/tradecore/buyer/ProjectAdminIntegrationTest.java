@@ -1,5 +1,16 @@
 package com.aifuli.module.supplychain.tradecore.buyer;
 
+import com.aifuli.module.supplychain.tradecore.account.domain.FundReferenceType;
+import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.transaction.PlatformTransactionManager;
+import com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants;
+import com.aifuli.module.supplychain.tradecore.buyer.domain.BuyerProjectStatus;
+import com.aifuli.module.supplychain.tradecore.buyer.domain.BuyerStatus;
+import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerProjectMapper;
+import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerMapper;
+import com.aifuli.module.supplychain.tradecore.account.dal.mysql.BuyerAccountMapper;
+import com.aifuli.module.supplychain.tradecore.account.application.BuyerAccountReturnService;
+import com.aifuli.module.supplychain.tradecore.account.application.FundReservationService;
 import com.aifuli.framework.common.exception.ServiceException;
 import com.aifuli.framework.common.pojo.PageParam;
 import com.aifuli.module.supplychain.infrastructure.configuration.SupplyChainDataSourceConfiguration;
@@ -168,13 +179,26 @@ class ProjectAdminIntegrationTest {
             String projectCode = projects.create(new CreateProjectCommand(
                     "福利项目", buyerA, "WELFARE",
                     LocalDate.of(2026, 9, 1), LocalDate.of(2026, 12, 31),
-                    null, "说明", "DRAFT", 1L));
+                    null, "说明", "DRAFT", 1L, buyerB));
             assertThat(projectCode).startsWith("PRJ_");
+            assertThat(projectQueries.get(projectCode).settlementBuyerCode()).isEqualTo(buyerB);
+            assertThat(projectQueries.get(projectCode).settlementBuyerName()).isEqualTo("另一级");
+            var settlementRow = projectQueries.page(new ProjectAdminQueryService.ProjectPageQuery(
+                    null, projectCode, List.of(), null, List.of(), null, null, 1, 12)).getList().getFirst();
+            assertThat(settlementRow.settlementBuyerCode()).isEqualTo(buyerB);
+            assertThat(settlementRow.settlementBuyerName()).isEqualTo("另一级");
             projects.update(new UpdateProjectCommand(
                     projectCode, "福利项目", buyerA, "WELFARE",
                     LocalDate.of(2026, 9, 1), LocalDate.of(2026, 12, 31),
                     null, "说明", "ACTIVE", 1L));
             assertThat(projectQueries.get(projectCode).status()).isEqualTo("ACTIVE");
+            assertThat(projectQueries.get(projectCode).settlementBuyerCode()).isEqualTo(buyerB);
+            assertThatThrownBy(() -> projects.update(new UpdateProjectCommand(projectCode, "福利项目", buyerA,
+                    "WELFARE", LocalDate.of(2026, 9, 1), LocalDate.of(2026, 12, 31),
+                    null, "说明", null, 1L, buyerA))).isInstanceOf(ServiceException.class)
+                    .extracting(ex -> ((ServiceException) ex).getCode())
+                    .isEqualTo(SupplyChainErrorCodeConstants.PROJECT_SETTLEMENT_BUYER_IMMUTABLE.getCode());
+            verifyIndependentSettlementFunds(context, projectCode, buyerA, buyerB);
             assertThat(projectQueries.get(projectCode).productTypes())
                     .containsExactlyElementsOf(buyerQueries.get(buyerA).productTypes());
 
@@ -319,6 +343,12 @@ class ProjectAdminIntegrationTest {
                     .isInstanceOf(ServiceException.class)
                     .extracting(ex -> ((ServiceException) ex).getCode())
                     .isEqualTo(PROJECT_BUYER_IMMUTABLE.getCode());
+            verifySettlementStartRace(projects, projectQueries, buyerA, buyerB);
+            buyers.changeStatus(buyerB, BuyerStatus.SUSPENDED, 1L);
+            assertThat(buyerQueries.listSimple(null, null, List.of(
+                    BuyerStatus.ACTIVE)))
+                    .extracting(row -> row.buyerCode()).doesNotContain(buyerB).contains(buyerA);
+            assertThat(buyerQueries.listSimple(null, null)).extracting(row -> row.buyerCode()).contains(buyerB);
             assertThat(L2_CENTS).isEqualTo(Math.round(L1_CENTS * (L2_PERCENT / 100.0d)) + L2_AMOUNT_CENTS);
         }
     }
@@ -819,6 +849,66 @@ class ProjectAdminIntegrationTest {
         catalog.changeSkuStatus("SKU_001_200", CatalogEntityStatus.ACTIVE, 1L);
     }
 
+    /** 真实 MySQL：项目归属不变，冻结/扣款/释放/返还只影响结算方账户。 */
+    private void verifyIndependentSettlementFunds(ConfigurableApplicationContext context, String code,
+                                                  String ownerCode, String settlementCode) {
+        var buyers = context.getBean(BuyerMapper.class);
+        var projects = context.getBean(BuyerProjectMapper.class);
+        var accounts = context.getBean(BuyerAccountMapper.class);
+        var funds = context.getBean(FundReservationService.class);
+        var returns = context.getBean(BuyerAccountReturnService.class);
+        long owner = buyers.selectByBuyerCode(ownerCode).getId();
+        long settlement = buyers.selectByBuyerCode(settlementCode).getId();
+        long project = projects.selectByProjectCode(code).getId();
+        var reservation = funds.freeze(new FundReservationService.FreezeCommand(
+                owner, FundReferenceType.CARD_ORDER.code(), "REQ_SETTLEMENT", Money.cny(100L), "ORDER_SETTLEMENT", "trace-settlement", "cause", project));
+        assertThat(reservation.buyerId()).isEqualTo(settlement);
+        assertThat(accounts.selectByBuyerId(owner).getFrozen()).isZero();
+        assertThat(accounts.selectByBuyerId(settlement).getFrozen()).isEqualTo(100L);
+        funds.commitByReference(settlement, FundReferenceType.CARD_ORDER.code(), "REQ_SETTLEMENT", "ORDER_SETTLEMENT", "trace-settlement", "cause");
+        assertThat(accounts.selectByBuyerId(settlement).getBalance()).isEqualTo(-100L);
+        var tx = new TransactionTemplate(context.getBean(
+                "supplyChainTransactionManager", PlatformTransactionManager.class));
+        tx.executeWithoutResult(status -> returns.returnFunds(new BuyerAccountReturnService.ReturnCommand(
+                funds.requireBuyerIdForReservation(reservation.reservationNo()), "REFUND_SETTLEMENT", 100L,
+                "ORDER_SETTLEMENT", FundReferenceType.INSTORE_ORDER.code(), "FLOW_SETTLEMENT", "trace-settlement", "cause")));
+        var released = funds.freeze(new FundReservationService.FreezeCommand(
+                owner, FundReferenceType.CARD_ORDER.code(), "REQ_RELEASE_SETTLEMENT", Money.cny(50L), "ORDER_RELEASE", "trace-settlement", "cause", project));
+        funds.releaseByReference(settlement, FundReferenceType.CARD_ORDER.code(), "REQ_RELEASE_SETTLEMENT", "ORDER_RELEASE", "trace-settlement", "cause");
+        assertThat(released.buyerId()).isEqualTo(settlement);
+        assertThat(accounts.selectByBuyerId(settlement).getBalance()).isZero();
+        assertThat(accounts.selectByBuyerId(settlement).getFrozen()).isZero();
+        assertThat(accounts.selectByBuyerId(owner).getBalance()).isZero();
+        assertThat(projects.selectByProjectCode(code).getBuyerId()).isEqualTo(owner);
+    }
+
+    /** 项目同一行锁串行化启动与草稿改结算方，启动后不可被并发更新覆盖。 */
+    private void verifySettlementStartRace(ProjectAdminCommandService projects, ProjectAdminQueryService queries,
+                                           String owner, String other) throws Exception {
+        String code = projects.create(new CreateProjectCommand("结算方并发项目", owner, "OTHER", null, null,
+                null, null, "DRAFT", 1L, owner));
+        var latch = new CountDownLatch(1);
+        var executor = Executors.newFixedThreadPool(2);
+        try {
+            var start = executor.submit(() -> { latch.await(); projects.changeStatus(code,
+                    BuyerProjectStatus.ACTIVE, 1L); return true; });
+            var change = executor.submit(() -> {
+                latch.await();
+                try { projects.update(new UpdateProjectCommand(code, "结算方并发项目", owner, "OTHER", null, null,
+                        null, null, null, 1L, other)); return true; }
+                catch (ServiceException ex) {
+                    assertThat(ex.getCode()).isEqualTo(SupplyChainErrorCodeConstants.PROJECT_SETTLEMENT_BUYER_IMMUTABLE.getCode());
+                    return false;
+                }
+            });
+            latch.countDown();
+            assertThat(start.get(20, TimeUnit.SECONDS)).isTrue();
+            boolean changed = change.get(20, TimeUnit.SECONDS);
+            assertThat(queries.get(code).status()).isEqualTo("ACTIVE");
+            assertThat(queries.get(code).settlementBuyerCode()).isEqualTo(changed ? other : owner);
+        } finally { executor.shutdownNow(); }
+    }
+
     private static CreateBuyerCommand createBuyer(String name, String legalEntity, String creditCode) {
         return new CreateBuyerCommand(
                 name, List.of(new ContactLine("张三", "13800138000", "a@b.c")),
@@ -866,6 +956,8 @@ class ProjectAdminIntegrationTest {
             AesGcmEnvelopeCrypto.class, ProductCatalogCommandService.class, ProductCenterTestConfiguration.class,
             SettlementPriceResolver.class,
             BuyerAccountOpeningService.class, AccountLedgerWriter.class,
+            FundReservationService.class,
+            BuyerAccountReturnService.class,
             BuyerAdminCommandService.class, BuyerAdminQueryService.class,
             BuyerProductCommandService.class, BuyerProductQueryService.class,
             com.aifuli.module.supplychain.tradecore.catalog.application.BuyerAcceptanceCatalogReadService.class,

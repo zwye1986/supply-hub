@@ -103,7 +103,7 @@ class ProjectAdminRestContractTest {
         ProjectDetail detail = new ProjectDetail(
                 1L, "PRJ_1", "福利项目", "ACTIVE", "BYR_A", "一级",
                 "EMPLOYEE_BENEFIT", LocalDate.of(2026, 9, 1), LocalDate.of(2026, 9, 30),
-                "DISTRIBUTOR", "说明", "MANAGED", 0, 0, List.of());
+                "DISTRIBUTOR", "说明", "MANAGED", 0, 0, List.of(), "BYR_A", "一级");
         String json = mapper.writeValueAsString(detail);
         assertThat(json).doesNotContain("appKey", "appId");
         assertThat(json).contains("projectCode").contains("skuCount").contains("projectPriceSkuCount");

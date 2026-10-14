@@ -82,6 +82,8 @@ public interface SupplyChainErrorCodeConstants {
     ErrorCode L2_OVERRIDE_INVALID = error(1_050_001_060, "L2 覆盖公式或金额不合法");
     ErrorCode L3_OVERRIDE_INVALID = error(1_050_001_061, "L3 覆盖不合法");
     ErrorCode PROJECT_BUYER_IMMUTABLE = error(1_050_001_062, "项目创建后不能修改分销商");
+    /** 启动后结算账户身份不可变，见项目独立结算方设计 §1。 */
+    ErrorCode PROJECT_SETTLEMENT_BUYER_IMMUTABLE = error(1_050_001_182, "项目启动后不能修改结算方");
     ErrorCode PROJECT_PLATFORM_SETTLEMENT_NOT_ENABLED = error(1_050_001_063, "平台结算未开放");
     ErrorCode PROJECT_STATUS_INVALID = error(1_050_001_064, "非法项目状态迁移");
     ErrorCode PROJECT_SKU_NOT_IN_BUYER_CATALOG = error(1_050_001_065, "项目 SKU 不是该分销商的分销商品");
@@ -464,6 +466,7 @@ public interface SupplyChainErrorCodeConstants {
             entry(PROJECT_APP_NOT_ENABLED, RetryDirective.RETRY_SAME_KEY_AFTER_CONDITION_CHANGE),
             entry(PROJECT_APP_CONFIRMATION_REQUIRED, RetryDirective.DO_NOT_RETRY),
             entry(PROJECT_APP_CREDENTIAL_STATE_INVALID, RetryDirective.DO_NOT_RETRY),
+            entry(PROJECT_SETTLEMENT_BUYER_IMMUTABLE, RetryDirective.DO_NOT_RETRY),
             entry(PROJECT_CAPABILITY_VERSION_CONFLICT, RetryDirective.DO_NOT_RETRY),
             entry(PROJECT_CAPABILITY_CONFIRMATION_REQUIRED, RetryDirective.DO_NOT_RETRY),
             entry(SUPPLIER_ALREADY_HAS_PUBLISHED_CONNECTOR, RetryDirective.DO_NOT_RETRY),

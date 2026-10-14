@@ -32,6 +32,7 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PROJECT_PERIOD_INVALID;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PROJECT_PLATFORM_SETTLEMENT_NOT_ENABLED;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PROJECT_STATUS_INVALID;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PROJECT_SETTLEMENT_BUYER_IMMUTABLE;
 
 /**
  * 项目管理端档案命令：项目创建后分销商永久不变；结算方仅 DISTRIBUTOR；
@@ -62,6 +63,8 @@ public class ProjectAdminCommandService {
         String settlementParty = resolveSettlementParty(command.settlementPartyType());
         ProjectType projectType = ClosedEnums.parse(ProjectType.class, command.projectType());
         BuyerDO buyer = requireActiveBuyer(command.buyerCode());
+        BuyerDO settlementBuyer = command.settlementBuyerCode() == null
+                ? buyer : requireActiveBuyer(command.settlementBuyerCode());
         BuyerProjectStatus status = resolveCreateStatus(command.status());
         LocalDateTime now = databaseClock.now();
         String projectCode = scopedBusinessCodeService.allocateChild(ScopedBusinessCodeService.Kind.PRJ,
@@ -75,6 +78,7 @@ public class ProjectAdminCommandService {
                 .startDate(command.startDate())
                 .endDate(command.endDate())
                 .settlementPartyType(settlementParty)
+                .settlementBuyerId(settlementBuyer.getId())
                 .description(command.description())
                 .status(status.getCode())
                 .version(0L)
@@ -104,7 +108,12 @@ public class ProjectAdminCommandService {
                 throw exception(PROJECT_BUYER_IMMUTABLE);
             }
         }
+        Long settlementBuyerId = resolveSettlementBuyerForUpdate(project, currentStatus, command.settlementBuyerCode());
+        if (currentStatus == BuyerProjectStatus.DRAFT && targetStatus == BuyerProjectStatus.ACTIVE) {
+            requireEnabledSettlementBuyer(settlementBuyerId);
+        }
         LocalDateTime now = databaseClock.now();
+        project.setSettlementBuyerId(settlementBuyerId);
         project.setProjectName(command.projectName());
         project.setProjectType(projectType == null ? null : projectType.name());
         project.setStartDate(command.startDate());
@@ -136,12 +145,46 @@ public class ProjectAdminCommandService {
         if (!current.canTransitionTo(target)) {
             throw exception(PROJECT_STATUS_INVALID);
         }
+        if (current == BuyerProjectStatus.DRAFT && target == BuyerProjectStatus.ACTIVE) {
+            requireEnabledSettlementBuyer(effectiveSettlementBuyerId(project));
+        }
         project.setStatus(target.getCode());
         project.setUpdatedBy(operatorId);
         project.setUpdatedAt(databaseClock.now());
         if (projectMapper.updateById(project) != 1) {
             throw exception(PROJECT_STATUS_INVALID);
         }
+    }
+
+    /**
+     * 行锁内解析结算方：草稿允许选择已启用分销商，启动后仅允许保留原值。
+     * 省略字段保持历史身份，组织范围不参与校验；原值停用不阻碍非草稿档案编辑。
+     * 设计：docs/superpowers/specs/2026-10-14-project-settlement-buyer-design.md#2-保存与兼容契约。
+     */
+    private Long resolveSettlementBuyerForUpdate(BuyerProjectDO project, BuyerProjectStatus status, String code) {
+        Long currentId = effectiveSettlementBuyerId(project);
+        if (code == null) return currentId;
+        BuyerDO selected = requireBuyer(code);
+        if (status != BuyerProjectStatus.DRAFT) {
+            if (!java.util.Objects.equals(currentId, selected.getId())) {
+                throw exception(PROJECT_SETTLEMENT_BUYER_IMMUTABLE);
+            }
+        } else {
+            requireActive(selected);
+        }
+        return selected.getId();
+    }
+
+    /** 草稿启动前按持久化身份复核启用状态，PUT/PATCH 共用；见 docs/superpowers/specs/2026-10-14-project-settlement-buyer-design.md#1-业务不变量。 */
+    private void requireEnabledSettlementBuyer(Long buyerId) {
+        BuyerDO buyer = buyerId == null ? null : buyerMapper.selectById(buyerId);
+        if (buyer == null) throw exception(BUYER_PROFILE_NOT_FOUND);
+        requireActive(buyer);
+    }
+
+    /** 历史 NULL 兼容原结算主体，见 docs/superpowers/specs/2026-10-14-project-settlement-buyer-design.md#3-数据与资金。 */
+    private static Long effectiveSettlementBuyerId(BuyerProjectDO project) {
+        return project.getSettlementBuyerId() == null ? project.getBuyerId() : project.getSettlementBuyerId();
     }
 
     private BuyerProjectDO requireForUpdate(String projectCode) {
@@ -253,7 +296,14 @@ public class ProjectAdminCommandService {
             String settlementPartyType,
             String description,
             String status,
-            Long operatorId) {
+            Long operatorId,
+            String settlementBuyerCode) {
+        public CreateProjectCommand(String projectName, String buyerCode, String projectType,
+                                    LocalDate startDate, LocalDate endDate, String settlementPartyType,
+                                    String description, String status, Long operatorId) {
+            this(projectName, buyerCode, projectType, startDate, endDate, settlementPartyType,
+                    description, status, operatorId, null);
+        }
     }
 
     public record UpdateProjectCommand(
@@ -266,6 +316,13 @@ public class ProjectAdminCommandService {
             String settlementPartyType,
             String description,
             String status,
-            Long operatorId) {
+            Long operatorId,
+            String settlementBuyerCode) {
+        public UpdateProjectCommand(String projectCode, String projectName, String buyerCode, String projectType,
+                                    LocalDate startDate, LocalDate endDate, String settlementPartyType,
+                                    String description, String status, Long operatorId) {
+            this(projectCode, projectName, buyerCode, projectType, startDate, endDate, settlementPartyType,
+                    description, status, operatorId, null);
+        }
     }
 }

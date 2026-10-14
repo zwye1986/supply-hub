@@ -539,7 +539,7 @@ public class FulfillmentAcceptanceLifecycle {
         try {
             reservation = fundReservationService.freeze(new FundReservationService.FreezeCommand(
                     command.buyerId(), FundReferenceType.CARD_ORDER.code(), fulfillmentRequest.getRequestNo(),
-                    Money.cny(buyerAmount), order.getOrderNo(), command.traceId(), receipt.getReceiptNo()));
+                    Money.cny(buyerAmount), order.getOrderNo(), command.traceId(), receipt.getReceiptNo(), command.projectId()));
         } catch (IllegalStateException exception) {
             if (exception.getMessage() != null
                     && exception.getMessage().contains("account does not exist")) {
@@ -550,6 +550,10 @@ public class FulfillmentAcceptanceLifecycle {
             }
             throw exception;
         }
+        if (requestMapper.bindSettlementBuyer(fulfillmentRequest.getId(), reservation.buyerId()) != 1) {
+            throw new IllegalStateException("Fulfillment funding identity was not bound exactly once");
+        }
+        fulfillmentRequest.setSettlementBuyerId(reservation.buyerId());
         inject(AcceptanceFailureInjector.Stage.FUNDS_FROZEN);
 
         appendAcceptanceEvents(command, order, fulfillmentRequest, bOrder, operation, reservation, now);

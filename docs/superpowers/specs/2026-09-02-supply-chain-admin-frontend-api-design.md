@@ -34,7 +34,7 @@
 | a6 | 供货模式扩展为 5 种；发货时效 / 结算方式 / 对接方式可落库。可售品类 / 商品类型 / 商品分类为三级独立封闭枚举（system 字典），不是类目树 id；SPU 打同一套三码并按三码整体命中供货配置。清单与命中规则见 `docs/superpowers/specs/2026-09-07-供应链管理端表单字典与标品标签设计.md`。 |
 | a7 | 合作商品新增即 `PUBLISHED`（上架）。下架=`SUSPENDED`，移除=`RETIRED`。 |
 | a8 | 项目「已结束」=`CLOSED`，可恢复为进行中或已暂停。`ARCHIVED` 仍不可逆，本批页面不暴露。 |
-| a9 | 项目启动后不可改关联分销商。结算方本期只允许「关联分销商」；「平台结算」拒绝。 |
+| a9 | 项目启动后不可改关联分销商。结算方允许选择与关联分销商不同的已启用分销商，不校验组织范围；项目启动后不可修改。「平台结算」拒绝。详见 `2026-10-14-project-settlement-buyer-design.md`。 |
 | a10 | 项目新增 SKU 必须已是该分销商的分销商品（已有 `BuyerProduct`），禁止顺带创建。 |
 | a11 | 不提供物理删除供应商/分销商/项目。开票为独立子资源，见 a15。 |
 | a12 | 管理端对外契约用 REST：路径是名词资源，动作用 HTTP 方法。禁止 yudao 式 `/create` `/update` `/get` `/page` 以及新的动词路径（`/status` `/retire` `/batch`）。 |
@@ -498,13 +498,15 @@ Springdoc `components.schemas` 中冲突的通用简单类名。生成契约必�
 
 ### 7.1 档案
 
+结算方身份、启动后不可变性、历史回填与资金链路以 [项目独立结算方设计](./2026-10-14-project-settlement-buyer-design.md) 为准；列表/详情返回 `settlementBuyerCode` 和 `settlementBuyerName`。
+
 `GET /supply-chain/projects` 筛选：`projectName`、`projectCode`、`status[]`、`buyerCode`、`projectType[]`、`periodFrom`/`periodTo`。
 
 `GET /supply-chain/projects?view=simple`：名称/编号下拉。
 
 普通分页列表每行返回只读 `skuCount` 和 `projectPriceSkuCount`，与项目详情采用同一统计口径：只统计该项目 `status=AVAILABLE` 的项目商品；项目定价覆盖按当前通用定价版本显式覆盖分销价或旧冻结版本 L3 取并集，同一 SKU 只计一次。列表仅对本页项目批量读取商品、定价身份及当前版本，不逐卡调用详情，也不把缺失字段显示成真实的零。
 
-`GET /supply-chain/projects/{projectCode}`、`POST /supply-chain/projects`、`PUT /supply-chain/projects/{projectCode}`：`projectName`、`buyerCode`、`projectType`、`startDate`、`endDate`、`settlementPartyType`（仅 `DISTRIBUTOR`）、`description`（≤500）。创建允许 `DRAFT` 或 `ACTIVE`（`POST` body 可带 `status`）；整档更新 body 可选带 `status`，未传时保持原状态，传入时按第 4.2 节状态机执行迁移，目标状态与当前状态相同时按幂等保存处理。`skuCount`、`projectPriceSkuCount` 只读统计。
+`GET /supply-chain/projects/{projectCode}`、`POST /supply-chain/projects`、`PUT /supply-chain/projects/{projectCode}`：`projectName`、`buyerCode`、`projectType`、`startDate`、`endDate`、`settlementPartyType`（仅 `DISTRIBUTOR`）、`settlementBuyerCode`（独立结算方；创建省略默认关联方、更新省略保持原值）、`description`（≤500）。创建允许 `DRAFT` 或 `ACTIVE`（`POST` body 可带 `status`）；整档更新 body 可选带 `status`，未传时保持原状态，传入时按第 4.2 节状态机执行迁移，目标状态与当前状态相同时按幂等保存处理。`skuCount`、`projectPriceSkuCount` 只读统计。
 
 `catalogMode` 默认 `MANAGED`，本批页面不展示。`appId`/`appKey` 本批不返回（避免密钥进入管理端列表）。
 

@@ -21,6 +21,17 @@ public interface FulfillmentRequestMapper extends BaseMapperX<FulfillmentRequest
                 .eq(FulfillmentRequestDO::getOrderId, orderId));
     }
 
+    /**
+     * 首次冻结事务中绑定结算方，只允许从 NULL 设置一次；失败须由调用方回滚整笔受理。
+     * 设计：docs/superpowers/specs/2026-10-14-project-settlement-buyer-design.md#3-数据与资金。
+     */
+    default int bindSettlementBuyer(Long requestId, Long settlementBuyerId) {
+        return update(null, new LambdaUpdateWrapper<FulfillmentRequestDO>()
+                .set(FulfillmentRequestDO::getSettlementBuyerId, settlementBuyerId)
+                .eq(FulfillmentRequestDO::getId, requestId)
+                .isNull(FulfillmentRequestDO::getSettlementBuyerId));
+    }
+
     default int activateBOrder(Long id, Long bOrderId, LocalDateTime updatedAt) {
         return update(null, new LambdaUpdateWrapper<FulfillmentRequestDO>()
                 .set(FulfillmentRequestDO::getActiveBOrderId, bOrderId)

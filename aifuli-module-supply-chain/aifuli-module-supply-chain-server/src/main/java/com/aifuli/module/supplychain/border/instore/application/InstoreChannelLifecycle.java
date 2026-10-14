@@ -231,7 +231,7 @@ public class InstoreChannelLifecycle {
         try {
             reservation = fundReservationService.freeze(new FundReservationService.FreezeCommand(
                     binding.getBuyerId(), FundReferenceType.INSTORE_ORDER.code(), paymentFlowNo,
-                    Money.cny(command.payAmount()), order.getOrderNo(), command.traceId(), paymentFlowNo));
+                    Money.cny(command.payAmount()), order.getOrderNo(), command.traceId(), paymentFlowNo, binding.getProjectId()));
         } catch (IllegalStateException ex) {
             if (ex.getMessage() != null && ex.getMessage().contains("account does not exist")) {
                 log.warn("[INSTORE][lifecycle] 资金账户未开户 buyerId={}, tradeId={}",
@@ -869,7 +869,8 @@ public class InstoreChannelLifecycle {
                         cashierRefundReference, traceId, now);
             }
             accountReturnService.returnFunds(new BuyerAccountReturnService.ReturnCommand(
-                    instoreOrder.getBuyerId(), refundCase.getRefundCaseNo(), buyerActualRefundAmount,
+                    fundReservationService.requireBuyerIdForReservation(flow.getFundReservationNo()),
+                    refundCase.getRefundCaseNo(), buyerActualRefundAmount,
                     order.getOrderNo(), FundReferenceType.INSTORE_ORDER.code(),
                     instoreOrder.getInstoreOrderNo(), traceId, refundCase.getRefundCaseNo()));
             if (refundCaseMapper.completeRefund(refundCase.getId(), refundCase.getVersion(),

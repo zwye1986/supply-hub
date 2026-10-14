@@ -157,11 +157,22 @@ public class BuyerAdminQueryService {
     }
 
     public List<SimpleBuyerItem> listSimple(String buyerName, String buyerCode) {
+        return listSimple(buyerName, buyerCode, null);
+    }
+
+    /**
+     * 名称下拉继续排除归档，并支持显式状态筛选；结算方候选调用只选 ACTIVE。
+     * 不做组织范围筛选，不改变普通关联分销商下拉的兼容投影。
+     * 设计：docs/superpowers/specs/2026-10-14-project-settlement-buyer-design.md#4-前端。
+     */
+    public List<SimpleBuyerItem> listSimple(String buyerName, String buyerCode, List<BuyerStatus> statuses) {
         log.info("简易分销商列表 buyerName={} buyerCode={}", buyerName, buyerCode);
         List<BuyerDO> buyers = buyerMapper.selectList(new LambdaQueryWrapper<BuyerDO>()
                 .like(hasText(buyerName), BuyerDO::getBuyerName, buyerName)
                 .eq(hasText(buyerCode), BuyerDO::getBuyerCode, buyerCode)
                 .ne(BuyerDO::getStatus, BuyerStatus.ARCHIVED.getCode())
+                .in(statuses != null && !statuses.isEmpty(), BuyerDO::getStatus,
+                        statuses == null ? List.of() : statuses.stream().map(BuyerStatus::getCode).toList())
                 .orderByDesc(BuyerDO::getUpdatedAt));
         List<SimpleBuyerItem> items = new ArrayList<>();
         for (BuyerDO buyer : buyers) {

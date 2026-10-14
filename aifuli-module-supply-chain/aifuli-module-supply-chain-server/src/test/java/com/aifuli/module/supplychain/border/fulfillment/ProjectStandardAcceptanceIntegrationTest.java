@@ -195,6 +195,18 @@ class ProjectStandardAcceptanceIntegrationTest {
             seed(context);
             BuyerFulfillmentCommandFacade facade = context.getBean(BuyerFulfillmentCommandFacade.class);
             JdbcTemplate jdbc = new JdbcTemplate(context.getBean("supplyChainDataSource", DataSource.class));
+            // 项目 A 使用另一启用分销商结算；同 Buyer 的项目 B 保持原资金身份。
+            String settlementCode = context.getBean(BuyerCommandService.class).createBuyer(
+                    new BuyerCommandService.CreateBuyerCommand(null, "独立结算方", "独立结算方", null, null,
+                            SOURCE_SYSTEM, "tenant-settlement", LocalDateTime.now(ZoneOffset.UTC), 1L));
+            context.getBean(BuyerAccountOpeningService.class).open(
+                    new BuyerAccountOpeningService.OpeningBalanceCommand(settlementCode, Money.cny(25_000L),
+                            1L, "evidence://settlement-opening", new byte[32], "独立结算方测试期初额", "trace-settlement", null));
+            Long settlementId = context.getBean(BuyerMapper.class).selectByBuyerCode(settlementCode).getId();
+            var projectMapper = context.getBean(BuyerProjectMapper.class);
+            var projectA = projectMapper.selectByProjectCode(PROJECT_A);
+            projectA.setSettlementBuyerId(settlementId);
+            projectMapper.updateById(projectA);
             String sharedOrderNo = "C-PROJECT-KEY-SHARED";
             issueQuote(context, PROJECT_A, sharedOrderNo);
             issueQuote(context, PROJECT_B, sharedOrderNo);
@@ -218,6 +230,22 @@ class ProjectStandardAcceptanceIntegrationTest {
                     "SELECT project_id FROM sc_supply_chain_order WHERE buyer_order_no=?",
                     Long.class, sharedOrderNo)).containsExactlyInAnyOrder(
                     projectId(jdbc, PROJECT_A), projectId(jdbc, PROJECT_B));
+            assertThat(jdbc.queryForObject("SELECT settlement_buyer_id FROM sc_fulfillment_request WHERE request_no=?",
+                    Long.class, first.getFulfillmentRequestNo())).isEqualTo(settlementId);
+            assertThat(jdbc.queryForObject("SELECT buyer_id FROM sc_fund_reservation WHERE reference_no=?",
+                    Long.class, first.getFulfillmentRequestNo())).isEqualTo(settlementId);
+            assertThat(jdbc.queryForObject("SELECT buyer_id FROM sc_supply_chain_order WHERE order_no=?",
+                    Long.class, first.getOrderNo())).isEqualTo(projectA.getBuyerId());
+            assertThat(jdbc.queryForObject("SELECT settlement_buyer_id FROM sc_fulfillment_request WHERE request_no=?",
+                    Long.class, second.getFulfillmentRequestNo())).isEqualTo(projectA.getBuyerId());
+            var funds = context.getBean(FundReservationService.class);
+            funds.commitByReference(settlementId, "CARD_ORDER", first.getFulfillmentRequestNo(),
+                    first.getOrderNo(), "trace-settlement", "cause");
+            assertThat(jdbc.queryForObject("SELECT frozen FROM sc_buyer_account WHERE buyer_id=?",
+                    Long.class, settlementId)).isZero();
+            assertThat(jdbc.queryForObject("SELECT frozen FROM sc_buyer_account WHERE buyer_id=?",
+                    Long.class, projectA.getBuyerId())).isPositive();
+
         }
     }
 

@@ -279,7 +279,7 @@ public class SupplierOrderLifecycle {
                 .createdAt(now).build());
 
         // 7. 资金确认闭环：实扣资金
-        fundReservationService.commitByReference(request.getBuyerId(),
+        fundReservationService.commitByReference(request.fundsBuyerId(),
                 FundReferenceType.CARD_ORDER.code(), request.getRequestNo(),
                 order.getOrderNo(), traceId, bOrder.getBOrderNo());
 
@@ -538,7 +538,7 @@ public class SupplierOrderLifecycle {
                 ? BOrderFulfillmentStatus.CANCELLED.getCode() : BOrderFulfillmentStatus.FAILED.getCode();
         if (BOrderFulfillmentStatus.isConvergedTerminal(bOrder.getFulfillmentStatus())) {
             if (bOrder.getFulfillmentStatus() == targetStatus) {
-                var snapshot = fundReservationService.lockSnapshotByReference(request.getBuyerId(),
+                var snapshot = fundReservationService.lockSnapshotByReference(request.fundsBuyerId(),
                         FundReferenceType.CARD_ORDER.code(), request.getRequestNo());
                 if (snapshot == null) {
                     throw new IllegalStateException("Fund reservation missing for terminal BOrder: " + bOrder.getBOrderNo());
@@ -562,7 +562,7 @@ public class SupplierOrderLifecycle {
 
         LocalDateTime now = databaseClock.now();
         if (!now.isBefore(permit.leaseUntil())) throw new IllegalStateException("可信失败资格已过期");
-        var reservation = fundReservationService.lockSnapshotByReference(request.getBuyerId(), FundReferenceType.CARD_ORDER.code(), request.getRequestNo());
+        var reservation = fundReservationService.lockSnapshotByReference(request.fundsBuyerId(), FundReferenceType.CARD_ORDER.code(), request.getRequestNo());
         if (reservation == null || reservation.status() != FundReservationService.RESERVED
                 || reservation.committedAmount() != 0 || reservation.releasedAmount() != 0
                 || reservation.remainingAmount() != reservation.totalAmount()) {
@@ -647,7 +647,7 @@ public class SupplierOrderLifecycle {
                 .createdAt(now).build());
 
         // 6. 资金释放闭环：恰一次释放本单 remainingAmount（设计 §3.1）
-        fundReservationService.releaseByReference(request.getBuyerId(),
+        fundReservationService.releaseByReference(request.fundsBuyerId(),
                 FundReferenceType.CARD_ORDER.code(), request.getRequestNo(),
                 order.getOrderNo(), traceId, bOrder.getBOrderNo());
 
@@ -946,7 +946,7 @@ public class SupplierOrderLifecycle {
                     .traceId(traceId)
                     .createdAt(now).build());
 
-            fundReservationService.commitByReference(request.getBuyerId(),
+            fundReservationService.commitByReference(request.fundsBuyerId(),
                     FundReferenceType.CARD_ORDER.code(), request.getRequestNo(),
                     order.getOrderNo(), traceId, bOrder.getBOrderNo());
             openRecoverAssetCase(operation, bOrder, request, order, now);
@@ -1032,7 +1032,7 @@ public class SupplierOrderLifecycle {
                 .createdAt(now).build());
 
         // 7. 资金确认闭环：调用 fundReservationService.commit 实扣资金
-        fundReservationService.commitByReference(request.getBuyerId(),
+        fundReservationService.commitByReference(request.fundsBuyerId(),
                 FundReferenceType.CARD_ORDER.code(), request.getRequestNo(),
                 order.getOrderNo(), traceId, bOrder.getBOrderNo());
     }
@@ -1224,7 +1224,7 @@ public class SupplierOrderLifecycle {
                 .createdAt(now).build());
 
         // 6. 资金释放闭环：全败释放预冻结资金
-        fundReservationService.releaseByReference(request.getBuyerId(),
+        fundReservationService.releaseByReference(request.fundsBuyerId(),
                 FundReferenceType.CARD_ORDER.code(), request.getRequestNo(),
                 order.getOrderNo(), traceId, bOrder.getBOrderNo());
     }

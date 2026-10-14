@@ -45,6 +45,9 @@ public class BuyerProjectDO {
     private LocalDate endDate;
     /** 结算方，本期仅DISTRIBUTOR */
     private String settlementPartyType;
+    /** 结算方分销商内部主键，逻辑引用sc_buyer.id；历史 NULL 按关联方读取。
+     * 设计：docs/superpowers/specs/2026-10-14-project-settlement-buyer-design.md#3-数据与资金。 */
+    private Long settlementBuyerId;
     /** 项目说明 */
     private String description;
     /** 项目状态：0草稿，10启用，20暂停，90归档。 */

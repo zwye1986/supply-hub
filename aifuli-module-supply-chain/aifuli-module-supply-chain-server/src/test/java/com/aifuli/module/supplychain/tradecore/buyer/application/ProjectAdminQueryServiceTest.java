@@ -39,6 +39,34 @@ import static org.mockito.Mockito.when;
 class ProjectAdminQueryServiceTest {
 
     @Test
+    void listAndDetailProjectIndependentSettlementIdentityAndLegacyFallback() {
+        BuyerProjectMapper projects = mock(BuyerProjectMapper.class);
+        BuyerMapper buyers = mock(BuyerMapper.class);
+        var scope = mock(BuyerCategoryScopeMapper.class);
+        var listings = mock(ProjectListingMapper.class);
+        var service = new ProjectAdminQueryService(projects, buyers, scope, mock(ProductTypeMapper.class),
+                listings, mock(ProjectListingVersionMapper.class), mock(ProjectSkuPricingMapper.class),
+                mock(ProjectSkuPricingVersionMapper.class), new ObjectMapper());
+        BuyerProjectDO independent = BuyerProjectDO.builder().id(1L).projectCode("PRJ_INDEPENDENT")
+                .buyerId(2L).settlementBuyerId(3L).status(BuyerProjectStatus.ACTIVE.getCode()).build();
+        BuyerProjectDO legacy = BuyerProjectDO.builder().id(2L).projectCode("PRJ_LEGACY")
+                .buyerId(2L).status(BuyerProjectStatus.ACTIVE.getCode()).build();
+        when(buyers.selectById(2L)).thenReturn(BuyerDO.builder().id(2L).buyerCode("OWNER").buyerName("关联方").build());
+        when(buyers.selectById(3L)).thenReturn(BuyerDO.builder().id(3L).buyerCode("SETTLEMENT").buyerName("结算方").build());
+        when(projects.selectPage(any(PageParam.class), any(Wrapper.class)))
+                .thenReturn(new PageResult<>(List.of(independent, legacy), 2L));
+        when(projects.selectByProjectCode("PRJ_INDEPENDENT")).thenReturn(independent);
+        when(projects.selectByProjectCode("PRJ_LEGACY")).thenReturn(legacy);
+        var rows = service.page(new ProjectAdminQueryService.ProjectPageQuery(
+                null, null, List.of(), null, List.of(), null, null, 1, 12)).getList();
+        assertThat(rows).extracting(row -> row.buyerCode()).containsExactly("OWNER", "OWNER");
+        assertThat(rows).extracting(row -> row.settlementBuyerCode()).containsExactly("SETTLEMENT", "OWNER");
+        assertThat(rows).extracting(row -> row.settlementBuyerName()).containsExactly("结算方", "关联方");
+        assertThat(service.get("PRJ_INDEPENDENT").settlementBuyerCode()).isEqualTo("SETTLEMENT");
+        assertThat(service.get("PRJ_LEGACY").settlementBuyerCode()).isEqualTo("OWNER");
+    }
+
+    @Test
     void countsGenericAndLegacyProjectPricesWithoutDoubleCounting() throws Exception {
         BuyerProjectMapper projectMapper = mock(BuyerProjectMapper.class);
         ProjectListingMapper listingMapper = mock(ProjectListingMapper.class);
@@ -106,6 +134,21 @@ class ProjectAdminQueryServiceTest {
 
         assertThat(rows).extracting(row -> row.skuCount()).containsExactly(2, 1, 0);
         assertThat(rows).extracting(row -> row.projectPriceSkuCount()).containsExactly(1, 0, 0);
+    }
+
+    @Test
+    void projectContractsExposeIndependentSettlementBuyer() {
+        ObjectMapper mapper = new ObjectMapper();
+        for (Class<?> type : List.of(ProjectAdminQueryService.ProjectListItem.class,
+                ProjectAdminQueryService.ProjectDetail.class)) {
+            var properties = mapper.getSerializationConfig().introspect(mapper.constructType(type))
+                    .findProperties().stream().map(p -> p.getName()).toList();
+            assertThat(properties).contains("settlementBuyerCode", "settlementBuyerName");
+        }
+        var requestProperties = mapper.getDeserializationConfig().introspect(mapper.constructType(
+                com.aifuli.module.supplychain.interfaceapi.admin.ProjectAdminController.ProjectSaveReqVO.class))
+                .findProperties().stream().map(p -> p.getName()).toList();
+        assertThat(requestProperties).contains("settlementBuyerCode");
     }
 
     /** 项目详情只取关联分销商的商品类型范围，保持与分销商详情相同的类型名称。 */

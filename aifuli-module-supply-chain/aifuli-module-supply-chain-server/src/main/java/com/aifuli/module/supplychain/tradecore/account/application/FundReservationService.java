@@ -11,6 +11,7 @@ import com.aifuli.module.supplychain.tradecore.account.dal.mysql.FundReservation
 import com.aifuli.module.supplychain.tradecore.account.domain.FundReferenceType;
 import com.aifuli.module.supplychain.tradecore.account.domain.Money;
 import com.aifuli.module.supplychain.tradecore.ledger.application.AccountLedgerWriter;
+import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerProjectMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -39,6 +40,7 @@ public class FundReservationService {
     public static final short RELEASED = 40;
 
     private final BuyerAccountMapper accountMapper;
+    private final BuyerProjectMapper projectMapper;
     private final FundReservationMapper reservationMapper;
     private final AccountLedgerWriter ledgerWriter;
     private final BusinessNoGenerator businessNoGenerator;
@@ -46,6 +48,13 @@ public class FundReservationService {
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public ReservationSnapshot freeze(FreezeCommand command) {
         validateFreeze(command);
+        // 鉴权/目录使用项目所属 Buyer，资金单独绑定结算 Buyer，随后预留是不可变资金身份。
+        // 设计：docs/superpowers/specs/2026-10-14-project-settlement-buyer-design.md#3-数据与资金。
+        if (command.projectId() != null) {
+            Long settlementBuyerId = resolveSettlementBuyer(command.projectId(), command.buyerId());
+            command = new FreezeCommand(settlementBuyerId, command.referenceType(), command.referenceNo(),
+                    command.amount(), command.orderNo(), command.traceId(), command.causationId());
+        }
         FundReservationDO existing = reservationMapper.selectByReference(
                 command.buyerId(), command.referenceType(), command.referenceNo());
         if (existing != null) {
@@ -79,6 +88,30 @@ public class FundReservationService {
                 command.referenceNo(), null, null, null, null,
                 command.traceId(), command.causationId(), now));
         return snapshot(reservation);
+    }
+
+    /**
+     * 项目资金入口只解析本模块项目，校验归属后读取结算方；历史 NULL 回退原关联方。
+     * 非项目资金仍使用原 Buyer，不能以选择结算方改变项目鉴权和商品归属。
+     * 设计：docs/superpowers/specs/2026-10-14-project-settlement-buyer-design.md#3-数据与资金。
+     */
+    private Long resolveSettlementBuyer(Long projectId, Long ownerBuyerId) {
+        var project = projectMapper.selectById(projectId);
+        if (project == null || !java.util.Objects.equals(project.getBuyerId(), ownerBuyerId)) {
+            throw new IllegalStateException("Project funding owner mismatch or project missing");
+        }
+        return project.getSettlementBuyerId() == null ? ownerBuyerId : project.getSettlementBuyerId();
+    }
+
+    /**
+     * 退款返还原支付预留所属账户，禁止按当前项目配置或关联分销商重新推断。
+     * 必须在退款事务内读取并锁定原预留，缺失时终止而非向其他账户返还。
+     * 设计：docs/superpowers/specs/2026-10-14-project-settlement-buyer-design.md#3-数据与资金。
+     */
+    @Transactional(transactionManager = TRANSACTION_MANAGER,
+            propagation = org.springframework.transaction.annotation.Propagation.MANDATORY)
+    public Long requireBuyerIdForReservation(String reservationNo) {
+        return requireReservationForUpdate(reservationNo).getBuyerId();
     }
 
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
@@ -257,7 +290,13 @@ public class FundReservationService {
     }
 
     public record FreezeCommand(Long buyerId, String referenceType, String referenceNo,
-                                Money amount, String orderNo, String traceId, String causationId) {
+                                Money amount, String orderNo, String traceId, String causationId,
+                                Long projectId) {
+        /** 非项目历史入口保持原账户身份。 */
+        public FreezeCommand(Long buyerId, String referenceType, String referenceNo,
+                             Money amount, String orderNo, String traceId, String causationId) {
+            this(buyerId, referenceType, referenceNo, amount, orderNo, traceId, causationId, null);
+        }
     }
 
     public record ReservationSnapshot(String reservationNo, Long buyerId,
