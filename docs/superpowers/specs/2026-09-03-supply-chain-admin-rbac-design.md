@@ -235,7 +235,7 @@ C 的详细设计至少必须拆成两类能力：
 - 所有 `application_code` 与 permission 的判重、定位与同步比较必须使用 `CAST(... AS BINARY)` 精确比较，沿用 §8.3 第 2 条对 `Illegal mix of collations` 的要求。
 - 变更集必须显式写入 `application_code='supply-chain-admin'`，不能依赖列默认值 `mall-admin`；并带 `preConditions`（`onFail: HALT`）校验 `system_menu.application_code` 列已存在，缺失时失败关闭并提示先执行 §8.3 第 1 条的 schema 扩展脚本，禁止 `MARK_RAN` 静默跳过而重现「菜单缺行」故障。
 - 页面菜单的 `parent_id` 必须解析为既有供应链根目录（`parent_id=0` 且 `permission='supply-chain:admin'`）的 id，不得硬编码数字 id；根目录缺失时失败关闭。
-- **不写 `system_role_menu`**，沿用 §8.3「不预置业务角色」。可见性由 §8.1 的超集展开保证：yudao 超管走 `PermissionServiceImpl` 全量菜单分支、`AdminMenuProjectionService` 全部启用菜单分支，均不读 `system_role_menu`；持有 `supply-chain:admin` 的角色按 `parent_id` 展开整棵子树。仅当将来建立非超管的细粒度运营角色时，才另行增加授权变更集，并同步修订本节。
+- 菜单变更集**不写 `system_role_menu`**，沿用 §8.3「不预置业务角色」。可见性由 §8.1 的超集展开保证：yudao 超管走 `PermissionServiceImpl` 全量菜单分支、`AdminMenuProjectionService` 全部启用菜单分支，均不依赖 `system_role_menu`；持有 `supply-chain:admin` 的角色按 `parent_id` 展开整棵子树。用户明确指定授权对象时，允许独立授权变更集只补已有角色关系，不新建或提升角色。2026-10-14 用户指定超级管理员 `admin`：`017-supply-chain-order-entry-admin-grant` 只解析该精确用户名已绑定的启用 `super_admin` 角色及真实租户，幂等登记录入按钮关系，不放宽普通角色。详细边界见 `docs/superpowers/specs/2026-10-14-admin-order-entry-design.md#52-当前-admin-的显式授权迁移`。
 - 变更集只写 system 库的 `system_*` 表。中台 changelog 仍禁止写 `system_*`，由 `SupplyChainModuleArchitectureTest` 的数据所有权门禁保障。
 - **编号必须顺延、禁止复用或覆盖既有变更集**：该目录被多个并行任务共同追加，新增前先列出目录实际文件与 `db.changelog-1.0.0.yaml` 已注册 id，取最大编号 +1，并在 yaml 中**追加**而非替换末尾块。改动或覆盖已提交的变更集会同时造成两个后果：其它任务的菜单永久丢失部署，以及已执行过该变更集的库校验和不一致。同理，`script/deploy` 脚本内移除已迁出的菜单块时，只能删除该块自身，其后其它任务追加的块必须原样保留。
 

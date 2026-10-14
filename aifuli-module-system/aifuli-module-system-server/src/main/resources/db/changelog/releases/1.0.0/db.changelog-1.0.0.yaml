@@ -186,3 +186,78 @@ databaseChangeLog:
             encoding: UTF-8
             splitStatements: true
             stripComments: false
+  # 录入按钮与授权分别登记；前置缺失/歧义必须HALT，不能记录为已执行却不生效。
+  # 设计：docs/superpowers/specs/2026-10-14-admin-order-entry-design.md#5-数据与交付
+  - changeSet:
+      id: 016-supply-chain-order-entry-menu
+      author: supply-chain
+      runInTransaction: true
+      preConditions:
+        - onFail: HALT
+          onError: HALT
+          and:
+            - sqlCheck:
+                expectedResult: 1
+                sql: >-
+                  SELECT COUNT(*) FROM information_schema.COLUMNS
+                  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'system_menu'
+                  AND COLUMN_NAME = 'application_code'
+            - sqlCheck:
+                expectedResult: 1
+                sql: >-
+                  SELECT COUNT(*) FROM system_menu page JOIN system_menu root ON root.id = page.parent_id
+                  WHERE CAST(page.application_code AS BINARY) = CAST('supply-chain-admin' AS BINARY)
+                  AND CAST(page.permission AS BINARY) = CAST('supply-chain:order:query' AS BINARY)
+                  AND page.type = 2 AND page.status = 0 AND page.deleted = b'0'
+                  AND CAST(root.application_code AS BINARY) = CAST('supply-chain-admin' AS BINARY)
+                  AND CAST(root.permission AS BINARY) = CAST('supply-chain:admin' AS BINARY)
+                  AND root.parent_id = 0 AND root.path = '/supplier'
+                  AND root.type = 1 AND root.status = 0 AND root.deleted = b'0'
+            - sqlCheck:
+                expectedResult: 1
+                sql: >-
+                  SELECT CASE WHEN COUNT(*) <= 1 THEN 1 ELSE 0 END FROM system_menu
+                  WHERE CAST(application_code AS BINARY) = CAST('supply-chain-admin' AS BINARY)
+                  AND CAST(permission AS BINARY) = CAST('supply-chain:order:create' AS BINARY)
+                  AND deleted = b'0'
+      changes:
+        - sqlFile:
+            path: 016-supply-chain-order-entry-menu.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+  - changeSet:
+      id: 017-supply-chain-order-entry-admin-grant
+      author: supply-chain
+      runInTransaction: true
+      preConditions:
+        - onFail: HALT
+          onError: HALT
+          and:
+            - sqlCheck:
+                expectedResult: 1
+                sql: >-
+                  SELECT COUNT(*) FROM system_menu
+                  WHERE CAST(application_code AS BINARY) = CAST('supply-chain-admin' AS BINARY)
+                  AND CAST(permission AS BINARY) = CAST('supply-chain:order:create' AS BINARY)
+                  AND type = 3 AND status = 0 AND deleted = b'0'
+            - sqlCheck:
+                expectedResult: 1
+                sql: >-
+                  SELECT CASE WHEN COUNT(*) > 0 THEN 1 ELSE 0 END
+                  FROM system_users admin_user
+                  JOIN system_user_role user_role ON user_role.user_id = admin_user.id
+                  AND user_role.tenant_id = admin_user.tenant_id AND user_role.deleted = b'0'
+                  JOIN system_role role ON role.id = user_role.role_id
+                  AND role.tenant_id = admin_user.tenant_id AND role.status = 0 AND role.deleted = b'0'
+                  WHERE CAST(admin_user.username AS BINARY) = CAST('admin' AS BINARY)
+                  AND admin_user.status = 0 AND admin_user.deleted = b'0'
+                  AND CAST(role.code AS BINARY) = CAST('super_admin' AS BINARY)
+      changes:
+        - sqlFile:
+            path: 017-supply-chain-order-entry-admin-grant.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false

@@ -52,12 +52,30 @@
 
 ## 5. 数据与交付
 
-不修改订单/账本 DDL。系统库菜单权限仅通过 `script/deploy/aifuli-test/sql/system-supply-chain-admin-menus.sql` 的幂等按钮种子维护；代码不跨库访问 system 表。部署 SQL 不在本轮执行；细权限角色上线时需要管理员分配录入权限并刷新登录态。
+不修改订单/账本 DDL。2026-10-14 用户补充确认：录入菜单及当前超级管理员 `admin` 的显式授权改由 system-server 自己的 Liquibase 管理，代码不跨库访问 system 表。本轮只生成、验证与本地提交迁移，不执行共享库迁移或部署。
 
-发布时先更新携带新 `ApiAccessLogPathUtils` 保护根的网关制品，再更新供应链服务与前端，最后配置菜单权限。共享 common 是编译依赖，单独发布供应链不会改变运行中网关的路径判定；不得在旧网关仍可能记录录入正文时开放此入口。其它进程未拥有该录入路径，不因本功能要求八进程全部重启；共享 common/web 与网关直接受影响回归已纳入本地验证。
+### 5.1 system 菜单迁移
+
+追加 `016-supply-chain-order-entry-menu`，注册在 system `db/changelog/releases/1.0.0/db.changelog-1.0.0.yaml`，不修改已存在的001–015变更集。幂等建立/收敛 `application_code=supply-chain-admin`、`permission=supply-chain:order:create` 的“录入订单”按钮，父节点动态解析既有启用订单页面（query权限）；保留其它应用的同名权限、软删除历史和所有既有角色关系。前置条件缺失或有效菜单重复时 HALT，不用 MARK_RAN 静默跳过。
+
+旧 `script/deploy/aifuli-test/sql/system-supply-chain-admin-menus.sql` 仅移出本轮新增的录入按钮块并保留 Liquibase 指针；存量菜单、订单页面及其它功能块保持不变，不借本任务重新迁移整棵历史菜单树。
+
+### 5.2 当前 admin 的显式授权迁移
+
+追加独立 `017-supply-chain-order-entry-admin-grant`。从 `system_users` 精确用户名 `admin` 联查有效 `system_user_role` 与同租户、启用的精确角色编码 `super_admin`；用户也必须启用且未删除。tenant_id、user_id、role_id 均从真实记录解析，不硬编码1，也不只按角色名称、全部超级角色或普通 `admin` 同名用户授予。
+
+只向这些现有超级角色补充录入按钮的 `system_role_menu` 行，显式写入角色真实 tenant_id，按有效 `(tenant_id,role_id,menu_id)` 判重；软删除旧关系不当成现有授权，重复用户角色关系不产生重复授权。保留其它授权、用户及角色状态，不创建账户、角色或用户角色绑定，不把普通用户提升为超管。找不到符合上述身份的 admin 时 HALT，防止无授权却登记完成。
+
+启用的 `super_admin` 本来就由 PermissionServiceImpl 与 AdminMenuProjectionService 获得全部启用菜单，显式关系用于遵循用户要求、形成可核验的迁移记录，不改变超管机制或扩大其它角色权限。Liquibase SQL 不触发服务层 CacheEvict；当前用户角色绑定不变且超管不依赖新增角色菜单关系，发布后重新登录/刷新权限信息获取菜单，不能以仅写入 role_menu 宣称浏览器已验收。
+
+### 5.3 发布顺序与边界
+
+发布时先更新携带新 `ApiAccessLogPathUtils` 保护根的网关制品，再发布带016/017的 system-server 完成菜单/授权迁移，随后更新供应链服务与前端并刷新 admin 权限信息。共享 common 是编译依赖，单独发布供应链不会改变运行中网关的路径判定；不得在旧网关仍可能记录录入正文时开放此入口。其它进程未拥有该录入路径，不因本功能要求八进程全部重启；共享 common/web 与网关直接受影响回归已纳入本地验证。
 
 ## 6. 验证与联调
 
 测试先行：管理端真实 HTTP 权限（未登录/只读/录入/管理员）、严格正文与项目/能力拒绝；真实 MySQL/Liquibase 下管理端到共享 Facade 的受理、同参回放、异目标冲突、格式跨入口同号、独立结算方、资金与 Outbox 不重复。供应商采用本地可控测试替身，不调用共享环境。
 
 前端执行真实 SFC 与 API 测试：卡券/账号目标、固定数量、项目切换和异步乱序、确认取消、重复提交抑制、已受理与拒绝/处理中显示、原单CAS及网络失败保持订单身份；渲染真实组件并截图检查卡券、直充和拒绝状态。运行供应链单元/架构回归及适用集成/契约门禁，运行前端现有测试、受影响 lint 与构建。记录自动化与人工联调步骤到 `docs/集成测试.md`，不以 mock 截图宣称共享环境联调完成。
+
+Liquibase补充验证沿既有真实MySQL完整system主清单集成夹具，覆盖菜单首次生成与存量漂移收敛、再次执行零新增、混合排序规则/大小写精确边界、admin的非1编号/真实租户授权、无关联超管/普通角色/停用删除用户角色与跨租户错误关系不误授，以及缺订单页面或缺合格admin时失败关闭。按仓库门禁只执行受影响system集成测试，非供应链纯单元测试仍跳过。

@@ -12,6 +12,7 @@ import liquibase.changelog.FastCheckService;
 import liquibase.database.Database;
 import liquibase.database.DatabaseFactory;
 import liquibase.database.jvm.JdbcConnection;
+import liquibase.exception.LiquibaseException;
 import liquibase.resource.ClassLoaderResourceAccessor;
 import org.apache.ibatis.datasource.unpooled.UnpooledDataSource;
 import org.apache.ibatis.mapping.Environment;
@@ -38,6 +39,8 @@ import java.sql.Statement;
 
 import static org.hamcrest.Matchers.contains;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -47,6 +50,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * 设计见 {@code docs/superpowers/specs/2026-09-07-供应链管理端表单字典与标品标签设计.md#7-测试门禁}。
  * 路由模式与状态契约见
  * {@code docs/superpowers/specs/2026-10-12-routing-rule-dictionaries-design.md#6-验证与验收}。
+ * 完整主清单的录入菜单与admin授权边界见
+ * {@code docs/superpowers/specs/2026-10-14-admin-order-entry-design.md#5-数据与交付}。
  */
 @Testcontainers(disabledWithoutDocker = true)
 class AdminFormDictionaryMigrationIntegrationTest {
@@ -123,6 +128,85 @@ class AdminFormDictionaryMigrationIntegrationTest {
             statement.execute("""
                     INSERT INTO system_menu (application_code, name, permission, path)
                     VALUES ('supply-chain-admin', '供应链管理', 'supply-chain:admin', '/supplier')
+                    """);
+            statement.execute("""
+                    INSERT INTO system_menu (id, application_code, name, permission, type, parent_id, path)
+                    VALUES (810, 'supply-chain-admin', '订单管理', 'supply-chain:order:query', 2, 1, 'orders'),
+                           (820, 'mall-admin', '其它应用录入', 'supply-chain:order:create', 3, 0, ''),
+                           (5, 'supply-chain-admin', '错误父目录订单页', 'supply-chain:order:query', 2, 820, 'orders')
+                    """);
+            // 只建迁移读取/写入的真实字段；无额外唯一键，不能靠INSERT IGNORE掩盖重复授权。
+            statement.execute("""
+                    CREATE TABLE system_users (
+                      id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                      username VARCHAR(30) NOT NULL,
+                      status TINYINT NOT NULL DEFAULT 0,
+                      deleted BIT(1) NOT NULL DEFAULT b'0',
+                      tenant_id BIGINT NOT NULL DEFAULT 0
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                    """);
+            statement.execute("""
+                    CREATE TABLE system_role (
+                      id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                      code VARCHAR(100) NOT NULL,
+                      status TINYINT NOT NULL DEFAULT 0,
+                      deleted BIT(1) NOT NULL DEFAULT b'0',
+                      tenant_id BIGINT NOT NULL DEFAULT 0
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                    """);
+            statement.execute("""
+                    CREATE TABLE system_user_role (
+                      id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                      user_id BIGINT NOT NULL,
+                      role_id BIGINT NOT NULL,
+                      deleted BIT(1) NULL DEFAULT b'0',
+                      tenant_id BIGINT NOT NULL DEFAULT 0
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                    """);
+            statement.execute("""
+                    CREATE TABLE system_role_menu (
+                      id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                      role_id BIGINT NOT NULL,
+                      menu_id BIGINT NOT NULL,
+                      creator VARCHAR(64) NULL DEFAULT '',
+                      create_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                      updater VARCHAR(64) NULL DEFAULT '',
+                      update_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                      deleted BIT(1) NOT NULL DEFAULT b'0',
+                      tenant_id BIGINT NOT NULL DEFAULT 0
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                    """);
+            // admin/super_admin只是精确编码；普通同名用户、大小写近似、停用/删除和错租户都不是目标。
+            statement.execute("""
+                    INSERT INTO system_users (id, username, status, deleted, tenant_id) VALUES
+                    (70, 'admin', 0, b'0', 9), (71, 'ADMIN', 0, b'0', 19),
+                    (72, 'other', 0, b'0', 29), (73, 'admin', 1, b'0', 39),
+                    (74, 'admin', 0, b'1', 49), (75, 'admin', 0, b'0', 59),
+                    (76, 'admin', 0, b'0', 69), (77, 'admin', 0, b'0', 79),
+                    (78, 'admin', 0, b'0', 89), (79, 'admin', 0, b'0', 99),
+                    (80, 'admin', 0, b'0', 109), (81, 'admin', 0, b'0', 119)
+                    """);
+            statement.execute("""
+                    INSERT INTO system_role (id, code, status, deleted, tenant_id) VALUES
+                    (509, 'super_admin', 0, b'0', 9), (510, 'super_admin', 0, b'0', 19),
+                    (511, 'super_admin', 0, b'0', 29), (512, 'super_admin', 0, b'0', 39),
+                    (513, 'super_admin', 0, b'0', 49), (514, 'super_admin', 0, b'1', 59),
+                    (515, 'super_admin', 1, b'0', 69), (516, 'super_admin', 0, b'0', 79),
+                    (517, 'super_admin', 0, b'0', 89), (518, 'SUPER_ADMIN', 0, b'0', 99),
+                    (519, 'super_admin', 0, b'0', 129), (520, 'common', 0, b'0', 119),
+                    (521, 'super_admin', 0, b'0', 139), (602, 'common', 0, b'0', 9)
+                    """);
+            statement.execute("""
+                    INSERT INTO system_user_role (user_id, role_id, deleted, tenant_id) VALUES
+                    (70, 509, b'0', 9), (70, 509, b'0', 9), (70, 602, b'0', 9),
+                    (71, 510, b'0', 19), (72, 511, b'0', 29), (73, 512, b'0', 39),
+                    (74, 513, b'0', 49), (75, 514, b'0', 59), (76, 515, b'0', 69),
+                    (77, 516, b'1', 79), (78, 517, b'0', 189), (79, 518, b'0', 99),
+                    (80, 519, b'0', 109), (81, 520, b'0', 119)
+                    """);
+            statement.execute("""
+                    INSERT INTO system_role_menu (role_id, menu_id, creator, tenant_id)
+                    VALUES (602, 820, '保留既有授权', 9)
                     """);
         }
     }
@@ -513,6 +597,110 @@ class AdminFormDictionaryMigrationIntegrationTest {
                 SELECT COUNT(*) FROM DATABASECHANGELOG
                 WHERE ID = '015-routing-rule-dictionaries' AND AUTHOR = 'supply-chain'
                 """));
+    }
+
+    /** 只授权已有admin超管，幂等且不污染其它应用、普通角色或租户。设计见录入设计 §5.1、§5.2。 */
+    @Test
+    void orderEntryMenuAndAdminGrantAreIdempotentAndScoped() throws Exception {
+        updateLiquibase();
+        assertEquals(1, queryCount("""
+                SELECT COUNT(*) FROM system_menu
+                WHERE CAST(application_code AS BINARY) = CAST('supply-chain-admin' AS BINARY)
+                  AND CAST(permission AS BINARY) = CAST('supply-chain:order:create' AS BINARY)
+                  AND name = '录入订单' AND parent_id = 810 AND type = 3 AND status = 0
+                  AND visible = b'1' AND keep_alive = b'0' AND deleted = b'0'
+                """));
+        long menuId = Long.parseLong(queryText("""
+                SELECT id FROM system_menu
+                WHERE CAST(application_code AS BINARY) = CAST('supply-chain-admin' AS BINARY)
+                  AND permission = 'supply-chain:order:create' AND deleted = b'0'
+                """));
+        assertEquals("509:9", queryText("SELECT GROUP_CONCAT(CONCAT(role_id, ':', tenant_id) ORDER BY role_id)"
+                + " FROM system_role_menu WHERE menu_id=" + menuId + " AND deleted=b'0'"));
+        assertEquals("其它应用录入", queryText("SELECT name FROM system_menu WHERE id=820"));
+        assertEquals("保留既有授权", queryText("SELECT creator FROM system_role_menu WHERE role_id=602 AND menu_id=820"));
+
+        try (Connection connection = connection(); Statement statement = connection.createStatement()) {
+            statement.execute("UPDATE system_menu SET name='旧录入', parent_id=0, status=1, keep_alive=b'1' WHERE id=" + menuId);
+            statement.execute("UPDATE system_role_menu SET deleted=b'1' WHERE menu_id=" + menuId + " AND tenant_id=9");
+            // 错误租户的既有关系不能替代正确租户授权，也不应被本迁移擅自修正。
+            statement.execute("INSERT INTO system_role_menu(role_id,menu_id,tenant_id) VALUES (509," + menuId + ",0)");
+            for (int replay = 0; replay < 2; replay++) {
+                for (String script : new String[]{"016-supply-chain-order-entry-menu.sql", "017-supply-chain-order-entry-admin-grant.sql"}) {
+                    ScriptUtils.executeSqlScript(connection, new EncodedResource(new ClassPathResource(
+                            "db/changelog/releases/1.0.0/" + script), StandardCharsets.UTF_8));
+                }
+            }
+            statement.execute("DELETE FROM DATABASECHANGELOG WHERE ID IN ('016-supply-chain-order-entry-menu','017-supply-chain-order-entry-admin-grant')");
+        }
+        Scope.getCurrentScope().getSingleton(FastCheckService.class).clearCache();
+        updateLiquibase();
+        updateLiquibase();
+        assertEquals("录入订单:810:0:0", queryText("SELECT CONCAT(name,':',parent_id,':',status,':',keep_alive+0) FROM system_menu WHERE id=" + menuId));
+        assertEquals("509:0,509:9", queryText("SELECT GROUP_CONCAT(CONCAT(role_id,':',tenant_id) ORDER BY tenant_id)"
+                + " FROM system_role_menu WHERE menu_id=" + menuId + " AND deleted=b'0'"));
+        assertEquals(1, queryCount("SELECT COUNT(*) FROM system_role_menu WHERE menu_id=" + menuId + " AND deleted=b'1'"));
+        assertEquals(1, queryCount("SELECT COUNT(*) FROM system_menu WHERE application_code='supply-chain-admin' AND permission='supply-chain:order:create' AND deleted=b'0'"));
+        assertEquals(2, queryCount("SELECT COUNT(*) FROM DATABASECHANGELOG WHERE ID IN ('016-supply-chain-order-entry-menu','017-supply-chain-order-entry-admin-grant') AND EXECTYPE='EXECUTED'"));
+    }
+
+    /** 缺页面或菜单歧义不得静默登记完成；失败后修复前置数据可以继续迁移。 */
+    @Test
+    void orderEntryMenuHaltsWhenPrerequisitesAreMissingOrAmbiguous() throws Exception {
+        updateLiquibase();
+        String[] invalidFixtures = {
+                "UPDATE system_menu SET deleted=b'1' WHERE id=810",
+                """
+                INSERT INTO system_menu(id,application_code,permission,type,parent_id)
+                VALUES (9000,'supply-chain-admin','supply-chain:order:query',2,1)
+                """,
+                """
+                INSERT INTO system_menu(id,application_code,permission,type,parent_id)
+                VALUES (9000,'supply-chain-admin','supply-chain:order:create',3,810)
+                """
+        };
+        for (String invalidFixture : invalidFixtures) {
+            try (Connection connection = connection(); Statement statement = connection.createStatement()) {
+                statement.execute(invalidFixture);
+                statement.execute("DELETE FROM DATABASECHANGELOG WHERE ID IN ('016-supply-chain-order-entry-menu','017-supply-chain-order-entry-admin-grant')");
+                Scope.getCurrentScope().getSingleton(FastCheckService.class).clearCache();
+                try {
+                    LiquibaseException failure = assertThrows(LiquibaseException.class,
+                            AdminFormDictionaryMigrationIntegrationTest::updateLiquibase);
+                    assertTrue(failure.getMessage().contains("016-supply-chain-order-entry-menu"));
+                    assertEquals(0, queryCount("SELECT COUNT(*) FROM DATABASECHANGELOG WHERE ID IN ('016-supply-chain-order-entry-menu','017-supply-chain-order-entry-admin-grant')"));
+                } finally {
+                    // 仅清理本用例在disposable库制造的歧义；不影响其它迁移回归。
+                    statement.execute("UPDATE system_menu SET deleted=b'0' WHERE id=810");
+                    statement.execute("DELETE FROM system_menu WHERE id=9000");
+                    Scope.getCurrentScope().getSingleton(FastCheckService.class).clearCache();
+                    updateLiquibase();
+                }
+            }
+        }
+    }
+
+    /** 其它近似admin/超管不能替代用户指定的有效绑定，也不能绕过HALT。 */
+    @Test
+    void orderEntryGrantHaltsWithoutEligibleAdmin() throws Exception {
+        updateLiquibase();
+        int grantsBefore = queryCount("SELECT COUNT(*) FROM system_role_menu");
+        try (Connection connection = connection(); Statement statement = connection.createStatement()) {
+            statement.execute("UPDATE system_users SET status=1 WHERE id=70");
+            statement.execute("DELETE FROM DATABASECHANGELOG WHERE ID='017-supply-chain-order-entry-admin-grant'");
+            Scope.getCurrentScope().getSingleton(FastCheckService.class).clearCache();
+            try {
+                LiquibaseException failure = assertThrows(LiquibaseException.class,
+                        AdminFormDictionaryMigrationIntegrationTest::updateLiquibase);
+                assertTrue(failure.getMessage().contains("017-supply-chain-order-entry-admin-grant"));
+                assertEquals(0, queryCount("SELECT COUNT(*) FROM DATABASECHANGELOG WHERE ID='017-supply-chain-order-entry-admin-grant'"));
+                assertEquals(grantsBefore, queryCount("SELECT COUNT(*) FROM system_role_menu"));
+            } finally {
+                statement.execute("UPDATE system_users SET status=0 WHERE id=70");
+                Scope.getCurrentScope().getSingleton(FastCheckService.class).clearCache();
+                updateLiquibase();
+            }
+        }
     }
 
     private static void updateLiquibase() throws Exception {

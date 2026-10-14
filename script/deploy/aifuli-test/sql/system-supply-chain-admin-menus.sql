@@ -199,25 +199,11 @@ SET name = '订单管理', type = 2, sort = 4, parent_id = @sc_root_id, path = '
     updater = @sc_creator, update_time = NOW()
 WHERE id = @sc_order_page_id;
 
--- 管理员真实标准订单录入；只准备幂等种子，不自动赋权或执行共享库部署。
+-- 录入订单按钮及当前admin显式授权已迁至system-server Liquibase 016/017。
+-- 唯一事实来源：db/changelog/releases/1.0.0/016-supply-chain-order-entry-menu.sql
+--             db/changelog/releases/1.0.0/017-supply-chain-order-entry-admin-grant.sql
+-- 不在本人工脚本重复维护，避免发布漏执行或覆盖迁移结果。
 -- 设计：docs/superpowers/specs/2026-10-14-admin-order-entry-design.md#5-数据与交付
-INSERT INTO system_menu
-    (application_code, name, permission, type, sort, parent_id, path, icon, component, component_name,
-     status, visible, keep_alive, always_show, creator, create_time, updater, update_time, deleted)
-SELECT @sc_app, '录入订单', 'supply-chain:order:create', 3, 2, @sc_order_page_id, '', '', '', NULL,
-       0, b'1', b'0', b'0', @sc_creator, NOW(), @sc_creator, NOW(), b'0'
-WHERE @sc_order_page_id IS NOT NULL AND NOT EXISTS (
-    SELECT 1 FROM system_menu existing WHERE BINARY existing.application_code = BINARY @sc_app
-      AND BINARY existing.permission = BINARY 'supply-chain:order:create' AND existing.deleted = b'0'
-);
-
-UPDATE system_menu
-SET name = '录入订单', type = 3, sort = 2, parent_id = @sc_order_page_id,
-    path = '', icon = '', component = '', component_name = NULL, status = 0,
-    visible = b'1', keep_alive = b'0', always_show = b'0',
-    updater = @sc_creator, update_time = NOW()
-WHERE @sc_order_page_id IS NOT NULL AND BINARY application_code = BINARY @sc_app
-  AND BINARY permission = BINARY 'supply-chain:order:create' AND deleted = b'0';
 
 -- 商品中心目录及四个管理页面。电影、点餐等商品类型共用平台商品页面，不建立专属菜单。
 INSERT INTO system_menu
