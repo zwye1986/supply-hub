@@ -93,7 +93,7 @@
 | `buyerMobile` | `buyer_user_id`（规范化手机号） |
 | `buyerName`/`payMethod`/`payTradeNo`/`receiver*`/`couponAmount`/`freightAmount` | 本期空，`TODO` + Swagger 说明（§1.1） |
 | `goodsAmount` | `product_subtotal_cents`；`serviceFee` = `service_fee_cents`；`salePrice`（item 级）= `sales_unit_price_cents`；`distPrice` = 报价凭证 `distribution_unit_price_cents`（联表 `sc_standard_pricing_quote`，受理时已冻结） |
-| `distributorPayAmount` | `buyer_settlement_amount`；`projectPayAmount` 本期空【待确认语义】 |
+| `distributorPayAmount` / `projectPayAmount` | 均为总单冻结的 `buyer_settlement_amount`（2026-10-14 评审确认）；表示采购结算金额，不推断支付状态 |
 | `items[]` | CARD 场景由总表 + 报价凭证 + 资产组装（单商品单行）；`cardInfos`/`rechargeInfo`/`ticketCode`/`pickupCode` 见 §3.6 |
 | `supplierOrders[]` | 该总单下全部 B 端尝试（`sc_b_order`）：`supplierOrderNo`=`b_order_no`、`status`=§4.3 映射 |
 | `traces[]` | 虚拟履约无物流，本期空 |
@@ -105,6 +105,19 @@
 - 前端为 `order-views` 的供应商摘要定义独立类型，字段与后端摘要一致，不再复用 `/supplier-orders` 的完整尝试类型。映射必须读取 `supplierOrderNo`，保留全部尝试及顺序，不能按不存在的 `bOrderNo` 过滤。
 - 本次只修复编号返回与映射，不调整价格口径；摘要没有完整尝试的 SKU/供应商结算单价，前端不再读取这些不存在的字段，供货价维持现有缺值占位行为。
 - 回归覆盖列表/平台详情/供应商详情的分销商编号一致性、不同订单不会串号、无尝试与缺值、前端多尝试编号保留以及原供应商工作台仍按 `bOrderNo` 跳转。无需 DDL、历史数据回填或新出站调用。
+
+#### 3.2.2 订单详情金额与价格修订（2026-10-14，已评审通过）
+
+本节取代 §3.2.1 中供货价缺值占位的过渡安排，不修改下单、资金、路由或不可变历史版本。
+
+1. 管理端隐藏「用户支付金额」整行及其专用计算，保留用户支付方式和支付流水号。项目支付金额与分销商支付金额统一读取总单冻结的 `buyer_settlement_amount`；删除没有独立 B 端冻结依据的「商品金额＋运费」拼接公式。金额缺失显示 `—`，真实零值显示 `0.00`。
+2. `OrderItemView.distPrice` 及顶层 `distPrice` 继续表示报价凭证冻结的项目最终有效结算单价，不改变既有接口含义。详情新增 `baseDistPrice`（基础分销单价）、`projectPrice`（项目专属单价）、`supplyPrice`（本次尝试的供应商结算单价），单位均为 CNY 分；前端仅在映射时转换成元。「分销价」列改称「基础分销价」，读取 `baseDistPrice`。
+3. 基础分销价沿报价凭证 `project_pricing_version_id` 读取不可变项目版本，再沿该版本 `buyer_pricing_version_id` 读取不可变分销商版本的 `distribution_price_cents`。项目专属价仅在冻结项目版本 `override_json.distributionInherited=false` 时读取该项目版本 `distribution_price_cents`；继承、历史引用缺失或价格缺失均返回 null，不从当前配置、最终价或零值推断覆盖来源。显式配置的零价与继承来源必须区分。
+4. 标准商品平台详情的供应价由选定 BOrder 的 `supplier_settlement_unit_price` 提供，不能取预计总金额、当前 Offer 或定价时最低供货价。成功单取尝试顺序中的最后成功尝试；非成功单有履约请求 `active_b_order_id` 时只取该指针对应尝试（指针失配返回未知）；无当前指针的失败/取消单取最后尝试；其它情况保持未知。不使用可能残留的 `active_flag` 推断当前尝试。供应商名称与供应价来自同一选定尝试；供应商视角详情则严格取路径指定的 BOrder。总单的首次供应商快照保持不变，无法确定当前尝试时详情供应商名称也不冒充为首次供应商。
+5. 分销商订单编号与全部供应商内部 B 端编号保持 §3.2.1 的口径和跳转行为。不存在供应商尝试的订单不补造编号；不增加供应商外部订单号列。
+6. 价格补齐限详情查询，列表与导出保留原先供应商快照及价格口径，不增加逐行查询；供应商视角保持不解密平台资产。无标准商品冻结价格的渠道订单新增价格字段为空。所有新增读取只访问供应链独立库，不新增外呼、DDL 或历史回填。
+
+实施顺序：先扩展查询契约回归，观察旧实现失败；补齐后端只读投影；扩展前端真实 API/SFC 回归并观察失败；修改类型、映射和模板；运行供应链单测/契约/架构与前端检查，实际渲染专属价、继承价、零价和历史缺值四种状态。部署时先后端后前端；旧后端缺少新增字段时新前端显示未知，不回源当前价格兜底。
 
 ### 3.3 详情 `GET /supply-chain/order-views/{orderNo}?source=PLATFORM|SUPPLIER`
 

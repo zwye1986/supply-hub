@@ -131,6 +131,85 @@ class HuashengAssetQueryContractTest {
                 .hasSize(3).allSatisfy(row -> assertThat(row).containsEntry("reason_code", "DECRYPT_FAILED"));
     }
 
+    /**
+     * 管理详情冻结价格契约：变更当前定价指针不得改变历史订单，供应价必须是尝试单价。
+     * 设计：docs/superpowers/specs/2026-09-23-order-frontend-alignment-and-routing-prd-model-design.md#322-订单详情金额与价格修订2026-10-14已评审通过。
+     */
+    @Test void adminDetailKeepsFrozenPricesAfterCurrentPricingChanges() {
+        save(ProjectStandardAssetPayloadDecoderTest.huashengPayload(""));
+        db.transaction().executeWithoutResult(tx -> {
+            db.jdbc.update("""
+                    INSERT INTO sc_buyer_sku_pricing_version
+                    (id,pricing_id,version_no,platform_pricing_version_id,override_json,effective_config_json,
+                    distribution_rule_json,sales_rule_json,service_fee_rule_json,hide_rule_json,tax_metadata_json,
+                    market_price_cents,suggested_sale_price_cents,supply_price_cents,distribution_price_cents,
+                    pricing_status,currency,published_at,created_at)
+                    VALUES (301,401,1,501,'{}','{}','{}','{}','{}','{}','{}',3000,3000,100,2500,
+                    'READY','CNY',CURRENT_TIMESTAMP(3),CURRENT_TIMESTAMP(3)),
+                    (302,401,2,501,'{}','{}','{}','{}','{}','{}','{}',3000,3000,100,2900,
+                    'READY','CNY',CURRENT_TIMESTAMP(3),CURRENT_TIMESTAMP(3))
+                    """);
+            db.jdbc.update("""
+                    INSERT INTO sc_project_sku_pricing_version
+                    (id,pricing_id,version_no,buyer_pricing_version_id,override_json,effective_config_json,
+                    market_price_cents,suggested_sale_price_cents,supply_price_cents,distribution_price_cents,
+                    pricing_status,currency,published_at,created_at)
+                    VALUES (201,601,1,301,'{"distributionInherited":false}','{}',3000,3000,100,2250,
+                    'READY','CNY',CURRENT_TIMESTAMP(3),CURRENT_TIMESTAMP(3)),
+                    (202,601,2,302,'{"distributionInherited":true}','{}',3000,3000,100,2900,
+                    'READY','CNY',CURRENT_TIMESTAMP(3),CURRENT_TIMESTAMP(3))
+                    """);
+            db.jdbc.update("""
+                    INSERT INTO sc_buyer_sku_pricing
+                    (id,buyer_product_id,current_version_id,pricing_status,created_at,updated_at)
+                    VALUES (401,701,301,'READY',CURRENT_TIMESTAMP(3),CURRENT_TIMESTAMP(3))
+                    """);
+            db.jdbc.update("""
+                    INSERT INTO sc_project_sku_pricing
+                    (id,listing_id,current_version_id,pricing_status,created_at,updated_at)
+                    VALUES (601,1,201,'READY',CURRENT_TIMESTAMP(3),CURRENT_TIMESTAMP(3))
+                    """);
+            db.jdbc.update("""
+                    INSERT INTO sc_standard_pricing_quote
+                    (id,quote_token,buyer_id,project_id,listing_id,platform_sku_id,platform_sku_code,
+                    project_pricing_version_id,buyer_order_no,quantity,distribution_unit_price_cents,
+                    sales_unit_price_cents,product_subtotal_cents,service_fee_cents,user_payable_amount_cents,
+                    tax_metadata_json,status,created_at)
+                    VALUES (101,'detail-price-test',2,3,1,1,'sku',201,'order',1,2250,3000,3000,500,3500,
+                    '{}','CONSUMED',CURRENT_TIMESTAMP(3))
+                    """);
+            db.jdbc.update("""
+                    UPDATE sc_supply_chain_order SET pricing_quote_id=101,pricing_version_id=201,
+                    buyer_settlement_amount=2250,sales_unit_price_cents=3000,
+                    product_subtotal_cents=3000,service_fee_cents=500,user_payable_amount_cents=3500 WHERE id=1
+                    """);
+            db.jdbc.update("""
+                    UPDATE sc_b_order SET supplier_settlement_unit_price=1800,
+                    expected_supplier_settlement_amount=1800 WHERE id=10
+                    """);
+            var original = json.valueToTree(admin.get("SC_1", "PLATFORM", 9001L));
+            assertThat(original.path("distributorOrderNo").textValue()).isEqualTo("order");
+            assertThat(original.path("projectPayAmount").longValue()).isEqualTo(2250L);
+            assertThat(original.path("distributorPayAmount").longValue()).isEqualTo(2250L);
+            var item = original.path("items").get(0);
+            assertThat(item.path("supplyPrice").longValue()).isEqualTo(1800L);
+            assertThat(item.path("baseDistPrice").longValue()).isEqualTo(2500L);
+            assertThat(item.path("projectPrice").longValue()).isEqualTo(2250L);
+            assertThat(item.path("distPrice").longValue()).isEqualTo(2250L);
+            db.jdbc.update("UPDATE sc_buyer_sku_pricing SET current_version_id=302 WHERE id=401");
+            db.jdbc.update("UPDATE sc_project_sku_pricing SET current_version_id=202 WHERE id=601");
+            var replay = json.valueToTree(admin.get("SC_1", "PLATFORM", 9001L));
+            assertThat(replay).isEqualTo(original);
+            int audits = db.jdbc.queryForObject("SELECT COUNT(*) FROM sc_sensitive_access_audit", Integer.class);
+            var supplier = json.valueToTree(admin.get("BO_10", "SUPPLIER", 9001L));
+            assertThat(supplier.path("items").get(0).path("supplyPrice").longValue()).isEqualTo(1800L);
+            assertThat(supplier.path("items").get(0).path("cardInfos")).isEmpty();
+            assertThat(db.jdbc.queryForObject("SELECT COUNT(*) FROM sc_sensitive_access_audit", Integer.class))
+                    .isEqualTo(audits);
+            tx.setRollbackOnly();
+        });
+    }
+
     private void save(String payload) {
         byte[] plain = payload.getBytes(StandardCharsets.UTF_8);
         try {

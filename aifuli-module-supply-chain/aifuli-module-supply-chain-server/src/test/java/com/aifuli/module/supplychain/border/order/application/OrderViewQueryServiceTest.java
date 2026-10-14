@@ -4,20 +4,34 @@ import com.aifuli.framework.common.pojo.PageParam;
 import com.aifuli.framework.common.pojo.PageResult;
 import com.aifuli.module.supplychain.api.order.dto.SupplyChainOrderStatus;
 import com.aifuli.module.supplychain.border.fulfillment.dal.dataobject.BOrderDO;
+import com.aifuli.module.supplychain.border.fulfillment.dal.dataobject.FulfillmentRequestDO;
 import com.aifuli.module.supplychain.border.fulfillment.dal.mysql.BOrderMapper;
+import com.aifuli.module.supplychain.border.fulfillment.dal.mysql.FulfillmentAssetMapper;
 import com.aifuli.module.supplychain.border.fulfillment.dal.mysql.FulfillmentRequestMapper;
 import com.aifuli.module.supplychain.border.order.dal.dataobject.SupplyChainOrderDO;
+import com.aifuli.module.supplychain.border.order.dal.mysql.OrderStatusLogMapper;
 import com.aifuli.module.supplychain.border.order.dal.mysql.SupplyChainOrderMapper;
 import com.aifuli.module.supplychain.border.order.domain.BOrderFulfillmentStatus;
 import com.aifuli.module.supplychain.border.order.domain.SupplyChainOrderTypes;
+import com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerSkuPricingVersionDO;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProjectSkuPricingVersionDO;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.StandardPricingQuoteDO;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerSkuPricingVersionMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProjectSkuPricingVersionMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.StandardPricingQuoteMapper;
+import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierMapper;
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.List;
@@ -36,10 +50,16 @@ class OrderViewQueryServiceTest {
     @Mock BOrderMapper attempts;
     @Mock SupplierMapper suppliers;
     @Mock FulfillmentRequestMapper requests;
+    @Mock FulfillmentAssetMapper assets;
+    @Mock SupplyChainDatabaseClock clock;
     @Mock OrderFailureViewQuery failureViews;
+    @Mock OrderStatusLogMapper statusLogs;
+    @Mock StandardPricingQuoteMapper quotes;
+    @Mock ProjectSkuPricingVersionMapper projectVersions;
+    @Mock BuyerSkuPricingVersionMapper buyerVersions;
     @InjectMocks OrderViewQueryService service;
 
-    private final ObjectMapper json = new ObjectMapper().findAndRegisterModules();
+    @Spy private final ObjectMapper json = new ObjectMapper().findAndRegisterModules();
 
     @Test
     void pageKeepsEachBuyerNumberIncludingOrdersWithoutAttemptsAndMissingNumbers() {
@@ -67,6 +87,7 @@ class OrderViewQueryServiceTest {
     @Test
     void bothDetailViewsKeepTheBuyerNumberAndDoNotReplaceAttemptNumberWithExternalNumber() {
         var order = order(1L, "PLATFORM_A", "BUYER_A");
+        order.setBuyerSettlementAmount(2250L);
         var attempt = attempt();
         when(orders.selectByOrderNo("PLATFORM_A")).thenReturn(order);
         when(orders.selectById(1L)).thenReturn(order);
@@ -80,7 +101,114 @@ class OrderViewQueryServiceTest {
             assertThat(result.path("orderNo").textValue()).isEqualTo("PLATFORM_A");
             assertThat(result.path("supplierOrders").get(0).path("supplierOrderNo").textValue())
                     .isEqualTo("BO_ATTEMPT_A");
+            assertThat(result.path("projectPayAmount").longValue()).isEqualTo(2250L);
+            assertThat(result.path("distributorPayAmount").longValue()).isEqualTo(2250L);
         }
+    }
+
+    @ParameterizedTest
+    @CsvSource(value = {"false,2250,2250", "true,2500,NULL", "false,0,0"}, nullValues = "NULL")
+    void detailReadsFrozenBaseAndExplicitProjectPrice(boolean inherited, long finalPrice, Long exclusivePrice) {
+        var order = order(1L, "PLATFORM_A", "BUYER_A");
+        order.setPricingQuoteId(101L);
+        order.setBuyerSettlementAmount(finalPrice);
+        when(orders.selectByOrderNo("PLATFORM_A")).thenReturn(order);
+        when(quotes.selectBatchIds(any())).thenReturn(List.of(StandardPricingQuoteDO.builder()
+                .id(101L).projectPricingVersionId(201L).distributionUnitPriceCents(finalPrice).build()));
+        when(projectVersions.selectById(201L)).thenReturn(ProjectSkuPricingVersionDO.builder()
+                .id(201L).buyerPricingVersionId(301L).distributionPriceCents(finalPrice)
+                .supplyPriceCents(100L).overrideJson("{\"distributionInherited\":" + inherited + "}").build());
+        when(buyerVersions.selectById(301L)).thenReturn(BuyerSkuPricingVersionDO.builder()
+                .id(301L).distributionPriceCents(2500L).build());
+
+        JsonNode result = json.valueToTree(service.get("PLATFORM_A", "PLATFORM", 9001L));
+        JsonNode item = result.path("items").get(0);
+        assertThat(item.path("baseDistPrice").longValue()).isEqualTo(2500L);
+        assertThat(item.path("distPrice").longValue()).isEqualTo(finalPrice);
+        assertThat(result.path("distPrice").longValue()).isEqualTo(finalPrice);
+        assertThat(result.path("projectPayAmount").longValue()).isEqualTo(finalPrice);
+        if (exclusivePrice == null) assertThat(item.path("projectPrice").isNull()).isTrue();
+        else assertThat(item.path("projectPrice").longValue()).isEqualTo(exclusivePrice);
+        assertThat(item.path("supplyPrice").isNull()).isTrue();
+
+        JsonNode replay = json.valueToTree(service.get("PLATFORM_A", "PLATFORM", 9001L));
+        assertThat(replay).isEqualTo(result);
+    }
+
+    @Test
+    void platformSuccessAndSupplierDetailUseTheirOwnAttemptUnitPriceAndName() {
+        var order = order(1L, "PLATFORM_A", "BUYER_A");
+        order.setDisplaySupplierName("首次供应商");
+        order.setQuantity(5L);
+        var failed = pricedAttempt(11L, 1, 41L, BOrderFulfillmentStatus.FAILED, 1900L);
+        var succeeded = pricedAttempt(12L, 2, 42L, BOrderFulfillmentStatus.SUCCEEDED, 1800L);
+        when(orders.selectByOrderNo("PLATFORM_A")).thenReturn(order);
+        when(orders.selectById(1L)).thenReturn(order);
+        when(attempts.selectList(any(Wrapper.class))).thenReturn(List.of(failed, succeeded));
+        when(attempts.selectOne(any(Wrapper.class))).thenReturn(failed);
+        var supplierA = SupplierDO.builder().id(41L).supplierName("供应商甲").build();
+        var supplierB = SupplierDO.builder().id(42L).supplierName("供应商乙").build();
+        when(suppliers.selectBatchIds(any())).thenReturn(List.of(supplierA, supplierB));
+        when(suppliers.selectById(41L)).thenReturn(supplierA);
+
+        JsonNode platform = json.valueToTree(service.get("PLATFORM_A", "PLATFORM", 9001L));
+        assertThat(platform.path("supplierName").textValue()).isEqualTo("供应商乙");
+        assertThat(platform.path("items").get(0).path("supplyPrice").longValue()).isEqualTo(1800L);
+        assertThat(platform.path("supplierOrders").size()).isEqualTo(2);
+        JsonNode supplier = json.valueToTree(service.get(failed.getBOrderNo(), "SUPPLIER", 9001L));
+        assertThat(supplier.path("supplierName").textValue()).isEqualTo("供应商甲");
+        assertThat(supplier.path("items").get(0).path("supplyPrice").longValue()).isEqualTo(1900L);
+        assertThat(order.getDisplaySupplierName()).isEqualTo("首次供应商");
+    }
+
+    @Test
+    void processingUsesRequestPointerRatherThanStaleActiveFlagsAndKeepsUnknownWhenPointerIsMissing() {
+        var order = order(1L, "PLATFORM_A", "BUYER_A");
+        order.setOrderStatus(SupplyChainOrderStatus.PROCESSING.getCode());
+        order.setDisplaySupplierName("首次供应商");
+        var old = pricedAttempt(11L, 1, 41L, BOrderFulfillmentStatus.FAILED, 1900L);
+        var current = pricedAttempt(12L, 2, 42L, BOrderFulfillmentStatus.PROCESSING, 1750L);
+        when(orders.selectByOrderNo("PLATFORM_A")).thenReturn(order);
+        when(attempts.selectList(any(Wrapper.class))).thenReturn(List.of(old, current));
+        when(suppliers.selectBatchIds(any())).thenReturn(List.of(
+                SupplierDO.builder().id(41L).supplierName("供应商甲").build(),
+                SupplierDO.builder().id(42L).supplierName("供应商乙").build()));
+        var request = FulfillmentRequestDO.builder().orderId(1L).activeBOrderId(12L).build();
+        when(requests.selectByOrderId(1L)).thenReturn(request);
+
+        JsonNode result = json.valueToTree(service.get("PLATFORM_A", "PLATFORM", 9001L));
+        assertThat(result.path("supplierName").textValue()).isEqualTo("供应商乙");
+        assertThat(result.path("items").get(0).path("supplyPrice").longValue()).isEqualTo(1750L);
+        request.setActiveBOrderId(999L);
+        JsonNode unknown = json.valueToTree(service.get("PLATFORM_A", "PLATFORM", 9001L));
+        assertThat(unknown.path("items").get(0).path("supplyPrice").isNull()).isTrue();
+        assertThat(unknown.path("supplierName").isNull()).isTrue();
+    }
+
+    @Test
+    void failedOrderUsesLastAttemptAndLegacyPricesStayNullInsteadOfZero() {
+        var order = order(1L, "PLATFORM_A", "BUYER_A");
+        order.setOrderStatus(SupplyChainOrderStatus.FAILED.getCode());
+        when(orders.selectByOrderNo("PLATFORM_A")).thenReturn(order);
+        when(attempts.selectList(any(Wrapper.class))).thenReturn(List.of(
+                pricedAttempt(11L, 1, null, BOrderFulfillmentStatus.FAILED, 1900L),
+                pricedAttempt(12L, 2, null, BOrderFulfillmentStatus.FAILED, 1700L)));
+
+        JsonNode result = json.valueToTree(service.get("PLATFORM_A", "PLATFORM", 9001L));
+        JsonNode item = result.path("items").get(0);
+        assertThat(item.path("supplyPrice").longValue()).isEqualTo(1700L);
+        assertThat(item.path("baseDistPrice").isNull()).isTrue();
+        assertThat(item.path("projectPrice").isNull()).isTrue();
+        assertThat(result.path("projectPayAmount").isNull()).isTrue();
+        assertThat(result.path("distributorPayAmount").isNull()).isTrue();
+    }
+
+    private static BOrderDO pricedAttempt(long id, int number, Long supplierId,
+                                         BOrderFulfillmentStatus status, long unitPrice) {
+        return BOrderDO.builder().id(id).orderId(1L).bOrderNo("BO_" + id).attemptNo(number)
+                .supplierId(supplierId).fulfillmentStatus(status.getCode()).activeFlag(true)
+                .requestedQuantity(5L).supplierSettlementUnitPrice(unitPrice)
+                .expectedSupplierSettlementAmount(unitPrice * 5).build();
     }
 
     private static SupplyChainOrderDO order(long id, String platformNo, String buyerNo) {

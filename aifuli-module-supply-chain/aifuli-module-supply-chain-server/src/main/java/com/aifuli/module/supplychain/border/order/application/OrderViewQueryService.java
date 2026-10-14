@@ -28,11 +28,15 @@ import com.aifuli.module.supplychain.infrastructure.identity.BusinessNoPrefixes;
 import com.aifuli.module.supplychain.infrastructure.security.EnvelopeCryptoPort;
 import com.aifuli.module.supplychain.infrastructure.security.HmacFingerprintPort;
 import com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerSkuPricingVersionDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSpuDO;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProjectSkuPricingVersionDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.StandardPricingQuoteDO;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerSkuPricingVersionMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSpuMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProjectSkuPricingVersionMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.StandardPricingQuoteMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierSupplyScopeDO;
@@ -61,6 +65,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.function.Consumer;
 
@@ -126,6 +131,8 @@ public class OrderViewQueryService {
     private final SupplierRoutingRoundMapper routingRoundMapper;
     private final SensitiveAccessAuditMapper auditMapper;
     private final StandardPricingQuoteMapper quoteMapper;
+    private final ProjectSkuPricingVersionMapper projectPricingVersionMapper;
+    private final BuyerSkuPricingVersionMapper buyerPricingVersionMapper;
     private final PlatformSkuMapper platformSkuMapper;
     private final PlatformSpuMapper platformSpuMapper;
     private final SupplierSupplyScopeMapper supplyScopeMapper;
@@ -159,7 +166,7 @@ public class OrderViewQueryService {
         pageParam.setPageNo(query.pageNo() == null ? DEFAULT_PAGE_NO : query.pageNo());
         pageParam.setPageSize(query.pageSize() == null ? DEFAULT_PAGE_SIZE : query.pageSize());
         PageResult<SupplyChainOrderDO> page = orderMapper.selectPage(pageParam, wrapper);
-        List<OrderView> rows = assembleRows(page.getList(), null);
+        List<OrderView> rows = assembleRows(page.getList(), null, false);
         return new PageResult<>(rows, page.getTotal());
     }
 
@@ -176,7 +183,7 @@ public class OrderViewQueryService {
             return supplierView(orderNo, userId);
         }
         SupplyChainOrderDO order = requireOrderByNo(orderNo);
-        List<OrderView> rows = assembleRows(List.of(order), userId);
+        List<OrderView> rows = assembleRows(List.of(order), userId, true);
         OrderView view = rows.get(0);
         log.info("订单前端契约详情完成 orderNo={} bizType={} assetLoaded={}",
                 orderNo, view.bizType(), view.items() != null && !view.items().isEmpty());
@@ -196,7 +203,7 @@ public class OrderViewQueryService {
         }
         SupplierDO supplier = attempt.getSupplierId() == null ? null
                 : supplierMapper.selectById(attempt.getSupplierId());
-        List<OrderView> rows = assembleRows(List.of(order), null);
+        List<OrderView> rows = assembleRows(List.of(order), null, true);
         OrderView view = rows.get(0);
         String supplyMode = resolveSupplyMode(attempt.getSupplierId(), order);
         List<SupplierOrderView> supplierOrders = List.of(toSupplierOrderView(attempt, supplier));
@@ -279,16 +286,17 @@ public class OrderViewQueryService {
         }
         log.info("订单前端契约导出 rows={} bizTypes={} statuses={}",
                 orders.size(), query.bizTypes(), query.statuses());
-        return assembleRows(orders, null);
+        return assembleRows(orders, null, false);
     }
 
     // ------------------------------------------------------------------ 组装
 
     /**
      * 批量把总单 DO 组装为前端 OrderView。userId 非空时解密交付资产并写审计（仅详情调用）；
-     * 列表与导出路径传 null，不触碰资产。
+     * 列表与导出路径传 null，不触碰资产。冻结价格版本和履约请求指针只在详情读取。
+     * 设计：docs/superpowers/specs/2026-09-23-order-frontend-alignment-and-routing-prd-model-design.md#322-订单详情金额与价格修订2026-10-14已评审通过。
      */
-    private List<OrderView> assembleRows(List<SupplyChainOrderDO> orders, Long userId) {
+    private List<OrderView> assembleRows(List<SupplyChainOrderDO> orders, Long userId, boolean detail) {
         if (orders.isEmpty()) {
             return List.of();
         }
@@ -313,8 +321,11 @@ public class OrderViewQueryService {
             StandardPricingQuoteDO quote = order.getPricingQuoteId() == null ? null
                     : quotes.get(order.getPricingQuoteId());
             List<BOrderDO> attempts = attemptsByOrder.getOrDefault(order.getId(), List.of());
+            boolean standardDetail = detail && SupplyChainOrderType.CARD.name().equals(order.getOrderType());
+            BOrderDO selectedAttempt = standardDetail ? selectDetailAttempt(order, attempts) : null;
+            SupplierDO selectedSupplier = selectedAttempt == null ? null : suppliers.get(selectedAttempt.getSupplierId());
             OrderItemView item = toItemView(order, quote,
-                    userId == null ? OrderAssets.EMPTY : loadAssets(order, userId));
+                    userId == null ? OrderAssets.EMPTY : loadAssets(order, userId), standardDetail, selectedAttempt);
             List<SupplierOrderView> supplierOrders = attempts.stream()
                     .map(attempt -> toSupplierOrderView(attempt,
                             attempt.getSupplierId() == null ? null : suppliers.get(attempt.getSupplierId()), userId != null))
@@ -329,7 +340,8 @@ public class OrderViewQueryService {
                     OrderViewMappings.platformStatus(SupplyChainOrderStatus.fromCode(order.getOrderStatus())),
                     order.getBuyerSettlementAmount(),
                     order.getQuantity(),
-                    order.getDisplaySupplierName(),
+                    standardDetail ? (selectedSupplier == null ? null : selectedSupplier.getSupplierName())
+                            : order.getDisplaySupplierName(),
                     order.getBuyerNameSnapshot(),
                     order.getProjectNameSnapshot(),
                     order.getBuyerUserId(),
@@ -341,7 +353,7 @@ public class OrderViewQueryService {
                     order.getSalesUnitPriceCents(),
                     quote == null ? null : quote.getDistributionUnitPriceCents(),
                     order.getBuyerSettlementAmount(),
-                    null,
+                    order.getBuyerSettlementAmount(),
                     List.of(item),
                     supplierOrders,
                     List.of(),
@@ -354,14 +366,19 @@ public class OrderViewQueryService {
     /** source=SUPPLIER 视图回填：总单号关联、供货模式、单条供应商尝试。 */
     private OrderView withSupplierView(OrderView view, SupplyChainOrderDO order, BOrderDO attempt,
                                        String supplyMode, List<SupplierOrderView> supplierOrders) {
+        OrderItemView item = view.items().getFirst();
+        OrderItemView supplierItem = new OrderItemView(item.skuCode(), item.skuName(), item.qty(),
+                item.salePrice(), item.distPrice(), item.cardInfos(), item.rechargeInfo(),
+                item.ticketCode(), item.pickupCode(), attempt.getSupplierSettlementUnitPrice(),
+                item.baseDistPrice(), item.projectPrice());
         return new OrderView(view.orderNo(), view.distributorOrderNo(), order.getOrderNo(), view.bizType(),
                 OrderViewMappings.supplierStatus(BOrderFulfillmentStatus.fromCode(attempt.getFulfillmentStatus())),
-                view.amount(), view.qty(), view.supplierName(), view.distributorName(), view.projectName(),
+                view.amount(), view.qty(), supplierOrders.getFirst().supplierName(), view.distributorName(), view.projectName(),
                 view.buyerMobile(), view.buyerName(), view.payMethod(), view.payTradeNo(),
                 view.receiverName(), view.receiverPhone(), view.receiverAddress(),
                 view.couponAmount(), view.freightAmount(), view.goodsAmount(), view.serviceFee(),
                 view.salePrice(), view.distPrice(), view.distributorPayAmount(), view.projectPayAmount(),
-                view.items(), supplierOrders, view.traces(), view.createdAt(),
+                List.of(supplierItem), supplierOrders, view.traces(), view.createdAt(),
                 supplyMode, null, null, view.terminalReasonCode());
     }
 
@@ -375,8 +392,28 @@ public class OrderViewQueryService {
         return rows.isEmpty() ? null : rows.getFirst().getReasonCode();
     }
 
+    /**
+     * 详情价格只沿报价凭证冻结引用读取不可变版本；未知与真实零价严格区分。
+     * 项目显式覆盖才有专属价，供应价只来自所选履约尝试，不使用定价时最低供货价。
+     * 设计：docs/superpowers/specs/2026-09-23-order-frontend-alignment-and-routing-prd-model-design.md#322-订单详情金额与价格修订2026-10-14已评审通过。
+     */
     private OrderItemView toItemView(SupplyChainOrderDO order, StandardPricingQuoteDO quote,
-                                     OrderAssets assets) {
+                                     OrderAssets assets, boolean detail, BOrderDO attempt) {
+        ProjectSkuPricingVersionDO projectVersion = !detail || quote == null || quote.getProjectPricingVersionId() == null
+                ? null : projectPricingVersionMapper.selectById(quote.getProjectPricingVersionId());
+        BuyerSkuPricingVersionDO buyerVersion = projectVersion == null || projectVersion.getBuyerPricingVersionId() == null
+                ? null : buyerPricingVersionMapper.selectById(projectVersion.getBuyerPricingVersionId());
+        Long projectPrice = null;
+        if (projectVersion != null && StringUtils.hasText(projectVersion.getOverrideJson())) {
+            try {
+                JsonNode inherited = objectMapper.readTree(projectVersion.getOverrideJson()).path("distributionInherited");
+                if (inherited.isBoolean() && !inherited.booleanValue()) {
+                    projectPrice = projectVersion.getDistributionPriceCents();
+                }
+            } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+                throw new IllegalStateException("订单冻结项目定价覆盖配置无法解析，versionId=" + projectVersion.getId(), e);
+            }
+        }
         return new OrderItemView(
                 order.getSkuCodeSnapshot(),
                 order.getSkuNameSnapshot(),
@@ -386,7 +423,35 @@ public class OrderViewQueryService {
                 assets.cardInfos(),
                 assets.rechargeInfo(),
                 assets.ticketCodes(),
-                assets.pickupCodes());
+                assets.pickupCodes(),
+                attempt == null ? null : attempt.getSupplierSettlementUnitPrice(),
+                buyerVersion == null ? null : buyerVersion.getDistributionPriceCents(),
+                projectPrice);
+    }
+
+    /**
+     * 平台详情选择当前/最终尝试：成功按成功事实，进行中按请求指针，失败/取消按最后尝试。
+     * 不读可能残留的 activeFlag，不改变总单的首次供应商快照；指针失配时保持未知。
+     * attempts 已由 loadAttempts 按 attemptNo/id 升序加载。
+     * 设计：docs/superpowers/specs/2026-09-23-order-frontend-alignment-and-routing-prd-model-design.md#322-订单详情金额与价格修订2026-10-14已评审通过。
+     */
+    private BOrderDO selectDetailAttempt(SupplyChainOrderDO order, List<BOrderDO> attempts) {
+        if (attempts.isEmpty()) return null;
+        if (Objects.equals(order.getOrderStatus(), SupplyChainOrderStatus.SUCCEEDED.getCode())) {
+            return attempts.reversed().stream()
+                    .filter(attempt -> Objects.equals(attempt.getFulfillmentStatus(), BOrderFulfillmentStatus.SUCCEEDED.getCode()))
+                    .findFirst().orElse(null);
+        }
+        FulfillmentRequestDO request = fulfillmentRequestMapper.selectByOrderId(order.getId());
+        if (request != null && request.getActiveBOrderId() != null) {
+            return attempts.stream().filter(attempt -> Objects.equals(attempt.getId(), request.getActiveBOrderId()))
+                    .findFirst().orElse(null);
+        }
+        if (Objects.equals(order.getOrderStatus(), SupplyChainOrderStatus.FAILED.getCode())
+                || Objects.equals(order.getOrderStatus(), SupplyChainOrderStatus.CANCELLED.getCode())) {
+            return attempts.getLast();
+        }
+        return null;
     }
 
     private SupplierOrderView toSupplierOrderView(BOrderDO attempt, SupplierDO supplier) {
@@ -930,9 +995,9 @@ public class OrderViewQueryService {
             @Schema(description = "source=SUPPLIER时的关联平台总单号") String relatedPlatformOrderNo,
             @Schema(description = "业务类型：VIRTUAL_CARD/VIRTUAL_RECHARGE/DINING/MOVIE/HEMA/INSTORE") String bizType,
             @Schema(description = "平台订单状态：WAIT_PAY/PROCESSING/SUCCESS/FAILED/CLOSED/MANUAL；供应商视图保留MANUAL/CANCELLED") String status,
-            @Schema(description = "采购商应结算订单金额，单位为分") Long amount,
+            @Schema(description = "采购商应向中台结算的订单金额，单位为分") Long amount,
             @Schema(description = "数量") Long qty,
-            @Schema(description = "供应商名称快照") String supplierName,
+            @Schema(description = "供应商名称；标准商品详情与供货单价对应同一尝试，列表保留首次快照") String supplierName,
             @Schema(description = "分销商名称快照") String distributorName,
             @Schema(description = "受理时项目名称快照；CARD场景有值，非项目场景可空") String projectName,
             @Schema(description = "下单人手机号（采购商用户标识）") String buyerMobile,
@@ -948,8 +1013,8 @@ public class OrderViewQueryService {
             @Schema(description = "平台服务费，单位为分") Long serviceFee,
             @Schema(description = "商品销售单价，单位为分") Long salePrice,
             @Schema(description = "报价凭证冻结的分销单价，单位为分") Long distPrice,
-            @Schema(description = "分销商应付金额，单位为分") Long distributorPayAmount,
-            @Schema(description = "项目应付金额；语义待定本期为空") Long projectPayAmount,
+            @Schema(description = "采购商应向中台结算的订单金额，单位为分") Long distributorPayAmount,
+            @Schema(description = "采购商应向中台结算的订单金额，单位为分；与分销商应付金额一致，不表示实际付款") Long projectPayAmount,
             @Schema(description = "商品行；CARD场景单商品单行") List<OrderItemView> items,
             @Schema(description = "供应商履约尝试列表") List<SupplierOrderView> supplierOrders,
             @Schema(description = "物流轨迹；虚拟履约本期为空数组") List<Object> traces,
@@ -970,7 +1035,10 @@ public class OrderViewQueryService {
             @Schema(description = "卡号卡密资产明文；仅卡密类返回") List<CardInfo> cardInfos,
             @Schema(description = "直充资产明文；仅直充/账户权益返回") List<RechargeInfo> rechargeInfo,
             @Schema(description = "券码资产明文；仅券码类返回") List<String> ticketCode,
-            @Schema(description = "券链接资产明文；仅券链接类返回") List<String> pickupCode) {
+            @Schema(description = "券链接资产明文；仅券链接类返回") List<String> pickupCode,
+            @Schema(description = "供应商结算单价，单位CNY分；仅详情所选履约尝试有值") Long supplyPrice,
+            @Schema(description = "冻结分销商版本的基础分销单价，单位CNY分；仅详情返回，缺历史引用为空") Long baseDistPrice,
+            @Schema(description = "冻结项目版本的专属分销单价，单位CNY分；仅详情显式覆盖时返回，继承或未知为空") Long projectPrice) {
     }
 
     /**
