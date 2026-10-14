@@ -84,6 +84,7 @@
 | 前端字段 | 来源 |
 |---|---|
 | `orderNo` | `sc_supply_chain_order.order_no` |
+| `distributorOrderNo` | `sc_supply_chain_order.buyer_order_no`（采购商侧 C 端订单号）；列表、平台详情和供应商视角详情统一返回 |
 | `bizType` | §4.1 映射 |
 | `status` | §4.2 映射（平台视角） |
 | `amount` | `buyer_settlement_amount`（分） |
@@ -96,6 +97,14 @@
 | `items[]` | CARD 场景由总表 + 报价凭证 + 资产组装（单商品单行）；`cardInfos`/`rechargeInfo`/`ticketCode`/`pickupCode` 见 §3.6 |
 | `supplierOrders[]` | 该总单下全部 B 端尝试（`sc_b_order`）：`supplierOrderNo`=`b_order_no`、`status`=§4.3 映射 |
 | `traces[]` | 虚拟履约无物流，本期空 |
+
+#### 3.2.1 订单编号回显修订（2026-10-14）
+
+- 平台列表和详情的「分销商订单编号」读取顶层 `distributorOrderNo`，不从供应商尝试中反推；无供应商尝试时仍返回总单保存的采购商侧订单号，历史缺值保持空值，不用平台单号兜底。
+- 「供应商订单编号」保持现有契约：`supplierOrders[].supplierOrderNo` 是平台的 B 端履约尝试编号，用于打开 `/supplier-orders/{bOrderNo}`；不是供应商系统返回的 `external_order_no`，也不是发往供应商的 `billno`。本次不调整这三种编号的语义或增加外部编号列。
+- 前端为 `order-views` 的供应商摘要定义独立类型，字段与后端摘要一致，不再复用 `/supplier-orders` 的完整尝试类型。映射必须读取 `supplierOrderNo`，保留全部尝试及顺序，不能按不存在的 `bOrderNo` 过滤。
+- 本次只修复编号返回与映射，不调整价格口径；摘要没有完整尝试的 SKU/供应商结算单价，前端不再读取这些不存在的字段，供货价维持现有缺值占位行为。
+- 回归覆盖列表/平台详情/供应商详情的分销商编号一致性、不同订单不会串号、无尝试与缺值、前端多尝试编号保留以及原供应商工作台仍按 `bOrderNo` 跳转。无需 DDL、历史数据回填或新出站调用。
 
 ### 3.3 详情 `GET /supply-chain/order-views/{orderNo}?source=PLATFORM|SUPPLIER`
 

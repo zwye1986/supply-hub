@@ -321,6 +321,7 @@ public class OrderViewQueryService {
                     .toList();
             rows.add(new OrderView(
                     order.getOrderNo(),
+                    order.getBuyerOrderNo(),
                     null,
                     OrderViewMappings.bizType(order.getOrderType(),
                             sku == null ? null : sku.getFulfillmentType(),
@@ -353,7 +354,7 @@ public class OrderViewQueryService {
     /** source=SUPPLIER 视图回填：总单号关联、供货模式、单条供应商尝试。 */
     private OrderView withSupplierView(OrderView view, SupplyChainOrderDO order, BOrderDO attempt,
                                        String supplyMode, List<SupplierOrderView> supplierOrders) {
-        return new OrderView(view.orderNo(), order.getOrderNo(), view.bizType(),
+        return new OrderView(view.orderNo(), view.distributorOrderNo(), order.getOrderNo(), view.bizType(),
                 OrderViewMappings.supplierStatus(BOrderFulfillmentStatus.fromCode(attempt.getFulfillmentStatus())),
                 view.amount(), view.qty(), view.supplierName(), view.distributorName(), view.projectName(),
                 view.buyerMobile(), view.buyerName(), view.payMethod(), view.payTradeNo(),
@@ -918,9 +919,14 @@ public class OrderViewQueryService {
         }
     }
 
-    /** 前端 OrderVO 对齐视图；金额单位为分。商城侧字段（buyerName/payMethod 等）本期为空。 */
+    /**
+     * 前端 OrderVO 对齐视图；金额单位为分。商城侧字段（buyerName/payMethod 等）本期为空。
+     * 分销商订单编号直接取总单，不依赖供应商尝试是否存在。
+     * 设计：docs/superpowers/specs/2026-09-23-order-frontend-alignment-and-routing-prd-model-design.md#321-订单编号回显修订2026-10-14。
+     */
     public record OrderView(
             @Schema(description = "供应链中台订单号") String orderNo,
+            @Schema(description = "采购商侧C端订单号，CARD场景必填") String distributorOrderNo,
             @Schema(description = "source=SUPPLIER时的关联平台总单号") String relatedPlatformOrderNo,
             @Schema(description = "业务类型：VIRTUAL_CARD/VIRTUAL_RECHARGE/DINING/MOVIE/HEMA/INSTORE") String bizType,
             @Schema(description = "平台订单状态：WAIT_PAY/PROCESSING/SUCCESS/FAILED/CLOSED/MANUAL；供应商视图保留MANUAL/CANCELLED") String status,
