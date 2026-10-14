@@ -1,0 +1,65 @@
+{
+  "evidenceLevel": "actual-source-function-execution",
+  "sourceRoot": "/Users/mac/codespace/supplychainhubweb",
+  "sourceHashes": [
+    {
+      "file": "ProductList.vue",
+      "sha256": "50b44ad72d0d4cd75192bfc2bb44de80f7ba45619e8c0c499f4bef3d1579e8cf"
+    },
+    {
+      "file": "DistributionPriceForm.vue",
+      "sha256": "bd3a0d4403c6080d829dd022fddcb3c2a7e833d38aa30775249c30e2b0733795"
+    }
+  ],
+  "confirmedCases": 12,
+  "results": [
+    {
+      "name": "输入2按2%原值提交，明确覆盖",
+      "observed": true
+    },
+    {
+      "name": "空输入明确切换为继承",
+      "observed": true
+    },
+    {
+      "name": "0是明确覆盖，不能当作空值",
+      "observed": true
+    },
+    {
+      "name": "2.25原值保留，无整数截断",
+      "observed": true
+    },
+    {
+      "name": "列表旧阈值为null，回填空并在再次提交时切换继承",
+      "observed": true
+    },
+    {
+      "name": "列表旧阈值为7，回填并再次提交7",
+      "observed": true
+    },
+    {
+      "name": "列表即使追加新阈值2，现有回填仍使用旧阈值7",
+      "observed": true
+    },
+    {
+      "name": "自定义公式文案无法恢复参数，实际校验器拒绝空百分比",
+      "observed": true
+    },
+    {
+      "name": "每次保存固定将销售价与服务费改为继承",
+      "observed": true
+    },
+    {
+      "name": "隐藏组覆盖没有携带原销售区阈值",
+      "observed": true
+    },
+    {
+      "name": "不含税覆盖请求遗漏NON_TAXABLE编码",
+      "observed": true
+    },
+    {
+      "name": "税务回填取有效值，再次提交强制声明覆盖",
+      "observed": true
+    }
+  ]
+}

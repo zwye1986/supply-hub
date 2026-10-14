@@ -1,0 +1,49 @@
+{
+  "date": "2026-10-14",
+  "timezone": "Asia/Shanghai",
+  "backendHead": "7688bee7313d5cebf7c545850b4f0bc4cab63b56",
+  "testScope": "existing-unit-tests-with-mocked-mappers",
+  "totalTests": 54,
+  "suites": [
+    {
+      "name": "com.aifuli.module.supplychain.interfaceapi.admin.pricing.GenericPricingRequestMapperTest",
+      "tests": "7",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0",
+      "time": "0.142"
+    },
+    {
+      "name": "com.aifuli.module.supplychain.tradecore.catalog.application.BuyerProductQueryServiceTest",
+      "tests": "15",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0",
+      "time": "1.078"
+    },
+    {
+      "name": "com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericBatchPricingServiceTest",
+      "tests": "23",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0",
+      "time": "0.29"
+    },
+    {
+      "name": "com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericPricingCalculatorTest",
+      "tests": "6",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0",
+      "time": "0.002"
+    },
+    {
+      "name": "com.aifuli.module.supplychain.tradecore.catalog.pricing.ProjectPricingConfigMergerTest",
+      "tests": "3",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0",
+      "time": "0.002"
+    }
+  ]
+}

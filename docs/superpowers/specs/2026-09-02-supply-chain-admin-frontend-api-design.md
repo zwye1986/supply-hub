@@ -470,6 +470,23 @@ Springdoc `components.schemas` 中冲突的通用简单类名。生成契约必�
 
 前端未传 `l2AdjustMode` 时默认 `FOLLOW_TEMPLATE`。页面默认选项「按分销价=销售建议价」必须显式传 `EQUAL_L1`，覆盖值取当前 `suggestPriceCents`（L1），禁止用 `marketPriceCents`。
 
+#### 6.3.1 当前通用定价编辑快照（2026-10-14 修复）
+
+分销商品列表追加 `currentPricingVersionId`、`pricingStatus`、`buyerPricingConfig`，从当前分销通用
+定价版本读取原始五组继承/覆盖配置，用于编辑无损往返。`pricingStatus` 取同次读取的定价身份状态，
+不把旧版本 READY 当成身份 RECALCULATING 时的当前状态。配置形状与项目原始配置相同，包含五组
+`xxxInherited` 和对应规则；隐藏组分别返回原始 `distributionThresholdPercent`、
+`salesThresholdPercent`，不是有效最大阈值。`sourceBuyerPricingVersionId` 仍表示目录快照来源。
+旧 `displayThresholdPercent` 保持整数兼容语义，不用于新弹窗回填。
+
+无当前指针明确返回 null 版本、UNPRICED、null 配置；存在版本但原始 JSON 空白/无效、配置缺损或
+版本归属不匹配时读取失败，不伪装全继承。前端对旧服务字段缺失和读取失败阻止保存；确认 UNPRICED
+时显式展示初始化继承流程。编辑按结构回填公式，保留未展示的销售价/服务费和销售区隐藏阈值；
+分销价、隐藏组与税务提供显式继承开关，不把空输入当成继承。税务覆盖不含税时仍提交 NON_TAXABLE。
+保存仍走 `PUT /buyers/{buyerCode}/products/pricing`，完整五组提交并沿用已提交/目录刷新结果契约。
+该修复不改变共享新增选品表单的创建语义，无 DDL/旧列双写/历史迁移。
+详见 `docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#63-分销商品原始配置回显与无损编辑2026-10-14-修复`。
+
 ### 6.4 开票信息
 
 `GET/PUT /supply-chain/buyers/{buyerCode}/invoice`。见

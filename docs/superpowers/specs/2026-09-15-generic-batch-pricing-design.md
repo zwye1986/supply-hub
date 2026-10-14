@@ -221,6 +221,45 @@ when inherit=false`，被全局异常处理器包装为 HTTP 500。错误既无�
 后端覆盖请求 Bean Validation、真实 HTTP 业务错误及真实 MySQL/Liquibase 下的批量失败零写入、有效保存和
 下游继承。供应链普通、契约、集成与架构门禁按主设计第 17 章执行，联调证据维护 `docs/集成测试.md`。
 
+### 6.3 分销商品原始配置回显与无损编辑（2026-10-14 修复）
+
+分销商品改价保存到通用定价版本，编辑回显必须读取同一版本的原始覆盖配置。旧
+`sc_buyer_product.display_threshold_percent` 为整数兼容列，不参与新规则计算，不作为新弹窗的输入来源。
+本节为已批准修复设计；代码与门禁结果以 `docs/集成测试.md` 的实际记录为准。
+
+1. `GET /supply-chain/buyers/{buyerCode}/products` 每行追加 `currentPricingVersionId`、`pricingStatus`、
+   `buyerPricingConfig`。当前版本 ID 取 `sc_buyer_sku_pricing.current_version_id`，`pricingStatus` 取同次读取
+   的身份表状态；旧版本 READY 与身份 RECALCULATING 可以并存，不能用版本快照状态冒充当前处理状态。
+   版本主键沿用生产 Jackson 的 Long 契约：现有 NumberSerializer 判定范围内为数值，边界或超出时为十进制字符串；前端须接受
+   这两种精确表示，不把大编号转成浮点数。不得使用目录快照来源
+   `sourceBuyerPricingVersionId` 代替。配置由该指针所指版本的 `override_json` 投影，为五组继承标记和
+   完整原始规则，结构与项目 `projectPricingConfig` 对齐；应用 DTO 不直接暴露 DAL 对象。
+2. `buyerPricingConfig` 包含 `distributionInherited/distributionRule`、`salesInherited/salesRule`、
+   `serviceFeeInherited/serviceFeeRule`、`hideInherited/hideRule`、`taxInherited/taxMetadata`。
+   隐藏规则内原始字段为 `distributionThresholdPercent` 与 `salesThresholdPercent`，保留 null、0 和两位小数。
+   当前生效最大阈值及合并后的有效配置不得代替原始规则。继承为 true 时已存规则可回显，但不参与计算。
+3. 无身份或无当前指针时返回 `currentPricingVersionId=null`、`pricingStatus=UNPRICED`、
+   `buyerPricingConfig=null`，前端明确进入“尚未定价、配置商品默认继承”的初始化流程；历史旧列不带入。
+   当前版本存在但引用缺失、版本归属不匹配、原始 JSON 空白/无效或原始配置不完整时拒绝读取，
+   不能降级成无版本或全继承。MARGIN_HIDDEN/DEPENDENCY_MISSING 等非 READY 版本仍可编辑其合法原始配置。
+4. 改价弹窗保留原始五组配置，以结构字段回填公式，停止解析 `pricingRule` 展示文案。只编辑分销价、
+   分销区隐藏阈值及税务；销售价、服务费和隐藏组销售区阈值保持原始配置，不固定改成继承或清空。
+   分销价、隐藏组、税务显式提供“继承商品默认”开关；未切换继承方式时，空输入不能自动改成继承。
+   隐藏组覆盖允许双 null，与 §3 一致；0 始终是明确覆盖。覆盖分销价与税务仍执行原有完整性校验。
+5. 保存仍调用原 PUT，并提交五组完整配置：未编辑组从原始快照携带；仅用户编辑的组被替换。
+   不含税覆盖必须携带 `taxIncluded=false + NON_TAXABLE`。继承组可省略规则，继承标记始终明确。
+   UI/请求映射不把有效税务值冻结为新的覆盖，也不把有效最大阈值冒充原始分销区数值。
+6. 新前端收到缺少新增字段的旧服务响应、缺损配置或列表查询失败时阻止保存并提示重新读取。
+   确认读取的 UNPRICED 与服务字段缺失必须区分。保存提交与目录刷新继续按现有结构化结果分别展示，
+   请求结果不确定不自动重复保存。共享新增选品表单沿用现有创建语义，不因编辑模式新增开关而改变。
+7. 该修复不改变 PUT 的并发写入契约；当前版本 ID 用于解释快照来源，尚不具备陈旧编辑拒绝能力。
+   无修改保存允许发布新版本，但五组业务配置须等价。无需 DDL 变更、旧列双写或历史版本迁移。
+   疑似误覆盖历史数据先查证业务意图，再通过正式保存生成新版本。
+8. 自动化包含结构化查询单测、真实 HTTP JSON/权限/归属契约、真实 MySQL/Liquibase/Mapper/事务往返，
+   以及真实 Vue 组件/表单/API 的编辑回归。覆盖 2/0/2.25/100、双阈值、销售区单独覆盖、双 null、
+   非零上游继承、未编辑销售价/服务费、全部公式运算与基数、不含税覆盖、缺损配置和只读无写入；
+   执行供应链普通/架构门禁与适用 `supply-chain-integration`，真实用户端联调另留待发布验收记录。
+
 ## 7. 项目报价凭证与标准履约
 
 新增项目级标准商品报价 RPC，输入绑定 `sourceSystem + externalTenantId + projectCode + platformSkuCode +

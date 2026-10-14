@@ -41,17 +41,24 @@ import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericBatchPrici
 import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericPricingCalculator.PricingConfig;
 import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericPricingCalculator.PriceMode;
 import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericPricingCalculator.TaxMetadata;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericPricingCalculator.FormulaRule;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericPricingCalculator.ServiceFeeRule;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericPricingCalculator.HideRule;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericPricingCalculator.PricingStatus;
 import com.aifuli.module.supplychain.tradecore.profile.domain.L2AdjustMode;
 import com.aifuli.module.supplychain.tradecore.profile.domain.L3AdjustMode;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.JsonNode;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
@@ -292,7 +299,8 @@ public class BuyerProductQueryService {
         Long l1Cents = sku == null ? null : loadL1Cents(sku.getId());
         BuyerProductL2OverrideVersionDO overrideVersion = loadOverrideVersion(product.getId());
         Long overrideCents = overrideVersion == null ? null : overrideVersion.getResolvedUnitPriceCents();
-        BuyerSkuPricingVersionDO buyerPricingVersion = loadBuyerPricingVersion(product.getId());
+        BuyerPricingSnapshot buyerPricing = loadBuyerPricingSnapshot(product.getId());
+        BuyerSkuPricingVersionDO buyerPricingVersion = buyerPricing.version();
         Long platformBasePriceCents = loadPlatformBasePriceCents(buyerPricingVersion, l1Cents);
         ProjectOverrides buyerPricingOverrides = loadBuyerPricingOverrides(buyerPricingVersion);
         Long legacyDistPriceCents = overrideCents != null ? overrideCents : l1Cents;
@@ -337,7 +345,9 @@ public class BuyerProductQueryService {
                 product.getDisplayThresholdPercent(),
                 catalog.canonicalBuyerSkuCode(), catalog.acceptanceListingNo(), catalog.managementMode(),
                 catalog.publicationState(), catalog.availabilityStatus(), catalog.catalogRefreshReason(),
-                catalog.sourceBuyerPricingVersionId(), catalog.lastEvaluatedAt(), catalog.nextEvaluateAt());
+                catalog.sourceBuyerPricingVersionId(), catalog.lastEvaluatedAt(), catalog.nextEvaluateAt(),
+                buyerPricing.currentVersionId(), buyerPricing.pricingStatus(),
+                buyerPricingOverrides == null ? null : BuyerPricingConfigView.from(buyerPricingOverrides));
     }
 
     /**
@@ -417,17 +427,33 @@ public class BuyerProductQueryService {
         return PRICING_RULE_INHERIT_L1;
     }
 
-    private BuyerSkuPricingVersionDO loadBuyerPricingVersion(Long buyerProductId) {
+    /**
+     * 当前指针存在时校验身份和版本归属，禁止损坏引用降级为未定价；状态与指针只读一次身份。
+     * 设计见 {@code docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#63-分销商品原始配置回显与无损编辑2026-10-14-修复}。
+     */
+    private BuyerPricingSnapshot loadBuyerPricingSnapshot(Long buyerProductId) {
         BuyerSkuPricingDO identity = buyerPricingMapper.selectByBuyerProductId(buyerProductId);
         if (identity == null || identity.getCurrentVersionId() == null) {
-            return null;
+            return new BuyerPricingSnapshot(null, PricingStatus.UNPRICED.name(), null);
+        }
+        if (!Objects.equals(identity.getBuyerProductId(), buyerProductId)) {
+            throw new IllegalStateException("buyer pricing identity ownership is mismatched");
         }
         BuyerSkuPricingVersionDO version = buyerPricingVersionMapper.selectById(identity.getCurrentVersionId());
-        if (version == null) {
-            throw new IllegalStateException("buyer pricing current version is missing: "
+        if (version == null || !Objects.equals(version.getId(), identity.getCurrentVersionId())
+                || !Objects.equals(version.getPricingId(), identity.getId())) {
+            throw new IllegalStateException("buyer pricing current version is missing or mismatched: "
                     + identity.getCurrentVersionId());
         }
-        return version;
+        return new BuyerPricingSnapshot(identity.getCurrentVersionId(), identity.getPricingStatus(), version);
+    }
+
+    /**
+     * 同一次身份读取固定当前指针与处理状态；重算中的身份不能误报旧版本 READY。
+     * 版本对象保持不可变读取，原始配置仍来自该指针指定的版本，不改写版本状态。
+     * 设计见 {@code docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#63-分销商品原始配置回显与无损编辑2026-10-14-修复}。
+     */
+    private record BuyerPricingSnapshot(Long currentVersionId, String pricingStatus, BuyerSkuPricingVersionDO version) {
     }
 
     /**
@@ -447,11 +473,116 @@ public class BuyerProductQueryService {
         return platformVersion == null ? null : platformVersion.getDistributionPriceCents();
     }
 
+    /**
+     * 编辑回显只投影当前版本原始 override_json，不能用有效配置或旧整数隐藏列补全。
+     * 五个继承标记必须明确；覆盖组必须结构完整，隐藏组的双 null 是合法覆盖。
+     * 非 READY 版本仍可读取；损坏配置必须失败，避免编辑保存把损坏事实改写为全继承。
+     * 设计见 {@code docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#63-分销商品原始配置回显与无损编辑2026-10-14-修复}。
+     */
     private ProjectOverrides loadBuyerPricingOverrides(BuyerSkuPricingVersionDO version) {
-        if (version == null || version.getOverrideJson() == null || version.getOverrideJson().isBlank()) {
+        if (version == null) {
             return null;
         }
-        return fromJson(version.getOverrideJson(), ProjectOverrides.class);
+        if (version.getOverrideJson() == null || version.getOverrideJson().isBlank()) {
+            throw new IllegalStateException("buyer pricing original config is missing");
+        }
+        try {
+            JsonNode config = objectMapper.readTree(version.getOverrideJson());
+            if (config == null || !config.isObject()) {
+                throw new IllegalStateException("buyer pricing original config must be an object");
+            }
+            requireOriginalGroup(config, "distributionInherited", "distributionRule");
+            requireOriginalGroup(config, "salesInherited", "salesRule");
+            requireOriginalGroup(config, "serviceFeeInherited", "serviceFeeRule");
+            requireOriginalGroup(config, "hideInherited", "hideRule");
+            requireOriginalGroup(config, "taxInherited", "taxMetadata");
+            // 从原始文本解析 BigDecimal，不能经浮点 JsonNode 重建原始公式的数值。
+            return objectMapper.readValue(version.getOverrideJson(), ProjectOverrides.class);
+        } catch (JsonProcessingException ex) {
+            throw new IllegalStateException("buyer pricing original config is invalid", ex);
+        }
+    }
+
+    private static void requireOriginalGroup(JsonNode config, String inheritedField, String ruleField) {
+        JsonNode inherited = config.get(inheritedField);
+        if (inherited == null || !inherited.isBoolean()) {
+            throw new IllegalStateException("buyer pricing inherited flag is missing or invalid: " + inheritedField);
+        }
+        JsonNode rule = config.get(ruleField);
+        if (rule != null && !rule.isNull()) {
+            requireOriginalRuleTypes(rule, ruleField);
+        }
+        if (inherited.booleanValue()) {
+            return;
+        }
+        if (rule == null || !rule.isObject()) {
+            throw new IllegalStateException("buyer pricing override group is missing: " + ruleField);
+        }
+        switch (ruleField) {
+            case "distributionRule", "salesRule" -> {
+                requireOriginalFields(rule, "mode");
+                if (PriceMode.CUSTOM.name().equals(rule.get("mode").asText())) {
+                    requireOriginalFields(rule, "base", "percentage", "operator", "operand");
+                }
+            }
+            case "serviceFeeRule" -> {
+                requireOriginalFields(rule, "percentage", "operator", "operand", "hideCopy");
+                if (!rule.get("hideCopy").isBoolean()) {
+                    throw new IllegalStateException("buyer pricing service fee hideCopy is invalid");
+                }
+                if (!rule.get("hideCopy").booleanValue()) {
+                    requireOriginalFields(rule, "copy");
+                }
+            }
+            case "hideRule" -> { /* 双 null 覆盖合法；缺省阈值按 null 原样投影。 */ }
+            case "taxMetadata" -> {
+                requireOriginalFields(rule, "taxIncluded", "taxRateCode");
+                if (!rule.get("taxIncluded").isBoolean() || rule.get("taxRateCode").asText().isBlank()) {
+                    throw new IllegalStateException("buyer pricing tax metadata is incomplete");
+                }
+            }
+            default -> throw new IllegalStateException("unknown buyer pricing override group");
+        }
+    }
+
+    /** 原始规则字段禁止 JSON 字符串/数值/布尔之间的宽松转换，防止读取时改变保存事实。 */
+    private static void requireOriginalRuleTypes(JsonNode rule, String ruleField) {
+        if (!rule.isObject()) {
+            throw new IllegalStateException("buyer pricing original rule must be an object: " + ruleField);
+        }
+        // ServiceFeeRule.hideCopy 为 primitive boolean；缺省/null 会伪造 false，继承组也必须保留明确原始值。
+        if ("serviceFeeRule".equals(ruleField)) {
+            JsonNode hideCopy = rule.get("hideCopy");
+            if (hideCopy == null || !hideCopy.isBoolean()) {
+                throw new IllegalStateException("buyer pricing service fee hideCopy is missing or invalid");
+            }
+        }
+        for (String name : List.of("percentage", "operand", "distributionThresholdPercent", "salesThresholdPercent")) {
+            JsonNode value = rule.get(name);
+            if (value != null && !value.isNull() && !value.isNumber()) {
+                throw new IllegalStateException("buyer pricing numeric field is invalid: " + name);
+            }
+        }
+        for (String name : List.of("hideCopy", "taxIncluded")) {
+            JsonNode value = rule.get(name);
+            if (value != null && !value.isNull() && !value.isBoolean()) {
+                throw new IllegalStateException("buyer pricing boolean field is invalid: " + name);
+            }
+        }
+        for (String name : List.of("mode", "base", "operator", "copy", "taxRateCode", "taxRateLabel")) {
+            JsonNode value = rule.get(name);
+            if (value != null && !value.isNull() && !value.isTextual()) {
+                throw new IllegalStateException("buyer pricing text field is invalid: " + name);
+            }
+        }
+    }
+
+    private static void requireOriginalFields(JsonNode rule, String... names) {
+        for (String name : names) {
+            if (!rule.has(name) || rule.get(name).isNull()) {
+                throw new IllegalStateException("buyer pricing override field is missing: " + name);
+            }
+        }
     }
 
     /**
@@ -560,6 +691,102 @@ public class BuyerProductQueryService {
             @Schema(description = "供给可用性原因编码；过期或来源失配显示待重新评估原因") String catalogRefreshReason,
             @Schema(description = "自动商业快照来源的分销通用定价版本主键，逻辑引用sc_buyer_sku_pricing_version.id；手工版本为空") Long sourceBuyerPricingVersionId,
             @Schema(description = "供给可用性投影评估时间，Asia/Shanghai") LocalDateTime lastEvaluatedAt,
-            @Schema(description = "供给可用性投影下次必须重建的时间，Asia/Shanghai；历史未评估为空") LocalDateTime nextEvaluateAt) {
+            @Schema(description = "供给可用性投影下次必须重建的时间，Asia/Shanghai；历史未评估为空") LocalDateTime nextEvaluateAt,
+            @JsonInclude(JsonInclude.Include.ALWAYS) @Schema(description = "当前通用定价版本主键，空表示未定价；逻辑引用sc_buyer_sku_pricing_version.id") Long currentPricingVersionId,
+            @Schema(description = "当前定价状态：UNPRICED未定价，READY可售，RECALCULATING重算中，DEPENDENCY_MISSING依赖缺失，CALCULATION_FAILED计算失败，MARGIN_HIDDEN利润隐藏；取身份处理状态，无当前指针时为UNPRICED") String pricingStatus,
+            @JsonInclude(JsonInclude.Include.ALWAYS) @Schema(description = "当前版本保存的原始五组覆盖配置；无当前指针时为空") BuyerPricingConfigView buyerPricingConfig) {
+    }
+    /**
+     * 分销商当前版本的原始五组覆盖视图，独立于持久化对象；规则和继承标记逐字段保留。
+     * 设计见 {@code docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#63-分销商品原始配置回显与无损编辑2026-10-14-修复}。
+     */
+    @Schema(name = "BuyerPricingConfigView", description = "分销商当前版本保存的五组配置。每组 Inherited=true 表示继承商品默认配置、计算时忽略本组规则；false 表示使用本分销商覆盖规则。继承时规则对象通常为 null，但已保存的非空规则仍原样回显。此对象不是合并后的有效配置或旧 L3 冻结价。")
+    @JsonInclude(JsonInclude.Include.ALWAYS)
+    public record BuyerPricingConfigView(
+            @Schema(description = "分销价是否继承商品默认配置；true 继承，false 使用 distributionRule") boolean distributionInherited,
+            @Schema(description = "分销商分销价覆盖公式；distributionInherited=true 时通常为 null，若保存了规则仍原样回显但不参与计算")
+            BuyerFormulaRuleView distributionRule,
+            @Schema(description = "销售价是否继承商品默认配置；true 继承，false 使用 salesRule") boolean salesInherited,
+            @Schema(description = "分销商销售价覆盖公式；salesInherited=true 时通常为 null，若保存了规则仍原样回显但不参与计算")
+            BuyerFormulaRuleView salesRule,
+            @Schema(description = "服务费是否继承商品默认配置；true 继承，false 使用 serviceFeeRule") boolean serviceFeeInherited,
+            @Schema(description = "分销商服务费覆盖公式；serviceFeeInherited=true 时通常为 null，若保存了规则仍原样回显但不参与计算")
+            BuyerServiceFeeRuleView serviceFeeRule,
+            @Schema(description = "利润隐藏阈值是否继承商品默认配置；true 继承，false 使用 hideRule") boolean hideInherited,
+            @Schema(description = "分销商利润隐藏阈值；hideInherited=true 时通常为 null，若保存了规则仍原样回显但不参与计算")
+            BuyerHideRuleView hideRule,
+            @Schema(description = "税务展示属性是否继承商品默认配置；true 继承，false 使用 taxMetadata") boolean taxInherited,
+            @Schema(description = "分销商税务展示属性；taxInherited=true 时通常为 null，已保存的非空值原样回显但不参与计算")
+            BuyerTaxMetadataView taxMetadata) {
+
+        public static BuyerPricingConfigView from(ProjectOverrides source) {
+            return new BuyerPricingConfigView(
+                    source.distributionInherited(), BuyerFormulaRuleView.from(source.distributionRule()),
+                    source.salesInherited(), BuyerFormulaRuleView.from(source.salesRule()),
+                    source.serviceFeeInherited(), BuyerServiceFeeRuleView.from(source.serviceFeeRule()),
+                    source.hideInherited(), BuyerHideRuleView.from(source.hideRule()),
+                    source.taxInherited(), BuyerTaxMetadataView.from(source.taxMetadata()));
+        }
+    }
+
+    /** 价格公式回显；设计见 {@code docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#2-公式与精度}。 */
+    @Schema(name = "BuyerFormulaRuleView", description = "分销商分销价或销售价覆盖公式；对应的 distributionInherited/salesInherited=true 时通常为 null，已保存的非空规则仍回显但不参与计算。CUSTOM 时按 (base × percentage / 100) operator operand 计算，最终金额四舍五入到分；DIRECT_MARKET_PRICE 时直接等于市场价，其余字段为空。")
+    public record BuyerFormulaRuleView(
+            @Schema(description = "调价方式：DIRECT_MARKET_PRICE 直接等于市场价；CUSTOM 自定义公式", example = "CUSTOM") String mode,
+            @Schema(description = "CUSTOM 的价格基数：MARKET_PRICE 市场价、SUGGESTED_SALE_PRICE 销售建议价、SUPPLY_PRICE 最低有效供货价；直接等于市场价时为 null", example = "MARKET_PRICE") String base,
+            @Schema(description = "CUSTOM 的基数百分比，大于 0、最多两位小数；100 表示基数原值，85 表示基数的 85%；直接等于市场价时为 null", example = "85") BigDecimal percentage,
+            @Schema(description = "CUSTOM 的运算符：ADD 加、SUBTRACT 减、MULTIPLY 乘、DIVIDE 除；直接等于市场价时为 null", example = "SUBTRACT") String operator,
+            @Schema(description = "CUSTOM 的运算值，非负；ADD/SUBTRACT 的单位为元、最多两位小数，MULTIPLY/DIVIDE 为无单位系数、最多四位小数，DIVIDE 不得为 0；直接等于市场价时为 null", example = "1.50") BigDecimal operand) {
+
+        static BuyerFormulaRuleView from(FormulaRule source) {
+            return source == null ? null : new BuyerFormulaRuleView(
+                    source.mode() == null ? null : source.mode().name(),
+                    source.base() == null ? null : source.base().name(), source.percentage(),
+                    source.operator() == null ? null : source.operator().name(), source.operand());
+        }
+    }
+
+    /** 服务费规则回显；设计见 {@code docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#2-公式与精度}。 */
+    @Schema(name = "BuyerServiceFeeRuleView", description = "分销商服务费覆盖规则；serviceFeeInherited=true 时通常为 null，已保存的非空规则仍回显但不参与计算。按 (商品小计 × percentage / 100) operator operand 计算，最终金额四舍五入到分。")
+    public record BuyerServiceFeeRuleView(
+            @Schema(description = "商品小计的百分比，大于 0、最多两位小数；2 表示商品小计的 2%", example = "2") BigDecimal percentage,
+            @Schema(description = "服务费运算符：ADD 加、SUBTRACT 减、MULTIPLY 乘、DIVIDE 除", example = "ADD") String operator,
+            @Schema(description = "服务费运算值，非负；加减单位为元、最多两位小数，乘除为无单位系数、最多四位小数，除数不得为 0", example = "1.00") BigDecimal operand,
+            @Schema(description = "是否隐藏自定义服务费文案；不影响费用金额或收取", example = "false") boolean hideCopy,
+            @Schema(description = "服务费自定义展示文案；hideCopy=false 时应提供，未配置时为空", example = "服务费") String copy) {
+
+        static BuyerServiceFeeRuleView from(ServiceFeeRule source) {
+            return source == null ? null : new BuyerServiceFeeRuleView(source.percentage(),
+                    source.operator() == null ? null : source.operator().name(), source.operand(),
+                    source.hideCopy(), source.copy());
+        }
+    }
+
+    /** 利润隐藏规则回显；设计见 {@code docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#2-公式与精度}。 */
+    @Schema(name = "BuyerHideRuleView", description = "分销商利润隐藏阈值；hideInherited=true 时通常为 null，已保存的非空规则仍回显但不参与计算。分销区与销售区同时配置时取较高值；利润率严格低于该值时用户端隐藏商品。")
+    @JsonInclude(JsonInclude.Include.ALWAYS)
+    public record BuyerHideRuleView(
+            @Schema(description = "分销区利润隐藏阈值，百分数 0 到 100、最多两位小数；未配置时为 null", example = "12.50")
+            BigDecimal distributionThresholdPercent,
+            @Schema(description = "销售区利润隐藏阈值，百分数 0 到 100、最多两位小数；未配置时为 null", example = "10")
+            BigDecimal salesThresholdPercent) {
+
+        static BuyerHideRuleView from(HideRule source) {
+            return source == null ? null : new BuyerHideRuleView(
+                    source.distributionThresholdPercent(), source.salesThresholdPercent());
+        }
+    }
+
+    /** 税务展示属性回显；设计见 {@code docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#4-税务展示属性}。 */
+    @Schema(name = "BuyerTaxMetadataView", description = "分销商原始税务展示属性；taxInherited=true 时通常为 null，已保存的非空值仍原样回显；不参与价格计算。")
+    public record BuyerTaxMetadataView(
+            @Schema(description = "true 含税，false 不含税；不含税时 taxRateCode 必须为 NON_TAXABLE", example = "true") Boolean taxIncluded,
+            @Schema(description = "system 动态字典 supply_chain_tax_rate 的启用编码；不含税时为 NON_TAXABLE", example = "RATE_6") String taxRateCode,
+            @Schema(description = "保存时解析并冻结的税率名称；字典未提供名称时为 null", example = "6%") String taxRateLabel) {
+
+        static BuyerTaxMetadataView from(TaxMetadata source) {
+            return source == null ? null : new BuyerTaxMetadataView(
+                    source.taxIncluded(), source.taxRateCode(), source.taxRateLabel());
+        }
     }
 }
