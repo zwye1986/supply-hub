@@ -285,7 +285,7 @@ class BuyerProductQueryServiceTest {
         when(buyerPricingMapper.selectByBuyerProductId(31L)).thenReturn(BuyerSkuPricingDO.builder()
                 .id(71L).buyerProductId(31L).currentVersionId(72L).build());
         when(buyerPricingVersionMapper.selectById(72L)).thenReturn(BuyerSkuPricingVersionDO.builder()
-                .id(72L).pricingId(71L)
+                .id(72L).pricingId(71L).overrideJson(INHERITED_CONFIG)
                 .taxMetadataJson("{\"taxIncluded\":false,\"taxRateCode\":\"NON_TAXABLE\",\"taxRateLabel\":\"不征税\"}")
                 .build());
 
@@ -320,7 +320,8 @@ class BuyerProductQueryServiceTest {
                 .id(72L).pricingId(71L).platformPricingVersionId(73L).distributionPriceCents(62_900L)
                 .overrideJson("{\"distributionInherited\":false,\"distributionRule\":{"
                         + "\"mode\":\"CUSTOM\",\"base\":\"SUGGESTED_SALE_PRICE\","
-                        + "\"percentage\":100,\"operator\":\"ADD\",\"operand\":30}}")
+                        + "\"percentage\":100,\"operator\":\"ADD\",\"operand\":30},"
+                        + "\"salesInherited\":true,\"serviceFeeInherited\":true,\"hideInherited\":true,\"taxInherited\":true}")
                 .build());
         when(platformPricingVersionMapper.selectById(73L)).thenReturn(PlatformSkuPricingVersionDO.builder()
                 .id(73L).distributionPriceCents(59_900L).build());
@@ -350,7 +351,7 @@ class BuyerProductQueryServiceTest {
                 .id(71L).buyerProductId(31L).currentVersionId(72L).build());
         when(buyerPricingVersionMapper.selectById(72L)).thenReturn(BuyerSkuPricingVersionDO.builder()
                 .id(72L).pricingId(71L).platformPricingVersionId(73L).distributionPriceCents(59_900L)
-                .overrideJson("{\"distributionInherited\":true}")
+                .overrideJson(INHERITED_CONFIG)
                 .build());
         when(platformPricingVersionMapper.selectById(73L)).thenReturn(PlatformSkuPricingVersionDO.builder()
                 .id(73L).distributionPriceCents(59_900L).build());
@@ -378,9 +379,10 @@ class BuyerProductQueryServiceTest {
         when(l1VersionMapper.selectById(51L)).thenReturn(PlatformSettlementPriceVersionDO.builder()
                 .id(51L).unitPriceCents(9_800L).build());
         when(buyerPricingMapper.selectByBuyerProductId(31L)).thenReturn(BuyerSkuPricingDO.builder()
-                .id(71L).currentVersionId(72L).build());
+                .id(71L).buyerProductId(31L).currentVersionId(72L).build());
         when(buyerPricingVersionMapper.selectById(72L)).thenReturn(BuyerSkuPricingVersionDO.builder()
-                .id(72L).platformPricingVersionId(73L).distributionPriceCents(10_800L).build());
+                .id(72L).pricingId(71L).overrideJson(INHERITED_CONFIG)
+                .platformPricingVersionId(73L).distributionPriceCents(10_800L).build());
 
         BuyerProductQueryService.BuyerProductListItem item =
                 service.page("BYR_A", List.of(), 1, 20).getList().getFirst();
@@ -417,6 +419,175 @@ class BuyerProductQueryServiceTest {
         assertThat(item.taxIncluded()).isFalse();
         assertThat(item.taxRateCode()).isEqualTo("NON_TAXABLE");
         assertThat(item.taxRateDisplay()).isEqualTo("不征税");
+    }
+
+    private static final String INHERITED_CONFIG = "{\"distributionInherited\":true,\"salesInherited\":true,"
+            + "\"serviceFeeInherited\":true,\"hideInherited\":true,\"taxInherited\":true}";
+
+    /** 当前版本原始配置与旧整数列、目录快照来源各自独立，编辑必须完整保留五组。 */
+    @Test
+    void exposesOriginalFiveGroupsAndBothThresholdsFromCurrentVersion() {
+        String original = """
+                {"distributionInherited":false,"distributionRule":{"mode":"CUSTOM","base":"SUGGESTED_SALE_PRICE",
+                 "percentage":85.25,"operator":"ADD","operand":1.50},
+                 "salesInherited":false,"salesRule":{"mode":"DIRECT_MARKET_PRICE"},
+                 "serviceFeeInherited":false,"serviceFeeRule":{"percentage":3.25,"operator":"MULTIPLY",
+                 "operand":1.1250,"hideCopy":false,"copy":"原始服务费"},
+                 "hideInherited":false,"hideRule":{"distributionThresholdPercent":2,"salesThresholdPercent":5},
+                 "taxInherited":false,"taxMetadata":{"taxIncluded":false,"taxRateCode":"NON_TAXABLE","taxRateLabel":"不征税"}}
+                """;
+        for (Integer legacyThreshold : java.util.Arrays.asList(null, 7)) {
+            stubOriginalPricing(original, legacyThreshold, "MARGIN_HIDDEN");
+            var item = service.page("BYR_A", List.of(), 1, 20).getList().getFirst();
+            var tree = new ObjectMapper().valueToTree(item);
+            assertThat(tree.path("currentPricingVersionId").asLong()).isEqualTo(72L);
+            assertThat(tree.path("pricingStatus").asText()).isEqualTo("MARGIN_HIDDEN");
+            assertThat(tree.path("sourceBuyerPricingVersionId").asLong()).isEqualTo(99L);
+            assertThat(tree.path("buyerPricingConfig")).isEqualTo(readTree(original));
+        }
+    }
+
+    @Test
+    void preservesInheritedRawRulesAndExplicitZeroNullableThresholds() {
+        String original = INHERITED_CONFIG.replace("\"hideInherited\":true", "\"hideInherited\":true,"
+                + "\"hideRule\":{\"distributionThresholdPercent\":0,\"salesThresholdPercent\":null}")
+                .replace("\"serviceFeeInherited\":true", "\"serviceFeeInherited\":true,"
+                        + "\"serviceFeeRule\":{\"hideCopy\":true,\"percentage\":null,\"operator\":null,\"operand\":null,\"copy\":null}");
+        stubOriginalPricing(original, 7, "DEPENDENCY_MISSING");
+        var tree = new ObjectMapper().valueToTree(service.page("BYR_A", List.of(), 1, 20).getList().getFirst());
+        assertThat(tree.path("buyerPricingConfig").path("hideInherited").asBoolean()).isTrue();
+        assertThat(tree.path("buyerPricingConfig").path("hideRule").path("distributionThresholdPercent").asInt()).isZero();
+        assertThat(tree.path("buyerPricingConfig").path("hideRule").path("salesThresholdPercent").isNull()).isTrue();
+        assertThat(tree.path("pricingStatus").asText()).isEqualTo("DEPENDENCY_MISSING");
+        assertThat(tree.path("buyerPricingConfig")).isEqualTo(readTree(original));
+    }
+
+    @Test
+    void doubleNullAndOmittedThresholdsRemainLegalHideOverrides() {
+        for (String rule : List.of("{}", "{\"distributionThresholdPercent\":null,\"salesThresholdPercent\":null}")) {
+            stubOriginalPricing(INHERITED_CONFIG.replace("\"hideInherited\":true",
+                    "\"hideInherited\":false,\"hideRule\":" + rule), 7, "DEPENDENCY_MISSING");
+            var config = new ObjectMapper().valueToTree(service.page("BYR_A", List.of(), 1, 20)
+                    .getList().getFirst()).path("buyerPricingConfig");
+            assertThat(config.path("hideInherited").asBoolean()).isFalse();
+            assertThat(config.path("hideRule").path("distributionThresholdPercent").isNull()).isTrue();
+            assertThat(config.path("hideRule").path("salesThresholdPercent").isNull()).isTrue();
+        }
+    }
+
+    @Test
+    void currentIdentityRecalculatingStatusDoesNotUsePreviousReadyVersionStatus() {
+        stubOriginalPricing(INHERITED_CONFIG, 7, "READY");
+        when(buyerPricingMapper.selectByBuyerProductId(31L)).thenReturn(BuyerSkuPricingDO.builder()
+                .id(71L).buyerProductId(31L).currentVersionId(72L).pricingStatus("RECALCULATING").build());
+        var row = new ObjectMapper().valueToTree(service.page("BYR_A", List.of(), 1, 20).getList().getFirst());
+        assertThat(row.path("pricingStatus").asText()).isEqualTo("RECALCULATING");
+        assertThat(row.path("currentPricingVersionId").asLong()).isEqualTo(72L);
+        assertThat(row.path("buyerPricingConfig")).isEqualTo(readTree(INHERITED_CONFIG));
+        verify(buyerPricingMapper).selectByBuyerProductId(31L);
+    }
+
+    @Test
+    void noCurrentPointerReturnsExplicitUnpricedWithoutLegacyConfig() {
+        stubOriginalPricing(INHERITED_CONFIG, 7, "READY");
+        for (BuyerSkuPricingDO identity : java.util.Arrays.asList(null,
+                BuyerSkuPricingDO.builder().id(71L).buyerProductId(31L).pricingStatus("READY").build())) {
+            when(buyerPricingMapper.selectByBuyerProductId(31L)).thenReturn(identity);
+            var tree = new ObjectMapper().valueToTree(service.page("BYR_A", List.of(), 1, 20).getList().getFirst());
+            assertThat(tree.path("currentPricingVersionId").isNull()).isTrue();
+            assertThat(tree.path("pricingStatus").asText()).isEqualTo("UNPRICED");
+            assertThat(tree.path("buyerPricingConfig").isNull()).isTrue();
+        }
+    }
+
+    @Test
+    void rejectsCurrentVersionWithWrongPricingIdentity() {
+        stubOriginalPricing(INHERITED_CONFIG, null, "READY");
+        when(buyerPricingVersionMapper.selectById(72L)).thenReturn(BuyerSkuPricingVersionDO.builder()
+                .id(72L).pricingId(999L).overrideJson(INHERITED_CONFIG).build());
+        assertThatThrownBy(() -> service.page("BYR_A", List.of(), 1, 20)).isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    void rejectsMissingCurrentVersion() {
+        stubOriginalPricing(INHERITED_CONFIG, null, "READY");
+        when(buyerPricingVersionMapper.selectById(72L)).thenReturn(null);
+        assertThatThrownBy(() -> service.page("BYR_A", List.of(), 1, 20)).isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    void originalDecimalOperandDoesNotRoundThroughDoubleTreeParsing() {
+        String original = INHERITED_CONFIG.replace("\"distributionInherited\":true",
+                "\"distributionInherited\":false,\"distributionRule\":{\"mode\":\"CUSTOM\","
+                        + "\"base\":\"MARKET_PRICE\",\"percentage\":100,\"operator\":\"ADD\","
+                        + "\"operand\":99999999999999.13}");
+        stubOriginalPricing(original, null, "DEPENDENCY_MISSING");
+        var row = new ObjectMapper().valueToTree(service.page("BYR_A", List.of(), 1, 20).getList().getFirst());
+        assertThat(row.path("buyerPricingConfig").path("distributionRule").path("operand").decimalValue())
+                .isEqualByComparingTo("99999999999999.13");
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"{}", "{\"hideCopy\":null}"})
+    void inheritedServiceFeeObjectRequiresExplicitHideCopyBoolean(String rawRule) {
+        String original = INHERITED_CONFIG.replace("\"serviceFeeInherited\":true",
+                "\"serviceFeeInherited\":true,\"serviceFeeRule\":" + rawRule);
+        stubOriginalPricing(original, null, "DEPENDENCY_MISSING");
+        assertThatThrownBy(() -> service.page("BYR_A", List.of(), 1, 20))
+                .as("inherited service fee must not fabricate hideCopy=false: %s", rawRule)
+                .isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    void rejectsCoercedNumericAndBooleanRuleFields() {
+        for (String malformed : List.of(
+                "\"hideInherited\":false,\"hideRule\":{\"distributionThresholdPercent\":\"2\"}",
+                "\"serviceFeeInherited\":false,\"serviceFeeRule\":{\"percentage\":\"3\",\"operator\":\"ADD\",\"operand\":0,\"hideCopy\":true}",
+                "\"taxInherited\":false,\"taxMetadata\":{\"taxIncluded\":false,\"taxRateCode\":2}",
+                "\"distributionInherited\":false,\"distributionRule\":{\"mode\":\"CUSTOM\",\"base\":\"MARKET_PRICE\",\"percentage\":\"100\",\"operator\":\"ADD\",\"operand\":0}")) {
+            String flag = malformed.substring(0, malformed.indexOf(':'));
+            stubOriginalPricing(INHERITED_CONFIG.replace(flag + ":true", malformed), null, "READY");
+            assertThatThrownBy(() -> service.page("BYR_A", List.of(), 1, 20))
+                    .as("must not coerce original rule fields: %s", malformed).isInstanceOf(IllegalStateException.class);
+        }
+    }
+
+    @Test
+    void rejectsBlankInvalidMissingFlagAndIncompleteOverrideGroups() {
+        for (String broken : java.util.Arrays.asList(null, " ", "{", "null", "[]", "{}",
+                INHERITED_CONFIG.replace("\"salesInherited\":true,", ""),
+                INHERITED_CONFIG.replace("\"hideInherited\":true", "\"hideInherited\":null"),
+                INHERITED_CONFIG.replace("\"hideInherited\":true", "\"hideInherited\":\"true\""),
+                INHERITED_CONFIG.replace("\"distributionInherited\":true", "\"distributionInherited\":false"),
+                INHERITED_CONFIG.replace("\"distributionInherited\":true", "\"distributionInherited\":false,\"distributionRule\":{\"mode\":\"CUSTOM\"}"),
+                INHERITED_CONFIG.replace("\"salesInherited\":true", "\"salesInherited\":false"),
+                INHERITED_CONFIG.replace("\"serviceFeeInherited\":true", "\"serviceFeeInherited\":false,\"serviceFeeRule\":{}"),
+                INHERITED_CONFIG.replace("\"hideInherited\":true", "\"hideInherited\":false"),
+                INHERITED_CONFIG.replace("\"taxInherited\":true", "\"taxInherited\":false,\"taxMetadata\":{\"taxIncluded\":false}"))) {
+            stubOriginalPricing(broken, 7, "READY");
+            assertThatThrownBy(() -> service.page("BYR_A", List.of(), 1, 20))
+                    .as("corrupt override_json: %s", broken).isInstanceOf(IllegalStateException.class);
+        }
+    }
+
+    private void stubOriginalPricing(String json, Integer legacyThreshold, String status) {
+        BuyerProductDO product = BuyerProductDO.builder().id(31L).buyerId(9L).platformSkuId(11L)
+                .buyerProductCode("BPD_1").displayThresholdPercent(legacyThreshold).build();
+        when(productMapper.selectPage(any(PageParam.class), any())).thenReturn(new PageResult<>(List.of(product), 1L));
+        when(listingMapper.selectList(any())).thenReturn(List.of());
+        when(buyerPricingMapper.selectByBuyerProductId(31L)).thenReturn(BuyerSkuPricingDO.builder()
+                .id(71L).buyerProductId(31L).currentVersionId(72L).pricingStatus(status).build());
+        when(buyerPricingVersionMapper.selectById(72L)).thenReturn(BuyerSkuPricingVersionDO.builder()
+                .id(72L).pricingId(71L).pricingStatus(status).overrideJson(json).build());
+        org.mockito.Mockito.doReturn(new BuyerAcceptanceCatalogReadService.CatalogView(
+                "BPD_1", "LST_1", "AUTO_SELECTION", "PUBLISHED", "AVAILABLE", null, 99L, null, null))
+                .when(acceptanceCatalog).read(any());
+    }
+
+    private com.fasterxml.jackson.databind.JsonNode readTree(String json) {
+        try { var mapper = new ObjectMapper(); return mapper.valueToTree(mapper.readValue(json,
+                com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericBatchPricingService.ProjectOverrides.class)); }
+        catch (Exception ex) { throw new AssertionError(ex); }
     }
 
     private void stubCatalog(boolean spuMatches) {
