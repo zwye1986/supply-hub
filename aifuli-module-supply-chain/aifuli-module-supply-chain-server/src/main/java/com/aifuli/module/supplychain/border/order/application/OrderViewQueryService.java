@@ -39,11 +39,9 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSpuMapp
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProjectSkuPricingVersionMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.StandardPricingQuoteMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierDO;
-import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierSupplyScopeDO;
-import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierSupplyScopeModeDO;
+import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierOfferDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierMapper;
-import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierSupplyScopeMapper;
-import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierSupplyScopeModeMapper;
+import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferMapper;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.aifuli.module.supplychain.api.fulfillment.dto.SupplierValidTimeState;
 import com.aifuli.module.supplychain.border.fulfillment.application.huashengflow.HuashengType201AssetCodec;
@@ -135,8 +133,7 @@ public class OrderViewQueryService {
     private final BuyerSkuPricingVersionMapper buyerPricingVersionMapper;
     private final PlatformSkuMapper platformSkuMapper;
     private final PlatformSpuMapper platformSpuMapper;
-    private final SupplierSupplyScopeMapper supplyScopeMapper;
-    private final SupplierSupplyScopeModeMapper supplyScopeModeMapper;
+    private final SupplierOfferMapper offerMapper;
     private final EnvelopeCryptoPort envelopeCrypto;
     private final HmacFingerprintPort hmacFingerprint;
     private final BusinessNoGenerator businessNoGenerator;
@@ -205,9 +202,9 @@ public class OrderViewQueryService {
                 : supplierMapper.selectById(attempt.getSupplierId());
         List<OrderView> rows = assembleRows(List.of(order), null, true);
         OrderView view = rows.get(0);
-        String supplyMode = resolveSupplyMode(attempt.getSupplierId(), order);
+        String supplyMode = resolveSupplyMode(attempt);
         List<SupplierOrderView> supplierOrders = List.of(toSupplierOrderView(attempt, supplier));
-        // 供货模式与发货时间本期按设计 §3.3：供货模式取供应商供货范围配置，取不到为空；shipTime/deliveryMode 本期空
+        // 供货模式按所选 Offer 当前配置展示；shipTime/deliveryMode 本期空。
         OrderView detail = withSupplierView(view, order, attempt, supplyMode, supplierOrders);
         log.info("B端订单前端契约详情完成 bOrderNo={} orderNo={} userId={}", bOrderNo, order.getOrderNo(), userId);
         return detail;
@@ -326,9 +323,13 @@ public class OrderViewQueryService {
             SupplierDO selectedSupplier = selectedAttempt == null ? null : suppliers.get(selectedAttempt.getSupplierId());
             OrderItemView item = toItemView(order, quote,
                     userId == null ? OrderAssets.EMPTY : loadAssets(order, userId), standardDetail, selectedAttempt);
+            // 平台已成功时，历史失败尝试也不再生成处置摘要；尝试编号和历史仍保留。
+            // 设计：docs/superpowers/specs/2026-09-21-supplier-order-admin-readonly-design.md#82-成功订单不展示失败处置。
+            boolean includeFailureClosure = userId != null
+                    && !Objects.equals(order.getOrderStatus(), SupplyChainOrderStatus.SUCCEEDED.getCode());
             List<SupplierOrderView> supplierOrders = attempts.stream()
                     .map(attempt -> toSupplierOrderView(attempt,
-                            attempt.getSupplierId() == null ? null : suppliers.get(attempt.getSupplierId()), userId != null))
+                            attempt.getSupplierId() == null ? null : suppliers.get(attempt.getSupplierId()), includeFailureClosure))
                     .toList();
             rows.add(new OrderView(
                     order.getOrderNo(),
@@ -902,30 +903,13 @@ public class OrderViewQueryService {
         return attempt == null ? null : attempt.getOrderId();
     }
 
-    /** 供货模式：供应商 + SPU 商品类型命中的供货范围行 → 模式子表首行；取不到为空（设计 §4.5）。 */
-    private String resolveSupplyMode(Long supplierId, SupplyChainOrderDO order) {
-        if (supplierId == null || order.getPlatformSkuId() == null) {
-            return null;
-        }
-        PlatformSkuDO sku = platformSkuMapper.selectById(order.getPlatformSkuId());
-        if (sku == null || sku.getSpuId() == null) {
-            return null;
-        }
-        PlatformSpuDO spu = platformSpuMapper.selectById(sku.getSpuId());
-        if (spu == null || !StringUtils.hasText(spu.getProductType())) {
-            return null;
-        }
-        SupplierSupplyScopeDO scope = supplyScopeMapper.selectOne(
-                new LambdaQueryWrapper<SupplierSupplyScopeDO>()
-                        .eq(SupplierSupplyScopeDO::getSupplierId, supplierId)
-                        .eq(SupplierSupplyScopeDO::getProductType, spu.getProductType())
-                        .last("LIMIT 1"));
-        if (scope == null || scope.getId() == null) {
-            return null;
-        }
-        List<SupplierSupplyScopeModeDO> modes =
-                supplyScopeModeMapper.selectByScopeIds(List.of(scope.getId()));
-        return modes.isEmpty() ? null : modes.get(0).getSupplyMode();
+    /**
+     * 兼容供应商详情同样取所选 Offer 当前配置，不把范围支持能力当成本次供货模式。
+     * 设计：docs/superpowers/specs/2026-09-21-supplier-order-admin-readonly-design.md#81-当前合作商品供货模式与业务类型。
+     */
+    private String resolveSupplyMode(BOrderDO attempt) {
+        SupplierOfferDO offer = attempt.getOfferId() == null ? null : offerMapper.selectById(attempt.getOfferId());
+        return offer == null ? null : offer.getOfferSupplyMode();
     }
 
     /** 路由耗时：首个路由轮次计算完成时间 → 总单终态时间；任一缺失则为空。 */

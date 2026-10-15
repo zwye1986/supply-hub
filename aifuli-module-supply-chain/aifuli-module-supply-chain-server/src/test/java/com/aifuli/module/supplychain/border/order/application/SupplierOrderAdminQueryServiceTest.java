@@ -13,11 +13,21 @@ import com.aifuli.module.supplychain.border.order.domain.BOrderFulfillmentStatus
 import com.aifuli.module.supplychain.border.order.domain.BOrderSettlementStatus;
 import com.aifuli.module.supplychain.border.order.domain.SupplyChainOrderType;
 import com.aifuli.module.supplychain.border.order.domain.SupplyChainOrderTypes;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuDO;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSpuDO;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSpuMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierDO;
+import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierOfferDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierMapper;
+import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferMapper;
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
-import org.junit.jupiter.api.BeforeEach;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -27,7 +37,6 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -37,20 +46,19 @@ import static org.mockito.Mockito.when;
  * 供应商订单只读契约：列表只读 B 单，详情不暴露幂等键与内部主键。
  * 设计见 {@code docs/superpowers/specs/2026-09-21-supplier-order-admin-readonly-design.md#7-测试门禁}。
  */
+@ExtendWith(MockitoExtension.class)
 class SupplierOrderAdminQueryServiceTest {
 
     private static final LocalDateTime NOW = LocalDateTime.of(2026, 9, 21, 12, 0);
 
-    private final BOrderMapper bOrderMapper = mock(BOrderMapper.class);
-    private final SupplyChainOrderMapper orderMapper = mock(SupplyChainOrderMapper.class);
-    private final SupplierMapper supplierMapper = mock(SupplierMapper.class);
-    private SupplierOrderAdminQueryService service;
-
-    @BeforeEach
-    void setUp() {
-        service = new SupplierOrderAdminQueryService(bOrderMapper, orderMapper, supplierMapper,
-                mock(OrderFailureViewQuery.class));
-    }
+    @Mock private BOrderMapper bOrderMapper;
+    @Mock private SupplyChainOrderMapper orderMapper;
+    @Mock private SupplierMapper supplierMapper;
+    @Mock private PlatformSkuMapper skus;
+    @Mock private PlatformSpuMapper spus;
+    @Mock private SupplierOfferMapper offers;
+    @Mock private OrderFailureViewQuery failureViews;
+    @InjectMocks private SupplierOrderAdminQueryService service;
 
     @Test
     void pageMapsAttemptsNewestFirstAndHidesInternalFields() {
@@ -133,6 +141,57 @@ class SupplierOrderAdminQueryServiceTest {
                 .isInstanceOf(ServiceException.class)
                 .extracting(ex -> ((ServiceException) ex).getCode())
                 .isEqualTo(SUPPLY_CHAIN_B_ORDER_NOT_FOUND.getCode());
+    }
+
+    @Test
+    void listAndDetailDistinguishCardAndRechargeAndFollowSelectedOfferCurrentMode() {
+        var card = order(1L, "SC_CARD");
+        card.setPlatformSkuId(101L);
+        var recharge = order(2L, "SC_RECHARGE");
+        recharge.setPlatformSkuId(102L);
+        var first = attempt(1L, "BO_1", 1L, 11L, 1, true);
+        var second = attempt(2L, "BO_2", 2L, 11L, 1, true);
+        second.setOfferId(25L);
+        var selectedOffer = SupplierOfferDO.builder().id(21L).offerSupplyMode("DROP_SHIP").build();
+        when(bOrderMapper.selectPage(any(PageParam.class), any(Wrapper.class)))
+                .thenReturn(new PageResult<>(List.of(second, first), 2L));
+        when(orderMapper.selectBatchIds(any())).thenReturn(List.of(card, recharge));
+        when(skus.selectBatchIds(any())).thenReturn(List.of(
+                PlatformSkuDO.builder().id(101L).spuId(201L).fulfillmentType("CARD_CODE_SECRET").build(),
+                PlatformSkuDO.builder().id(102L).spuId(202L).fulfillmentType("DIRECT_RECHARGE").build()));
+        when(spus.selectBatchIds(any())).thenReturn(List.of(
+                PlatformSpuDO.builder().id(201L).productType("EQUITY_PRODUCT").build(),
+                PlatformSpuDO.builder().id(202L).productType("EQUITY_PRODUCT").build()));
+        when(offers.selectBatchIds(any())).thenReturn(List.of(selectedOffer,
+                SupplierOfferDO.builder().id(25L).offerSupplyMode("BATCH").build()));
+        var json = new ObjectMapper().findAndRegisterModules();
+        var rows = json.valueToTree(service.page(query()).getList());
+        assertThat(rows.get(0).path("bizType").textValue()).isEqualTo("VIRTUAL_RECHARGE");
+        assertThat(rows.get(0).path("supplyMode").textValue()).isEqualTo("BATCH");
+        assertThat(rows.get(1).path("bizType").textValue()).isEqualTo("VIRTUAL_CARD");
+        assertThat(rows.get(1).path("supplyMode").textValue()).isEqualTo("DROP_SHIP");
+
+        when(bOrderMapper.selectOne(any(Wrapper.class))).thenReturn(first);
+        when(orderMapper.selectById(1L)).thenReturn(card);
+        var detail = json.valueToTree(service.get("BO_1"));
+        assertThat(detail.path("bizType")).isEqualTo(rows.get(1).path("bizType"));
+        assertThat(detail.path("supplyMode")).isEqualTo(rows.get(1).path("supplyMode"));
+        selectedOffer.setOfferSupplyMode("STORE_PICKUP");
+        assertThat(json.valueToTree(service.get("BO_1")).path("supplyMode").textValue())
+                .isEqualTo("STORE_PICKUP");
+        selectedOffer.setOfferSupplyMode(null);
+        assertThat(json.valueToTree(service.get("BO_1")).path("supplyMode").isNull()).isTrue();
+    }
+
+    @Test
+    void missingSkuAndOfferStayUnknownRatherThanInventingCardOrApiMode() {
+        when(bOrderMapper.selectOne(any(Wrapper.class))).thenReturn(attempt(1L, "BO_1", 1L, 11L, 1, true));
+        when(orderMapper.selectById(1L)).thenReturn(order(1L, "SC_CARD"));
+        var result = new ObjectMapper().findAndRegisterModules().valueToTree(service.get("BO_1"));
+        assertThat(result.has("bizType")).isTrue();
+        assertThat(result.path("bizType").isNull()).isTrue();
+        assertThat(result.has("supplyMode")).isTrue();
+        assertThat(result.path("supplyMode").isNull()).isTrue();
     }
 
     private static SupplierOrderPageQuery query() {

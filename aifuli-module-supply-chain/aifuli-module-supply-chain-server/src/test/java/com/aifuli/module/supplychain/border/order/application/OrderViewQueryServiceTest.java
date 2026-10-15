@@ -21,7 +21,9 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.BuyerSkuPricing
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProjectSkuPricingVersionMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.StandardPricingQuoteMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierDO;
+import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierOfferDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierMapper;
+import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferMapper;
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -57,6 +59,7 @@ class OrderViewQueryServiceTest {
     @Mock StandardPricingQuoteMapper quotes;
     @Mock ProjectSkuPricingVersionMapper projectVersions;
     @Mock BuyerSkuPricingVersionMapper buyerVersions;
+    @Mock SupplierOfferMapper offers;
     @InjectMocks OrderViewQueryService service;
 
     @Spy private final ObjectMapper json = new ObjectMapper().findAndRegisterModules();
@@ -141,6 +144,9 @@ class OrderViewQueryServiceTest {
         order.setDisplaySupplierName("首次供应商");
         order.setQuantity(5L);
         var failed = pricedAttempt(11L, 1, 41L, BOrderFulfillmentStatus.FAILED, 1900L);
+        failed.setOfferId(71L);
+        when(offers.selectById(71L)).thenReturn(SupplierOfferDO.builder()
+                .id(71L).offerSupplyMode("H5_DIRECT").build());
         var succeeded = pricedAttempt(12L, 2, 42L, BOrderFulfillmentStatus.SUCCEEDED, 1800L);
         when(orders.selectByOrderNo("PLATFORM_A")).thenReturn(order);
         when(orders.selectById(1L)).thenReturn(order);
@@ -157,6 +163,7 @@ class OrderViewQueryServiceTest {
         assertThat(platform.path("supplierOrders").size()).isEqualTo(2);
         JsonNode supplier = json.valueToTree(service.get(failed.getBOrderNo(), "SUPPLIER", 9001L));
         assertThat(supplier.path("supplierName").textValue()).isEqualTo("供应商甲");
+        assertThat(supplier.path("supplyMode").textValue()).isEqualTo("H5_DIRECT");
         assertThat(supplier.path("items").get(0).path("supplyPrice").longValue()).isEqualTo(1900L);
         assertThat(order.getDisplaySupplierName()).isEqualTo("首次供应商");
     }
@@ -201,6 +208,28 @@ class OrderViewQueryServiceTest {
         assertThat(item.path("projectPrice").isNull()).isTrue();
         assertThat(result.path("projectPayAmount").isNull()).isTrue();
         assertThat(result.path("distributorPayAmount").isNull()).isTrue();
+    }
+
+    @Test
+    void successfulPlatformHidesAllFailureSummariesButFailedPlatformKeepsHistory() {
+        var order = order(1L, "PLATFORM_A", "BUYER_A");
+        var failed = pricedAttempt(11L, 1, null, BOrderFulfillmentStatus.FAILED, 1900L);
+        var succeeded = pricedAttempt(12L, 2, null, BOrderFulfillmentStatus.SUCCEEDED, 1800L);
+        when(orders.selectByOrderNo("PLATFORM_A")).thenReturn(order);
+        when(attempts.selectList(any(Wrapper.class))).thenReturn(List.of(failed, succeeded));
+        when(failureViews.read(any())).thenReturn(new OrderFailureViewQuery.View(
+                null, null, 9500L, null, null, "CASE_HISTORY", null, null));
+
+        JsonNode success = json.valueToTree(service.get("PLATFORM_A", "PLATFORM", 9001L));
+        assertThat(success.path("supplierOrders").size()).isEqualTo(2);
+        assertThat(success.path("supplierOrders").get(0).path("failureClosure").isNull()).isTrue();
+        assertThat(success.path("supplierOrders").get(1).path("failureClosure").isNull()).isTrue();
+
+        order.setOrderStatus(SupplyChainOrderStatus.FAILED.getCode());
+        when(attempts.selectList(any(Wrapper.class))).thenReturn(List.of(failed));
+        JsonNode failure = json.valueToTree(service.get("PLATFORM_A", "PLATFORM", 9001L));
+        assertThat(failure.path("supplierOrders").get(0).path("failureClosure").path("caseNo").textValue())
+                .isEqualTo("CASE_HISTORY");
     }
 
     private static BOrderDO pricedAttempt(long id, int number, Long supplierId,

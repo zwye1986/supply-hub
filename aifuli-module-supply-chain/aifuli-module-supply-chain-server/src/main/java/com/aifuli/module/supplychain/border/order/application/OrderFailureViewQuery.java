@@ -2,6 +2,7 @@ package com.aifuli.module.supplychain.border.order.application;
 
 import com.aifuli.module.supplychain.border.fulfillment.dal.dataobject.*;
 import com.aifuli.module.supplychain.border.fulfillment.dal.mysql.*;
+import com.aifuli.module.supplychain.border.order.domain.BOrderFulfillmentStatus;
 import com.aifuli.module.supplychain.tradecore.account.application.FundReservationService;
 import com.aifuli.module.supplychain.tradecore.account.domain.FundReferenceType;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
@@ -23,6 +24,11 @@ public class OrderFailureViewQuery {
     private final RawStatusObservationMapper observations;
 
     public View read(BOrderDO order) {
+        // 成功尝试不展示失败处置；保留历史 Case，不改变资金或履约事实。
+        // 设计：docs/superpowers/specs/2026-09-21-supplier-order-admin-readonly-design.md#82-成功订单不展示失败处置。
+        if (java.util.Objects.equals(order.getFulfillmentStatus(), BOrderFulfillmentStatus.SUCCEEDED.getCode())) {
+            return null;
+        }
         var request = requests.selectById(order.getFulfillmentRequestId());
         var reservation = request == null ? null : funds.findSnapshotByReference(
                 request.fundsBuyerId(), FundReferenceType.CARD_ORDER.code(), request.getRequestNo());

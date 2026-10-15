@@ -2,6 +2,7 @@ package com.aifuli.module.supplychain.border.order.application;
 
 import com.aifuli.module.supplychain.border.fulfillment.dal.dataobject.*;
 import com.aifuli.module.supplychain.border.fulfillment.dal.mysql.*;
+import com.aifuli.module.supplychain.border.order.domain.BOrderFulfillmentStatus;
 import com.aifuli.module.supplychain.tradecore.account.application.FundReservationService;
 import com.aifuli.module.supplychain.tradecore.account.domain.FundReferenceType;
 import org.junit.jupiter.api.Test;
@@ -11,6 +12,21 @@ import static org.mockito.Mockito.*;
 import static org.mockito.ArgumentMatchers.any;
 
 class OrderFailureViewQueryTest {
+    @Test
+    void succeededAttemptHasNoFailureDispositionEvenWhenPlatformStillAwaitsDelivery() {
+        var cases = mock(FulfillmentExceptionCaseMapper.class);
+        var requests = mock(FulfillmentRequestMapper.class);
+        var funds = mock(FundReservationService.class);
+        var observations = mock(RawStatusObservationMapper.class);
+        var order = BOrderDO.builder().id(1L).fulfillmentRequestId(2L)
+                .fulfillmentStatus(BOrderFulfillmentStatus.SUCCEEDED.getCode())
+                .expectedSupplierSettlementAmount(20000L).reportedSupplierSettlementAmount(20000L).build();
+        when(cases.selectList(any())).thenReturn(List.of());
+        when(observations.selectList(any())).thenReturn(List.of());
+
+        assertThat(new OrderFailureViewQuery(cases, requests, funds, observations).read(order)).isNull();
+    }
+
     @Test
     void cancelledPriceMismatchKeepsOriginalAmountsAndMissingReservationUnknown() {
         var cases = mock(FulfillmentExceptionCaseMapper.class);

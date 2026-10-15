@@ -27,6 +27,7 @@ import com.aifuli.module.supplychain.border.o2o.domain.O2OFundStatus;
 import com.aifuli.module.supplychain.border.o2o.domain.O2OPaymentStatus;
 import com.aifuli.module.supplychain.border.order.application.OrderAdminQueryService;
 import com.aifuli.module.supplychain.border.order.application.OrderAdminQueryService.OrderPageQuery;
+import com.aifuli.module.supplychain.border.order.application.OrderFailureViewQuery;
 import com.aifuli.module.supplychain.border.order.application.SupplierOrderAdminQueryService;
 import com.aifuli.module.supplychain.border.order.application.SupplierOrderAdminQueryService.SupplierOrderPageQuery;
 import com.aifuli.module.supplychain.border.order.dal.dataobject.SupplyChainOrderDO;
@@ -36,7 +37,20 @@ import com.aifuli.module.supplychain.border.order.domain.BOrderSettlementStatus;
 import com.aifuli.module.supplychain.border.order.domain.SupplyChainOrderType;
 import com.aifuli.module.supplychain.border.order.domain.SupplyChainOrderTypes;
 import com.aifuli.module.supplychain.infrastructure.configuration.SupplyChainDataSourceConfiguration;
+import com.aifuli.module.supplychain.infrastructure.identity.BusinessNoGenerator;
+import com.aifuli.module.supplychain.infrastructure.identity.UlidGenerator;
 import com.aifuli.module.supplychain.routing.domain.RoutingDecisionStatus;
+import com.aifuli.module.supplychain.tradecore.account.application.FundReservationService;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuDO;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSpuDO;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSpuMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.domain.SuggestedSalePriceRule;
+import com.aifuli.module.supplychain.tradecore.ledger.application.AccountLedgerWriter;
+import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierOfferDO;
+import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferMapper;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -189,6 +203,24 @@ class OrderAdminIntegrationTest {
             assertThat(service.getRoutingRecords(o2o.getOrderNo()).rounds()).isEmpty();
             assertThat(service.getRoutingRecords(instore.getOrderNo()).rounds()).isEmpty();
 
+            // 用直充区分 CARD 默认卡密映射；Offer 当前配置在旧订单查询时即时生效。
+            // 设计：docs/superpowers/specs/2026-09-21-supplier-order-admin-readonly-design.md#83-回归与交付边界。
+            var spuMapper = context.getBean(PlatformSpuMapper.class);
+            var skuMapper = context.getBean(PlatformSkuMapper.class);
+            var offerMapper = context.getBean(SupplierOfferMapper.class);
+            var spu = PlatformSpuDO.builder().spuCode("SPU_" + suffix).spuName("测试权益")
+                    .brandId(1L).primaryCategoryId(1L).productType("EQUITY_PRODUCT")
+                    .status((short) 10).version(0L).createdAt(now).updatedAt(now).build();
+            spuMapper.insert(spu);
+            skuMapper.insert(PlatformSkuDO.builder().id(401L).spuId(spu.getId()).skuCode("SKU_1")
+                    .skuName("测试直充").fulfillmentType("DIRECT_RECHARGE").faceValue(100L).currency("CNY")
+                    .suggestedSalePrice(100L).suggestedSalePriceRuleJson(SuggestedSalePriceRule.fixed(100L))
+                    .resultSchemaCode("RECHARGE_RESULT").resultSchemaVersion(1).status((short) 10)
+                    .version(0L).createdAt(now).updatedAt(now).build());
+            var offer = SupplierOfferDO.builder().id(21L).offerNo("OF_" + suffix).offerCode("CURRENT")
+                    .supplierId(11L).platformSkuId(401L).offerSupplyMode("API_DIRECT")
+                    .status((short) 10).version(0L).createdAt(now).updatedAt(now).build();
+            offerMapper.insert(offer);
             SupplierOrderAdminQueryService supplierOrders = context.getBean(SupplierOrderAdminQueryService.class);
             var supplierPage = supplierOrders.page(new SupplierOrderPageQuery(null, card.getOrderNo(),
                     null, null, null, null, null, 1, 20));
@@ -203,6 +235,30 @@ class OrderAdminIntegrationTest {
             var supplierDetail = supplierOrders.get("BO_" + suffix);
             assertThat(supplierDetail.orderNo()).isEqualTo(card.getOrderNo());
             assertThat(supplierDetail.billno()).isEqualTo("BILL_" + suffix);
+            assertThat(supplierPage.getList().getFirst().bizType()).isEqualTo("VIRTUAL_RECHARGE");
+            assertThat(supplierDetail.bizType()).isEqualTo("VIRTUAL_RECHARGE");
+            assertThat(supplierPage.getList().getFirst().supplyMode()).isEqualTo("API_DIRECT");
+            assertThat(supplierDetail.supplyMode()).isEqualTo("API_DIRECT");
+            assertThat(supplierDetail.failureClosure()).isNotNull();
+            offer.setOfferSupplyMode("DROP_SHIP");
+            assertThat(offerMapper.updateById(offer)).isEqualTo(1);
+            assertThat(supplierOrders.get("BO_" + suffix).supplyMode()).isEqualTo("DROP_SHIP");
+            assertThat(supplierOrders.page(new SupplierOrderPageQuery(null, card.getOrderNo(),
+                    null, null, null, null, null, 1, 20)).getList().getFirst().supplyMode()).isEqualTo("DROP_SHIP");
+            var attemptMapper = context.getBean(BOrderMapper.class);
+            var attempt = attemptMapper.selectOne(new LambdaQueryWrapper<BOrderDO>()
+                    .eq(BOrderDO::getBOrderNo, "BO_" + suffix));
+            assertThat(attemptMapper.update(new LambdaUpdateWrapper<BOrderDO>()
+                    .eq(BOrderDO::getId, attempt.getId())
+                    .set(BOrderDO::getFulfillmentStatus, BOrderFulfillmentStatus.SUCCEEDED.getCode())
+                    .set(BOrderDO::getFulfilledQuantity, 1L)
+                    .set(BOrderDO::getActiveFlag, null)
+                    .set(BOrderDO::getCompletedAt, now))).isEqualTo(1);
+            assertThat(supplierOrders.get("BO_" + suffix).failureClosure()).isNull();
+            offerMapper.deleteById(offer.getId());
+            skuMapper.deleteById(401L);
+            assertThat(supplierOrders.get("BO_" + suffix).supplyMode()).isNull();
+            assertThat(supplierOrders.get("BO_" + suffix).bizType()).isNull();
             assertThat(supplierOrders.page(new SupplierOrderPageQuery(null, o2o.getOrderNo(),
                     null, null, null, null, null, 1, 20)).getList()).isEmpty();
         }
@@ -326,7 +382,8 @@ class OrderAdminIntegrationTest {
 
     @Configuration(proxyBeanMethods = false)
     @Import({SupplyChainDataSourceConfiguration.class, OrderAdminQueryService.class,
-            SupplierOrderAdminQueryService.class})
+            SupplierOrderAdminQueryService.class, OrderFailureViewQuery.class, FundReservationService.class,
+            AccountLedgerWriter.class, BusinessNoGenerator.class, UlidGenerator.class})
     static class TestConfiguration {
     }
 }

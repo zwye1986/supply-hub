@@ -8,9 +8,16 @@ import com.aifuli.module.supplychain.border.order.dal.dataobject.SupplyChainOrde
 import com.aifuli.module.supplychain.border.order.dal.mysql.SupplyChainOrderMapper;
 import com.aifuli.module.supplychain.border.order.domain.BOrderFulfillmentStatus;
 import com.aifuli.module.supplychain.border.order.domain.BOrderSettlementStatus;
+import com.aifuli.module.supplychain.border.order.domain.OrderViewMappings;
 import com.aifuli.module.supplychain.border.order.domain.SupplyChainOrderType;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSkuDO;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSpuDO;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
+import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSpuMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierDO;
+import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierOfferDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierMapper;
+import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierOfferMapper;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.RequiredArgsConstructor;
@@ -24,7 +31,9 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 import static com.aifuli.framework.common.exception.util.ServiceExceptionUtil.exception;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.ORDER_QUERY_TIME_RANGE_INVALID;
@@ -48,6 +57,9 @@ public class SupplierOrderAdminQueryService {
     private final SupplyChainOrderMapper orderMapper;
     private final SupplierMapper supplierMapper;
     private final OrderFailureViewQuery failureViews;
+    private final PlatformSkuMapper platformSkuMapper;
+    private final PlatformSpuMapper platformSpuMapper;
+    private final SupplierOfferMapper offerMapper;
 
     /**
      * 分页查询供应商履约尝试。总单与供应商档案批量补齐，禁止列表 N+1。
@@ -96,9 +108,7 @@ public class SupplierOrderAdminQueryService {
         PageResult<BOrderDO> page = bOrderMapper.selectPage(pageParam, wrapper);
         Map<Long, SupplyChainOrderDO> orders = loadOrders(page.getList());
         Map<Long, SupplierDO> suppliers = loadSuppliers(page.getList());
-        return new PageResult<>(page.getList().stream()
-                .map(attempt -> toView(attempt, orders, suppliers, null))
-                .toList(), page.getTotal());
+        return new PageResult<>(assembleRows(page.getList(), orders, suppliers, false), page.getTotal());
     }
 
     /**
@@ -122,7 +132,44 @@ public class SupplierOrderAdminQueryService {
         if (supplier != null && supplier.getId() != null) {
             suppliers.put(supplier.getId(), supplier);
         }
-        return toView(attempt, orders, suppliers, failureViews.read(attempt));
+        return assembleRows(List.of(attempt), orders, suppliers, true).getFirst();
+    }
+
+    /**
+     * 当页批量补齐商品业务类型与所选 Offer 的当前供货模式，不使用供应商范围的首项模式。
+     * 该模式不是订单冻结事实；缺少关联时保持未知，不影响订单及资金状态。
+     * 设计：docs/superpowers/specs/2026-09-21-supplier-order-admin-readonly-design.md#81-当前合作商品供货模式与业务类型。
+     */
+    private List<SupplierOrderView> assembleRows(List<BOrderDO> attempts, Map<Long, SupplyChainOrderDO> orders,
+                                                Map<Long, SupplierDO> suppliers, boolean detail) {
+        Set<Long> skuIds = orders.values().stream().map(SupplyChainOrderDO::getPlatformSkuId)
+                .filter(Objects::nonNull).collect(Collectors.toSet());
+        Map<Long, PlatformSkuDO> skus = skuIds.isEmpty() ? Map.of()
+                : platformSkuMapper.selectBatchIds(skuIds).stream()
+                        .collect(Collectors.toMap(PlatformSkuDO::getId, row -> row));
+        Set<Long> spuIds = skus.values().stream().map(PlatformSkuDO::getSpuId)
+                .filter(Objects::nonNull).collect(Collectors.toSet());
+        Map<Long, PlatformSpuDO> spus = spuIds.isEmpty() ? Map.of()
+                : platformSpuMapper.selectBatchIds(spuIds).stream()
+                        .collect(Collectors.toMap(PlatformSpuDO::getId, row -> row));
+        Set<Long> offerIds = attempts.stream().map(BOrderDO::getOfferId)
+                .filter(Objects::nonNull).collect(Collectors.toSet());
+        Map<Long, SupplierOfferDO> offers = offerIds.isEmpty() ? Map.of()
+                : offerMapper.selectBatchIds(offerIds).stream()
+                        .collect(Collectors.toMap(SupplierOfferDO::getId, row -> row));
+        return attempts.stream().map(attempt -> {
+            SupplyChainOrderDO order = orders.get(attempt.getOrderId());
+            PlatformSkuDO sku = order == null || order.getPlatformSkuId() == null ? null
+                    : skus.get(order.getPlatformSkuId());
+            PlatformSpuDO spu = sku == null || sku.getSpuId() == null ? null : spus.get(sku.getSpuId());
+            SupplierOfferDO offer = attempt.getOfferId() == null ? null : offers.get(attempt.getOfferId());
+            String bizType = order == null || (SupplyChainOrderType.CARD.name().equals(order.getOrderType()) && sku == null)
+                    ? null : OrderViewMappings.bizType(order.getOrderType(),
+                            sku == null ? null : sku.getFulfillmentType(),
+                            spu == null ? null : spu.getProductType());
+            return toView(attempt, orders, suppliers, detail ? failureViews.read(attempt) : null,
+                    bizType, offer == null ? null : offer.getOfferSupplyMode());
+        }).toList();
     }
 
     private Long resolveSingleOrderId(String orderNo, String buyerCode) {
@@ -178,7 +225,8 @@ public class SupplierOrderAdminQueryService {
     }
 
     private static SupplierOrderView toView(BOrderDO attempt, Map<Long, SupplyChainOrderDO> orders,
-                                            Map<Long, SupplierDO> suppliers, OrderFailureViewQuery.View failureClosure) {
+                                            Map<Long, SupplierDO> suppliers, OrderFailureViewQuery.View failureClosure,
+                                            String bizType, String supplyMode) {
         SupplyChainOrderDO order = attempt.getOrderId() == null ? null : orders.get(attempt.getOrderId());
         if (order == null) {
             throw new IllegalStateException("Supplier attempt is missing its platform order: " + attempt.getBOrderNo());
@@ -209,7 +257,7 @@ public class SupplierOrderAdminQueryService {
                 attempt.getCreatedAt(),
                 attempt.getUpdatedAt(),
                 attempt.getStartedAt(),
-                attempt.getCompletedAt(), failureClosure);
+                attempt.getCompletedAt(), failureClosure, bizType, supplyMode);
     }
 
     private static PageResult<SupplierOrderView> emptyPage() {
@@ -258,6 +306,8 @@ public class SupplierOrderAdminQueryService {
             @Schema(description = "B端履约尝试最后更新时间") LocalDateTime updatedAt,
             @Schema(description = "首次开始外部履约时间") LocalDateTime startedAt,
             @Schema(description = "履约尝试进入终态时间") LocalDateTime completedAt,
-            @Schema(description = "失败处置详情；列表为空") OrderFailureViewQuery.View failureClosure) {
+            @Schema(description = "失败处置详情；列表及成功尝试为空") OrderFailureViewQuery.View failureClosure,
+            @Schema(description = "页面业务类型，与平台订单一致；缺少CARD商品事实时为空") String bizType,
+            @Schema(description = "该Offer供货模式（当前合作商品配置），不是订单历史快照") String supplyMode) {
     }
 }
