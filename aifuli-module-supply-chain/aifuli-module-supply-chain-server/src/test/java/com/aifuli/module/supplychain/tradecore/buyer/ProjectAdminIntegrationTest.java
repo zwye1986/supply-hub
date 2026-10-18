@@ -238,6 +238,8 @@ class ProjectAdminIntegrationTest {
             var initialListingPage = listingQuery.page(projectCode, 1, 20).getList();
             assertThat(initialListingPage).hasSize(1);
             var displayRow = initialListingPage.getFirst();
+            // 来源取关联方而非独立结算方；设计见管理端 API 详细设计 §7.2 项目商品。
+            assertThat(displayRow.priceSourceName()).isEqualTo("一级");
             assertThat(displayRow.spuCode()).isEqualTo("SPU_001");
             assertThat(displayRow.spuName()).isEqualTo("电影票");
             assertThat(displayRow.productType()).isEqualTo("MOVIE");
@@ -272,6 +274,7 @@ class ProjectAdminIntegrationTest {
             assertThat(listingPageAfterL2.getFirst().finalPriceCents()).isEqualTo(L1_CENTS);
             assertThat(listingPageAfterL2.getFirst().distPriceCents()).isEqualTo(L2_CENTS);
             assertThat(listingPageAfterL2.getFirst().projectPriceCovered()).isFalse();
+            assertThat(listingPageAfterL2.getFirst().priceSourceName()).isEqualTo("一级");
 
             listings.patchL3(projectCode, listingCode, L3AdjustMode.CUSTOM, 90, 0L, 1L);
             ProjectListingDO afterL3 = listingMapper.selectByCode(listingCode);
@@ -280,6 +283,8 @@ class ProjectAdminIntegrationTest {
             assertThat(version2.getVersionNo()).isEqualTo(2);
             assertThat(version2.getSettlementPriceLevel()).isEqualTo(PriceSource.L3.name());
             assertThat(version2.getPriceSource()).isEqualTo(ListingPriceSource.PROJECT_OVERRIDE.name());
+            assertThat(listingQuery.page(projectCode, 1, 20).getList().getFirst().priceSourceName())
+                    .isEqualTo("福利项目");
             assertThat(listingVersionMapper.selectById(version1Id).getBuyerSettlementUnitPrice())
                     .isEqualTo(L1_CENTS);
 
@@ -431,6 +436,7 @@ class ProjectAdminIntegrationTest {
         assertThat(inlineRow.finalPriceCents()).isEqualTo(9_000L);
         assertThat(inlineRow.priceSource()).isEqualTo(PriceSource.L3.name());
         assertThat(inlineRow.projectPriceCovered()).isTrue();
+        assertThat(inlineRow.priceSourceName()).isEqualTo("行内专属价项目");
         assertThat(context.getBean(ProjectAdminQueryService.class).get(inlineProjectCode).projectPriceSkuCount())
                 .isEqualTo(1);
         var projectPage = context.getBean(ProjectAdminQueryService.class).page(

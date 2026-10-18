@@ -3,9 +3,11 @@ package com.aifuli.module.supplychain.tradecore.catalog.application;
 import com.aifuli.framework.common.pojo.PageParam;
 import com.aifuli.framework.common.pojo.PageResult;
 import com.aifuli.framework.mybatis.core.util.MyBatisUtils;
+import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerDO;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerProductDO;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerProjectDO;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.ProjectListingDO;
+import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerMapper;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerProductMapper;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.BuyerProjectMapper;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.mysql.ProjectListingMapper;
@@ -70,6 +72,7 @@ public class ProjectListingQueryService {
     private static final int DEFAULT_PAGE_SIZE = 20;
 
     private final BuyerProjectMapper projectMapper;
+    private final BuyerMapper buyerMapper;
     private final ProjectListingMapper listingMapper;
     private final ProjectListingVersionMapper listingVersionMapper;
     private final ProjectSkuPricingMapper projectPricingMapper;
@@ -131,15 +134,29 @@ public class ProjectListingQueryService {
         Map<Long, PlatformSpuDO> spus = loadSpus(products.values());
         Map<String, String> typeNames = loadTypeNames(spus.values());
         Map<Long, String> categoryNames = loadCategoryNames(spus.values());
+        String buyerName = loadBuyerName(project, page.getList());
         List<ProjectListingListItem> items = new ArrayList<>();
         for (ProjectListingDO listing : page.getList()) {
             ProductContext product = products.get(listing.getId());
             PlatformSpuDO spu = product == null || product.sku() == null ? null
                     : spus.get(product.sku().getSpuId());
             items.add(toListItem(listing, pricingVersions.get(listing.getId()), product, spu,
-                    typeNames, categoryNames));
+                    typeNames, categoryNames, project.getProjectName(), buyerName));
         }
         return new PageResult<>(items, page.getTotal());
+    }
+
+    /**
+     * 来源名称只取项目关联分销商档案，不按组织等级或历史 L1/L2 编码推测上级。
+     * 同页共享一次名称查询；空页或缺失关联时不查询，档案缺失只令展示名称为空，不改变价格。
+     * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#72-项目商品}。
+     */
+    private String loadBuyerName(BuyerProjectDO project, List<ProjectListingDO> listings) {
+        if (listings.isEmpty() || project.getBuyerId() == null) {
+            return null;
+        }
+        BuyerDO buyer = buyerMapper.selectById(project.getBuyerId());
+        return buyer == null ? null : buyer.getBuyerName();
     }
 
     /**
@@ -249,7 +266,8 @@ public class ProjectListingQueryService {
 
     private ProjectListingListItem toListItem(ProjectListingDO listing, ProjectSkuPricingVersionDO pricingVersion,
                                               ProductContext context, PlatformSpuDO spu,
-                                              Map<String, String> typeNames, Map<Long, String> categoryNames) {
+                                              Map<String, String> typeNames, Map<Long, String> categoryNames,
+                                              String projectName, String buyerName) {
         BuyerProductDO product = context == null ? null : context.product();
         PlatformSkuDO sku = context == null ? null : context.sku();
         PriceBasis basis = product == null ? null : priceSource.resolve(product);
@@ -263,6 +281,8 @@ public class ProjectListingQueryService {
         Long finalPriceCents = genericCovered ? pricingVersion.getDistributionPriceCents()
                 : frozen == null ? null : frozen.getBuyerSettlementUnitPrice();
         boolean covered = genericCovered || frozen != null && PriceSource.L3.name().equals(frozen.getSettlementPriceLevel());
+        // 名称与原项目专属价标记共用同一判断；不以金额是否为空、为零或相等推断来源。
+        // 设计见 docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#72-项目商品。
         return new ProjectListingListItem(
                 listing.getListingCode(),
                 sku == null ? null : sku.getSkuCode(),
@@ -282,6 +302,7 @@ public class ProjectListingQueryService {
                 covered ? finalPriceCents : null,
                 finalPriceCents,
                 genericCovered ? PriceSource.L3.name() : frozen == null ? null : frozen.getSettlementPriceLevel(),
+                covered ? projectName : buyerName,
                 covered,
                 savedOverrides == null ? null : ProjectPricingConfigView.from(savedOverrides),
                 sku == null ? null : sku.getTargetSchemaCode(),
@@ -329,6 +350,8 @@ public class ProjectListingQueryService {
             @Schema(description = "项目通用定价显式覆盖分销价时取当前项目版本分销价；否则旧冻结版本为 L3 时取冻结价，单位 CNY 分") Long projectPriceCents,
             @Schema(description = "有项目通用分销价覆盖时取当前项目版本分销价，否则取旧冻结单价，单位 CNY 分") Long finalPriceCents,
             @Schema(description = "项目分销价覆盖或旧冻结版本的结算层级：L1、L2、L3") String priceSource,
+            @Schema(description = "定价来源名称：项目专属分销价返回当前项目名称，否则返回项目关联分销商名称；对应名称或档案缺失时为空")
+            String priceSourceName,
             @Schema(description = "当前通用项目分销价显式覆盖，或旧冻结版本结算层级为 L3") boolean projectPriceCovered,
             @Schema(description = "当前项目综合定价版本保存的五组继承开关及覆盖规则；无当前版本时为空")
             ProjectPricingConfigView projectPricingConfig,

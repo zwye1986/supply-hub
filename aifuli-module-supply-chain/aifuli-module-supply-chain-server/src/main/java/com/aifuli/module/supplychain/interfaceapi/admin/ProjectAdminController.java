@@ -110,6 +110,7 @@ public class ProjectAdminController {
                   "projectPriceCents": 9800,
                   "finalPriceCents": 9800,
                   "priceSource": "L3",
+                  "priceSourceName": "福利项目",
                   "projectPriceCovered": true,
                   "targetSchemaCode": "VOUCHER_DELIVERY_TARGET",
                   "targetSchemaVersion": 1,
@@ -234,6 +235,7 @@ public class ProjectAdminController {
     @Operation(summary = "分页查询项目商品",
             description = "只返回未移除行。SPU、类型与分类取平台商品主数据，marketPriceCents 取 SKU 市场划线价；"
                     + "projectPricingConfig 为当前项目综合定价版本保存的五组覆盖配置；"
+                    + "priceSourceName 在项目专属分销价时为项目名称，否则为项目关联分销商名称；"
                     + "finalPriceCents 为旧冻结版本单价，distPriceCents 为当前有效 L2。金额单位 CNY 分。",
             responses = @ApiResponse(responseCode = "200", description = "项目商品分页响应",
                     content = @Content(mediaType = "application/json",

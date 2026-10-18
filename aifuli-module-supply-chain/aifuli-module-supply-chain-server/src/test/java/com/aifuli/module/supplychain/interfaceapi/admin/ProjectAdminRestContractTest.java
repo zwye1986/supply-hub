@@ -143,7 +143,7 @@ class ProjectAdminRestContractTest {
         assertThat(propertyNames).contains("spuCode", "spuName", "productType", "productTypeName",
                 "productClassification", "categoryName", "marketPriceCents",
                 "suggestPriceCents", "suggestedSalePriceCents",
-                "platformBasePriceCents", "distPriceCents", "finalPriceCents", "projectPricingConfig");
+                "platformBasePriceCents", "distPriceCents", "finalPriceCents", "priceSourceName", "projectPricingConfig");
     }
 
     /** 验证 Knife4j 能从接口响应一路展开到五组配置及子字段，且文档字段与实际 JSON 一致。 */
@@ -167,8 +167,10 @@ class ProjectAdminRestContractTest {
                 "spuCode", "spuName", "productType", "productTypeName",
                 "productClassification", "categoryName", "marketPriceCents",
                 "suggestPriceCents", "suggestedSalePriceCents", "platformBasePriceCents",
-                "distPriceCents", "projectPriceCents", "finalPriceCents", "priceSource",
+                "distPriceCents", "projectPriceCents", "finalPriceCents", "priceSource", "priceSourceName",
                 "projectPriceCovered", "projectPricingConfig");
+        assertThat(row.getProperties().get("priceSourceName").getType()).isEqualTo("string");
+        assertThat(row.getProperties().get("priceSourceName").getDescription()).contains("项目", "分销商");
         assertThat(row.getProperties().keySet())
                 .containsExactlyInAnyOrderElementsOf(jsonProperties(ProjectListingListItem.class));
         row.getProperties().forEach((name, property) -> assertDescriptions(schemas, row, name));
@@ -250,6 +252,7 @@ class ProjectAdminRestContractTest {
         assertThat(page.get("total").asLong()).isEqualTo(1);
         assertThat(page.get("list").size()).isEqualTo(1);
         JsonNode row = page.get("list").get(0);
+        assertThat(row.path("priceSourceName").asText()).isEqualTo("福利项目");
         assertJsonFields(row, ProjectListingListItem.class);
         JsonNode config = row.get("projectPricingConfig");
         assertJsonFields(config, ProjectPricingConfigView.class);
