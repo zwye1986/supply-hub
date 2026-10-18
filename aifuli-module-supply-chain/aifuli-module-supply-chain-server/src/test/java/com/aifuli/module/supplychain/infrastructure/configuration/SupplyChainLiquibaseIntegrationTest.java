@@ -191,8 +191,10 @@ class SupplyChainLiquibaseIntegrationTest {
                 .containsExactly("app_id", "nonce");
         // 065/066/067分别新增号段、异常命令证据、独立结算方；不把文件末号当作变更集总数。
         // 基线核对见 docs/superpowers/specs/2026-10-15-renyue-qnm-szcard-detailed-design.md#104-t00基线收口修订2026-10-16。
-        // 068只补齐异常命令时间注释，总计70个变更集，业务表和列不增加。
-        assertThat(firstStartup.changeSetCount()).isEqualTo(70L);
+        // 069追加商户额度/调用租约/容量等待三表；不修改历史变更集，累计71个。
+        // 设计：docs/superpowers/specs/2026-10-18-single-step-merchant-quota-design.md#5-数据结构与归属。
+        assertThat(firstStartup.changeSetCount()).isEqualTo(71L);
+        assertThat(firstStartup.tableNames()).contains("sc_supplier_merchant_quota", "sc_supplier_merchant_call_lease", "sc_single_step_capacity_wait");
         assertThat(firstStartup.uniqueIndexes())
                 .contains("sc_instore_payment_flow.uk_sc_instore_flow_order",
                         "sc_instore_channel_user_binding.uk_sc_instore_user_binding_project",
@@ -215,7 +217,9 @@ class SupplyChainLiquibaseIntegrationTest {
                         "sc_fulfillment_acceptance_receipt.uk_sc_fulfillment_receipt_project",
                         "sc_fulfillment_acceptance_receipt.uk_sc_fulfillment_receipt_legacy",
                         "sc_supply_chain_order.uk_sc_order_project_key",
-                        "sc_supply_chain_order.uk_sc_order_legacy_key");
+                        "sc_supply_chain_order.uk_sc_order_legacy_key",
+                        "sc_supplier_merchant_quota.uk_sc_merchant_quota_identity",
+                        "sc_supplier_merchant_call_lease.uk_sc_merchant_call_operation");
         assertThat(firstStartup.indexes())
                 .contains("sc_buyer.idx_sc_buyer_parent_created",
                         "sc_product_category.idx_sc_category_product_type",
@@ -274,15 +278,15 @@ class SupplyChainLiquibaseIntegrationTest {
                         FROM information_schema.COLUMNS
                         WHERE TABLE_SCHEMA = DATABASE()
                           AND TABLE_NAME LIKE 'sc\\_%'
-                        """)).isEqualTo(129L);
-                // 065追加三列时间，066异常命令再追加四列，共311个DATETIME(3)。
+                        """)).isEqualTo(132L);
+                // 069额度2列、租约3列、等待3列时间，累计319个DATETIME(3)。
                 assertThat(queryLong(connection, """
                         SELECT COUNT(*)
                         FROM information_schema.COLUMNS
                         WHERE TABLE_SCHEMA = DATABASE()
                           AND TABLE_NAME LIKE 'sc\\_%'
                           AND DATA_TYPE = 'datetime'
-                        """)).isEqualTo(311L);
+                        """)).isEqualTo(319L);
                 assertThat(queryLong(connection, """
                         SELECT COUNT(*)
                         FROM information_schema.COLUMNS

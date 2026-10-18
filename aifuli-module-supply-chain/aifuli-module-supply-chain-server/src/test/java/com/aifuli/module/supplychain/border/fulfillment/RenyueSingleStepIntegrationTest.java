@@ -52,6 +52,10 @@ class RenyueSingleStepIntegrationTest {
             snapshot.addObject().put("itemId", id).put("itemKey", key).put("providerType", "ENV").put("activeSecretVersion", 1);
         }
         fixture.jdbc.update("UPDATE sc_supplier_connector_version SET credential_slot_id=NULL,credential_set_id=?,credential_item_snapshot=?", set, snapshot.toString());
+        // 只为隔离商户显式配置测试额度，不读取Connector字段或播种生产默认值。
+        fixture.context.getBean(com.aifuli.module.supplychain.tradecore.supply.application.MerchantQuotaService.class)
+                .configure(new com.aifuli.module.supplychain.tradecore.supply.application.MerchantQuotaService.Configure(
+                        com.aifuli.module.supplychain.tradecore.supply.domain.MerchantQuotaPlatform.RENYUE, "fixture", 100, 20, null, 1L, "仁跃本机HTTP隔离夹具"));
         mvc = mvc();
         server.setDispatcher(new Dispatcher() {
             @Override public MockResponse dispatch(RecordedRequest request) {

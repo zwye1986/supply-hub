@@ -14,6 +14,10 @@ import org.springframework.context.annotation.Configuration;
  */
 @Configuration(proxyBeanMethods = false)
 public class SingleStepFulfillmentConfiguration {
+    @Bean PersistentTimerHandler singleStepCapacityWake(ObjectProvider<SingleStepFulfillmentRunner> runner,
+                                                        ObjectProvider<SingleStepFulfillmentLifecycle> lifecycle) {
+        return new Handler(FulfillmentTimerTaskTypes.SINGLE_STEP_CAPACITY_WAKE, runner, lifecycle);
+    }
     @Bean PersistentTimerHandler singleStepQuery(ObjectProvider<SingleStepFulfillmentRunner> runner,
                                                 ObjectProvider<SingleStepFulfillmentLifecycle> lifecycle) {
         return new Handler(FulfillmentTimerTaskTypes.SINGLE_STEP_QUERY, runner, lifecycle);
@@ -36,6 +40,17 @@ public class SingleStepFulfillmentConfiguration {
                 return lifecycle.getObject().preparationFailed(operation.textValue(), 0, true);
             }
             var generation = payload.path("expectedGeneration");
+            if (FulfillmentTimerTaskTypes.SINGLE_STEP_CAPACITY_WAKE.equals(taskType)) {
+                var sequence = payload.path("wakeSequence");
+                if (!generation.isIntegralNumber() || !generation.canConvertToLong() || generation.longValue() < 0
+                        || !sequence.isIntegralNumber() || !sequence.canConvertToLong() || sequence.longValue() <= 0
+                        || !payload.path("action").isTextual()) throw new IllegalArgumentException("容量任务围栏无效");
+                var action = com.aifuli.module.supplychain.border.fulfillment.domain.singlestep.SingleStepAction.valueOf(payload.path("action").textValue());
+                if (!lifecycle.getObject().capacityWakeMatches(operation.textValue(), action, generation.longValue(), sequence.longValue())) return "STALE";
+                return action == com.aifuli.module.supplychain.border.fulfillment.domain.singlestep.SingleStepAction.CREATE
+                        ? runner.getObject().runExecute(operation.textValue(), payload.path("originTraceId").asText(null))
+                        : runner.getObject().runRecovery(operation.textValue(), generation.longValue(), payload.path("originTraceId").asText(null));
+            }
             if (!generation.isIntegralNumber() || !generation.canConvertToLong() || generation.longValue() <= 0) {
                 throw new IllegalArgumentException("单步骤任务缺少合法围栏代次");
             }

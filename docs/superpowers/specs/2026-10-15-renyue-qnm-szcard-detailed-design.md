@@ -65,6 +65,8 @@ AdapterMetadata已增加默认无约束的`validateMappings(statuses, errors)`�
 
 封闭模板至少包含：各家CREATE受理→ACCEPTED非终态；QUERY处理中→ACCEPTED，可靠成功/失败→对应事实；CALLBACK成功/失败→对应事实；未知/手工/不存在的单次协议事实保持非资金终态。§4.5的三次查无单关单由编排层检查历史与计数，不把模板中的NOT_FOUND改成供应商REJECTED。业务phase仍用CREATE/QUERY/CALLBACK，端点和原始字段单独留在事实内。
 
+**商户共享限额方案A确认（2026-10-18）**：用户选择独立商户配置 + MySQL共享准入 + PersistentTimer持久等待，不采用Redis准入或从多个Connector版本猜当前限额。具体身份、算法、租约、锁序及等待合同见[单步直充商户共享限额与持久等待设计](2026-10-18-single-step-merchant-quota-design.md)；该细化稿已获用户完整批准，后端配置/准入/等待已本地实现，2026-10-19组合2500项单测/架构及223项所选集成/契约通过；第20～22项为PARTIAL，不将后端子集通过等同整体验收。生产额度仍无默认值，不解除供应商准入门禁。
+
 ### 2.3 凭据
 
 - RENYUE：CREDENTIAL_SET，键恰为merchantKey/privateKey；merchantAccount是MerchantNo。
@@ -163,6 +165,8 @@ T02验证使用测试专用`TEST_SINGLE_STEP`显式启用；生产Metadata的默
 直接复用Operation已有execution_generation、execution_lease_until、recovery_count、recovery_deadline_at、business_send_possible_at、side_effect_free、next_recover_at、version；复用现有恢复索引、Inbox/Timer/Outbox、BOrder金额与终结原因字段，不重复建同列索引/资金表。
 
 首期不预定新增业务表或列；检查点V1承载新增冻结内容。新适配器/原因/任务码使用集中常量，检查其是否受现有CHECK约束。若确需扩展CHECK或存储预算，先更新本节字段COMMENT/DTO、按实际末尾追加Liquibase，再通过空库/旧库迁移测试；当前067之后的编号仅在实施时确定。不得修改历史054～067或执行生产迁移。
+
+**方案A存储扩展提案（2026-10-18）**：共享限额不能继续仅靠原Operation字段表达。新细化设计拟增加`sc_supplier_merchant_quota`、`sc_supplier_merchant_call_lease`、`sc_single_step_capacity_wait`三表，配置/租约归tradecore.supply，等待归border.fulfillment；详见[限额设计§5](2026-10-18-single-step-merchant-quota-design.md#5-数据结构与归属)。实施前确认末尾068，本批追加069迁移，本段明确覆盖上文“不预定新增业务表”的早期范围，不修改既有业务表/检查点或历史变更集。该扩展已获本地实施批准，不作为执行共享迁移授权。
 
 ## 4. 共享执行与恢复接口（FR-07～FR-09/12/15/16）
 

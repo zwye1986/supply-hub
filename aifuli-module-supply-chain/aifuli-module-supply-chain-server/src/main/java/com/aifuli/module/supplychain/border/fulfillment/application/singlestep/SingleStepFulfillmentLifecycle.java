@@ -56,6 +56,8 @@ public class SingleStepFulfillmentLifecycle {
     private final SupplierOrderLifecycle supplierOrders;
     private final OutboxEventRepository outbox;
     private final SingleStepCallbackInbox callbackInbox;
+    private final com.aifuli.module.supplychain.tradecore.supply.application.MerchantQuotaService merchantQuota;
+    private final SingleStepCapacityWaitService capacityWait;
 
     /** CREATE先竞争频控，锁后失败必须抛出回滚，不能留下孤立SEND_POSSIBLE。 */
     public SingleStepExecutionPermit claim(String operationNo, SingleStepAction action, long expectedGeneration,
@@ -74,6 +76,10 @@ public class SingleStepFulfillmentLifecycle {
         }
         long anchor = System.nanoTime();
         var now = clock.now();
+        if (capacityWait.pending(op.getId(), action, expectedGeneration, now)) {
+            // CREATE频控边界已在本事务暂写，必须回滚，不能提交一个并未获准发送的holder/marker。
+            throw new com.aifuli.module.supplychain.tradecore.supply.application.MerchantQuotaService.CapacityUnavailable(capacityNext(op.getId()));
+        }
         var contract = runtime.frozen().recoveryContract();
         if (action == SingleStepAction.CREATE) {
             if (op.getBusinessSendPossibleAt() != null || expectedGeneration != 0 || runtime.progress().trustedExists()) {
@@ -94,8 +100,16 @@ public class SingleStepFulfillmentLifecycle {
             if (now.isBefore(op.getNextRecoverAt())) return null;
             op.setRecoveryCount(Math.incrementExact(op.getRecoveryCount()));
         }
+        var leaseUntil = now.plusNanos(contract.executionLeaseMs() * 1_000_000L);
+        var metadata = connectors.singleStepMetadata(locked.bOrder().getConnectorVersionId());
+        if (metadata.merchantQuotaPlatform() != null) {
+            var config = connectors.resolveForExistingOrder(runtime.frozen()).connector();
+            merchantQuota.admit(metadata.merchantQuotaPlatform(), config.merchantAccount(), operationNo,
+                    Math.incrementExact(expectedGeneration), leaseUntil);
+        }
+        capacityWait.complete(op.getId());
         op.setExecutionGeneration(Math.incrementExact(expectedGeneration));
-        op.setExecutionLeaseUntil(now.plusNanos(contract.executionLeaseMs() * 1_000_000L));
+        op.setExecutionLeaseUntil(leaseUntil);
         op.setNextRecoverAt(null);
         op.setStatus(SupplierOrderOperationStatus.EXECUTING.getCode());
         var progress = runtime.progress();
@@ -104,6 +118,41 @@ public class SingleStepFulfillmentLifecycle {
         schedule(FulfillmentTimerTaskTypes.SINGLE_STEP_WATCHDOG, op, op.getExecutionLeaseUntil(), originTraceId);
         return new SingleStepExecutionPermit(runtime.frozen().binding(), action, op.getExecutionGeneration(),
                 op.getExecutionLeaseUntil(), anchor + Duration.between(now, op.getExecutionLeaseUntil()).toNanos());
+    }
+
+    /** 认领回滚后重新校验原单才可靠接管等待，不修改供应商事实或原恢复到期点。设计见商户共享限额设计§7。 */
+    public String waitForCapacity(String operationNo, SingleStepAction action, long generation, LocalDateTime retryAt, String traceId) {
+        var locked = frequency.lockForResult(operationNo);
+        if (locked == null || terminal(locked.operation()) || locked.operation().getExecutionGeneration() != generation) return "STALE";
+        var runtime = runtime(locked); var op = locked.operation(); var now = clock.now();
+        if (runtime.successEvidence() != null) return settle(locked, runtime, runtime.successEvidence(), false, now, traceId);
+        if (cases.selectActiveByOperationId(op.getId()) != null || !Boolean.TRUE.equals(locked.bOrder().getActiveFlag())) return "STALE";
+        if (action == SingleStepAction.CREATE) {
+            if (generation != 0 || op.getBusinessSendPossibleAt() != null) return "STALE";
+        } else {
+            if (!active(locked) || op.getBusinessSendPossibleAt() == null || op.getNextRecoverAt() == null
+                    || op.getStatus() == SupplierOrderOperationStatus.EXECUTING.getCode()) return "STALE";
+            if (!now.isBefore(op.getRecoveryDeadlineAt())) { capacityWait.complete(op.getId()); manual(locked, runtime, Fact.DEADLINE_REACHED, now); return "MANUAL"; }
+            if (op.getRecoveryCount() >= runtime.frozen().recoveryContract().maxQueryClaims()) { capacityWait.complete(op.getId()); manual(locked, runtime, Fact.BUDGET_EXHAUSTED, now); return "MANUAL"; }
+        }
+        capacityWait.record(op, action, retryAt, traceId);
+        return "CAPACITY_WAITING";
+    }
+
+    /** 容量Handler与采购方重复请求共享未到期护栏，不能绕过持久等待。 */
+    public boolean capacityPending(String operationNo, SingleStepAction action, long generation) {
+        var locked = frequency.lockForResult(operationNo);
+        return locked != null && capacityWait.pending(locked.operation().getId(), action, generation, clock.now());
+    }
+
+    public boolean capacityWakeMatches(String operationNo, SingleStepAction action, long generation, long sequence) {
+        var locked = frequency.lockForResult(operationNo);
+        return locked != null && !terminal(locked.operation()) && locked.operation().getExecutionGeneration() == generation
+                && capacityWait.matches(locked.operation().getId(), action, generation, sequence, clock.now());
+    }
+
+    private LocalDateTime capacityNext(long operationId) {
+        return capacityWait.nextWakeAt(operationId);
     }
 
     /** 发送前核当前代与原lease；时间只扣不加，不靠此检查声称取消远端已发送请求。 */
@@ -322,6 +371,7 @@ public class SingleStepFulfillmentLifecycle {
         if (watchdog) {
             if (locked.operation().getBusinessSendPossibleAt() != null) return "STALE";
             if (clock.now().isBefore(locked.operation().getCreatedAt().plusMinutes(FulfillmentTimerTaskTypes.SINGLE_STEP_PREPARATION_WATCHDOG_MINUTES))) return "NOT_DUE";
+            if (capacityWait.active(locked.operation().getId(), expectedGeneration)) return "CAPACITY_WAITING";
             if (locked.queue() != null && locked.queue().getBlockedReason() == null) {
                 if (locked.queue().getHolderEntryId() != null && !RechargeFrequencyLifecycle.isCurrentHolder(locked)) return "FREQUENCY_WAITING";
                 var head = frequencyEntries.selectFirstWaiting(locked.queue().getId());
@@ -460,6 +510,7 @@ public class SingleStepFulfillmentLifecycle {
         }
         var completed = new SingleStepRuntimeCheckpoint(SCHEMA_VERSION, runtime.frozen(), runtime.progress(), runtime.successEvidence(), evidence);
         var op = locked.operation();
+        capacityWait.complete(op.getId());
         op.setExecutionLeaseUntil(null); op.setNextRecoverAt(null);
         save(op, completed, now);
         if (!supplierOrders.completeSingleStep(locked, completed, notFoundClosure, traceId)) {
@@ -474,6 +525,7 @@ public class SingleStepFulfillmentLifecycle {
     }
     private void manual(LockedExecution locked, SingleStepRuntimeCheckpoint runtime, Fact reason, LocalDateTime now) {
         var op = locked.operation();
+        capacityWait.complete(op.getId());
         if (cases.selectActiveByOperationId(op.getId()) == null) {
             String ref = "SINGLE_STEP:" + reason + ":" + op.getOperationNo();
             cases.insert(FulfillmentExceptionCaseDO.builder().caseNo(numbers.next(BusinessNoPrefixes.CASE))

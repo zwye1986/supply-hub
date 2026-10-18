@@ -22,6 +22,12 @@ public interface AdapterMetadata {
         return null;
     }
 
+    /** 单步商户额度平台由代码映射；非单步旧协议不会调用，隔离测试可显式选择。
+     * 设计：docs/superpowers/specs/2026-10-18-single-step-merchant-quota-design.md#41-额度域。 */
+    default com.aifuli.module.supplychain.tradecore.supply.domain.MerchantQuotaPlatform merchantQuotaPlatform() {
+        return com.aifuli.module.supplychain.tradecore.supply.domain.MerchantQuotaPlatform.forAdapter(adapterType());
+    }
+
     /** 非秘密扩展参数的封闭 Schema，默认沿用连接器 Schema。 */
     default String extraConfigSchemaResource() { return connectorSchemaResource(); }
 

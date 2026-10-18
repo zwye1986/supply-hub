@@ -17,6 +17,8 @@ public final class FulfillmentTimerTaskTypes {
     /** 新单步骤同代补查及执行租约看门狗，详见三家详细设计§4.7。 */
     public static final String SINGLE_STEP_QUERY = "SINGLE_STEP_QUERY";
     public static final String SINGLE_STEP_WATCHDOG = "SINGLE_STEP_WATCHDOG";
+    /** 商户容量等待独立序次，不改供应商补查事实；详见商户共享限额设计§7。 */
+    public static final String SINGLE_STEP_CAPACITY_WAKE = "SINGLE_STEP_CAPACITY_WAKE";
 
     /** 新单步骤受理事务的准备定位任务。
      * 设计：docs/superpowers/specs/2026-10-15-renyue-qnm-szcard-detailed-design.md#43-查询看门狗与频控协作。 */

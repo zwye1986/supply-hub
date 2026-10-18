@@ -360,6 +360,8 @@ class SingleStepFrozenConfigurationIntegrationTest {
             com.aifuli.module.supplychain.border.fulfillment.application.singlestep.SingleStepFulfillmentLifecycle.class,
             com.aifuli.module.supplychain.border.fulfillment.application.singlestep.SingleStepCallbackInbox.class,
             com.aifuli.module.supplychain.border.fulfillment.application.singlestep.SingleStepFulfillmentRunner.class,
+            com.aifuli.module.supplychain.border.fulfillment.application.singlestep.SingleStepCapacityWaitService.class,
+            com.aifuli.module.supplychain.tradecore.supply.application.MerchantQuotaService.class,
             com.aifuli.module.supplychain.infrastructure.security.FrozenCredentialSlotResolver.class})
     static class Config {
         @Bean AdapterMetadataRegistry testRegistry() { return new AdapterMetadataRegistry(List.of(new QnmGameOrderV1Metadata(), new TestMetadata())); }
