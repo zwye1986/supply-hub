@@ -523,3 +523,38 @@ mvn -pl aifuli-module-supply-chain/aifuli-module-supply-chain-server -am \
 **交付与剩余**：§14资金基线已中文提交；用户后续明确授权本批回调公共核心随本次中文提交固定，无推送或部署。Inbox与内部认证后事实应用已接线，成功独立保护，结果消费/资金/终态事件原子提交；三家HTTP协议认证、原格式ACK、网关安全及实机重投仍未接线/未验收，生产Metadata保持关闭。C-04第24项仍PARTIAL，商户总限额及逐家准入门禁不关闭；未跑全量MySQL集成，到店两项继续延期。不接通知渠道、不操作共享库或真实供应商。
 
 **提交前复验／17:44／PASS**：Codec23、主架构31、回调真实MySQL集成16，合计70项，失败/错误/跳过均0，`verify`退出0。日志`.amp/in/artifacts/t04-callback-before-commit.log`；本次为提交前定向复验，不冒充重新执行2461/250组合门禁，也不重复加总测试项。
+
+## 16. T05独立向量核验与密码基础（2026-10-18）
+
+在同一`Dev-1031`工作树从已提交回调核心继续。先核原附件，再依DDD§5.1.1实现不依赖未决字段集的密码基础。已发现创建/查询回执示例复用旧请求密文、回调示例单号不匹配；不能以卡管自签自验填补C-03，HTTP/生产注册保持关闭。
+
+- [x] **A：独立取证**。以Python cryptography读取现有附件，仅输出字段名/相等布尔值和源SHA-256，核请求固定签名、PHP回执正向对照及三种示例；不输出秘密、目标或完整明文。复现脚本与结果保存在`.amp/in/artifacts/renyue-vector-audit.{py,json}`。源附件不迁入Git，不调用真实供应商。
+- [x] **B：密码入口RED**。新增`T/supplieradapter/renyue/RenyueProtocolTest.java`和纯合成资源`src/test/resources/supply-chain/renyue/synthetic-crypto-vector.json`，向量用独立Python按固定规范串生成，不调用生产实现。新增可编译`J/supplieradapter/renyue/RenyueProtocol.java`桩：`signRequest(Map<String,String>,ResolvedCredentialMaterial)`返回空签名、`decryptReceipt(String,ResolvedCredentialMaterial)`返回空数组。运行下述定向命令，确认固定签名/跨块明文断言失败，而非编译失败。
+- [x] **C：最小实现GREEN**。按DDD§5.1.1实现SHA256withRSA请求签名与有界RSA分段解密。正例使用含中文/前后空格/`+&=`的原值和排序不对称字段；反例区分先URL编码、trim、大小写归一化、MIME忽略垃圾字符、固定错误块宽或只解第一块、错误密钥和后续块损坏。异常不含原输入，不创建已认证业务事实；凭据由现有可关闭材料持有，不注册Metadata或Adapter。
+- [x] **D：验证与实录**。定向GREEN后执行§4命令A的供应链全部单测/架构，核新XML，不把历史2461/250计为本轮执行。不改HTTP/事务/安全/资金，故不以本切片重跑全部MySQL门禁；保持全量集成未复验、C-04第24项PARTIAL、两项到店延期及本批未提交、未推送、未部署的交付边界。将独立核验结果、RED/GREEN、实际命令及剩余C-03问题写入`docs/集成测试.md`，请求确认当前三种回执合同及供应商脱敏向量，不猜测接线。
+
+定向命令（JDK21；各轮日志分别保存于`.amp/in/artifacts/renyue-crypto-{red,green}.log`）：
+
+```bash
+mvn -pl aifuli-module-supply-chain/aifuli-module-supply-chain-server -am \
+  -Dtest=RenyueProtocolTest -Dsurefire.failIfNoSpecifiedTests=false test
+```
+
+本节只推进T05密码基础，不标T04 HTTP或T05闭环完成；签名与解密是技术结果，不构成供应商事实认证或资金释放授权。
+
+**验证结果／19:31／PASS**：可编译空实现RED为16次执行、16断言失败、0错误；实现后定向16项通过，随后补强同2048位错误私钥及1MiB上限等值正例。最终完整供应链单测/架构`test`退出0、BUILD SUCCESS，API125、server2352共2477项（含仁跃16），失败/错误/跳过均0，耗时59.704秒；250个实际运行类逐一核新XML并保全于`.amp/in/artifacts/renyue-crypto-reports/`及`summary.json`，完整日志`renyue-crypto-unit-regression.log`。编译仍有既有Druid废弃桩的6条警告，不改变该无关测试。全量MySQL与所选250项集成/契约本轮未重跑，不沿用旧结果宣称此次已执行。
+
+**阻断与交付**：无争议密码基础完成，仅本地未提交。C-03仍缺当前CREATE/QUERY回执字段集及逐字节一致的供应商向量、比较规则和回调失败重投合同，C-02仍缺逐家可信零交付失败依据；不能将解密成功直接标VERIFIED或据状态3自动释放。HTTP/网关规则、仁跃Metadata/Adapter及T05端到端样板尚未接线，生产三家新路径继续关闭；需取得协议确认后继续，不修改共享库、不发真实请求、不接通知、不推送或部署。
+
+## 17. 仁跃只接直充与请求装配（2026-10-18）
+
+用户再次限定仁跃不接卡券、只对照cardshop直充；范围见SRS§4.2、实现合同见DDD§5.1.2。保留前批未提交密码基础，原工作树继续；不改cardshop、不注册生产适配器、不扩展QQ/OTHER。卡券材料不作为阻断，已确定的直充请求装配继续实施；直充回执矛盾和供应商重投保证不伪装成已解决。
+
+- [x] **A：核真实直充调用链及历史**。只读核`RenyueConstants`、`RenyueSupplierTradeServiceImpl`、`RenyueCrypto`、`RenyueCallbackApi`和直充提交；请求取值确认后先更新SRS§4.2和DDD§5.1.2，再动实现。
+- [x] **B：请求入口RED**。扩展`T/supplieradapter/renyue/RenyueProtocolTest.java`，经公开`buildRequest(OperationTicket,Instant)`断言创建九字段、查询四字段和固定原文签名、884分/100分/大整分精确格式、毫秒时刻转秒、不同外部号不能替代原billno、恶意extra不能覆盖，以及卡券/查资产/错步骤/非单份/缺价/非CNY拒绝。先加返回空Map的可编译桩，定向运行确认断言失败。
+- [x] **C：最小GREEN**。只在已有`J/supplieradapter/renyue/RenyueProtocol.java`装配Map，封闭操作/步骤，投影冻结字段，以`BigDecimal.valueOf(price,2).toPlainString()`定价、Instant.getEpochSecond()定时、现有signRequest签原值并返回Map.copyOf；不合并extra、不关闭材料、不发HTTP、不输出认证事实。
+- [x] **D：验证与实录**。沿用§16定向命令与完整供应链单测/架构命令，日志分别为`.amp/in/artifacts/renyue-direct-request-{red,green,regression}.log`；检查实际新XML与diff，将本轮结果、未执行HTTP/MySQL和未提交/未推送边界记入`docs/集成测试.md`。不沿用旧2477项充当本轮执行，不将T04/T05勾为整体完成。
+
+**验证／20:34／PASS**：RED执行33项，新增17项断言失败、错误0，原密码16项仍通过；GREEN定向33项全通过，退出0。随后完整供应链单测/架构BUILD SUCCESS、退出0，API125+server2369=2494项，失败/错误/跳过均0，250类，耗时51.060秒；按日志实际运行类核新XML，保全于`.amp/in/artifacts/renyue-direct-request-reports/summary.json`及对应报告。无新HTTP Controller、Adapter/Metadata、网关/安全或资金改动，未跑HTTP/集成/契约/MySQL，不宣称闭环完成。所有变更仍仅本地未提交、未推送、未部署、未真实外呼；三家生产新路径关闭，C-04第24项PARTIAL不变。
+
+**提交前复验／20:52／PASS**：按用户要求准备中文本地提交；原认证后回调核心已在父提交保存，本次增量是仁跃直充请求与密码基础，不能描述为HTTP回调闭环完成。完整供应链单测/架构重新执行2494项/250类，失败/错误/跳过均0，BUILD SUCCESS、退出0；日志`.amp/in/artifacts/renyue-direct-before-commit.log`与逐类XML核对汇总`renyue-direct-before-commit-summary.json`。未重跑集成/契约或MySQL，不新增真实调用、推送或部署授权。

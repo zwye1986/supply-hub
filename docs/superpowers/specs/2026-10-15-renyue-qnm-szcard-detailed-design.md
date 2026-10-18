@@ -301,6 +301,32 @@ ReturnSign是供应商用商户公钥加密的回执，商户私钥RSA/ECB/PKCS1
 
 AgreedPrice只能精确分报价；例如884分传8.84，不自行将8.845元舍入。仁跃文档默认商户单号不做重复校验，因此NONE；只有独立合同评审才能提升幂等能力。本轮不接余额、折扣目录与专用mobileCharge。
 
+#### 5.1.1 独立向量核验与密码基础切片（2026-10-18）
+
+进入T04 HTTP与T05闭环前，已用独立于Java实现的Python cryptography离线核验原附件（SHA-256为`8bfac7dfe6c30bc1d9c9842e98371f6ec7fdae0a6b8b5ccf6004b3269726eb64`），未访问供应商。附件测试公私钥配对、2024请求固定签名及PHP回执与其声明明文均验证通过，构成核验程序的正向对照；不是所有示例均无效。
+
+- 创建成功示例与查询成功示例的ReturnSign逐字节相同，解密均为旧创建请求字段，包含`FaceValue/CallbackUrl/TimesTamp`，不是查询的`RegState/ThirdOrderNo`短字段集。不能据此验证当前创建回执的排除项或查询合同，亦不能自动兼容旧拼写。
+- 回调成功示例可解密，但明文`OrderNo`与示例JSON不相等；同附件Java示例给出的预期单号与该密文相符。可确认RSA解密和回调字段集合，不得将不匹配的JSON当作双号校验成功向量。
+- 卡管测试中的创建/查询回执由其自己的`build…Plaintext`加密生成，能说明实现意图，不是独立供应商响应。线上短字段集、大小写比较、当前原始报文与重投合同仍须C-03补证；创建/查询失败的零交付依据仍须C-02，不能因状态3自动释放。
+
+因此先落实无争议的密码基础，不猜测上述业务合同：新增`J/supplieradapter/renyue/RenyueProtocol.java`，只提供`signRequest(Map<String,String>, ResolvedCredentialMaterial)`与`decryptReceipt(String, ResolvedCredentialMaterial)`。前者仅按§5.1非空原始值ASCII字段名排序、排除SignSecret/ExpandParams/MobileNo，追加merchantKey，以PKCS#8 RSA私钥执行SHA256withRSA并输出Base64；不做URL编码、金额转换或任何状态分类。材料键集中为merchantKey/privateKey，不投影到appSecret，不接受入参伪造MerchantKey。
+
+解密只接受有界Base64（最多1MiB，排版空白限ASCII空格、TAB、CR、LF），按实际RSA模数字节数逐块`RSA/ECB/PKCS1Padding`解密，拒绝非法字符、非整块及坏padding。返回调用方拥有的明文字节，调用方必须finally擦除；不返回“已认证”事实、不猜字段或大小写策略，也不提供公钥加密生产接口。接管材料仍由Ticket/调用方关闭，临时凭据副本、UTF-8密钥字节、DER、分段明文工作区在正常/异常退出均擦除；不宣称Java密钥对象或不可变String可立即擦除。类无日志、Spring注册、HTTP或DAL依赖，错误说明固定且保留不含输入原文的原因。
+
+测试使用单独Python生成的纯合成密钥、固定规范串/签名及跨块回执，通过公开密码入口核对结果；不把供应商附件中的测试私钥或实际目标复制进Git。覆盖`+ & =`、中文/空格原值、空值排除、签名前编码差异、请求排序与回执原字节不同职责，以及截断/错误密钥/垃圾Base64/半途解密失败。合成向量验证算法与编码，不替代C-03供应商合同。证据及复现命令写入`docs/集成测试.md`；HTTP Controller、服务/网关POST规则、Metadata/Schema、Adapter与资金入口均不在本切片启用，三家生产新路径继续关闭。
+
+#### 5.1.2 仅直充范围与请求装配（2026-10-18）
+
+用户再次确认不接仁跃卡券，仅对照cardshop直充。已只读核对卡管`RenyueConstants`、`RenyueSupplierTradeServiceImpl`、`RenyueCrypto`、`RenyueCallbackApi`及直充实现提交`d7ce940f`：普通创建`/api/v2/getOrderRechargeInfo`、查询`/api/v2/getCardInquiryInfo`、form回调及纯文本success/fail确有实现；提交说明记载创建/查询回执按线上实测调整。这是代码与提交来源，不冒充本中台已执行真实联调；卡券/卡密/取券/核销/余额及专用mobileCharge不纳入接口或验收。
+
+先在已有`RenyueProtocol`增加`buildRequest(OperationTicket, Instant)`公开纯入口，返回带SignSecret的不可变原始字段Map，不新增第二个Builder/HTTP客户端。只接受FULFILL+SEND和QUERY_ORDER+QUERY_ORDER，拒绝SEND_KM、查资产、取券等其它步骤；无调用供应商、状态解释或资金副作用。时间取调用方传入Instant的epochSecond，不在重放中偷偷读取当前配置；真正执行器以后必须在实际创建/查询尝试时提供时间，不把测试固定时间作为生产值。
+
+- 创建严格投影§5.1九个字段；查询严格投影四个字段，不携手机号、商品、供价或仁跃单号。商户单号始终取billno，不以externalOrderNo代替。忽略Ticket.extraParameters，不让其覆盖冻结身份、价格、目标、回调或签名，也不透传卡券参数。
+- 创建数量必须1，供价非空非负且币种为Money.CURRENCY_CNY；用`BigDecimal.valueOf(minorUnits, 2).toPlainString()`精确输出元（884→8.84、100→1.00），不用浮点、不舍入、不读取当前商品价格。商户、SKU、手机号及回调不能为空。MOBILE身份/格式及受保护目标由§3.2原单Ticket工厂认证，不在协议层读取DAL或另造目标Schema；协议入口不能宣称给任意字符串贴上MOBILE资格。
+- 先以原始字段调用已有signRequest，再由后续受预算HTTP边界做一次表单编码；本切片不提前URL编码、不释放/关闭由Ticket持有的凭据，调用方继续try-with-resources。字段Map含充值目标，仅允许短期出站消费，不得写日志或持久为普通JSON。
+
+用现有合成密钥从公开入口测试确切字段集、秒/毫秒差异、原单号/外部号差异、分/元、特殊字符未预编码、额外字段不能覆盖及非直充步骤拒绝。签名期望串在测试人工固定，独立公钥验签，不调用生产canonical构造期望。先RED再GREEN，随后重跑供应链单测/架构；不因请求装配通过就关闭T04 HTTP、T05闭环或C-03，也不把回调重投次数猜成卡管已证明的供应商保证。
+
 ### 5.2 QNM_GAME_ORDER_V1（开发期调整为USERKEY合同）
 
 创建POST表单`/GameOrder/Send`；原单查询`/GameOrder/Query`。公共字段userid←merchantAccount、userkey←单槽材料、time←毫秒；创建productid、billno、number=1、account、backurl。查询按卡管合同携原billno；不凭习惯把orderno替代billno，正式可选字段需确认向量。
