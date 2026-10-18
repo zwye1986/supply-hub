@@ -149,6 +149,13 @@ spring:
               predicates:
                 - Path=/callbacks/suppliers/huasheng/{connectorVersionId}
                 - Method=POST
+            # 仁跃临时本地合同仅放行单版本 POST，原样转发，不扩宽 callbacks/**。
+            # 设计见 docs/superpowers/specs/2026-10-15-renyue-qnm-szcard-detailed-design.md#513-临时本地认证与http闭环合同2026-10-18用户批准。
+            - id: supply-chain-renyue-callback
+              uri: "${AIFULI_GATEWAY_SUPPLY_CHAIN_URI:grayLb://supply-chain-server}"
+              predicates:
+                - Path=/callbacks/suppliers/renyue/{connectorVersionId}
+                - Method=POST
           x-forwarded:
             prefix-enabled: false # 避免 Swagger 重复带上额外的 /admin-api/system 前缀
           default-filters:

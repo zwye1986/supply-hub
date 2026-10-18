@@ -37,6 +37,9 @@ public class SupplyChainSecurityConfiguration {
                 // 华昇供应商回调端点免除用户登录token前置要求，但必须通过华昇冻结版本认证，认证失败关闭。
                 // 详见 docs/superpowers/specs/2026-10-09-huasheng-type201-production-closure-design.md#81-冻结身份认证
                 registry.requestMatchers(HttpMethod.POST, "/callbacks/suppliers/huasheng/**").permitAll();
+                // 仁跃仅放行一个版本路径段的POST，原单冻结回执认证由应用入口执行，不放行整个回调前缀。
+                // 设计见 docs/superpowers/specs/2026-10-15-renyue-qnm-szcard-detailed-design.md#513-临时本地认证与http闭环合同2026-10-18用户批准
+                registry.requestMatchers(HttpMethod.POST, "/callbacks/suppliers/renyue/{connectorVersionId}").permitAll();
                 registry.requestMatchers("/v3/api-docs/**").permitAll()
                         .requestMatchers("/webjars/**").permitAll()
                         .requestMatchers("/swagger-ui").permitAll()

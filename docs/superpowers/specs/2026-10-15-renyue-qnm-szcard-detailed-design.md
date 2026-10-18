@@ -327,6 +327,28 @@ AgreedPrice只能精确分报价；例如884分传8.84，不自行将8.845元舍
 
 用现有合成密钥从公开入口测试确切字段集、秒/毫秒差异、原单号/外部号差异、分/元、特殊字符未预编码、额外字段不能覆盖及非直充步骤拒绝。签名期望串在测试人工固定，独立公钥验签，不调用生产canonical构造期望。先RED再GREEN，随后重跑供应链单测/架构；不因请求装配通过就关闭T04 HTTP、T05闭环或C-03，也不把回调重投次数猜成卡管已证明的供应商保证。
 
+#### 5.1.3 临时本地认证与HTTP闭环合同（2026-10-18用户批准）
+
+用户批准采用cardshop当前直充字段集完成本地隔离闭环；供应商自洽向量、比较规则和重投实测仍是发布门禁，不据此关闭C-02/C-03。创建回执取本次请求字段并排除CallbackUrl/SignSecret/ExpandParams/MobileNo；查询只取RegState和原ThirdOrderNo；回调只取OrderNo/RechargeAccount/RechargeStatus/StoreNo，三者均按ASCII字段排序并追加MerchantKey。解密结果按UTF-8原始字节精确比较，不trim/casefold、不猜旧字段集；临时数组finally擦除。认证前不输出可信状态；未知/非法报文不伪造NOT_FOUND，FAILURE不授予zeroDeliveryConfirmed，金额不取未认证扩展字段，实报缺失保持PENDING。
+
+仁跃Adapter实现带单调截止的OperationExecutorPort，必须消费经工厂认证的原冻结检查点/时限，以SingleStepHttpCallFactory执行一次form POST，响应最多1MiB、JSON深度16、拒绝重复键与尾随正文。CREATE的1000仅受理，QUERY的01/02/03/04分别处理中/成功/失败/人工未知；非1000、未知状态及非成功HTTP均不冒充失败或查无单。回执不符分类AUTHENTICATION_FAILED、原目标/已绑定外部号不符分类IDENTITY_CONFLICT，安全异常不走普通未知补查。物理外呼仅记录一次request和一个终止摘要，日志不含目标/原文/凭据；不注册生产Metadata/Schema或开放新供给，仅测试Metadata选择仁跃合同。
+
+短回执不覆盖响应OrderNo/金额，不能用这两个未认证扩展首次绑定外部单号或结算金额；只能保留先前已认证外部号，首次外部号由四字段已认证回调建立。格式损坏/非成功HTTP只允许`UNVERIFIED + RESPONSE_UNKNOWN + RESULT_UNKNOWN`且无金额、资产、零交付证据的窄组合按CREATE 180秒、QUERY 600秒补查原单；该组合不产生可信存在/成功证据，也不能累计NOT_FOUND。认证失败/身份冲突继续转Case停普通恢复。可信QUERY 04使用`EXISTS_UNKNOWN + MANUAL_REQUIRED`，仅当前代可停止普通查询，旧代只能留下可信存在观察，不能抢占新代；沿用RESPONSE_UNKNOWN事实标签并以MANUAL状态/Case区别人工接管。
+
+回调由固定仁跃Controller委派事务外应用入口：限制读取1MiB，仅UTF-8 application/x-www-form-urlencoded，拒绝重复/未知字段、无效UTF-8及查询串参与认证。以路径版本+StoreNo有限定位原BOrder及唯一FULFILL/SEND Operation，要求已提交CREATE marker；通过现有Ticket工厂核完整原单/冻结配置/凭据/目标，再由仁跃解析器认证双号及目标，调用§7.7内部入口。CALLBACK不伪造QUERY资格、不消耗认领预算，TimeStamp仅为传输字段且不做安全时间窗。事务成功提交或已可靠接管重复/冲突后才ACK；结果失败仍保留独立成功证据。
+
+仁跃入口使用既有TraceFilter建立的MDC平台traceId传递审计/结果事件，不重新读取可缺省的供应商Header导致状态日志NOT NULL失败，也不以Agent编号替换平台编号。端点不另造编号或修改共享TraceFilter；HTTP测试带真实过滤器验证无上游Header也与响应trace-id一致。未安装过滤器的独立测试入口只允许空串而非null，不冒称获得真实来源关联。
+
+**失败响应按用户最新要求覆盖§6建议和此前fail提案**：进入仁跃回调端点的处理失败统一HTTP 200、application/json、正文仅`{"code":"稳定错误码","message":"固定安全信息"}`，不包CommonResult，不回显异常、充值账号或报文。错误码为INVALID_CALLBACK（格式/版本参数）、CALLBACK_NOT_FOUND（原单未找到）、AUTHENTICATION_FAILED（回执不符）、IDENTITY_CONFLICT（双号/目标不符）、CALLBACK_PROCESSING_FAILED（材料/数据库/事务等故障）。成功仍为HTTP 200、text/plain、逐字节success，无换行/BOM。GET/额外路径不属于回调处理失败，不免登录、不扩宽路由；网关设施层尚未到达端点的故障不伪装成已处理ACK。没有供应商重投次数或间隔保证，HTTP 200错误JSON不能记为业务成功。
+
+**接续审查补充（2026-10-18）**：仁跃Controller是本进程回调异常的终结责任边界。封闭回调拒绝和`ServiceException`均只记录单行WARN、不附堆栈；业务异常仍映射固定`CALLBACK_PROCESSING_FAILED`，不得透传其原始错误文案。其它系统异常只在该边界记录一次ERROR，安全异常副本保留原类型、栈帧、cause及suppressed，不读取原message；以身份集合去重防环，最多32个异常节点、合计200个栈帧，避免诊断图无界展开。此规则只修复仁跃端点，不改变共享异常协议或华昇ACK。验证同时核日志级别、异常图及响应正文不泄露合成敏感值。
+
+普通未知恢复沿执行动作区分：CREATE损坏响应按180秒，QUERY损坏响应或未识别状态按600秒，保持已确认的§4.4与冻结恢复合同。QUERY 04人工停查后，迟到已认证成功回调仍可经原Inbox/资金边界完成原单；不再外呼、不新增认领预算。补充真实MySQL的公开Runner/HTTP回调回归，不以Mock调用次数替代账本验证。
+
+安全配置只放行POST单路径版本段；网关增加相同Path+Method且原样转发。不扩宽callbacks/**。仁跃路径沿用现有敏感回调不读取正文/查询参数、隐藏版本尾段、异常不带原文的保护强度，不能因新增入口让访问日志采集手机号、ReturnSign或私钥；共享路径识别直接受影响回归必须验证。无数据库迁移、真实请求、通知渠道、推送或部署授权。
+
+验收分层：公开协议/MockWebServer验证三个不同字段集、严格比较、form编码、坏回执/双号/目标、未知状态及禁补发；HTTP合同验证200错误码/信息与纯文本ACK、精确POST权限；真实MySQL由公开受理→HTTP创建→回调/查询验证原1000分资金一次收敛、坏认证不动账、结果回滚后重投及marker后只核原单。供应链全部单测/架构、所选集成/契约及受影响网关/日志回归单列实际结果；全量MySQL门禁、商户限额及实机验收未执行不得写PASS，第24项继续PARTIAL。
+
 ### 5.2 QNM_GAME_ORDER_V1（开发期调整为USERKEY合同）
 
 创建POST表单`/GameOrder/Send`；原单查询`/GameOrder/Query`。公共字段userid←merchantAccount、userkey←单槽材料、time←毫秒；创建productid、billno、number=1、account、backurl。查询按卡管合同携原billno；不凭习惯把orderno替代billno，正式可选字段需确认向量。

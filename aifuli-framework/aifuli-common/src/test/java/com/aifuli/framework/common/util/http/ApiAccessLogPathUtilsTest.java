@@ -8,6 +8,29 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class ApiAccessLogPathUtilsTest {
 
+    /** 仁跃保护根与未知子路径，但不能冒充华昇或扩大到相邻供应商路径。 */
+    @Test
+    void renyueCallbackUsesSensitiveProtectionWithoutBeingHuasheng() {
+        String root = "/callbacks/suppliers/renyue";
+        for (String path : new String[]{root, root + "/101", root + "/101/extra"}) {
+            assertThat(ApiAccessLogPathUtils.isSensitivePlatformPath(path)).isTrue();
+            assertThat(ApiAccessLogPathUtils.isSensitiveProtectionPath("/sc" + path, "/sc")).isTrue();
+            assertThat(ApiAccessLogPathUtils.isHuashengCallbackPath(path, "")).isFalse();
+            assertThat(ApiAccessLogPathUtils.isSupplierCallbackPath("/sc" + path, "/sc")).isTrue();
+            assertThat(ApiAccessLogPathUtils.safeSupplierCallbackUrl("/sc" + path, "/sc"))
+                    .isEqualTo(path.equals(root) ? root : root + "/[version]");
+        }
+        for (String path : new String[]{root + "-other", root + "foo", "/callbacks/suppliers/other/101"}) {
+            assertThat(ApiAccessLogPathUtils.isSensitivePlatformPath(path)).isFalse();
+            assertThat(ApiAccessLogPathUtils.isSensitiveProtectionPath(path, "")).isFalse();
+        }
+        assertThat(ApiAccessLogPathUtils.isSensitiveProtectionPath("/edge/sc" + root, "/sc")).isFalse();
+        assertThat(ApiAccessLogPathUtils.isSupplierCallbackPath(null, "")).isFalse();
+        assertThat(ApiAccessLogPathUtils.safeSupplierCallbackUrl(null, "")).isEqualTo(root + "/[version]");
+        assertThat(ApiAccessLogPathUtils.safeSupplierCallbackUrl("/callbacks/suppliers/huasheng/101", ""))
+                .isEqualTo("/callbacks/suppliers/huasheng/101");
+    }
+
     /** 管理录入与标准开放下单使用相同目标正文，保护完整路径段且不能隐藏相邻普通接口。 */
     @ParameterizedTest
     @ValueSource(strings = {

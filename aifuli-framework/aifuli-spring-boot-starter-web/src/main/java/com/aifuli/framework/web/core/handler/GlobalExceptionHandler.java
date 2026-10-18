@@ -395,11 +395,11 @@ public class GlobalExceptionHandler {
      */
     private CommonResult<?> handleSensitiveSystemException(HttpServletRequest req, Throwable ex, SensitivePathKind kind) {
         boolean standardOrder = kind == SensitivePathKind.STANDARD_ORDER;
-        boolean huashengCallback = kind == SensitivePathKind.HUASHENG_CALLBACK;
-        if (standardOrder || kind == SensitivePathKind.SUPPLIER_CREDENTIAL || huashengCallback) { ensureNoStore(); }
+        boolean supplierCallback = kind == SensitivePathKind.SUPPLIER_CALLBACK;
+        if (standardOrder || kind == SensitivePathKind.SUPPLIER_CREDENTIAL || supplierCallback) { ensureNoStore(); }
         if (isParameterFailure(ex)) {
             if (kind == SensitivePathKind.SUPPLIER_CREDENTIAL) { return safeCredentialParameterFailure(ex); }
-            if (huashengCallback) { return safeHuashengCallbackParameterFailure(ex); }
+            if (supplierCallback) { return safeSupplierCallbackParameterFailure(ex); }
             return standardOrder ? safeStandardOrderParameterFailure(ex) : safeParameterFailure(ex);
         }
         if (ex instanceof ServiceException service) {
@@ -411,7 +411,7 @@ public class GlobalExceptionHandler {
         String label = switch (kind) {
             case STANDARD_ORDER -> "[标准订单系统异常]";
             case SUPPLIER_CREDENTIAL -> "[供应商凭据系统异常]";
-            case HUASHENG_CALLBACK -> "[华昇回调系统异常]";
+            case SUPPLIER_CALLBACK -> "[供应商回调系统异常]";
             default -> "[限频管理系统异常]";
         };
         log.error("{} types={}, traceId={}", label, SensitiveExceptionLogUtils.types(ex), TracerUtils.getTraceId());
@@ -467,8 +467,8 @@ public class GlobalExceptionHandler {
         String requestUrl;
         if (kind == SensitivePathKind.SUPPLIER_CREDENTIAL) {
             requestUrl = "/supply-chain/supplier-config/[credential-protected]";
-        } else if (kind == SensitivePathKind.HUASHENG_CALLBACK) {
-            requestUrl = ApiAccessLogPathUtils.safeHuashengCallbackUrl(request.getRequestURI(), request.getContextPath());
+        } else if (kind == SensitivePathKind.SUPPLIER_CALLBACK) {
+            requestUrl = ApiAccessLogPathUtils.safeSupplierCallbackUrl(request.getRequestURI(), request.getContextPath());
         } else if (frequency) {
             requestUrl = "/supply-chain/recharge-frequency/[protected]";
         } else if (standardOrder) {
@@ -492,7 +492,7 @@ public class GlobalExceptionHandler {
      * 普通路径不受影响。分类只认登记的精确路径，避免相似前缀误伤。
      */
     private enum SensitivePathKind {
-        STANDARD_ORDER, RECHARGE_FREQUENCY, SUPPLIER_CREDENTIAL, HUASHENG_CALLBACK, NONE
+        STANDARD_ORDER, RECHARGE_FREQUENCY, SUPPLIER_CREDENTIAL, SUPPLIER_CALLBACK, NONE
     }
 
     /** 只保护登记的标准订单、限频管理与供应商凭据写入路径，八个进程其他路径保持原有错误契约。设计见
@@ -511,8 +511,8 @@ public class GlobalExceptionHandler {
         if (ApiAccessLogPathUtils.isSupplierCredentialWritePath(request.getRequestURI(), request.getContextPath())) {
             return SensitivePathKind.SUPPLIER_CREDENTIAL;
         }
-        if (ApiAccessLogPathUtils.isHuashengCallbackPath(request.getRequestURI(), request.getContextPath())) {
-            return SensitivePathKind.HUASHENG_CALLBACK;
+        if (ApiAccessLogPathUtils.isSupplierCallbackPath(request.getRequestURI(), request.getContextPath())) {
+            return SensitivePathKind.SUPPLIER_CALLBACK;
         }
         return SensitivePathKind.NONE;
     }
@@ -525,7 +525,7 @@ public class GlobalExceptionHandler {
     private static CommonResult<?> safeParameterFailureIfSensitive(HttpServletRequest request, Throwable ex) {
         SensitivePathKind kind = classifySensitivePath(request);
         if (kind == SensitivePathKind.SUPPLIER_CREDENTIAL) { return safeCredentialParameterFailure(ex); }
-        if (kind == SensitivePathKind.HUASHENG_CALLBACK) { return safeHuashengCallbackParameterFailure(ex); }
+        if (kind == SensitivePathKind.SUPPLIER_CALLBACK) { return safeSupplierCallbackParameterFailure(ex); }
         if (kind == SensitivePathKind.STANDARD_ORDER) { return safeStandardOrderParameterFailure(ex); }
         if (kind == SensitivePathKind.RECHARGE_FREQUENCY) { return safeParameterFailure(ex); }
         return null;
@@ -543,9 +543,9 @@ public class GlobalExceptionHandler {
             log.warn("[供应商凭据HTTP错误] type={}, traceId={}", ex.getClass().getSimpleName(), TracerUtils.getTraceId());
             return CommonResult.error(errorCode);
         }
-        if (kind == SensitivePathKind.HUASHENG_CALLBACK) {
+        if (kind == SensitivePathKind.SUPPLIER_CALLBACK) {
             ensureNoStore();
-            log.warn("[华昇回调HTTP错误] type={}, traceId={}", ex.getClass().getSimpleName(), TracerUtils.getTraceId());
+            log.warn("[供应商回调HTTP错误] type={}, traceId={}", ex.getClass().getSimpleName(), TracerUtils.getTraceId());
             return CommonResult.error(errorCode);
         }
         if (kind == SensitivePathKind.STANDARD_ORDER) {
@@ -571,9 +571,9 @@ public class GlobalExceptionHandler {
             log.warn("[供应商凭据业务拒绝] code={}, traceId={}", ex.getCode(), TracerUtils.getTraceId());
             return CommonResult.error(ex.getCode(), ex.getMessage());
         }
-        if (kind == SensitivePathKind.HUASHENG_CALLBACK) {
+        if (kind == SensitivePathKind.SUPPLIER_CALLBACK) {
             ensureNoStore();
-            log.warn("[华昇回调业务拒绝] code={}, traceId={}", ex.getCode(), TracerUtils.getTraceId());
+            log.warn("[供应商回调业务拒绝] code={}, traceId={}", ex.getCode(), TracerUtils.getTraceId());
             return CommonResult.error(ex.getCode(), ex.getMessage());
         }
         if (kind == SensitivePathKind.STANDARD_ORDER) {
@@ -605,9 +605,12 @@ public class GlobalExceptionHandler {
         return CommonResult.error(BAD_REQUEST.getCode(), "请求参数不正确");
     }
 
-    private static CommonResult<?> safeHuashengCallbackParameterFailure(Throwable ex) {
+    /** 共享回调日志只保留异常类型；端点 ACK/错误合同由供应链入口负责。
+     * 设计见 docs/superpowers/specs/2026-10-15-renyue-qnm-szcard-detailed-design.md#513-临时本地认证与http闭环合同2026-10-18用户批准。
+     */
+    private static CommonResult<?> safeSupplierCallbackParameterFailure(Throwable ex) {
         ensureNoStore();
-        log.warn("[华昇回调参数错误] type={}, traceId={}", ex.getClass().getSimpleName(), TracerUtils.getTraceId());
+        log.warn("[供应商回调参数错误] type={}, traceId={}", ex.getClass().getSimpleName(), TracerUtils.getTraceId());
         return CommonResult.error(BAD_REQUEST.getCode(), "请求参数不正确");
     }
 

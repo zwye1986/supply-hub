@@ -40,6 +40,11 @@ public final class ApiAccessLogPathUtils {
 
     private static final String HUASHENG_CALLBACK_PATH_SLASH = HUASHENG_CALLBACK_PATH + "/";
 
+    /** 仁跃临时回调合同：禁止读取正文、查询串或输出版本尾段；不扩大实际路由与权限。
+     * 设计见 docs/superpowers/specs/2026-10-15-renyue-qnm-szcard-detailed-design.md#513-临时本地认证与http闭环合同2026-10-18用户批准。
+     */
+    public static final String RENYUE_CALLBACK_PATH = "/callbacks/suppliers/renyue";
+
     /** 限频管理路径前缀（无 admin-api 前缀）；供敏感平台前缀数组与限频判断方法共用，避免字面量漂移。 */
     private static final String RECHARGE_FREQUENCY_PATH = "/supply-chain/recharge-frequency/";
 
@@ -128,7 +133,7 @@ public final class ApiAccessLogPathUtils {
         String path = stripLeadingContextPath(requestUri, contextPath);
         // 标准订单路径精确保留根与子路径，排除 orders-other 等相似前缀
         if (matchesStandardOrdersPath(path) || isSupplierCredentialWritePath(requestUri, contextPath)
-                || matchesHuashengCallbackPath(path)) {
+                || isSupplierCallbackPath(requestUri, contextPath)) {
             return true;
         }
         for (String prefix : SENSITIVE_PLATFORM_PATH_PREFIXES) {
@@ -162,7 +167,26 @@ public final class ApiAccessLogPathUtils {
         String path = stripLeadingContextPath(requestUri, contextPath);
         return matchesStandardOrdersPath(path) || matchesRechargeFrequencyAdminPath(path)
                 || isSupplierCredentialWritePath(requestUri, contextPath)
-                || matchesHuashengCallbackPath(path);
+                || isSupplierCallbackPath(requestUri, contextPath);
+    }
+
+    /** 已登记的华昇与仁跃回调统一日志保护；根与未知子路径也保护，但相似前缀不匹配。
+     * 设计见 docs/superpowers/specs/2026-10-15-renyue-qnm-szcard-detailed-design.md#513-临时本地认证与http闭环合同2026-10-18用户批准。
+     */
+    public static boolean isSupplierCallbackPath(String requestUri, String contextPath) {
+        if (requestUri == null) { return false; }
+        String path = stripLeadingContextPath(requestUri, contextPath);
+        return matchesHuashengCallbackPath(path) || RENYUE_CALLBACK_PATH.equals(path)
+                || path.startsWith(RENYUE_CALLBACK_PATH + "/");
+    }
+
+    /** 仁跃版本尾段一律隐藏；华昇沿用原安全 URL 规则，不改变其既有日志与 HTTP 语义。 */
+    public static String safeSupplierCallbackUrl(String requestUri, String contextPath) {
+        if (isHuashengCallbackPath(requestUri, contextPath)) {
+            return safeHuashengCallbackUrl(requestUri, contextPath);
+        }
+        String path = requestUri == null ? null : stripLeadingContextPath(requestUri, contextPath);
+        return RENYUE_CALLBACK_PATH.equals(path) ? RENYUE_CALLBACK_PATH : RENYUE_CALLBACK_PATH + "/[version]";
     }
 
     /**

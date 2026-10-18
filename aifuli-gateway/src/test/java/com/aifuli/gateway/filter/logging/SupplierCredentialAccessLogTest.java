@@ -119,6 +119,8 @@ class SupplierCredentialAccessLogTest {
 
     @ParameterizedTest
     @ValueSource(strings = {"/callbacks/suppliers/huasheng", "/callbacks/suppliers/huasheng/101",
+            "/callbacks/suppliers/renyue/SYNTHETIC_GATEWAY_CREDENTIAL",
+            "/callbacks/suppliers/renyue/SYNTHETIC_GATEWAY_CREDENTIAL/extra",
             "/open-api/supply-chain/project/v2/orders", "/open-api/supply-chain/project/v2/orders/query",
             "/open-api/supply-chain/project/v2/orders/assets/query"})
     void sensitiveTransportBodyResponseQueryAndFailureNeverEnterGatewayLogs(String path) {
@@ -126,10 +128,13 @@ class SupplierCredentialAccessLogTest {
         ListAppender<ILoggingEvent> appender = new ListAppender<>();
         appender.start(); logger.addAppender(appender);
         try {
-            String body = "0123456789abcdefhexCIPHER" + SECRET;
+            boolean renyue = path.startsWith("/callbacks/suppliers/renyue/");
+            String body = renyue ? "RechargeAccount=13800138000&ReturnSign=%2B%2F%3D" + SECRET
+                    : "0123456789abcdefhexCIPHER" + SECRET;
             for (boolean failing : new boolean[]{false, true}) {
                 var exchange = MockServerWebExchange.from(MockServerHttpRequest.post(path + "?sign=" + SECRET)
-                        .contentType(org.springframework.http.MediaType.TEXT_PLAIN).body(body));
+                        .contentType(renyue ? org.springframework.http.MediaType.APPLICATION_FORM_URLENCODED
+                                : org.springframework.http.MediaType.TEXT_PLAIN).body(body));
                 AccessLogFilter filter = new AccessLogFilter();
                 ReflectionTestUtils.setField(filter, "codecConfigurer", ServerCodecConfigurer.create());
                 Mono<Void> execution = filter.filter(exchange, forwarded -> DataBufferUtils.join(forwarded.getRequest().getBody())
@@ -149,27 +154,52 @@ class SupplierCredentialAccessLogTest {
                 }
             }
             assertThat(appender.list).isNotEmpty().allSatisfy(event -> {
-                assertThat(event.getFormattedMessage()).doesNotContain(SECRET);
+                assertThat(event.getFormattedMessage()).doesNotContain(SECRET, "13800138000");
                 assertThat(event.getThrowableProxy()).isNull();
             });
         } finally { logger.detachAppender(appender); appender.stop(); }
     }
 
+    /** 未到下游前绝不订阅 form 正文，也不读取 query；响应不装饰，不能改变签名原文。 */
     @Test
-    void huashengCallbackExceptionInGlobalExceptionHandlerMasksUrlAndHidesExceptionDetails() {
+    void renyueFormBodyAndQueryAreNotReadByGatewayFilter() {
+        var request = MockServerHttpRequest.post("/callbacks/suppliers/renyue/101?ReturnSign=" + SECRET)
+                .contentType(org.springframework.http.MediaType.APPLICATION_FORM_URLENCODED)
+                .body(reactor.core.publisher.Flux.defer(() -> { throw new AssertionError("不能订阅正文"); }));
+        var exchange = MockServerWebExchange.from(request);
+        var guarded = new org.springframework.http.server.reactive.ServerHttpRequestDecorator(request) {
+            @Override public org.springframework.util.MultiValueMap<String, String> getQueryParams() {
+                throw new AssertionError("不能读取查询参数");
+            }
+        };
+        new AccessLogFilter().filter(exchange.mutate().request(guarded).build(), forwarded -> {
+            assertThat(forwarded.getRequest().getBody()).isSameAs(request.getBody());
+            assertThat(forwarded.getResponse()).isSameAs(exchange.getResponse());
+            return Mono.empty();
+        }).block();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"huasheng/101", "renyue/SYNTHETIC_GATEWAY_CREDENTIAL"})
+    void supplierCallbackExceptionInGlobalExceptionHandlerMasksUrlAndHidesExceptionDetails(String suffix) {
         com.aifuli.gateway.handler.GlobalExceptionHandler handler = new com.aifuli.gateway.handler.GlobalExceptionHandler();
         Logger logger = (Logger) LoggerFactory.getLogger(com.aifuli.gateway.handler.GlobalExceptionHandler.class);
         ListAppender<ILoggingEvent> appender = new ListAppender<>();
         appender.start(); logger.addAppender(appender);
         try {
-            var exchange = MockServerWebExchange.from(MockServerHttpRequest.post(
-                    "/callbacks/suppliers/huasheng/101?token=" + SECRET)
-                    .contentType(org.springframework.http.MediaType.TEXT_PLAIN).body("CIPHER_" + SECRET));
-            handler.handle(exchange, new RuntimeException(SECRET)).block();
-            assertThat(exchange.getResponse().getHeaders().getFirst("Cache-Control")).isEqualTo("no-store");
+            for (Throwable failure : new Throwable[]{new RuntimeException(SECRET),
+                    new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.BAD_GATEWAY, SECRET)}) {
+                var exchange = MockServerWebExchange.from(MockServerHttpRequest.post(
+                        "/callbacks/suppliers/" + suffix + "?token=" + SECRET)
+                        .contentType(org.springframework.http.MediaType.TEXT_PLAIN).body("CIPHER_" + SECRET));
+                handler.handle(exchange, failure).block();
+                assertThat(exchange.getResponse().getHeaders().getFirst("Cache-Control")).isEqualTo("no-store");
+                assertThat(exchange.getResponse().getBodyAsString().block()).doesNotContain(SECRET);
+            }
             assertThat(appender.list).isNotEmpty().allSatisfy(event -> {
                 assertThat(event.getFormattedMessage()).doesNotContain(SECRET);
-                assertThat(event.getFormattedMessage()).contains("/callbacks/suppliers/huasheng/101");
+                assertThat(event.getFormattedMessage()).contains("/callbacks/suppliers/" +
+                        (suffix.startsWith("huasheng") ? "huasheng/101" : "renyue/[version]"));
                 assertThat(event.getThrowableProxy()).isNull();
             });
         } finally { logger.detachAppender(appender); appender.stop(); }

@@ -151,17 +151,17 @@ public class ApiAccessLogFilter extends ApiRequestFilter {
         }
         // 设置请求字段
         boolean standardOrder = ApiAccessLogPathUtils.isStandardOrdersPath(request.getRequestURI(), request.getContextPath());
-        boolean huashengCallback = ApiAccessLogPathUtils.isHuashengCallbackPath(request.getRequestURI(), request.getContextPath());
+        boolean supplierCallback = ApiAccessLogPathUtils.isSupplierCallbackPath(request.getRequestURI(), request.getContextPath());
         String safeUrl = standardOrder
                 ? ApiAccessLogPathUtils.safeStandardOrderUrl(request.getRequestURI(), request.getContextPath())
-                : huashengCallback
-                ? ApiAccessLogPathUtils.safeHuashengCallbackUrl(request.getRequestURI(), request.getContextPath())
+                : supplierCallback
+                ? ApiAccessLogPathUtils.safeSupplierCallbackUrl(request.getRequestURI(), request.getContextPath())
                 : request.getRequestURI();
         accessLog.setTraceId(TracerUtils.getTraceId()).setApplicationName(applicationName)
                 .setRequestUrl(safeUrl).setRequestMethod(request.getMethod())
                 .setUserAgent(ServletUtils.getUserAgent(request)).setUserIp(ServletUtils.getClientIP(request));
         String[] sanitizeKeys = accessLogAnnotation != null ? accessLogAnnotation.sanitizeKeys() : null;
-        Boolean requestEnable = (standardOrder || huashengCallback || ApiAccessLogPathUtils.isSensitivePlatformPath(
+        Boolean requestEnable = (standardOrder || supplierCallback || ApiAccessLogPathUtils.isSensitivePlatformPath(
                 request.getRequestURI(), request.getContextPath())) ? Boolean.FALSE
                 : accessLogAnnotation != null ? accessLogAnnotation.requestEnable() : Boolean.TRUE;
         if (!BooleanUtil.isFalse(requestEnable)) { // 默认记录，所以判断 !false
@@ -172,10 +172,11 @@ public class ApiAccessLogFilter extends ApiRequestFilter {
         }
         // 标准订单强制禁止记录响应正文，杜绝卡密交付明文被访问日志记录
         // 凭据写入成功、绑定错误与系统异常均不允许保存响应正文，避免错误报文夹带拒绝值。
-        // 华昇回调响应正文及异常亦禁止记录。
+        // 华昇与仁跃回调响应正文及异常亦禁止记录。
         // 设计见 docs/superpowers/specs/2026-10-09-huasheng-type201-production-closure-design.md#83-安全与日志影响。
+        // 仁跃见 docs/superpowers/specs/2026-10-15-renyue-qnm-szcard-detailed-design.md#513-临时本地认证与http闭环合同2026-10-18用户批准。
         Boolean responseEnable = (standardOrder || ApiAccessLogPathUtils.isSupplierCredentialWritePath(
-                request.getRequestURI(), request.getContextPath()) || huashengCallback) ? Boolean.FALSE
+                request.getRequestURI(), request.getContextPath()) || supplierCallback) ? Boolean.FALSE
                 : accessLogAnnotation != null ? accessLogAnnotation.responseEnable() : Boolean.FALSE;
         if (BooleanUtil.isTrue(responseEnable)) { // 默认不记录，默认强制要求 true
             accessLog.setResponseBody(sanitizeJson(result, sanitizeKeys));

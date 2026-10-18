@@ -558,3 +558,19 @@ mvn -pl aifuli-module-supply-chain/aifuli-module-supply-chain-server -am \
 **验证／20:34／PASS**：RED执行33项，新增17项断言失败、错误0，原密码16项仍通过；GREEN定向33项全通过，退出0。随后完整供应链单测/架构BUILD SUCCESS、退出0，API125+server2369=2494项，失败/错误/跳过均0，250类，耗时51.060秒；按日志实际运行类核新XML，保全于`.amp/in/artifacts/renyue-direct-request-reports/summary.json`及对应报告。无新HTTP Controller、Adapter/Metadata、网关/安全或资金改动，未跑HTTP/集成/契约/MySQL，不宣称闭环完成。所有变更仍仅本地未提交、未推送、未部署、未真实外呼；三家生产新路径关闭，C-04第24项PARTIAL不变。
 
 **提交前复验／20:52／PASS**：按用户要求准备中文本地提交；原认证后回调核心已在父提交保存，本次增量是仁跃直充请求与密码基础，不能描述为HTTP回调闭环完成。完整供应链单测/架构重新执行2494项/250类，失败/错误/跳过均0，BUILD SUCCESS、退出0；日志`.amp/in/artifacts/renyue-direct-before-commit.log`与逐类XML核对汇总`renyue-direct-before-commit-summary.json`。未重跑集成/契约或MySQL，不新增真实调用、推送或部署授权。
+
+## 18. T04 HTTP与T05仁跃临时本地闭环（2026-10-18）
+
+用户批准按cardshop当前直充字段集与精确字节比较先做本地闭环，并明确处理失败必须HTTP 200+错误码/错误信息。先更新DDD§5.1.3，再按TDD实施；附件矛盾、供应商向量与重投实测仍未关闭，不把本地合同冒充供应商确认。不接卡券/卡密/取券/核销/余额，不接通知渠道，不改三家生产准入。
+
+- [x] **A：协议HTTP RED/GREEN**。增加`RenyueSupplierAdapterContractTest`，经本机MockWebServer验证创建/查询不同回执字段、严格字节比较、原单查询、form编码、坏回执/非法JSON/1MiB及回调四字段认证。RED为24断言失败/0错误，原密码33通过；最小实现后24+33通过。Adapter带截止、一次物理HTTP、不重试不重定向；未认证扩展OrderNo/金额不首次绑定或动账，不输出NOT_FOUND或零交付证明。
+- [x] **B：HTTP响应与精确授权**。增加仁跃单版本POST Controller与应用入口；原始form有界解析，版本+StoreNo有限定位，要求原CREATE marker，复用Ticket工厂/冻结材料认证后调用既有Inbox/资金核心。success只在提交后返回；失败固定200 JSON `{code,message}`、no-store、不包CommonResult。补充无上游Header与通配Content-Type反例，继承TraceFilter的MDC平台编号而非重新读Header。
+- [x] **C：网关与共享保护**。网关Path+Method原样转发，只免登录POST单版本段；已登记仁跃路径沿用正文/查询串不读取、版本尾段隐藏与安全异常保护。父线程复核共享改动并独立复跑直接受影响67项（common17/web15/gateway35），全部通过，日志`renyue-shared-regression.log`；不宣称八进程/ELK实机验证。
+- [x] **D：原单未知分类**。普通损坏响应仅允许UNVERIFIED/RESPONSE_UNKNOWN/RESULT_UNKNOWN且无金额/资产/零交付的窄组合沿180秒恢复，不产生可信存在或NOT_FOUND计数；认证/身份异常转Case。可信QUERY 04为人工未知，仅当前代停普通查询。隔离MySQL RED已证三处行为缺失（空回调未扣款、普通未知误转人工、人工未知误继续查）；之后实现对应分支，不改变旧协议入口。
+- [x] **E：最终组合门禁与实录**。原Amp最终组合于22:01完成：2494项单测/架构及207项集成/契约通过；Thread结束时仍在等待，未回填结果。接续审查先补日志反例RED，再修复仁跃Controller业务异常级别和suppressed丢失，增加查询未知600秒与MANUAL迟到成功回归。最终以本轮22:41的2494项单测/架构、212项集成/契约及共享/根配置验证为准，详见下文；不累计历史轮次。保留重开Spring/连接池与持久数据的证据，不冒称OS强杀或供应商重投实测。
+
+**接续审查及验证／22:43／本地范围PASS**：已读取Thread `T-01a14f15-c2f6-71b8-8a34-283e55bf874b`全部204条消息及工具记录，核HEAD `8b2f358c`与原16个已跟踪修改、9个未跟踪文件，沿用同一工作树，没有覆盖原实现。先修订DDD§5.1.3，新增日志回归得到21项中2断言失败/0错误：ServiceException误记ERROR、suppressed丢失；修复为固定安全响应、业务WARN无堆栈与有界防环安全异常图。补3次真实MySQL执行验证QUERY损坏/未知状态600秒及MANUAL后可信成功回调。最终`verify`退出0、BUILD SUCCESS，耗时18分27秒：API125+server2369共2494项单测/架构，10类集成/契约212项（仁跃14、REST21、回调16、恢复40、频控Timer8、QNM12、华昇HTTP48/REST9、仁跃协议24、单步HTTP20），失败/错误/跳过均0。共享common17/web15/gateway35共67项再次通过；TraceFilter2及真实根配置28组合共30项通过。日志`renyue-resume-{logging-red,combined,shared,root-logging}.log`，本轮逐类XML/汇总保全在`.amp/in/artifacts/renyue-resume-reports/`。根配置探针是7进程×4组合的本机自动化，不是实际启动7个服务或真实ELK验收。
+
+**交付界限**：本批只本地未提交，不推送、不部署、不写共享库、不真实调用。生产Metadata/Schema均未注册新路径，商户总限额与独立直充向量/重投实测仍为发布门禁；C-04第24项PARTIAL、到店两项延期及全量MySQL门禁未重跑保持不变。本节仅覆盖此前HTTP尚未接线的历史进度，不能据此勾选T04/T05整体发布验收。前端实际仓库已只读核对，未改DTO或启用生产Metadata，本切片不需配套界面变更；其中已有未提交修改保持不动。
+
+**提交前复验／23:17／PASS**：用户已授权中文本地提交本批全部相关改动。提交前定向`verify`退出0、BUILD SUCCESS：主架构31、仁跃密码/请求33、回调REST21、仁跃协议HTTP24，共109项，失败/错误/跳过均0；日志`.amp/in/artifacts/renyue-before-commit.log`。本次不冒充重跑2494/212组合或真实MySQL，上一轮结果保持上述范围。拟提交包含仁跃适配器/回调/共享日志与网关、测试及三份文档，不含已忽略取证材料、前端无关修改或生产配置放行；未获推送/部署/真实交易授权。

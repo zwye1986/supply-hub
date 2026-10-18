@@ -262,6 +262,10 @@ public class SingleStepFulfillmentLifecycle {
             if (exists != runtime.progress().trustedExists()) save(locked.operation(), withExists(runtime, true), now);
             return "STALE";
         }
+        // 人工未知不继续自动查；只有当前代可接管，旧代已在上方仅保留观察。设计同详细设计§5.1.3。
+        if (outcome.outcomeClass() == OperationOutcomeClass.MANUAL_REQUIRED) {
+            manual(locked, withExists(runtime, exists), Fact.RESPONSE_UNKNOWN, now); return "MANUAL";
+        }
         var factKind = switch (fact.observation()) {
             case ACCEPTED -> Fact.ACCEPTED;
             case PROCESSING -> Fact.PROCESSING;
@@ -429,7 +433,14 @@ public class SingleStepFulfillmentLifecycle {
                 && locked.operation().getBusinessSendPossibleAt() != null && permit.generation() > 0
                 && permit.generation() <= locked.operation().getExecutionGeneration()
                 && (permit.action() != SingleStepAction.CREATE || permit.generation() == 1)
-                && fact.verification() == SingleStepSupplierFact.Verification.VERIFIED && outcome.assets().isEmpty()
+                // 普通解析未知没有可信业务证据；只允许无金额/资产/零交付的窄组合恢复，不放宽认证失败。
+                // 设计：docs/superpowers/specs/2026-10-15-renyue-qnm-szcard-detailed-design.md#513-临时本地认证与http闭环合同2026-10-18用户批准。
+                && (fact.verification() == SingleStepSupplierFact.Verification.VERIFIED
+                    || fact.verification() == SingleStepSupplierFact.Verification.UNVERIFIED
+                        && fact.observation() == SingleStepSupplierFact.Observation.RESPONSE_UNKNOWN
+                        && outcome.outcomeClass() == OperationOutcomeClass.RESULT_UNKNOWN
+                        && fact.reportedSettlementAmount() == null && !fact.zeroDeliveryConfirmed())
+                && outcome.assets().isEmpty()
                 && (fact.reportedSettlementAmount() == null || fact.reportedSettlementAmount() >= 0)
                 && Objects.equals(outcome.reportedSettlementAmount(), fact.reportedSettlementAmount())
                 && (!fact.zeroDeliveryConfirmed() || fact.observation() == SingleStepSupplierFact.Observation.FAILURE)

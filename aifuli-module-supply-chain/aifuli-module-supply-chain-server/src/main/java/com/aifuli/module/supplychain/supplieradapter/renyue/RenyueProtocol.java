@@ -16,6 +16,7 @@ import java.security.GeneralSecurityException;
 import java.security.KeyFactory;
 import java.security.PrivateKey;
 import java.security.Signature;
+import java.security.MessageDigest;
 import java.security.interfaces.RSAKey;
 import java.security.spec.PKCS8EncodedKeySpec;
 import java.time.Instant;
@@ -76,6 +77,30 @@ public final class RenyueProtocol {
         }
         fields.put("SignSecret", signRequest(fields, ticket.resolvedCredentialMaterial()));
         return Map.copyOf(fields);
+    }
+
+    /**
+     * 临时合同按原字节比较完整字段串；字段由固定协议入口投影，禁止混用请求/查询/回调字段集。
+     * 密钥不进入不可变预期串，解密/规范字节在正常和异常退出均擦除；见详细设计§5.1.3。
+     */
+    public static boolean matchesReceipt(String receipt, Map<String, String> fields, ResolvedCredentialMaterial material) {
+        byte[] plain;
+        try { plain = decryptReceipt(receipt, material); }
+        catch (IllegalArgumentException invalid) { return false; }
+        try {
+            return material.use(MERCHANT_KEY, chars -> {
+                byte[] key = utf8(chars);
+                byte[] prefix = new TreeMap<>(fields).entrySet().stream()
+                        .map(e -> e.getKey() + "=" + e.getValue()).collect(Collectors.joining("&")).getBytes(StandardCharsets.UTF_8);
+                byte[] expected = new byte[prefix.length + MERCHANT_KEY_SUFFIX.length + key.length];
+                try {
+                    System.arraycopy(prefix, 0, expected, 0, prefix.length);
+                    System.arraycopy(MERCHANT_KEY_SUFFIX, 0, expected, prefix.length, MERCHANT_KEY_SUFFIX.length);
+                    System.arraycopy(key, 0, expected, prefix.length + MERCHANT_KEY_SUFFIX.length, key.length);
+                    return MessageDigest.isEqual(expected, plain);
+                } finally { Arrays.fill(key, (byte) 0); Arrays.fill(prefix, (byte) 0); Arrays.fill(expected, (byte) 0); }
+            });
+        } finally { Arrays.fill(plain, (byte) 0); }
     }
 
     /**

@@ -41,20 +41,21 @@ public final class AccessLogSanitizeUtils {
     }
 
     /**
-     * 判断是否为华昇供应商回调路径。
+     * 判断是否为已登记的供应商回调路径，不将仁跃归为华昇。
      */
-    public static boolean isHuashengCallbackPath(String requestUrl) {
-        return ApiAccessLogPathUtils.isHuashengCallbackPath(requestUrl, "");
+    public static boolean isSupplierCallbackPath(String requestUrl) {
+        return ApiAccessLogPathUtils.isSupplierCallbackPath(requestUrl, "");
     }
 
     /**
-     * 凭据写入、标准订单与华昇回调使用同一不消费正文分支，日志不读取查询参数、请求/响应流。
+     * 凭据写入、标准订单与已登记回调使用同一不消费正文分支，日志不读取查询参数、请求/响应流。
      * 设计见 docs/superpowers/specs/2026-10-09-huasheng-type201-production-closure-design.md#83-安全与日志影响。
+     * 仁跃见 docs/superpowers/specs/2026-10-15-renyue-qnm-szcard-detailed-design.md#513-临时本地认证与http闭环合同2026-10-18用户批准。
      */
     public static boolean isProtectedBodyPath(String requestUrl) {
         return isStandardOrdersPath(requestUrl)
                 || ApiAccessLogPathUtils.isSupplierCredentialWritePath(requestUrl, "")
-                || isHuashengCallbackPath(requestUrl);
+                || isSupplierCallbackPath(requestUrl);
     }
 
     /**
@@ -65,10 +66,10 @@ public final class AccessLogSanitizeUtils {
     }
 
     /**
-     * 安全的华昇回调请求路径，避免在未知路径中泄漏可能夹带的敏感参数。
+     * 安全的供应商回调请求路径，复用 common 的分供应商版本尾段保护。
      */
-    public static String safeHuashengCallbackUrl(String requestUrl) {
-        return ApiAccessLogPathUtils.safeHuashengCallbackUrl(requestUrl, "");
+    public static String safeSupplierCallbackUrl(String requestUrl) {
+        return ApiAccessLogPathUtils.safeSupplierCallbackUrl(requestUrl, "");
     }
 
     /**
