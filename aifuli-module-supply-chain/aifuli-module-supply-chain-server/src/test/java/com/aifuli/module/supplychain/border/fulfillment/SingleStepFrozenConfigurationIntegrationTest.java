@@ -358,6 +358,7 @@ class SingleStepFrozenConfigurationIntegrationTest {
             ConnectorValidationRecordService.class, SupplierOfferPublicationService.class, SingleStepCheckpointCodec.class,
             com.aifuli.module.supplychain.border.fulfillment.application.singlestep.SingleStepFulfillmentConfiguration.class,
             com.aifuli.module.supplychain.border.fulfillment.application.singlestep.SingleStepFulfillmentLifecycle.class,
+            com.aifuli.module.supplychain.border.fulfillment.application.singlestep.SingleStepCallbackInbox.class,
             com.aifuli.module.supplychain.border.fulfillment.application.singlestep.SingleStepFulfillmentRunner.class,
             com.aifuli.module.supplychain.infrastructure.security.FrozenCredentialSlotResolver.class})
     static class Config {

@@ -7,10 +7,10 @@ import java.util.Objects;
 
 /**
  * Adapter产出的认证事实，不是资金指令；原绑定/目标摘要用于锁后核验，不携明文手机号或原报文。
- * 安全失败必须显式分类，不能伪装成普通解析未知；资金动作由受控生命周期决定，回调HTTP/Inbox另行接入。
- * 设计：docs/superpowers/specs/2026-10-15-renyue-qnm-szcard-detailed-design.md#76-t04公共终态与资金切片2026-10-18。
+ * 安全失败必须显式分类，不能伪装成普通解析未知；CALLBACK不携外呼资格，HTTP认证另行接入。
+ * 设计：docs/superpowers/specs/2026-10-15-renyue-qnm-szcard-detailed-design.md#77-t04回调公共核心切片2026-10-18。
  */
-public record SingleStepSupplierFact(SingleStepCheckpoint.Binding binding, SingleStepAction source,
+public record SingleStepSupplierFact(SingleStepCheckpoint.Binding binding, Source source,
                                     String billno, String targetDigest, long quantity,
                                     Verification verification, Observation observation, String externalOrderNo,
                                     LocalDateTime receivedAt, byte[] payloadDigest,
@@ -19,8 +19,17 @@ public record SingleStepSupplierFact(SingleStepCheckpoint.Binding binding, Singl
     public SingleStepSupplierFact(SingleStepCheckpoint.Binding binding, SingleStepAction source, String billno,
                                   String targetDigest, long quantity, Verification verification, Observation observation,
                                   String externalOrderNo, LocalDateTime receivedAt, byte[] payloadDigest) {
-        this(binding, source, billno, targetDigest, quantity, verification, observation, externalOrderNo,
+        this(binding, Source.valueOf(source.name()), billno, targetDigest, quantity, verification, observation, externalOrderNo,
                 receivedAt, payloadDigest, null, false);
+    }
+
+    /** 外呼事实构造兼容；CALLBACK没有对应SingleStepAction或执行permit。设计同详细设计§7.7。 */
+    public SingleStepSupplierFact(SingleStepCheckpoint.Binding binding, SingleStepAction source, String billno,
+                                  String targetDigest, long quantity, Verification verification, Observation observation,
+                                  String externalOrderNo, LocalDateTime receivedAt, byte[] payloadDigest,
+                                  Long reportedSettlementAmount, boolean zeroDeliveryConfirmed) {
+        this(binding, Source.valueOf(source.name()), billno, targetDigest, quantity, verification, observation, externalOrderNo,
+                receivedAt, payloadDigest, reportedSettlementAmount, zeroDeliveryConfirmed);
     }
 
     public SingleStepSupplierFact {
@@ -33,6 +42,13 @@ public record SingleStepSupplierFact(SingleStepCheckpoint.Binding binding, Singl
             throw new IllegalArgumentException("单步骤协议事实无效");
         }
         payloadDigest = payloadDigest.clone();
+    }
+    /** 事实来源不是外呼动作；枚举名保留V3旧CREATE/QUERY密文表示。 */
+    public enum Source {
+        CREATE("CREATE_RESPONSE"), QUERY("QUERY_RESPONSE"), CALLBACK("CALLBACK");
+        private final String observationSource;
+        Source(String observationSource) { this.observationSource = observationSource; }
+        public String observationSource() { return observationSource; }
     }
     public enum Verification { VERIFIED, AUTHENTICATION_FAILED, IDENTITY_CONFLICT, UNVERIFIED }
     public enum Observation { ACCEPTED, PROCESSING, EXISTS_UNKNOWN, NOT_FOUND, SUCCESS, FAILURE, RESPONSE_UNKNOWN }

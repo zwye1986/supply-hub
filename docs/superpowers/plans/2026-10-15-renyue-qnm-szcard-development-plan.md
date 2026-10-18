@@ -506,3 +506,20 @@ mvn -pl aifuli-module-supply-chain/aifuli-module-supply-chain-server -am \
 **收口结果**：成功保护独立于订单/资金回滚，结果Outbox与订单/账本同事务；已保护成功由持久watchdog或QUERY任务本地补交，不再外呼。限定第三次NOT_FOUND按平台原因失败并一次释放，历史存在/安全冲突/截止阻止错误释放；已释放后迟到成功只留证开Case。细节与RED/GREEN见`docs/集成测试.md`本批实录。
 
 **当前边界**：本节覆盖§13中“完整终态证据及资金/三次释放未接线”的历史状态；T04公共核心完成，不代表回调HTTP/Inbox或T04整体完成。三家真实协议、商户总限额及逐家准入仍未接线，生产Metadata保持关闭，第24项PARTIAL，不发布供给。到店两项继续延期，未跑全量MySQL集成门禁；本批全部本地未提交，未推送、部署或操作共享数据库。
+
+## 15. T04回调公共核心执行顺序（2026-10-18）
+
+用户要求先中文提交固定§14基线，再开展回调改动。基线已本地提交，标题“完善单步直充成功保护与订单资金原子收敛”，提交前Codec/订单生命周期/架构63项复验通过；无推送或部署授权。以下按DDD§7.7在当前隔离工作树串行实施，不启用三家HTTP/安全白名单或原始协议解析。
+
+- [x] **A：公开入口RED**。新增`T/border/fulfillment/SingleStepCallbackIntegrationTest.java`，复用原单冻结与执行夹具；新增可编译`SingleStepCallbackApplicationService.handle(fact,traceId)`桩。先验marker后创建回执前SUCCESS应COMMIT1000、一个已消费Inbox且不递增QUERY预算；桩应产生行为断言失败，不能以编译失败代替。
+- [x] **B：身份与事务GREEN**。修改`SingleStepSupplierFact`分离来源与执行动作，构造器保留CREATE/QUERY调用兼容；在`application/singlestep/SingleStepCallbackInbox.java`封装事件、HMAC与MANDATORY认领/完成，首次插入唯一冲突单独分类。`SingleStepCallbackApplicationService`认证原冻结内容后两阶段调用Lifecycle；Lifecycle增加无permit的成功保护与Inbox结果事务，复用既有settle，CALLBACK不能进入认领/外呼。先验证A的公开结果。
+- [x] **C：冲突/故障RED→GREEN**。同一集成文件覆盖回调重投时间变化、相同事件不同金额、已有成功保护但尚无Inbox、并发重复/QUERY竞争、MANUAL后的可信零交付失败、未知不改当前调度、未认证/错原单/无marker拒绝及已释放后迟到成功。MySQL CHECK分别拒绝COMMIT/结果Outbox/Inbox成功标记，核全部结果回滚但成功保护保留，重开容器后重投只处理一次。重复/冲突核实际Inbox、观察、Case、订单和账本，不只数mock调用。
+- [x] **D：组合验证与实录**。供应链全部单测/架构，所选真实MySQL/契约增加`SingleStepCallbackIntegrationTest`并保留§14的恢复/资金及华昇回调回归；按实际收集类核新XML，不汇总旧报告。同步`docs/集成测试.md`，明确内部应用通过不等于HTTP认证/ACK、网关或三家端到端通过；C-04仍PARTIAL、商户限额与到店两项边界不变。本批回调变更不自动提交或推送。
+
+**定向验证／16:46／PASS**：首例RED为1个断言失败/0错误，完整矩阵RED为16次执行全部断言失败/0错误，均是可编译空入口未消费/未拒绝事实；日志分别为`.amp/in/artifacts/t04-callback-a-red.log`与`t04-callback-matrix-red.log`。实现后`t04-callback-core-green.log`的Codec23、主架构31及回调集成16全部通过，失败/错误/跳过均0。随后补强重投传输摘要变化与冲突首摘要不变断言，并显式声明事务外编排；最终版本验证见下文，不用首轮通过替代。
+
+**最终组合／17:10／PASS**：`verify`退出0、BUILD SUCCESS，耗时23分28秒；API125、server单测/架构2336，所选集成/契约250（16类），失败/错误/跳过均0。含最终回调16、恢复40、华昇回调集成14及REST契约9，其余保留§14全部13类。日志`.amp/in/artifacts/t04-callback-combined-regression.log`；逐一核日志实际执行类、新XML的数量/结果及时间后保全`t04-callback-reports/unit/`249份/2461项、`integration-contract/`16份/250项及Failsafe汇总，派生明细`summary.json`。不汇入历史报告，不把多轮定向测试重复加总。
+
+**交付与剩余**：§14资金基线已中文提交；用户后续明确授权本批回调公共核心随本次中文提交固定，无推送或部署。Inbox与内部认证后事实应用已接线，成功独立保护，结果消费/资金/终态事件原子提交；三家HTTP协议认证、原格式ACK、网关安全及实机重投仍未接线/未验收，生产Metadata保持关闭。C-04第24项仍PARTIAL，商户总限额及逐家准入门禁不关闭；未跑全量MySQL集成，到店两项继续延期。不接通知渠道、不操作共享库或真实供应商。
+
+**提交前复验／17:44／PASS**：Codec23、主架构31、回调真实MySQL集成16，合计70项，失败/错误/跳过均0，`verify`退出0。日志`.amp/in/artifacts/t04-callback-before-commit.log`；本次为提交前定向复验，不冒充重新执行2461/250组合门禁，也不重复加总测试项。

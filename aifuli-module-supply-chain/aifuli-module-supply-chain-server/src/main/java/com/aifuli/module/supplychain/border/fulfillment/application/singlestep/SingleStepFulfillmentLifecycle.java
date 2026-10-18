@@ -55,6 +55,7 @@ public class SingleStepFulfillmentLifecycle {
     private final HmacFingerprintPort fingerprint;
     private final SupplierOrderLifecycle supplierOrders;
     private final OutboxEventRepository outbox;
+    private final SingleStepCallbackInbox callbackInbox;
 
     /** CREATE先竞争频控，锁后失败必须抛出回滚，不能留下孤立SEND_POSSIBLE。 */
     public SingleStepExecutionPermit claim(String operationNo, SingleStepAction action, long expectedGeneration,
@@ -143,6 +144,75 @@ public class SingleStepFulfillmentLifecycle {
             save(locked.operation(), new SingleStepRuntimeCheckpoint(SCHEMA_VERSION, runtime.frozen(),
                     protectedRuntime.progress(), new ResultEvidence(permit.generation(), fact), runtime.terminalEvidence()), now);
         }
+    }
+
+    /** 回调独立保护成功；generation仅作原单留证，不是QUERY资格。设计同详细设计§7.7。 */
+    public void observeCallbackSuccess(SingleStepSupplierFact fact, String traceId) {
+        if (fact.observation() != SingleStepSupplierFact.Observation.SUCCESS) return;
+        var locked = frequency.lockForResult(fact.binding().operationNo());
+        if (locked == null) return;
+        var runtime = runtime(locked);
+        if (!validCallback(locked, runtime, fact)) return;
+        var now = clock.now();
+        persistCallbackObservation(locked, fact, now, traceId);
+        if (runtime.successEvidence() == null) {
+            save(locked.operation(), new SingleStepRuntimeCheckpoint(SCHEMA_VERSION, runtime.frozen(),
+                    withExists(runtime, true).progress(), new ResultEvidence(locked.operation().getExecutionGeneration(), fact),
+                    runtime.terminalEvidence()), now);
+        }
+    }
+
+    /**
+     * 先Inbox后聚合锁，消费标记与订单/资金/终态Outbox同事务；不补造执行permit。
+     * 非终态仅留证及永久存在保护，既有QUERY租约/预算/到期点均不变。设计同详细设计§7.7。
+     */
+    public void applyCallback(SingleStepCallbackInbox.Prepared prepared, String traceId) {
+        var now = clock.now();
+        var claim = callbackInbox.claim(prepared, traceId, now);
+        if (claim.completed()) return;
+        var fact = prepared.fact();
+        var locked = frequency.lockForResult(fact.binding().operationNo());
+        if (locked == null) throw new IllegalStateException("单步骤回调原单不存在");
+        var runtime = runtime(locked);
+        persistCallbackObservation(locked, fact, now, traceId);
+        var protectedSuccess = runtime.successEvidence();
+        boolean changedSuccess = fact.observation() == SingleStepSupplierFact.Observation.SUCCESS && protectedSuccess != null
+                && protectedSuccess.fact().source() == SingleStepSupplierFact.Source.CALLBACK
+                && !java.security.MessageDigest.isEqual(protectedSuccess.fact().payloadDigest(), fact.payloadDigest());
+        if (claim.conflict() || !validCallback(locked, runtime, fact) || changedSuccess) {
+            manual(locked, runtime, Fact.SECURITY_CONFLICT, now);
+            callbackInbox.conflict(claim, now);
+            return;
+        }
+        var op = locked.operation();
+        if (op.getStatus() == SupplierOrderOperationStatus.SUCCEEDED.getCode()
+                || op.getStatus() == SupplierOrderOperationStatus.FAILED.getCode()) {
+            boolean contrary = fact.observation() == SingleStepSupplierFact.Observation.SUCCESS
+                    && op.getStatus() == SupplierOrderOperationStatus.FAILED.getCode()
+                    || fact.observation() == SingleStepSupplierFact.Observation.FAILURE
+                    && op.getStatus() == SupplierOrderOperationStatus.SUCCEEDED.getCode();
+            if (contrary) manual(locked, runtime, Fact.TERMINAL_CONFLICT, now);
+        } else {
+            boolean exists = runtime.progress().trustedExists() || switch (fact.observation()) {
+                case ACCEPTED, PROCESSING, EXISTS_UNKNOWN, SUCCESS, FAILURE -> true;
+                default -> false;
+            };
+            if (exists && fact.externalOrderNo() != null && locked.bOrder().getExternalOrderNo() == null) {
+                locked.bOrder().setExternalOrderNo(fact.externalOrderNo()); locked.bOrder().setUpdatedAt(now);
+                if (bOrders.updateById(locked.bOrder()) != 1) throw new IllegalStateException("单步骤回调外部单号版本冲突");
+            }
+            if (fact.observation() == SingleStepSupplierFact.Observation.SUCCESS) {
+                if (protectedSuccess == null) manual(locked, withExists(runtime, true), Fact.TERMINAL_OBSERVED, now);
+                else settle(locked, runtime, protectedSuccess, false, now, traceId);
+            } else if (fact.observation() == SingleStepSupplierFact.Observation.FAILURE) {
+                if (protectedSuccess != null) manual(locked, runtime, Fact.TERMINAL_CONFLICT, now);
+                else if (!fact.zeroDeliveryConfirmed()) manual(locked, withExists(runtime, true), Fact.UNCONFIRMED_FAILURE, now);
+                else settle(locked, withExists(runtime, true), new ResultEvidence(op.getExecutionGeneration(), fact), false, now, traceId);
+            } else if (exists != runtime.progress().trustedExists()) {
+                save(op, withExists(runtime, true), now);
+            }
+        }
+        callbackInbox.succeed(claim, now);
     }
 
     /** 原绑定验证先于留证；可信旧代不改发送资格，终态资金须经过独立成功保护及共同检查。 */
@@ -325,7 +395,7 @@ public class SingleStepFulfillmentLifecycle {
     }
     private static boolean matches(SingleStepCheckpoint frozen, SingleStepExecutionPermit permit, SingleStepSupplierFact fact) {
         return frozen.binding().equals(permit.binding()) && frozen.binding().equals(fact.binding())
-                && permit.action() == fact.source() && frozen.business().billno().equals(fact.billno())
+                && permit.action().name().equals(fact.source().name()) && frozen.business().billno().equals(fact.billno())
                 && frozen.business().protectedTargetReference().targetDigest().equals(fact.targetDigest())
                 && frozen.business().quantity() == fact.quantity();
     }
@@ -333,6 +403,24 @@ public class SingleStepFulfillmentLifecycle {
         var p = runtime.progress();
         return runtime.withProgress(new Progress(p.action(), p.appliedGeneration(),
                 exists, p.consecutiveNotFound(), p.lastFact(), p.factAt()));
+    }
+
+    /** 锁后再核事实与第一份成功的双号，不放宽MANUAL之外的资金/活动身份约束。设计同§7.7。 */
+    private static boolean validCallback(LockedExecution locked, SingleStepRuntimeCheckpoint runtime, SingleStepSupplierFact fact) {
+        var frozen = runtime.frozen();
+        return fact.source() == SingleStepSupplierFact.Source.CALLBACK && frozen.binding().equals(fact.binding())
+                && frozen.business().billno().equals(fact.billno()) && frozen.business().quantity() == fact.quantity()
+                && frozen.business().protectedTargetReference().targetDigest().equals(fact.targetDigest())
+                && locked.operation().getBusinessSendPossibleAt() != null && locked.operation().getExecutionGeneration() > 0
+                && fact.verification() == SingleStepSupplierFact.Verification.VERIFIED
+                && fact.observation() != SingleStepSupplierFact.Observation.NOT_FOUND
+                && (fact.reportedSettlementAmount() == null || fact.reportedSettlementAmount() >= 0)
+                && (!fact.zeroDeliveryConfirmed() || fact.observation() == SingleStepSupplierFact.Observation.FAILURE)
+                && (fact.externalOrderNo() == null || locked.bOrder().getExternalOrderNo() == null
+                    || fact.externalOrderNo().equals(locked.bOrder().getExternalOrderNo()))
+                && (fact.externalOrderNo() == null || runtime.successEvidence() == null
+                    || runtime.successEvidence().fact().externalOrderNo() == null
+                    || fact.externalOrderNo().equals(runtime.successEvidence().fact().externalOrderNo()));
     }
 
     private static boolean validFact(LockedExecution locked, SingleStepRuntimeCheckpoint runtime,
@@ -419,9 +507,15 @@ public class SingleStepFulfillmentLifecycle {
         timer.scheduleOnce(type, type + ":" + op.getOperationNo() + ":" + op.getExecutionGeneration(), payload, clock.toInstant(at));
     }
     private void persistObservation(LockedExecution locked, SingleStepExecutionPermit permit, SingleStepSupplierFact fact, LocalDateTime now, String traceId) {
+        persistObservation(locked, permit.operationNo() + ":" + permit.generation() + ":" + HexFormat.of().formatHex(fact.payloadDigest()), fact, now, traceId);
+    }
+    private void persistCallbackObservation(LockedExecution locked, SingleStepSupplierFact fact, LocalDateTime now, String traceId) {
+        persistObservation(locked, fact.binding().operationNo() + ":CALLBACK:" + HexFormat.of().formatHex(fact.payloadDigest()), fact, now, traceId);
+    }
+    private void persistObservation(LockedExecution locked, String key, SingleStepSupplierFact fact, LocalDateTime now, String traceId) {
         observations.insertIdempotent(RawStatusObservationDO.builder().observationNo(numbers.next(BusinessNoPrefixes.OBS))
-                .observationKey(permit.operationNo() + ":" + permit.generation() + ":" + HexFormat.of().formatHex(fact.payloadDigest()))
-                .sourceType(fact.source() == SingleStepAction.CREATE ? "CREATE_RESPONSE" : "QUERY_RESPONSE")
+                .observationKey(key)
+                .sourceType(fact.source().observationSource())
                 .operationId(locked.operation().getId()).bOrderId(locked.bOrder().getId()).connectorVersionId(locked.bOrder().getConnectorVersionId())
                 .externalOrderNo(fact.externalOrderNo()).externalStatus(fact.observation().name()).externalSubStatus("")
                 .mappingDefinitionId(0L).mappedResultClass(fact.observation().name()).payloadDigest(fact.payloadDigest())
