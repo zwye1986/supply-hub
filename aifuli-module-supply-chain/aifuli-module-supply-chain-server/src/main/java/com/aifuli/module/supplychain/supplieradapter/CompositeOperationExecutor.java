@@ -54,4 +54,14 @@ public class CompositeOperationExecutor implements OperationExecutorPort {
         }
         throw new IllegalArgumentException("No OperationExecutorPort found for adapterType: " + adapterType);
     }
+
+    /** 单步骤仍走唯一协议分派器，截止必须原样下传，旧Adapter默认失败关闭。 */
+    @Override
+    public OperationOutcome execute(OperationTicket ticket, long executionDeadlineNanos) {
+        Objects.requireNonNull(ticket, "ticket must not be null");
+        for (OperationExecutorPort delegate : delegates) {
+            if (delegate.supports(ticket.adapterType())) return delegate.execute(ticket, executionDeadlineNanos);
+        }
+        throw new IllegalArgumentException("No OperationExecutorPort found for adapterType: " + ticket.adapterType());
+    }
 }

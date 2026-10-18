@@ -27,4 +27,13 @@ public interface OperationExecutorPort {
      * @return 标准化操作执行结果
      */
     OperationOutcome execute(OperationTicket ticket);
+
+    /**
+     * 单步骤受约束执行：必须消费原认领的单调截止及Ticket冻结HTTP合同，不能重置资格。
+     * 默认拒绝旧Adapter，避免默默调用不受预算限制的旧execute；原入口保持兼容。
+     * 设计：docs/superpowers/specs/2026-10-15-renyue-qnm-szcard-detailed-design.md#47-t03本地执行与恢复接线2026-10-18。
+     */
+    default OperationOutcome execute(OperationTicket ticket, long executionDeadlineNanos) {
+        throw new UnsupportedOperationException("适配器未实现单步骤受约束执行");
+    }
 }

@@ -17,6 +17,9 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.redisson.Redisson;
+import org.redisson.api.RedissonClient;
+import org.redisson.config.Config;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.boot.web.context.WebServerApplicationContext;
 import org.springframework.context.ConfigurableApplicationContext;
@@ -29,6 +32,7 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.client.RestTemplate;
+import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.MySQLContainer;
 
 import javax.sql.DataSource;
@@ -45,6 +49,7 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.INSTORE_CREDENTIAL_INVALID;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.INSTORE_PAYMENT_FLOW_NOT_FOUND;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.INSTORE_SUPPLIER_CHANNEL_BINDING_NOT_FOUND;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.SUPPLY_CHAIN_ORDER_NOT_FOUND;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -65,6 +70,9 @@ class ProjectAppAuthFlowIntegrationTest {
             .withUsername("supply_chain")
             .withPassword("supply_chain");
     private static final String EXTERNAL_JDBC_URL = System.getProperty("supply-chain.test.jdbc-url");
+    private static final GenericContainer<?> ORDER_REDIS = new GenericContainer<>("redis:7.4")
+            .withExposedPorts(6379);
+    private static RedissonClient orderRedisClient;
 
     /** 测试持有的原始主密钥字节；正常结束与异常启动均清零。 */
     private static final byte[] MASTER_KEY = Base64.getDecoder()
@@ -122,7 +130,21 @@ class ProjectAppAuthFlowIntegrationTest {
             if (EXTERNAL_JDBC_URL == null) {
                 MYSQL.start();
             }
+            ORDER_REDIS.start();
+            Config redisConfig = new Config();
+            redisConfig.useSingleServer().setAddress(
+                    "redis://" + ORDER_REDIS.getHost() + ":" + ORDER_REDIS.getMappedPort(6379));
+            orderRedisClient = Redisson.create(redisConfig);
             server = new SpringApplicationBuilder(SupplyChainServerApplication.class, IdentityKeyTestConfiguration.class)
+                    // 完整进程只扫描生产组件，不让其它测试的裸@Configuration污染本门禁。
+                    .initializers(context -> context.getBeanFactory().registerSingleton("authFixtureTypeExcludeFilter",
+                            new org.springframework.boot.context.TypeExcludeFilter() {
+                                @Override
+                                public boolean match(org.springframework.core.type.classreading.MetadataReader reader,
+                                                     org.springframework.core.type.classreading.MetadataReaderFactory factory) {
+                                    return reader.getResource().toString().contains("/test-classes/");
+                                }
+                            }))
                     .run(commandLineArguments());
             assertThat(server).isInstanceOf(WebServerApplicationContext.class);
             WebServerApplicationContext webServer = (WebServerApplicationContext) server;
@@ -417,8 +439,12 @@ class ProjectAppAuthFlowIntegrationTest {
         }
     }
 
+    /**
+     * 已开通再停用只保留历史摘要查询；合法正文穿透到查单业务，禁止用参数错误证明放行。
+     * 设计见 docs/superpowers/specs/2026-10-12-project-standard-product-capability-design.md#1-已确认范围。
+     */
     @Test
-    void suspendedStandardQueryCannotBypassDisabledCapability() {
+    void suspendedStandardCapabilityAllowsOnlySummaryQueries() {
         jdbc.update("""
                 INSERT INTO sc_project_capability(
                     id, project_id, capability_code, status, version, created_at, updated_at)
@@ -427,7 +453,17 @@ class ProjectAppAuthFlowIntegrationTest {
                 ProjectAuthStatus.SUSPENDED.code());
         try {
             jdbc.update("UPDATE sc_buyer_project SET status = ? WHERE id = ?", ProjectAuthStatus.SUSPENDED.code(), PROJECT_ID);
-            assertStandardQueryRejectedWithoutNonce(CURRENT_KEY_VERSION, "disabled-capability");
+            byte[] body = "{\"buyerOrderNo\":\"AUTH-SUSPENDED-HISTORY\"}".getBytes(StandardCharsets.UTF_8);
+            for (ProjectAuthOperations.Operation operation : standardOperations().toList()) {
+                boolean summaryQuery = ProjectAuthOperations.STANDARD_ORDER_QUERY.equals(operation.operationCode())
+                        || ProjectAuthOperations.STANDARD_ORDER_QUERY_V2.equals(operation.operationCode());
+                String nonce = unique("nonce-disabled-capability");
+                CommonResult<?> result = postSigned(operation.path(), body,
+                        projectCredentials(CURRENT_KEY_VERSION), System.currentTimeMillis(), nonce);
+                assertThat(result.getCode()).as(operation.operationCode()).isEqualTo(summaryQuery
+                        ? SUPPLY_CHAIN_ORDER_NOT_FOUND.getCode() : BUYER_AUTH_INVALID.getCode());
+                assertNonceRows(nonce, summaryQuery ? 1L : 0L);
+            }
         } finally {
             jdbc.update("UPDATE sc_buyer_project SET status = ? WHERE id = ?", ProjectAuthStatus.ENABLED.code(), PROJECT_ID);
             jdbc.update("DELETE FROM sc_project_capability WHERE id = ?", STANDARD_CAPABILITY_ID);
@@ -607,7 +643,7 @@ class ProjectAppAuthFlowIntegrationTest {
     /**
      * 高优先级启动参数隔离本机 local profile 与固定端口，同时禁用本门禁无关的注册中心、监控、
      * 文档、定时器、Outbox、渠道 RPC 及本门禁不覆盖的租户子系统。项目认证 nonce 使用 MySQL，
-     * 因此不应为了租户缓存装配伪造 Redis Bean。数据源与主密钥同样不能被 application-local 覆盖。
+     * 订单编号装配则使用真实隔离 Redis，不伪造客户端或关闭生产缺依赖门禁。
      * 详见 {@code docs/superpowers/specs/2026-08-23-project-app-auth-design.md#9-测试门禁}。
      */
     private static String[] commandLineArguments() {
@@ -622,6 +658,8 @@ class ProjectAppAuthFlowIntegrationTest {
                 "--spring.cloud.nacos.config.import-check.enabled=false",
                 "--spring.boot.admin.client.enabled=false",
                 "--aifuli.tenant.enable=false",
+                "--aifuli.supply-chain.order-no.env=test",
+                "--aifuli.supply-chain.order-no.scope=project-app-auth",
                 "--spring.data.redis.repositories.enabled=false",
                 "--spring.autoconfigure.exclude="
                         + "org.redisson.spring.starter.RedissonAutoConfigurationV2,"
@@ -663,6 +701,15 @@ class ProjectAppAuthFlowIntegrationTest {
      */
     @org.springframework.boot.test.context.TestConfiguration(proxyBeanMethods = false)
     static class IdentityKeyTestConfiguration {
+        /**
+         * 仅为完整应用的生产发号配置提供真实隔离客户端；资源由本类统一回收。
+         * 设计见 docs/superpowers/specs/2026-10-15-renyue-qnm-szcard-detailed-design.md#104-t00基线收口修订2026-10-16。
+         */
+        @org.springframework.context.annotation.Bean(destroyMethod = "")
+        RedissonClient orderNoRedisClient() {
+            return orderRedisClient;
+        }
+
         @org.springframework.context.annotation.Bean
         com.aifuli.module.supplychain.infrastructure.security.RechargeFrequencyIdentityKeyProvider
                 testRechargeFrequencyIdentityKeyProvider() {
@@ -695,6 +742,21 @@ class ProjectAppAuthFlowIntegrationTest {
             if (server != null) {
                 server.close();
                 server = null;
+            }
+        } catch (Throwable failure) {
+            firstFailure = appendCleanupFailure(firstFailure, failure);
+        }
+        try {
+            if (orderRedisClient != null) {
+                orderRedisClient.shutdown();
+                orderRedisClient = null;
+            }
+        } catch (Throwable failure) {
+            firstFailure = appendCleanupFailure(firstFailure, failure);
+        }
+        try {
+            if (ORDER_REDIS.isRunning()) {
+                ORDER_REDIS.stop();
             }
         } catch (Throwable failure) {
             firstFailure = appendCleanupFailure(firstFailure, failure);

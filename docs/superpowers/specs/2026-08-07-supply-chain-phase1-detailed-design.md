@@ -963,6 +963,8 @@ stateDiagram-v2
 
 ### 7.3 SupplierOrderOperation 与 FulfillmentAsset
 
+> 2026-10-15三供应商接入修订：RENYUE、QNM、SZ_CARD普通直充的冻结快照、一次创建围栏、原单恢复和成功先留证合同见[三家详细设计§3～§7](2026-10-15-renyue-qnm-szcard-detailed-design.md#3-冻结快照ticket与数据存储fr-020619)。QNM开发期直接调整现有注册类型，不要求保留切换前旧协议的回调/恢复，不授权清理旧数据。下文Task 11及卡密恢复是历史实现记录，不能代替本次直充验收；本次仍受SRS C项和[开发计划T00](../plans/2026-10-15-renyue-qnm-szcard-development-plan.md#t00-基线与合同冻结23人日项目对接be-aqa)约束，未实施的新路径不能宣称已可用。
+
 `sc_supplier_order_operation` 表示 SupplierOrder 内一项可独立识别和恢复的外部业务副作用，而不是新的订单：
 
 ```text
@@ -1210,6 +1212,8 @@ INSTORE 不复用 O2O 匿名 `channelUserId`。每个采购商租户配置独立
 INSTORE 建单事务提交后，中台先固化 `outTradeNo`，再通过 `BuyerCashierPort.createCashierOrder` 调用对应 SaaS 商城收银台，以 `(sourceSystem, externalTenantId, buyerUserId)` 路由租户和会员并取得 `cashierUrl/cashierOrderNo`；`buyerUserId` 为不透明字符串，不得沿用当前联调 Port 的 `Long` 参数。支付与退款结果均以 SaaS 回调优先，接口③/⑥和 Timer 在本地非终态时分别按原 `outTradeNo/refundCaseNo` 权威查询兜底。外呼前用 Operation CAS 抢占，外呼后以独立事务进入与回调相同的 Lifecycle 收敛路径；回调、渠道查询和 Timer 并发只允许一次状态与账本推进。供应链核心统一把旅通、大润发和 POS 视为 `RT_MART` 渠道边界，不建三套调用方身份。
 
 ## 10. Adapter 元数据、调用审计与敏感资产
+
+> 2026-10-15合同修订入口：[三家接入详细设计§2、§5](2026-10-15-renyue-qnm-szcard-detailed-design.md#2-注册配置能力和映射fr-01fr-05fr-18)拟新增RENYUE/SZ_CARD并将现有`QNM_GAME_ORDER_V1`直接调整为USERKEY普通直充。§10.1的customerid/timestamp、`&key`小写签名、整数金额按分猜测及SendKm属于切换前实现，不是新合同的容错分支；该节保留作历史记录。元数据钩子提取须先保持华昇及现有QNM行为并独立回归，之后再实现新协议，不能提前声明未实现能力。
 
 `supplier-adapter` 通过 `FulfillmentWorkflowPort` 与 `OperationExecutorPort` 执行统一 Operation，并按声明能力组合直充、发资产、绑定权益、查单、查资产、作废、解绑、查余额、查库存和回调解析实现。禁止用空实现或 `UnsupportedOperationException` 填充大接口；一期奇那梦正式使用同一 Operation/元数据机制，其余供应商仅验证模型兼容性，不实现 Adapter。
 
@@ -1523,6 +1527,8 @@ Liquibase 显式绑定 `supplyChainDataSource`，不能依赖默认 DataSource�
 一期基础叶子变更集对应的完整可执行 MySQL 8 DDL 见[《供应链中台一期数据库 DDL》](./2026-08-07-supply-chain-phase1-database-ddl.md)；INSTORE 的 `013/014` 以实际 Liquibase SQL 与大润发详细设计为准。已发布变更集只追加：账户透支约束走 `011`，INSTORE 生产不变量走 `014`，Timer/Outbox 结构修复走 `015`，均不回改旧 SQL。
 
 ## 17. 测试与发版门禁
+
+> 2026-10-15三家接入执行命令和AC-01～AC-12追踪见[开发计划§4](../plans/2026-10-15-renyue-qnm-szcard-development-plan.md#4-验证命令与证据要求)，实际结果见[集成测试记录](../../集成测试.md#2026-10-15-renyueqnmsz_card-供应商接入待实施)。采用当前嵌套Maven模块路径、供应链单测/架构和Failsafe完整门禁，禁止运行含删库的旧根脚本。下列旧示例路径及QNM卡密场景保留历史语境；本次只验普通直充和新接入订单恢复，不以旧QNM兼容为门禁，也不取消华昇201/202回归。基线既有失败必须单列，不能跳过或降低断言来宣称全绿。
 
 测试使用 JUnit 5、Mockito、MockWebServer、Testcontainers MySQL 8 和 ArchUnit：
 

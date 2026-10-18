@@ -4,10 +4,17 @@ import com.aifuli.module.supplychain.border.fulfillment.dal.dataobject.BOrderDO;
 import com.aifuli.module.supplychain.border.fulfillment.dal.dataobject.FulfillmentOperationDO;
 import com.aifuli.module.supplychain.border.fulfillment.dal.dataobject.FulfillmentRequestDO;
 import com.aifuli.module.supplychain.border.fulfillment.domain.AdapterStepCode;
+import com.aifuli.module.supplychain.border.fulfillment.domain.FrozenCredentialSlotIdentity;
 import com.aifuli.module.supplychain.border.fulfillment.domain.FulfillmentOperationKind;
 import com.aifuli.module.supplychain.border.fulfillment.domain.OperationTicket;
+import com.aifuli.module.supplychain.border.fulfillment.domain.ResolvedCredentialMaterial;
 import com.aifuli.module.supplychain.infrastructure.security.CredentialProvider;
+import com.aifuli.module.supplychain.infrastructure.security.FrozenCredentialSetResolver;
+import com.aifuli.module.supplychain.infrastructure.security.FrozenCredentialSlotResolver;
+import com.aifuli.module.supplychain.supplieradapter.metadata.AdapterMetadata;
+import com.aifuli.module.supplychain.supplieradapter.metadata.CredentialBindingMode;
 import com.aifuli.module.supplychain.supplieradapter.metadata.PublishedConnectorConfigurationResolver.PublishedConnectorConfiguration;
+import com.aifuli.module.supplychain.tradecore.account.domain.Money;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.CredentialSlotDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierOfferVersionDO;
@@ -17,13 +24,32 @@ import com.aifuli.module.supplychain.border.fulfillment.application.huashengflow
 import com.aifuli.module.supplychain.border.fulfillment.application.huashengflow.HuashengCheckpointCodec;
 import com.aifuli.module.supplychain.border.fulfillment.application.huashengflow.HuashengExecutionPermit;
 import com.aifuli.module.supplychain.supplieradapter.metadata.HuashengOrderV1Metadata;
+import com.aifuli.module.supplychain.border.fulfillment.application.singlestep.SingleStepCheckpointCodec;
+import com.aifuli.module.supplychain.border.fulfillment.domain.singlestep.SingleStepCheckpoint;
+import com.aifuli.module.supplychain.border.fulfillment.domain.FulfillmentTargetFields;
+import com.aifuli.module.supplychain.border.fulfillment.domain.FulfillmentIdempotencyKeys;
+import com.aifuli.module.supplychain.border.order.dal.dataobject.SupplyChainOrderDO;
+import com.aifuli.module.supplychain.infrastructure.security.EnvelopeCryptoPort;
+import com.aifuli.module.supplychain.infrastructure.security.HmacFingerprintPort;
+import com.aifuli.module.supplychain.supplieradapter.metadata.PublishedConnectorConfigurationResolver;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.util.Arrays;
+import java.util.HexFormat;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+import java.util.stream.Collectors;
 
-/** 冻结供应商配置与凭证的统一Ticket装配；查询复用原履约身份且不解密充值目标。
- * 设计见 docs/superpowers/specs/2026-09-30-direct-recharge-mobile-spu-frequency-design.md#6-timer-与补偿。 */
+/**
+ * 冻结供应商配置与凭证的统一Ticket装配；旧查询保持原语义，新单步入口认证原目标及完整冻结合同。
+ * 设计见 docs/superpowers/specs/2026-10-15-renyue-qnm-szcard-detailed-design.md#32-ticket扩展。
+ */
 @Component
 public class FulfillmentOperationTicketFactory {
     private final CredentialSlotMapper credentialSlotMapper;
@@ -31,15 +57,40 @@ public class FulfillmentOperationTicketFactory {
     private final FulfillmentCallbackProperties callbackProperties;
     private final List<com.aifuli.module.supplychain.infrastructure.security.CredentialSetResolver> credentialSetResolvers;
     private final HuashengCheckpointCodec checkpointCodec;
+    private final FrozenCredentialSlotResolver frozenSlotResolver;
+    private final FrozenCredentialSetResolver frozenSetResolver;
+    private final SingleStepCheckpointCodec singleStepCodec;
+    private final PublishedConnectorConfigurationResolver singleStepResolver;
+    private final EnvelopeCryptoPort targetCrypto;
+    private final HmacFingerprintPort targetFingerprint;
+    private final FulfillmentTargetSchemaRegistry targetSchemas;
+    private static final com.fasterxml.jackson.databind.ObjectMapper TARGET_JSON = com.fasterxml.jackson.databind.json.JsonMapper.builder(
+            com.fasterxml.jackson.core.JsonFactory.builder().enable(com.fasterxml.jackson.core.StreamReadFeature.STRICT_DUPLICATE_DETECTION)
+                    .streamReadConstraints(com.fasterxml.jackson.core.StreamReadConstraints.builder().maxNestingDepth(6).maxStringLength(4096).build()).build())
+            .enable(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_TRAILING_TOKENS).build();
 
     @org.springframework.beans.factory.annotation.Autowired
     public FulfillmentOperationTicketFactory(CredentialSlotMapper slots, List<CredentialProvider> providers,
             FulfillmentCallbackProperties callbacks,
             List<com.aifuli.module.supplychain.infrastructure.security.CredentialSetResolver> sets,
+            ObjectProvider<HuashengCheckpointCodec> checkpointCodecProvider,
+            ObjectProvider<FrozenCredentialSlotResolver> frozenSlots,
+            ObjectProvider<FrozenCredentialSetResolver> frozenSets,
+            ObjectProvider<SingleStepCheckpointCodec> singleSteps,
+            ObjectProvider<PublishedConnectorConfigurationResolver> configurations,
+            ObjectProvider<EnvelopeCryptoPort> targets, ObjectProvider<HmacFingerprintPort> fingerprints,
+            ObjectProvider<FulfillmentTargetSchemaRegistry> schemas) {
+        this(slots, providers, callbacks, sets, checkpointCodecProvider.getIfAvailable(),
+                frozenSlots.getIfAvailable(), frozenSets.getIfAvailable(), singleSteps.getIfAvailable(),
+                configurations.getIfAvailable(), targets.getIfAvailable(), fingerprints.getIfAvailable(), schemas.getIfAvailable());
+    }
+
+    public FulfillmentOperationTicketFactory(CredentialSlotMapper slots, List<CredentialProvider> providers,
+            FulfillmentCallbackProperties callbacks,
+            List<com.aifuli.module.supplychain.infrastructure.security.CredentialSetResolver> sets,
             ObjectProvider<HuashengCheckpointCodec> checkpointCodecProvider) {
-        credentialSlotMapper = slots; credentialProviders = providers; callbackProperties = callbacks;
-        credentialSetResolvers = List.copyOf(sets);
-        checkpointCodec = checkpointCodecProvider != null ? checkpointCodecProvider.getIfAvailable() : null;
+        this(slots, providers, callbacks, sets,
+                checkpointCodecProvider != null ? checkpointCodecProvider.getIfAvailable() : null);
     }
     public FulfillmentOperationTicketFactory(CredentialSlotMapper slots, List<CredentialProvider> providers,
             FulfillmentCallbackProperties callbacks,
@@ -50,11 +101,35 @@ public class FulfillmentOperationTicketFactory {
             FulfillmentCallbackProperties callbacks,
             List<com.aifuli.module.supplychain.infrastructure.security.CredentialSetResolver> sets,
             HuashengCheckpointCodec checkpointCodec) {
+        this(slots, providers, callbacks, sets, checkpointCodec, null, null);
+    }
+    public FulfillmentOperationTicketFactory(CredentialSlotMapper slots, List<CredentialProvider> providers,
+            FulfillmentCallbackProperties callbacks,
+            List<com.aifuli.module.supplychain.infrastructure.security.CredentialSetResolver> sets,
+            HuashengCheckpointCodec checkpointCodec, FrozenCredentialSlotResolver frozenSlotResolver,
+            FrozenCredentialSetResolver frozenSetResolver) {
+        this(slots, providers, callbacks, sets, checkpointCodec, frozenSlotResolver, frozenSetResolver, null, null, null, null, null);
+    }
+
+    public FulfillmentOperationTicketFactory(CredentialSlotMapper slots, List<CredentialProvider> providers,
+            FulfillmentCallbackProperties callbacks,
+            List<com.aifuli.module.supplychain.infrastructure.security.CredentialSetResolver> sets,
+            HuashengCheckpointCodec checkpointCodec, FrozenCredentialSlotResolver frozenSlotResolver,
+            FrozenCredentialSetResolver frozenSetResolver, SingleStepCheckpointCodec singleStepCodec,
+            PublishedConnectorConfigurationResolver singleStepResolver, EnvelopeCryptoPort targetCrypto,
+            HmacFingerprintPort targetFingerprint, FulfillmentTargetSchemaRegistry targetSchemas) {
         this.credentialSlotMapper = slots;
         this.credentialProviders = providers;
         this.callbackProperties = callbacks;
         this.credentialSetResolvers = List.copyOf(sets);
         this.checkpointCodec = checkpointCodec;
+        this.frozenSlotResolver = frozenSlotResolver;
+        this.frozenSetResolver = frozenSetResolver;
+        this.singleStepCodec = singleStepCodec;
+        this.singleStepResolver = singleStepResolver;
+        this.targetCrypto = targetCrypto;
+        this.targetFingerprint = targetFingerprint;
+        this.targetSchemas = targetSchemas;
     }
     /** 兼容旧单槽测试/调用；集模式缺解析器仍失败关闭。 */
     public FulfillmentOperationTicketFactory(CredentialSlotMapper slots, List<CredentialProvider> providers,
@@ -66,10 +141,191 @@ public class FulfillmentOperationTicketFactory {
         }
         return resolveSecretKey(config.credentialSlotId());
     }
+
+    /**
+     * 显式新材料入口：只按Metadata声明键解析原冻结身份，成功由Ticket接管，装配失败立即擦除。
+     * 不持有订单/资金锁调用；旧协议仍走原入口。供价只读BOrder冻结值，禁止Offer最新价兜底。
+     * 本基础入口不承担检查点认证；完整单步骤原单必须使用createForSingleStep，后续Runner不得绕过该认证入口。
+     * 材料合同见 docs/superpowers/specs/2026-10-15-renyue-qnm-szcard-detailed-design.md#32-ticket扩展。
+     */
+    public OperationTicket createWithFrozenCredentials(FulfillmentOperationDO operation, BOrderDO bOrder,
+            FulfillmentRequestDO request, SupplierDO supplier, SupplierOfferVersionDO offerVersion,
+            PublishedConnectorConfiguration config, AdapterMetadata metadata, FrozenCredentialSlotIdentity frozenSlot,
+            FulfillmentOperationKind kind, String rechargeAccount, String traceId) {
+        if (!Objects.equals(metadata.adapterType(), config.adapterType())
+                || metadata.credentialBindingMode() != config.credentialBindingMode()
+                || !Objects.equals(bOrder.getConnectorVersionId(), config.connectorVersionId())) {
+            throw new IllegalStateException("冻结配置与适配器或原单绑定不一致");
+        }
+        if (bOrder.getSupplierSettlementUnitPrice() == null) throw new IllegalStateException("原单冻结供价缺失");
+        var price = new Money(bOrder.getSupplierSettlementUnitPrice(), bOrder.getCurrency());
+        var material = resolveFrozenMaterial(config, metadata.credentialKeys(), frozenSlot);
+        try {
+            return ticketBuilder(operation, bOrder, request, supplier, offerVersion, config, kind, rechargeAccount, traceId)
+                    .settlementUnitPriceMinorUnits(price.cents()).currency(price.currency())
+                    .resolvedCredentialMaterial(material)
+                    .credentialSetId(config.credentialSetId()).frozenCredentialItems(config.frozenCredentialItems())
+                    .executionGeneration(operation.getExecutionGeneration() != null ? operation.getExecutionGeneration() : 0L)
+                    // 本切片不解密检查点，更不能把数据库信封密文当作适配器可消费的明文。
+                    .checkpointPayload(null)
+                    .build();
+        } catch (RuntimeException | Error failure) {
+            material.close();
+            throw failure;
+        }
+    }
+
+    private ResolvedCredentialMaterial resolveFrozenMaterial(PublishedConnectorConfiguration config,
+            Set<String> requiredKeys, FrozenCredentialSlotIdentity frozenSlot) {
+        requiredKeys = Set.copyOf(requiredKeys);
+        if (config.credentialBindingMode() == CredentialBindingMode.SINGLE_SLOT) {
+            if (frozenSlot == null || !Objects.equals(config.credentialSlotId(), frozenSlot.slotId())
+                    || config.credentialSetId() != null || !config.frozenCredentialItems().isEmpty()
+                    || requiredKeys.size() != 1 || frozenSlotResolver == null) {
+                throw new IllegalStateException("冻结凭据槽绑定或解析器不可用");
+            }
+            String key = requiredKeys.iterator().next();
+            return ResolvedCredentialMaterial.takeOwnership(requiredKeys, Map.of(key, frozenSlotResolver.resolve(frozenSlot)));
+        }
+        Set<String> frozenKeys = config.frozenCredentialItems().stream().map(item -> item.itemKey()).collect(Collectors.toSet());
+        if (config.credentialBindingMode() != CredentialBindingMode.CREDENTIAL_SET || frozenSlot != null
+                || config.credentialSlotId() != null || config.credentialSetId() == null || frozenSetResolver == null
+                || !frozenKeys.equals(requiredKeys)) {
+            throw new IllegalStateException("冻结凭据集绑定或解析器不可用");
+        }
+        return ResolvedCredentialMaterial.takeOwnership(requiredKeys,
+                frozenSetResolver.resolve(config.credentialSetId(), config.frozenCredentialItems(), requiredKeys));
+    }
+
+    /**
+     * 持久原单的完整认证装配：先认证原SEND检查点、归属和内容摘要，再解密目标/解析凭据。
+     * 禁止在聚合事务内准备材料；本入口不认领、不执行HTTP、不改订单或资金。
+     * QUERY仅改变执行端点，不改变原SEND的AAD；回调/供价/四时限均来自原合同，绝无最新值兜底。
+     * 设计：docs/superpowers/specs/2026-10-15-renyue-qnm-szcard-detailed-design.md#32-ticket扩展。
+     */
+    public OperationTicket createForSingleStep(FulfillmentOperationDO operation, BOrderDO bOrder,
+            FulfillmentRequestDO request, SupplyChainOrderDO order,
+            SupplierDO supplier, FulfillmentOperationKind kind, String traceId) {
+        return createForSingleStep(operation, bOrder, request, order, supplier, kind, traceId,
+                operation == null || operation.getExecutionGeneration() == null ? 0 : operation.getExecutionGeneration());
+    }
+
+    /** 事务外预装配拟认领代次；该值本身不是资格，必须再以原代次/冻结绑定竞争已提交permit。 */
+    public OperationTicket createForSingleStep(FulfillmentOperationDO operation, BOrderDO bOrder,
+            FulfillmentRequestDO request, SupplyChainOrderDO order,
+            SupplierDO supplier, FulfillmentOperationKind kind, String traceId, long proposedGeneration) {
+        if (TransactionSynchronizationManager.isActualTransactionActive()) {
+            throw new IllegalStateException("单步骤材料装配不得位于订单或资金事务内");
+        }
+        if (singleStepCodec == null || singleStepResolver == null || targetCrypto == null || targetFingerprint == null || targetSchemas == null) {
+            throw new IllegalStateException("单步骤原单装配依赖不可用");
+        }
+        if (operation == null || bOrder == null || request == null || order == null || supplier == null
+                || kind != FulfillmentOperationKind.FULFILL && kind != FulfillmentOperationKind.QUERY_ORDER
+                || !Objects.equals(operation.getBOrderId(), bOrder.getId())
+                || !Objects.equals(bOrder.getFulfillmentRequestId(), request.getId())
+                || !Objects.equals(bOrder.getOrderId(), order.getId()) || !Objects.equals(request.getOrderId(), order.getId())
+                || !Objects.equals(request.getBuyerId(), order.getBuyerId()) || !Objects.equals(bOrder.getSupplierId(), supplier.getId())
+                || !FulfillmentOperationKind.FULFILL.name().equals(operation.getOperationKind())
+                || !AdapterStepCode.SEND.name().equals(operation.getAdapterStepCode())
+                || !Objects.equals(operation.getSequenceNo(), 1)
+                || !Objects.equals(operation.getIdempotencyKey(), FulfillmentIdempotencyKeys.operation(bOrder.getBOrderNo(), 1))
+                || operation.getConfigDigest() == null || operation.getConfigDigest().length != 32) {
+            throw new IllegalStateException("单步骤原单绑定无效");
+        }
+        var metadata = singleStepResolver.singleStepMetadata(bOrder.getConnectorVersionId());
+        var binding = new SingleStepCheckpoint.Binding(operation.getOperationNo(), bOrder.getId(), metadata.adapterType(),
+                AdapterStepCode.SEND, supplier.getId(), bOrder.getConnectorVersionId(), bOrder.getOfferVersionId(),
+                HexFormat.of().formatHex(operation.getConfigDigest()));
+        var checkpoint = singleStepCodec.decrypt(new SingleStepCheckpointCodec.Stored(operation.getCheckpointSchemaVersion(),
+                operation.getCheckpointKeyVersion(), operation.getCheckpointCiphertext()), binding);
+        var business = checkpoint.business();
+        var target = business.protectedTargetReference();
+        if (!business.billno().equals(bOrder.getBillno()) || !Objects.equals(bOrder.getRequestedQuantity(), business.quantity())
+                || !Objects.equals(request.getRequestedQuantity(), business.quantity()) || !Objects.equals(order.getQuantity(), business.quantity())
+                || !Objects.equals(bOrder.getSupplierSettlementUnitPrice(), business.settlementUnitPriceMinorUnits())
+                || !business.currency().equals(bOrder.getCurrency()) || !business.targetSchemaCode().equals(request.getTargetSchemaCode())
+                || !Objects.equals(target.requestId(), request.getId()) || !target.requestNo().equals(request.getRequestNo())
+                || !Objects.equals(target.targetSchemaVersion(), request.getTargetSchemaVersion())
+                || !target.targetKeyVersion().equals(request.getTargetKeyVersion()) || request.getTargetDigest() == null
+                || !MessageDigest.isEqual(HexFormat.of().parseHex(target.targetDigest()), request.getTargetDigest())) {
+            throw new IllegalStateException("单步骤原单业务内容或目标引用不一致");
+        }
+        var frozen = singleStepResolver.resolveForExistingOrder(checkpoint);
+        if (!Objects.equals(bOrder.getOfferId(), frozen.offer().getOfferId())) throw new IllegalStateException("原Offer归属不一致");
+        String mobile = singleStepMobile(request, order);
+        byte[] plaintext = singleStepCodec.encodePlaintext(checkpoint);
+        ResolvedCredentialMaterial material = null;
+        try {
+            material = resolveFrozenMaterial(frozen.connector(), metadata.credentialKeys(), checkpoint.credentialIdentity().slot());
+            return ticketBuilder(operation, bOrder, request, supplier, frozen.offer(), frozen.connector(), kind, mobile, traceId)
+                    .billno(business.billno()).externalSkuCode(business.externalSkuCode()).quantity(business.quantity())
+                    .callbackUrl(business.callbackUrl()).checkpointPayload(plaintext)
+                    .adapterStepCode(kind == FulfillmentOperationKind.QUERY_ORDER ? AdapterStepCode.QUERY_ORDER : AdapterStepCode.SEND)
+                    .connectTimeoutMs(checkpoint.recoveryContract().connectTimeoutMs()).readTimeoutMs(checkpoint.recoveryContract().readWriteTimeoutMs())
+                    .settlementUnitPriceMinorUnits(business.settlementUnitPriceMinorUnits()).currency(business.currency())
+                    .credentialSetId(checkpoint.credentialIdentity().setId()).frozenCredentialItems(checkpoint.credentialIdentity().items())
+                    .executionGeneration(proposedGeneration)
+                    .resolvedCredentialMaterial(material).build();
+        } catch (RuntimeException | Error failure) {
+            if (material != null) material.close();
+            throw failure;
+        } finally {
+            Arrays.fill(plaintext, (byte) 0);
+        }
+    }
+
+    /** 只认受保护目标的封闭Schema和规范MOBILE；HMAC不符/坏密文不可借用订单普通手机号字段兜底。 */
+    private String singleStepMobile(FulfillmentRequestDO request, SupplyChainOrderDO order) {
+        byte[] plaintext = null;
+        try {
+            byte[] aad = (request.getBuyerId() + "|" + order.getBuyerOrderNo() + "|" + request.getTargetSchemaCode()
+                    + "|" + request.getTargetSchemaVersion()).getBytes(StandardCharsets.UTF_8);
+            plaintext = targetCrypto.decrypt(request.getTargetCiphertext(), request.getTargetKeyVersion(), aad);
+            if (plaintext == null || plaintext.length == 0 || plaintext.length > 4096
+                    || !MessageDigest.isEqual(targetFingerprint.fingerprint(FulfillmentTargetFields.FINGERPRINT_PURPOSE, plaintext), request.getTargetDigest())) {
+                throw new IllegalArgumentException();
+            }
+            var json = TARGET_JSON.readTree(plaintext);
+            var fields = new java.util.HashSet<String>(); json.fieldNames().forEachRemaining(fields::add);
+            var values = json.path("values");
+            if (!fields.equals(Set.of("schemaCode", "schemaVersion", "values"))
+                    || !json.path("schemaCode").isTextual() || !request.getTargetSchemaCode().equals(json.path("schemaCode").textValue())
+                    || !json.path("schemaVersion").isIntegralNumber() || !json.path("schemaVersion").canConvertToInt()
+                    || request.getTargetSchemaVersion() != json.path("schemaVersion").intValue() || !values.isObject()) {
+                throw new IllegalArgumentException();
+            }
+            Map<String, String> target = new java.util.HashMap<>();
+            values.fields().forEachRemaining(entry -> {
+                if (!entry.getValue().isTextual()) throw new IllegalArgumentException();
+                target.put(entry.getKey(), entry.getValue().textValue());
+            });
+            targetSchemas.validate(request.getTargetSchemaCode(), request.getTargetSchemaVersion(), target);
+            String mobile = FulfillmentTargetFields.mobileAccountValue(target);
+            if (mobile == null || !mobile.equals(target.get(FulfillmentTargetFields.ACCOUNT_VALUE))) throw new IllegalArgumentException();
+            return mobile;
+        } catch (java.io.IOException | RuntimeException invalid) {
+            // Jackson/密文异常可能包含明文，不把任意原始诊断带入Timer的通用异常路径。
+            throw new IllegalStateException("单步骤原目标认证或MOBILE校验失败");
+        } finally {
+            if (plaintext != null) Arrays.fill(plaintext, (byte) 0);
+        }
+    }
+
     public OperationTicket create(FulfillmentOperationDO operation, BOrderDO bOrder, FulfillmentRequestDO request,
                                   SupplierDO supplier, SupplierOfferVersionDO offerVersion,
                                   PublishedConnectorConfiguration connectorConfig, FulfillmentOperationKind kind,
                                   String rechargeAccount, String secretKey, String traceId) {
+        return ticketBuilder(operation, bOrder, request, supplier, offerVersion, connectorConfig, kind, rechargeAccount, traceId)
+                .secretKey(connectorConfig.credentialBindingMode() == com.aifuli.module.supplychain.supplieradapter.metadata.CredentialBindingMode.SINGLE_SLOT ? secretKey : null)
+                .credentialMaterial(resolveMaterial(connectorConfig))
+                .build();
+    }
+
+    private OperationTicket.OperationTicketBuilder ticketBuilder(FulfillmentOperationDO operation, BOrderDO bOrder,
+            FulfillmentRequestDO request, SupplierDO supplier, SupplierOfferVersionDO offerVersion,
+            PublishedConnectorConfiguration connectorConfig, FulfillmentOperationKind kind,
+            String rechargeAccount, String traceId) {
         if (HuashengOrderV1Metadata.TYPE.equals(connectorConfig.adapterType())) {
             throw new UnsupportedOperationException("华昇必须使用专用 createForHuasheng 入口");
         }
@@ -93,14 +349,11 @@ public class FulfillmentOperationTicketFactory {
                     .callbackUrl(resolveCallbackUrl(connectorConfig.callbackPath()))
                     .baseUrl(connectorConfig.baseUrl())
                     .merchantAccount(connectorConfig.merchantAccount())
-                    .secretKey(connectorConfig.credentialBindingMode() == com.aifuli.module.supplychain.supplieradapter.metadata.CredentialBindingMode.SINGLE_SLOT ? secretKey : null)
-                    .credentialMaterial(resolveMaterial(connectorConfig))
                     .connectTimeoutMs(connectorConfig.connectTimeoutMs())
                     .readTimeoutMs(connectorConfig.readTimeoutMs())
                     .traceId(traceId)
                     .checkpointPayload(operation.getCheckpointCiphertext())
-                    .extraParameters(connectorConfig.extraParameters())
-                    .build();
+                    .extraParameters(connectorConfig.extraParameters());
     }
 
     /**

@@ -65,6 +65,13 @@ public class FulfillmentOperationExecuteHandler implements PersistentTimerHandle
     private final FulfillmentOperationTicketFactory ticketFactory;
     private final RechargeFrequencyLifecycle frequencyLifecycle;
     private final ObjectProvider<HuashengFulfillmentRunner> huashengRunnerProvider;
+    private ObjectProvider<com.aifuli.module.supplychain.border.fulfillment.application.singlestep.SingleStepFulfillmentRunner> singleStepRunners;
+
+    /** 延迟读取避免Timer注册循环；手工构造的旧协议测试不要求单步组件。详见三家详细设计§4.7。 */
+    @Autowired
+    void setSingleStepRunners(ObjectProvider<com.aifuli.module.supplychain.border.fulfillment.application.singlestep.SingleStepFulfillmentRunner> runners) {
+        this.singleStepRunners = runners;
+    }
 
     @Autowired
     public FulfillmentOperationExecuteHandler(
@@ -149,6 +156,10 @@ public class FulfillmentOperationExecuteHandler implements PersistentTimerHandle
         // 华昇分派：必须在旧 EXECUTING/UNKNOWN 提前跳过与普通 claim 之前
         BOrderDO bOrder = bOrderMapper.selectById(operation.getBOrderId());
         if (bOrder != null) {
+            var singleStep = singleStepRunners == null ? null : singleStepRunners.getIfAvailable();
+            if (singleStep != null && singleStep.supports(bOrder.getConnectorVersionId())) {
+                return singleStep.runExecute(operationNo, payload.path("originTraceId").asText(null));
+            }
             PublishedConnectorConfiguration connectorConfig = connectorResolver.resolve(bOrder.getConnectorVersionId());
             if (connectorConfig != null && HuashengOrderV1Metadata.TYPE.equals(connectorConfig.adapterType())) {
                 HuashengFulfillmentRunner huashengRunner = huashengRunnerProvider != null ? huashengRunnerProvider.getIfAvailable() : null;

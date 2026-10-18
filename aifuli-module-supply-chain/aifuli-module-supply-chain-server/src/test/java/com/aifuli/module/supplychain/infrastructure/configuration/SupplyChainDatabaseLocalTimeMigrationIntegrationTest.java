@@ -80,9 +80,10 @@ class SupplyChainDatabaseLocalTimeMigrationIntegrationTest {
         // 044 路由 PRD 模型新增 3 表并删除旧强类型规则 2 表（净 +1）；045 新增每日配额 1 表。
         // 046业务编码域2表、047项目应用凭证审计1表、048限频3表、049迁移覆盖门禁1表后，
         // 054 AD-3 凭据集/凭据项 2 表；053/055/056/057/058/059/060 仅加列/键不增表；
-        // 061新增Outbox/Timer身份账本2表，063新增项目能力审计1表，相对021增加24张（全量126张）。
-        assertThat(businessTableCount(jdbc)).isEqualTo(businessTableCountBefore + 24);
-        assertThat(changeSetCount(jdbc)).isEqualTo(65L);
+        // 061账本2表、063能力审计1表、065号段2表、066异常命令1表；067/068不增表。
+        // 当前相对021增加27张（全量129张），主清单包含70个changeSet。
+        assertThat(businessTableCount(jdbc)).isEqualTo(businessTableCountBefore + 27);
+        assertThat(changeSetCount(jdbc)).isEqualTo(70L);
         assertThat(jdbc.queryForObject("""
                 SELECT COUNT(*) FROM DATABASECHANGELOG WHERE ID = '022-database-local-time'
                 """, Long.class)).isEqualTo(1L);
@@ -92,7 +93,8 @@ class SupplyChainDatabaseLocalTimeMigrationIntegrationTest {
         // + 045每日配额2列 = 274；047凭证审计1列、048限频12列及046编码域2列时区注释补齐，
         // + 049迁移取得及核验时间2列 = 291；054凭据集/项各2列 created_at/updated_at（Asia/Shanghai）+4，
         // 053/055/056/057/058/059 不加 datetime 列；060 valid_until 1列、061账本4列，
-        // 062 追加 lease/deadline/send 3列；063项目能力审计 occurred_at 1列，全量304列。
+        // 062追加lease/deadline/send 3列、063审计1列时共304列；065再加3列、066加4列，共311列。
+        // 068仅修正066四列的时区注释，不对存量时间再次增加八小时。
         assertThat(jdbc.queryForObject("""
                 SELECT COUNT(*)
                 FROM information_schema.COLUMNS
@@ -101,11 +103,11 @@ class SupplyChainDatabaseLocalTimeMigrationIntegrationTest {
                   AND DATA_TYPE = 'datetime'
                   AND DATETIME_PRECISION = 3
                   AND COLUMN_COMMENT LIKE '%Asia/Shanghai%'
-                """, Long.class)).isEqualTo(304L);
+                """, Long.class)).isEqualTo(311L);
 
         updateRemaining(dataSource);
 
-        assertThat(changeSetCount(jdbc)).isEqualTo(65L);
+        assertThat(changeSetCount(jdbc)).isEqualTo(70L);
         assertThat(brandCreatedAt(jdbc)).isEqualTo(SHANGHAI_WALL_TIME);
     }
 

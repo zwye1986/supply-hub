@@ -80,6 +80,7 @@ public final class HuashengOrderV1Metadata implements AdapterMetadata {
     }
 
     /** 发布和运行时均核对恰十行非终态模板，防止验证后改映射绕过资金边界。设计同§3.2。 */
+    @Override
     public void validateMappings(List<StatusMappingDefinitionDO> statuses, List<SupplierErrorCodeMapDO> errors) {
         var expected = new HashSet<>(mappingTemplates().statusMappings());
         require(statuses != null && statuses.size() == expected.size() && errors != null && errors.isEmpty());

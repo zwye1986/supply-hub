@@ -72,6 +72,11 @@ import com.aifuli.module.supplychain.border.fulfillment.application.huashengflow
 import com.aifuli.module.supplychain.border.fulfillment.application.huashengflow.HuashengCheckpointCodec;
 import com.aifuli.module.supplychain.border.fulfillment.application.huashengflow.HuashengFlowCodes;
 import com.aifuli.module.supplychain.border.fulfillment.application.huashengflow.HuashengFlowPolicy;
+import com.aifuli.module.supplychain.border.fulfillment.application.singlestep.SingleStepCheckpointCodec;
+import com.aifuli.module.supplychain.border.fulfillment.domain.singlestep.SingleStepCheckpoint;
+import com.aifuli.module.supplychain.border.fulfillment.domain.FulfillmentTargetFields;
+import com.aifuli.module.supplychain.border.fulfillment.domain.FulfillmentTimerTaskTypes;
+import com.aifuli.module.supplychain.tradecore.catalog.domain.FulfillmentType;
 import com.aifuli.module.supplychain.infrastructure.timer.PersistentTimer;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.aifuli.framework.common.exception.ServiceException;
@@ -159,6 +164,7 @@ public class FulfillmentAcceptanceLifecycle {
     private final ObjectProvider<HuashengCheckpointCodec> checkpointCodecProvider;
     private final ObjectProvider<PersistentTimer> persistentTimerProvider;
     private final ObjectProvider<FulfillmentCallbackProperties> callbackPropertiesProvider;
+    private final ObjectProvider<SingleStepCheckpointCodec> singleStepCheckpointCodecProvider;
 
     /**
      * 在敏感目标加密前，根据采购商商品关系解析平台 SKU 持有的权威 Schema。
@@ -525,10 +531,21 @@ public class FulfillmentAcceptanceLifecycle {
         if (orderMapper.advanceDetailVersion(order.getId(), 0L, 1L, now) != 1) {
             throw new IllegalStateException("Supply-chain order detail version lost monotonicity");
         }
-        FulfillmentOperationDO operation = createOperation(command, bOrder, listing.sku(), now);
+        FulfillmentOperationDO operation = createOperation(command, bOrder, fulfillmentRequest, listing.sku(), now);
         operationMapper.insert(operation);
         inject(AcceptanceFailureInjector.Stage.B_ORDER_CREATED);
         scheduleHuashengPreparationWatchdogIfApplicable(operation, command.traceId(), now);
+        if (AdapterStepCode.SEND.name().equals(operation.getAdapterStepCode()) && operation.getCheckpointCiphertext() != null) {
+            inject(AcceptanceFailureInjector.Stage.CHECKPOINT_FROZEN);
+            var timer = persistentTimerProvider.getIfAvailable();
+            if (timer == null) throw new IllegalStateException("单步骤准备Timer不可用");
+            var payload = objectMapper.createObjectNode().put("operationNo", operation.getOperationNo());
+            if (command.traceId() != null) payload.put("originTraceId", command.traceId());
+            timer.scheduleOnce(FulfillmentTimerTaskTypes.SINGLE_STEP_PREPARATION_WATCHDOG,
+                    FulfillmentTimerTaskTypes.SINGLE_STEP_PREPARATION_WATCHDOG + ":" + operation.getOperationNo(), payload,
+                    databaseClock.toInstant(now.plusMinutes(FulfillmentTimerTaskTypes.SINGLE_STEP_PREPARATION_WATCHDOG_MINUTES)));
+            inject(AcceptanceFailureInjector.Stage.PREPARATION_WATCHDOG_SCHEDULED);
+        }
 
         rechargeFrequencyLifecycle.enqueue(new RechargeFrequencyLifecycle.EnqueueCommand(
                 order.getId(), order.getOrderNo(), fulfillmentRequest.getId(), operation.getOperationNo(),
@@ -771,9 +788,13 @@ public class FulfillmentAcceptanceLifecycle {
                 .activeFlag(Boolean.TRUE).version(0L).createdAt(now).updatedAt(now).build();
     }
 
-    private FulfillmentOperationDO createOperation(PreparedAcceptance command, BOrderDO bOrder, PlatformSkuDO sku, LocalDateTime now) {
+    private FulfillmentOperationDO createOperation(PreparedAcceptance command, BOrderDO bOrder, FulfillmentRequestDO request,
+                                                  PlatformSkuDO sku, LocalDateTime now) {
         PublishedConnectorConfigurationResolver connectorResolver = connectorResolverProvider != null
                 ? connectorResolverProvider.getIfAvailable() : null;
+        if (connectorResolver != null && connectorResolver.singleStepRecoveryContract(bOrder.getConnectorVersionId()) != null) {
+            return createSingleStepOperation(command, bOrder, request, sku, connectorResolver, now);
+        }
         PublishedConnectorConfiguration connectorConfig = null;
         if (connectorResolver != null && bOrder.getConnectorVersionId() != null) {
             try {
@@ -798,6 +819,49 @@ public class FulfillmentAcceptanceLifecycle {
                         + "|" + bOrder.getConnectorVersionId()).getBytes(StandardCharsets.UTF_8)))
                 .status(FulfillmentInitialStatuses.OPERATION_PENDING).attemptCount(0)
                 .createdAt(now).updatedAt(now).version(0L).build();
+    }
+
+    /**
+     * 新单步骤路径在受理事务内冻结完整非秘密合同；任何准备失败均上抛回滚，不落旧Operation兜底。
+     * 不解析凭据材料，不计算首次CREATE日期/截止/租约。
+     * 设计：docs/superpowers/specs/2026-10-15-renyue-qnm-szcard-detailed-design.md#31-单步骤检查点v1。
+     */
+    private FulfillmentOperationDO createSingleStepOperation(PreparedAcceptance command, BOrderDO bOrder,
+            FulfillmentRequestDO request, PlatformSkuDO sku, PublishedConnectorConfigurationResolver resolver, LocalDateTime now) {
+        if (!FulfillmentType.DIRECT_RECHARGE.code().equals(sku.getFulfillmentType()) || command.quantity() != 1
+                || !FulfillmentTargetFields.ACCOUNT_TYPE_MOBILE.equals(command.targetAccountType())) {
+            throw new IllegalStateException("单步骤首期仅支持单份手机号直充");
+        }
+        var codec = singleStepCheckpointCodecProvider.getIfAvailable();
+        var callbacks = callbackPropertiesProvider.getIfAvailable();
+        if (codec == null || callbacks == null || callbacks.getPublicCallbackBaseUrl() == null
+                || callbacks.getPublicCallbackBaseUrl().isBlank()) throw new IllegalStateException("单步骤冻结依赖或回调域名不可用");
+        var frozen = resolver.resolveForSingleStepAcceptance(bOrder.getConnectorVersionId(), bOrder.getOfferVersionId());
+        var config = frozen.connector();
+        if (!Objects.equals(frozen.offer().getSupplierSettlementUnitPrice(), bOrder.getSupplierSettlementUnitPrice())
+                || frozen.content().path("supplierId").longValue() != bOrder.getSupplierId()
+                || config.callbackPath() == null || config.callbackPath().isBlank()) {
+            throw new IllegalStateException("单步骤原供给内容与路由不一致");
+        }
+        String base = callbacks.getPublicCallbackBaseUrl();
+        String callback = (base.endsWith("/") ? base.substring(0, base.length() - 1) : base)
+                + (config.callbackPath().startsWith("/") ? config.callbackPath() : "/" + config.callbackPath());
+        var target = new SingleStepCheckpoint.TargetReference(request.getId(), request.getRequestNo(), request.getTargetSchemaVersion(),
+                HexFormat.of().formatHex(request.getTargetDigest()), request.getTargetKeyVersion());
+        var business = new SingleStepCheckpoint.Business(bOrder.getBillno(), frozen.offer().getExternalSkuCode(), command.quantity(),
+                request.getTargetSchemaCode(), target, callback, bOrder.getSupplierSettlementUnitPrice(), bOrder.getCurrency());
+        var recovery = frozen.metadata().singleStepRecoveryContract();
+        String digest = SingleStepCheckpointCodec.contentDigest(frozen.content(), business, frozen.credentials(), recovery);
+        String operationNo = businessNoGenerator.next(BusinessNoPrefixes.OP);
+        var binding = new SingleStepCheckpoint.Binding(operationNo, bOrder.getId(), config.adapterType(), AdapterStepCode.SEND,
+                bOrder.getSupplierId(), bOrder.getConnectorVersionId(), bOrder.getOfferVersionId(), digest);
+        var stored = codec.encrypt(new SingleStepCheckpoint(SingleStepCheckpoint.SCHEMA_VERSION, binding, business, frozen.credentials(), recovery));
+        return FulfillmentOperationDO.builder().operationNo(operationNo).bOrderId(bOrder.getId())
+                .operationKind(FulfillmentOperationKind.FULFILL.name()).adapterStepCode(AdapterStepCode.SEND.name())
+                .sequenceNo(1).idempotencyKey(FulfillmentIdempotencyKeys.operation(bOrder.getBOrderNo(), 1))
+                .configDigest(HexFormat.of().parseHex(digest)).status(FulfillmentInitialStatuses.OPERATION_PENDING).attemptCount(0)
+                .checkpointSchemaVersion(stored.schemaVersion()).checkpointKeyVersion(stored.keyVersion()).checkpointCiphertext(stored.ciphertext())
+                .executionGeneration(0L).recoveryCount(0).createdAt(now).updatedAt(now).version(0L).build();
     }
 
     private FulfillmentOperationDO createHuashengInitialOperation(PreparedAcceptance command, BOrderDO bOrder,

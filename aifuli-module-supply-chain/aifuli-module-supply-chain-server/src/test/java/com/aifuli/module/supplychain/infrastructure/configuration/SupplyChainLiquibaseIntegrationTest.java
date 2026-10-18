@@ -72,7 +72,8 @@ class SupplyChainLiquibaseIntegrationTest {
                         "sc_supplier_invoice", "sc_buyer_invoice", "sc_product_type",
                         "sc_std_routing_rule", "sc_std_routing_rule_scope", "sc_std_routing_candidate",
                         "sc_supplier_sku_daily_quota", "sc_recharge_frequency_queue",
-                        "sc_recharge_frequency_entry", "sc_recharge_frequency_action_audit")
+                        "sc_recharge_frequency_entry", "sc_recharge_frequency_action_audit",
+                        "sc_order_no_sequence", "sc_order_no_segment", "sc_fulfillment_case_action")
                 .doesNotContain("sc_inventory_asset", "sc_supply_reservation",
                         "sc_standard_product_routing_rule", "sc_standard_product_routing_candidate");
         assertThat(firstStartup.columnNames())
@@ -169,7 +170,15 @@ class SupplyChainLiquibaseIntegrationTest {
                         "sc_supply_chain_order.fulfillment_account_type",
                         "sc_supply_chain_order.remark",
                         "sc_supply_chain_order.standard_project_key",
-                        "sc_supply_chain_order.legacy_buyer_key")
+                        "sc_supply_chain_order.legacy_buyer_key",
+                        "sc_order_no_sequence.last_reserved_value",
+                        "sc_order_no_segment.owner_id",
+                        "sc_b_order.terminal_reason_code",
+                        "sc_fulfillment_call_log.evidence_ciphertext",
+                        "sc_fulfillment_operation.side_effect_free",
+                        "sc_fulfillment_case_action.request_fingerprint",
+                        "sc_buyer_project.settlement_buyer_id",
+                        "sc_fulfillment_request.settlement_buyer_id")
                 .doesNotContain("sc_standard_pricing_quote.buyer_user_id",
                         "sc_fulfillment_acceptance_receipt.buyer_user_id",
                         "sc_fulfillment_asset.buyer_user_id");
@@ -180,8 +189,10 @@ class SupplyChainLiquibaseIntegrationTest {
                 "expire_at:DATETIME:-:3:NO");
         assertThat(firstStartup.projectAuthNoncePrimaryKeyColumns())
                 .containsExactly("app_id", "nonce");
-        // 065追加两张永久号段表；原66个变更集保持，正式增量新增1个。
-        assertThat(firstStartup.changeSetCount()).isEqualTo(67L);
+        // 065/066/067分别新增号段、异常命令证据、独立结算方；不把文件末号当作变更集总数。
+        // 基线核对见 docs/superpowers/specs/2026-10-15-renyue-qnm-szcard-detailed-design.md#104-t00基线收口修订2026-10-16。
+        // 068只补齐异常命令时间注释，总计70个变更集，业务表和列不增加。
+        assertThat(firstStartup.changeSetCount()).isEqualTo(70L);
         assertThat(firstStartup.uniqueIndexes())
                 .contains("sc_instore_payment_flow.uk_sc_instore_flow_order",
                         "sc_instore_channel_user_binding.uk_sc_instore_user_binding_project",
@@ -248,20 +259,30 @@ class SupplyChainLiquibaseIntegrationTest {
                 assertThat(queryLong(connection,
                         "SELECT TIMESTAMPDIFF(SECOND, UTC_TIMESTAMP(), CURRENT_TIMESTAMP())"))
                         .isEqualTo(28_800L);
+                // 先列出缺少时区语义的具体字段，避免总数断言掩盖新增列的契约缺失。
+                assertThat(queryStrings(connection, """
+                        SELECT CONCAT(TABLE_NAME, '.', COLUMN_NAME)
+                        FROM information_schema.COLUMNS
+                        WHERE TABLE_SCHEMA = DATABASE()
+                          AND TABLE_NAME LIKE 'sc\\_%'
+                          AND DATA_TYPE = 'datetime'
+                          AND COLUMN_COMMENT NOT LIKE '%Asia/Shanghai%'
+                        ORDER BY TABLE_NAME, ORDINAL_POSITION
+                        """)).isEmpty();
                 assertThat(queryLong(connection, """
                         SELECT COUNT(DISTINCT TABLE_NAME)
                         FROM information_schema.COLUMNS
                         WHERE TABLE_SCHEMA = DATABASE()
                           AND TABLE_NAME LIKE 'sc\\_%'
-                        """)).isEqualTo(128L);
-                // 065追加三列时间与两张表，真实模式共307个Asia/Shanghai DATETIME(3)。
+                        """)).isEqualTo(129L);
+                // 065追加三列时间，066异常命令再追加四列，共311个DATETIME(3)。
                 assertThat(queryLong(connection, """
                         SELECT COUNT(*)
                         FROM information_schema.COLUMNS
                         WHERE TABLE_SCHEMA = DATABASE()
                           AND TABLE_NAME LIKE 'sc\\_%'
                           AND DATA_TYPE = 'datetime'
-                        """)).isEqualTo(307L);
+                        """)).isEqualTo(311L);
                 assertThat(queryLong(connection, """
                         SELECT COUNT(*)
                         FROM information_schema.COLUMNS
@@ -277,14 +298,6 @@ class SupplyChainLiquibaseIntegrationTest {
                           AND TABLE_NAME LIKE 'sc\\_%'
                           AND DATA_TYPE = 'datetime'
                           AND UPPER(COLUMN_COMMENT) LIKE '%UTC%'
-                        """)).isZero();
-                assertThat(queryLong(connection, """
-                        SELECT COUNT(*)
-                        FROM information_schema.COLUMNS
-                        WHERE TABLE_SCHEMA = DATABASE()
-                          AND TABLE_NAME LIKE 'sc\\_%'
-                          AND DATA_TYPE = 'datetime'
-                          AND COLUMN_COMMENT NOT LIKE '%Asia/Shanghai%'
                         """)).isZero();
             }
         }

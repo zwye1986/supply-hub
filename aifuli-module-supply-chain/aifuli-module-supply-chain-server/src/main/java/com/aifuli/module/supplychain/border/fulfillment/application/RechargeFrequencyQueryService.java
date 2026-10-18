@@ -19,9 +19,20 @@ public class RechargeFrequencyQueryService {
     private final FulfillmentOperationTicketFactory tickets;
     private final OperationExecutorPort executor;
     private final SupplierOrderLifecycle lifecycle;
+    private org.springframework.beans.factory.ObjectProvider<com.aifuli.module.supplychain.border.fulfillment.application.singlestep.SingleStepFulfillmentRunner> singleSteps;
+    @org.springframework.beans.factory.annotation.Autowired
+    void setSingleSteps(org.springframework.beans.factory.ObjectProvider<com.aifuli.module.supplychain.border.fulfillment.application.singlestep.SingleStepFulfillmentRunner> runners) {
+        singleSteps = runners;
+    }
     @Transactional(transactionManager="supplyChainTransactionManager", propagation=Propagation.NOT_SUPPORTED)
     public void query(RechargeFrequencyRecoveryService.QueryWork work, String traceId) {
         var locked = work.locked(); var operation = locked.operation(); var bo = locked.bOrder();
+        // 单步骤恢复由原单围栏拥有；30秒频控唤醒不能绕过180/600秒合同或额外裸查。
+        // 设计：docs/superpowers/specs/2026-10-15-renyue-qnm-szcard-detailed-design.md#43-查询看门狗与频控协作。
+        var singleStep = singleSteps == null ? null : singleSteps.getIfAvailable();
+        if (singleStep != null && singleStep.supports(bo.getConnectorVersionId())) {
+            singleStep.runRecovery(operation.getOperationNo(), operation.getExecutionGeneration(), traceId); return;
+        }
         long start = System.nanoTime();
         try {
             var config = connectors.resolve(bo.getConnectorVersionId());

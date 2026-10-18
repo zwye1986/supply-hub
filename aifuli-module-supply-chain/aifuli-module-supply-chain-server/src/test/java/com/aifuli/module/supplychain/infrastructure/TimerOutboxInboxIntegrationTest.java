@@ -103,11 +103,19 @@ class TimerOutboxInboxIntegrationTest {
             outbox.appendLocal("TEST_AGG", "AGG-1", 0, "TEST_EVENT", RecordingDispatchHandler.TARGET,
                     Map.of("hello", "world"), "trace-1", null, null,
                     java.time.LocalDateTime.now(java.time.ZoneOffset.UTC));
-            await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
-                    assertThat(dispatch.count.get()).isEqualTo(1));
-            assertThat(jdbc.queryForObject(
-                    "SELECT status FROM sc_outbox_event WHERE event_type='TEST_EVENT'", Short.class))
-                    .isEqualTo((short) 40);
+            // 处理器完成早于publish事务提交；等待真实终态，不把计数可见当作提交屏障。
+            // 设计见 docs/superpowers/specs/2026-10-15-renyue-qnm-szcard-detailed-design.md#104-t00基线收口修订2026-10-16。
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+                assertThat(dispatch.count.get()).isEqualTo(1);
+                assertThat(jdbc.queryForObject(
+                        "SELECT status FROM sc_outbox_event WHERE event_type='TEST_EVENT'", Short.class))
+                        .isEqualTo((short) 40);
+            });
+            assertThat(jdbc.queryForObject("""
+                    SELECT COUNT(*) FROM sc_outbox_event
+                    WHERE event_type='TEST_EVENT' AND published_at IS NOT NULL
+                      AND lease_owner IS NULL AND lease_until IS NULL
+                    """, Long.class)).isEqualTo(1L);
 
             byte[] eventBytes = "payload".getBytes(java.nio.charset.StandardCharsets.UTF_8);
             InboxService.InboxAttempt first = inbox.tryStart("test-consumer", "EVT-1", eventBytes, "trace-1");

@@ -245,7 +245,11 @@ class FulfillmentAcceptanceIntegrationTest {
             long baselineOutbox = count(jdbc, "sc_outbox_event");
             BuyerAccountDO beforeFailures = context.getBean(BuyerAccountMapper.class)
                     .selectByBuyerId(fixture.buyerId());
-            for (AcceptanceFailureInjector.Stage stage : AcceptanceFailureInjector.Stage.values()) {
+            // 保留旧协议全部六个原有阶段；新增单步骤检查点/准备任务阶段由SingleStepFrozenConfigurationIntegrationTest覆盖。
+            for (AcceptanceFailureInjector.Stage stage : List.of(AcceptanceFailureInjector.Stage.ORDER_INSERTED,
+                    AcceptanceFailureInjector.Stage.REQUEST_ATTACHED, AcceptanceFailureInjector.Stage.ROUTING_RECORDED,
+                    AcceptanceFailureInjector.Stage.B_ORDER_CREATED, AcceptanceFailureInjector.Stage.FUNDS_FROZEN,
+                    AcceptanceFailureInjector.Stage.OUTBOX_APPENDED)) {
                 failures.failAt(stage);
                 AcceptFulfillmentReqDTO failed = request("C-FAIL-" + stage.name());
                 assertThatThrownBy(() -> facade.acceptFulfillment(failed))

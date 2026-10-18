@@ -10,6 +10,8 @@ public interface AcceptanceFailureInjector {
         REQUEST_ATTACHED,
         ROUTING_RECORDED,
         B_ORDER_CREATED,
+        CHECKPOINT_FROZEN,
+        PREPARATION_WATCHDOG_SCHEDULED,
         FUNDS_FROZEN,
         OUTBOX_APPENDED
     }

@@ -160,6 +160,20 @@ public class RechargeFrequencyLifecycle {
     }
 
     /**
+     * 单步骤认领的同事务频控边界；必须在单步骤Lifecycle获取其它聚合锁之前调用。
+     * 此处有意内部调用claim/markSendPossible：不经过代理、不另开事务，任一步失败使外层完整认领回滚。
+     * 旧公开入口的REQUIRES_NEW语义不变；原队首定位及ENTRY升序锁全部由频控所有者维护。
+     * 设计：docs/superpowers/specs/2026-10-15-renyue-qnm-szcard-detailed-design.md#47-t03本地执行与恢复接线2026-10-18。
+     */
+    @Transactional(transactionManager = "supplyChainTransactionManager", propagation = Propagation.MANDATORY, rollbackFor = Exception.class)
+    public boolean claimSingleStepSend(String operationNo) {
+        var permit = claim(operationNo);
+        if (permit == null) return false;
+        if (!markSendPossible(permit)) throw new IllegalStateException("单步骤频控发送边界竞争失败");
+        return true;
+    }
+
+    /**
      * 独立短事务越过发送边界；与人工PREPARED撤销竞争同一锁，提交成功后才能在事务外发送原ticket。
      * 设计见 docs/superpowers/specs/2026-09-30-direct-recharge-mobile-spu-frequency-design.md#42-认领。
      */

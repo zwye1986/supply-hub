@@ -10,6 +10,8 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import java.util.*;
 
 /**
@@ -45,6 +47,13 @@ public class FrozenCredentialSetResolver {
         if (actual.size() != rows.size() || !actual.equals(expected)) throw invalid();
         Map<String, char[]> resolved = new LinkedHashMap<>();
         try {
+            // 方法返回后Spring才提交；提交失败时调用者尚未接管，不能仅依赖下方catch擦除。
+            // 设计见 docs/superpowers/specs/2026-10-15-renyue-qnm-szcard-detailed-design.md#32-ticket扩展。
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override public void afterCompletion(int status) {
+                    if (status != STATUS_COMMITTED) resolved.values().forEach(chars -> { if (chars != null) Arrays.fill(chars, '\0'); });
+                }
+            });
             for (var row : rows) {
                 if (!requestedKeys.contains(row.getItemKey())) continue;
                 var provider = providers.stream().filter(value -> value.supports(row.getProviderType())).findFirst().orElseThrow(FrozenCredentialSetResolver::invalid);

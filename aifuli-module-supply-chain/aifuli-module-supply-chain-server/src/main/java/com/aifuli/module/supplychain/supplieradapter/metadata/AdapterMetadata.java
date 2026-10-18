@@ -14,6 +14,14 @@ public interface AdapterMetadata {
     /** 旧单槽适配器兼容默认；集模式必须显式声明，不能推断或混用主键。 */
     default CredentialBindingMode credentialBindingMode() { return CredentialBindingMode.SINGLE_SLOT; }
 
+    /**
+     * 新单步骤冻结路径的显式选择；默认不启用，不按无fulfillmentSteps推断或改变旧QNM/华昇。
+     * 设计：docs/superpowers/specs/2026-10-15-renyue-qnm-szcard-detailed-design.md#31-单步骤检查点v1。
+     */
+    default com.aifuli.module.supplychain.border.fulfillment.domain.singlestep.SingleStepCheckpoint.RecoveryContract singleStepRecoveryContract() {
+        return null;
+    }
+
     /** 非秘密扩展参数的封闭 Schema，默认沿用连接器 Schema。 */
     default String extraConfigSchemaResource() { return connectorSchemaResource(); }
 
@@ -54,6 +62,13 @@ public interface AdapterMetadata {
      * 该适配器的状态映射与错误码映射模板，UI『从模板初始化』据此生成映射行（G2）。协议知识单一来源。
      */
     MappingTemplates mappingTemplates();
+
+    /**
+     * 核对映射的协议内容，由配置验证、发布及已发布解析入口共同调用；不执行资金或重路由动作。
+     * 封闭适配器覆盖此方法，生命周期仍由入口校验；默认不增加约束，保留既有可扩展适配器行为。
+     * 设计见 docs/superpowers/specs/2026-10-15-renyue-qnm-szcard-detailed-design.md#22-发布合同。
+     */
+    default void validateMappings(List<StatusMappingDefinitionDO> statuses, List<SupplierErrorCodeMapDO> errors) {}
 
     /**
      * 是否允许在草稿上逐条追加状态映射；可扩展适配器默认允许，封闭模板必须显式关闭。

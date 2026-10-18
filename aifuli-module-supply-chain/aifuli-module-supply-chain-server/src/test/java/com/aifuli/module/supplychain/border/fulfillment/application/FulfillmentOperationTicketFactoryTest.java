@@ -12,6 +12,58 @@ import static org.assertj.core.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 class FulfillmentOperationTicketFactoryTest {
+    @Test
+    void keyedTicketUsesOriginalOrderCostAndOwnsMaterialUntilClosed() throws Exception {
+        var resolver = mock(com.aifuli.module.supplychain.infrastructure.security.FrozenCredentialSetResolver.class);
+        char[] merchant = "synthetic-merchant".toCharArray(), privateKey = "synthetic-private".toCharArray();
+        var identities = List.of(new FrozenCredentialItemIdentity(11L, "merchantKey", "ENV", 3),
+                new FrozenCredentialItemIdentity(12L, "privateKey", "ENV", 7));
+        when(resolver.resolve(42L, identities, Set.of("merchantKey", "privateKey")))
+                .thenReturn(Map.of("merchantKey", merchant, "privateKey", privateKey));
+        var factory = new FulfillmentOperationTicketFactory(mock(CredentialSlotMapper.class), List.of(),
+                new FulfillmentCallbackProperties(), List.of(), null, null, resolver);
+        var metadata = mock(com.aifuli.module.supplychain.supplieradapter.metadata.AdapterMetadata.class);
+        when(metadata.adapterType()).thenReturn("TEST_KEYED");
+        when(metadata.credentialBindingMode()).thenReturn(com.aifuli.module.supplychain.supplieradapter.metadata.CredentialBindingMode.CREDENTIAL_SET);
+        when(metadata.credentialKeys()).thenReturn(Set.of("merchantKey", "privateKey"));
+        var config = new PublishedConnectorConfiguration("CON", 71L, 1, "TEST_KEYED", "https://supplier.invalid", "MERCHANT",
+                null, null, Set.of(), 42L, metadata.credentialBindingMode(), 1500, 2501, Map.of(), identities);
+        var operation = FulfillmentOperationDO.builder().operationNo("OP").adapterStepCode("SEND").executionGeneration(9L).build();
+        var order = BOrderDO.builder().bOrderNo("BO").connectorVersionId(71L).offerVersionId(81L)
+                .supplierSettlementUnitPrice(884L).currency("CNY").build();
+        var offer = SupplierOfferVersionDO.builder().id(81L).externalSkuCode("SKU").supplierSettlementUnitPrice(999L).currency("CNY").build();
+        var ticket = factory.createWithFrozenCredentials(operation, order, FulfillmentRequestDO.builder().build(),
+                SupplierDO.builder().supplierCode("SUP").build(), offer, config, metadata, null,
+                FulfillmentOperationKind.QUERY_ORDER, null, "TRACE");
+        try (ticket) {
+            String actual = ticket.resolvedCredentialMaterial().use("merchantKey", String::new);
+            assertThat(actual).isEqualTo("synthetic-merchant");
+            assertThat(ticket.secretKey()).isNull();
+            assertThat(ticket.credentialMaterial()).isNull();
+            assertThat(ticket.settlementUnitPriceMinorUnits()).isEqualTo(884L);
+            assertThat(ticket.currency()).isEqualTo("CNY");
+            assertThat(ticket.executionGeneration()).isEqualTo(9L);
+            assertThat(ticket.frozenCredentialItems()).containsExactlyElementsOf(identities);
+            assertThat(ticket.toString()).doesNotContain("synthetic-merchant", "synthetic-private");
+            assertThatThrownBy(() -> new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(ticket))
+                    .hasMessageContaining("禁止序列化").hasMessageNotContaining("synthetic-");
+        }
+        assertThat(merchant).containsOnly('\0');
+        assertThat(privateKey).containsOnly('\0');
+        assertThatThrownBy(() -> ticket.resolvedCredentialMaterial().use("merchantKey", String::new))
+                .isInstanceOf(IllegalStateException.class);
+
+        char[] failedMerchant = "synthetic-merchant".toCharArray(), failedPrivate = "synthetic-private".toCharArray();
+        when(resolver.resolve(42L, identities, metadata.credentialKeys()))
+                .thenReturn(Map.of("merchantKey", failedMerchant, "privateKey", failedPrivate));
+        operation.setOperationNo("");
+        assertThatThrownBy(() -> factory.createWithFrozenCredentials(operation, order, FulfillmentRequestDO.builder().build(),
+                SupplierDO.builder().supplierCode("SUP").build(), offer, config, metadata, null,
+                FulfillmentOperationKind.QUERY_ORDER, null, "TRACE")).isInstanceOf(IllegalArgumentException.class);
+        assertThat(failedMerchant).containsOnly('\0');
+        assertThat(failedPrivate).containsOnly('\0');
+    }
+
     @Test void queryTicketKeepsFrozenReferencesWithoutAccountAndFallsBackToBOrderBillno() {
         var factory=new FulfillmentOperationTicketFactory(mock(CredentialSlotMapper.class),List.of(),new FulfillmentCallbackProperties());
         var operation=FulfillmentOperationDO.builder().operationNo("OP_ORIGINAL").operationKind("FULFILL")

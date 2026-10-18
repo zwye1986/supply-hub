@@ -71,7 +71,7 @@ class SupplierConfigurationSchemaIntegrationTest {
                 assertThat(jdbc.queryForObject("SELECT external_sku_code FROM sc_supplier_offer "
                         + "WHERE offer_no = 'OFR_PRE_057'", String.class)).isEqualTo("EXT-PRE-057");
                 insertOffer(900_051L, "OFR_POST_057", "EXT-PRE-057");
-                assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM DATABASECHANGELOG", Long.class)).isEqualTo(64L);
+                assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM DATABASECHANGELOG", Long.class)).isEqualTo(70L);
             }
         }
     }

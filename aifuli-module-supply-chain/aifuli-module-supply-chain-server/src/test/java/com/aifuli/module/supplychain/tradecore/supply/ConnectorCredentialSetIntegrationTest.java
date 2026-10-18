@@ -7,6 +7,8 @@ import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.*;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.*;
 import com.fasterxml.jackson.databind.JsonNode;
 import org.junit.jupiter.api.*;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.context.ConfigurableApplicationContext;
@@ -167,6 +169,67 @@ class ConnectorCredentialSetIntegrationTest {
         jdbc.update("UPDATE sc_supplier_connector_version SET extra_config='{\"token\":\"synthetic\"}' WHERE id=?",draft.connectorVersionId());
         assertThatThrownBy(()->context.getBean(PublishedConnectorConfigurationResolver.class).resolve(draft.connectorVersionId())).isInstanceOf(IllegalArgumentException.class);
     }
+
+    /**
+     * 非华昇适配器的协议合同同样约束验证、发布和已发布读取，不能靠类型特判绕过。
+     * 直接篡改隔离库以保留合法生命周期，避免被其它前置门禁拒绝而产生假绿。
+     * 设计见 docs/superpowers/specs/2026-10-15-renyue-qnm-szcard-detailed-design.md#22-发布合同。
+     */
+    @ParameterizedTest
+    @EnumSource(MappingBoundary.class)
+    void adapterMappingContractRejectsDriftAtEveryBoundary(MappingBoundary boundary) throws Throwable {
+        String supplier = supplier();
+        createCompleteSet(supplier, "MAPPING", privatePem());
+        var draft = draft(supplier, "MAPPING", "{}");
+        if (boundary == MappingBoundary.VALIDATION) {
+            context.getBean(SupplierConfigurationCommandService.class).initializeMappings(draft.connectorVersionId(), 1L);
+        } else {
+            validate(draft);
+            if (boundary == MappingBoundary.RUNTIME) publish(draft);
+        }
+        var command = new ConnectorValidationService.ValidateConnectorCommand(draft.connectorVersionId(),
+                new QnmGameOrderV1Metadata().capabilities().stream().map(Enum::name).collect(java.util.stream.Collectors.toSet()),
+                Duration.ofMinutes(10), 1L, "映射合同验证", "trace");
+        org.assertj.core.api.ThrowableAssert.ThrowingCallable action = switch (boundary) {
+            case VALIDATION -> () -> context.getBean(ConnectorValidationService.class).validate(command);
+            case PUBLICATION -> () -> publish(draft);
+            case RUNTIME -> () -> context.getBean(PublishedConnectorConfigurationResolver.class).resolve(draft.connectorVersionId());
+        };
+        var versions = context.getBean(SupplierConnectorVersionMapper.class);
+        var before = versions.selectById(draft.connectorVersionId());
+
+        assertThat(jdbc.update("UPDATE sc_status_mapping_definition SET fact_type='SUCCEEDED' "
+                + "WHERE connector_version_id=? AND external_status='ResCode=1'", draft.connectorVersionId())).isEqualTo(1);
+        assertThatThrownBy(action).isInstanceOf(IllegalArgumentException.class).hasMessage("TEST_SET封闭映射不一致");
+        jdbc.update("UPDATE sc_status_mapping_definition SET fact_type='ACCEPTED' "
+                + "WHERE connector_version_id=? AND external_status='ResCode=1'", draft.connectorVersionId());
+
+        var errors = context.getBean(SupplierErrorCodeMapMapper.class);
+        var unexpected = SupplierErrorCodeMapDO.builder().connectorVersionId(draft.connectorVersionId())
+                .mappingVersion(before.getVersionNo()).externalErrorCode("TIMEOUT").externalSubCode("")
+                .errorClass("RESULT_UNKNOWN").actionType("QUERY_FIRST").retryableFlag((short) 0)
+                .status((short) (boundary == MappingBoundary.RUNTIME ? 10 : 0))
+                .createdBy(1L).createdAt(java.time.LocalDateTime.now()).build();
+        errors.insert(unexpected);
+        assertThatThrownBy(action).isInstanceOf(IllegalArgumentException.class).hasMessage("TEST_SET封闭映射不一致");
+        errors.deleteById(unexpected.getId());
+
+        assertThat(versions.selectById(draft.connectorVersionId()).getStatus()).isEqualTo(before.getStatus());
+        if (boundary != MappingBoundary.RUNTIME) {
+            assertThat(jdbc.queryForObject("SELECT current_version_id FROM sc_supplier_connector WHERE connector_no=?",
+                    Long.class, draft.connectorNo())).isNull();
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_supplier_config_publish_record "
+                    + "WHERE target_version_id=? AND action_type='PUBLISH'", Long.class, draft.connectorVersionId())).isZero();
+        }
+        // 恢复合法合同后同一版本可继续，证明拒绝来自映射而非凭据、生命周期或能力。
+        action.call();
+        if (boundary == MappingBoundary.VALIDATION) publish(draft);
+        assertThat(context.getBean(PublishedConnectorConfigurationResolver.class).resolve(draft.connectorVersionId()).adapterType())
+                .isEqualTo("TEST_SET");
+    }
+
+    enum MappingBoundary { VALIDATION, PUBLICATION, RUNTIME }
+
     @Test void plaintextLimitsRejectBeforeMySqlWriteAndExactUtf8BoundarySurvives() throws Exception {
         String supplier=supplier();var service=context.getBean(SupplierCredentialCommandService.class);
         Long set=service.createCredentialSet(new SupplierCredentialCommandService.CreateCredentialSetCommand(supplier,"LIMIT",1L));
@@ -232,5 +295,17 @@ class ConnectorCredentialSetIntegrationTest {
         public void validateOfferConfig(int version,JsonNode config){qnm.validateOfferConfig(version,config);}
         public ExecutionProfileDefaults defaultExecutionProfile(){return qnm.defaultExecutionProfile();}
         public MappingTemplates mappingTemplates(){return qnm.mappingTemplates();}
+
+        /** 隔离适配器声明自己的封闭合同，不冒充任何新供应商的协议状态。 */
+        @Override
+        public void validateMappings(List<StatusMappingDefinitionDO> statuses, List<SupplierErrorCodeMapDO> errors) {
+            var expected = mappingTemplates().statusMappings();
+            var actual = statuses.stream().map(row -> new MappingTemplates.StatusMappingTemplate(
+                    row.getExternalStatus(), row.getExternalSubStatus(), row.getBusinessPhase(), row.getFactType(),
+                    row.getTerminalFlag() == 1)).toList();
+            if (actual.size() != expected.size() || !new HashSet<>(actual).equals(new HashSet<>(expected)) || !errors.isEmpty()) {
+                throw new IllegalArgumentException("TEST_SET封闭映射不一致");
+            }
+        }
     }
 }

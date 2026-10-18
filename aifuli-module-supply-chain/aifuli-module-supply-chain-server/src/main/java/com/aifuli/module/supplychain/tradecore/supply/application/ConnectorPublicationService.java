@@ -88,7 +88,8 @@ public class ConnectorPublicationService {
         if (!java.util.Objects.equals(setId, version.getCredentialSetId())) {
             throw new IllegalStateException("Connector credential association changed during publication");
         }
-        credentialBindingValidator.verify(metadataRegistry.require(connector.getAdapterType()), connector.getSupplierId(), version, true);
+        var metadata = metadataRegistry.require(connector.getAdapterType());
+        credentialBindingValidator.verify(metadata, connector.getSupplierId(), version, true);
         LocalDateTime now = now();
         if (connector.getVersion() != command.expectedConnectorVersion()
                 || version.getStatus() != ConnectorVersionStatus.VALIDATED.getCode()
@@ -100,10 +101,10 @@ public class ConnectorPublicationService {
         if (statuses.isEmpty() || statuses.stream().anyMatch(mapping -> mapping.getStatus() != 0)) {
             throw new IllegalStateException("Connector status mappings are not publishable");
         }
-        // 验证后映射仍可编辑，发布必须重复执行封闭安全契约；设计见华昇生产闭环§3.2。
-        if (metadataRegistry.require(connector.getAdapterType()) instanceof
-                com.aifuli.module.supplychain.supplieradapter.metadata.HuashengOrderV1Metadata huasheng) {
-            huasheng.validateMappings(statuses, errorCodeMapMapper.selectByConnectorVersionId(version.getId()));
+        // 发布前重核适配器协议合同，不能仅信任早先的验证结果；
+        // 设计见 docs/superpowers/specs/2026-10-15-renyue-qnm-szcard-detailed-design.md#22-发布合同。
+        metadata.validateMappings(statuses, errorCodeMapMapper.selectByConnectorVersionId(version.getId()));
+        if (metadata instanceof com.aifuli.module.supplychain.supplieradapter.metadata.HuashengOrderV1Metadata huasheng) {
             credentialBindingValidator.extraParameters(huasheng, version.getExtraConfig());
         }
         // D1 供应商级唯一守卫：同供应商已存在其它已发布连接器（current_version_id 非空的其它行）时，

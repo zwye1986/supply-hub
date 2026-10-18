@@ -14,6 +14,15 @@ public final class FulfillmentTimerTaskTypes {
 
     public static final String OPERATION_EXECUTE = "FULFILLMENT_OPERATION_EXECUTE";
 
+    /** 新单步骤同代补查及执行租约看门狗，详见三家详细设计§4.7。 */
+    public static final String SINGLE_STEP_QUERY = "SINGLE_STEP_QUERY";
+    public static final String SINGLE_STEP_WATCHDOG = "SINGLE_STEP_WATCHDOG";
+
+    /** 新单步骤受理事务的准备定位任务。
+     * 设计：docs/superpowers/specs/2026-10-15-renyue-qnm-szcard-detailed-design.md#43-查询看门狗与频控协作。 */
+    public static final String SINGLE_STEP_PREPARATION_WATCHDOG = "SINGLE_STEP_PREPARATION_WATCHDOG";
+    public static final int SINGLE_STEP_PREPARATION_WATCHDOG_MINUTES = 5;
+
     /** 华昇唯一下一步与首次执行 Timer 任务类型。 */
     public static final String HUASHENG_EXECUTE = "HS_FULFILLMENT_EXECUTE";
 

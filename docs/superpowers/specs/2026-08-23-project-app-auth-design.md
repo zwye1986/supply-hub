@@ -382,9 +382,12 @@ ThreadLocal 在 finally 清理，杜绝线程复用串号。
     OpenAPI、timer、outbox 等开关必须作为 `SpringApplication.run("--key=value")` 的高优先级
     命令行参数传入，不能只用 `SpringApplicationBuilder.properties` 的低优先级默认属性；实际端口
     必须从 `WebServerApplicationContext.getWebServer().getPort()` 读取，禁止依赖本地固定 58190；
-  - 本门禁只验证项目应用 HMAC 认证链路，nonce 按 §6.4 使用 MySQL，不依赖 Redis。测试上下文须以
-    `aifuli.tenant.enable=false` 关闭无关的租户 Web/MyBatis/RPC 与租户 Redis 缓存装配，并继续显式排除
-    Redis 自动配置；租户隔离与租户缓存由各自门禁覆盖，禁止为了启动本门禁伪造 Redis Bean；
+  - 本门禁只验证项目应用 HMAC 认证链路，nonce 按 §6.4 使用 MySQL。完整应用自订单编号改造后
+    必须装配真实 Redis 客户端；测试使用独占 `redis:7.4` 容器和显式客户端、发号 `env=test` 与
+    `scope=project-app-auth`，不把它改成 nonce 存储。测试上下文仍以 `aifuli.tenant.enable=false`
+    关闭无关的租户子系统、排除本机 Redis 自动配置，并隔离其他测试配置的组件扫描；启动失败与
+    正常退出均回收资源，禁止伪造 Redis Bean 或关闭生产缺依赖门禁。修订依据见
+    `docs/superpowers/specs/2026-10-15-renyue-qnm-szcard-detailed-design.md` §10.4；
   - 种子为 buyer + 项目(10) + INSTORE 能力(10) + application(10) +
     CURRENT/GRACE/REVOKED 三版凭证，`secret_ref` 必须用生产 AES-256-GCM codec 真实加密；
   - 四组 API 分别用合法 DTO 和合法签名穿透 Spring Security、Filter、Accessor、ApiImpl 与 Facade：

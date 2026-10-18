@@ -12,10 +12,15 @@ import java.util.Map;
  * 不可变履约操作执行凭证（Ticket）：包含执行单次供应商外部副作用所需的完整业务与技术入参。
  *
  * <p>调用者（如定时任务处理器或重试引擎）抢占 Operation 成功后构造本 Ticket 并传递给适配器，
- * 凭证构造后完全不可变，通信密钥在调用完成后由适配器丢弃，严禁日志明文记录。</p>
+ * 身份字段构造后不可变；新协议材料由Ticket接管并在调用完成/失败时关闭擦除，旧String材料路径保持原语义，严禁日志明文记录。</p>
  *
  * <p>设计详见 {@code docs/superpowers/specs/2026-08-07-supply-chain-phase1-detailed-design.md#731-operationexecutorport-契约模型}
- * 以及 {@code docs/superpowers/specs/2026-10-09-huasheng-type201-production-closure-design.md#33-冻结投影与首单-checkpoint}。</p>
+ * 以及 {@code docs/superpowers/specs/2026-10-09-huasheng-type201-production-closure-design.md#33-冻结投影与首单-checkpoint}。
+ * 新材料生命周期见 {@code docs/superpowers/specs/2026-10-15-renyue-qnm-szcard-detailed-design.md#32-ticket扩展}。</p>
+ *
+ * @param settlementUnitPriceMinorUnits 冻结的供应商履约结算单价，单位为分；旧路径为空
+ * @param currency 供应商结算币种，一期固定CNY；旧路径为空
+ * @param resolvedCredentialMaterial 新协议按声明键接管的受保护材料，关闭Ticket时擦除；旧路径为空
  */
 @Builder
 @JsonSerialize(using = FulfillmentInternalOnlySerializer.class)
@@ -49,8 +54,27 @@ public record OperationTicket(
         int readTimeoutMs,
         Long credentialSetId,
         List<FrozenCredentialItemIdentity> frozenCredentialItems,
-        long executionGeneration
-) {
+        long executionGeneration,
+        Long settlementUnitPriceMinorUnits,
+        String currency,
+        ResolvedCredentialMaterial resolvedCredentialMaterial
+) implements AutoCloseable {
+    /** 旧30字段构造兼容入口；新协议材料与供价不从旧字段猜测。 */
+    public OperationTicket(String operationNo, String bOrderNo, String billno, String externalOrderNo,
+            String supplierCode, String adapterType, Long connectorVersionId, Long offerVersionId,
+            FulfillmentOperationKind operationKind, AdapterStepCode adapterStepCode, int sequenceNo,
+            String idempotencyKey, String externalSkuCode, long quantity, String rechargeAccount, String targetSchemaCode,
+            String callbackUrl, String baseUrl, String merchantAccount, String secretKey, int timeoutSeconds,
+            String traceId, byte[] checkpointPayload, Map<String, String> extraParameters,
+            CredentialMaterial credentialMaterial, int connectTimeoutMs, int readTimeoutMs, Long credentialSetId,
+            List<FrozenCredentialItemIdentity> frozenCredentialItems, long executionGeneration) {
+        this(operationNo, bOrderNo, billno, externalOrderNo, supplierCode, adapterType, connectorVersionId, offerVersionId,
+                operationKind, adapterStepCode, sequenceNo, idempotencyKey, externalSkuCode, quantity, rechargeAccount,
+                targetSchemaCode, callbackUrl, baseUrl, merchantAccount, secretKey, timeoutSeconds, traceId,
+                checkpointPayload, extraParameters, credentialMaterial, connectTimeoutMs, readTimeoutMs,
+                credentialSetId, frozenCredentialItems, executionGeneration, null, null, null);
+    }
+
     /** 旧24字段构造兼容入口；毫秒值缺省由秒值补齐，不推断集材料。 */
     public OperationTicket(String operationNo, String bOrderNo, String billno, String externalOrderNo,
             String supplierCode, String adapterType, Long connectorVersionId, Long offerVersionId,
@@ -143,6 +167,15 @@ public record OperationTicket(
     @Override
     public byte[] checkpointPayload() {
         return checkpointPayload == null ? null : checkpointPayload.clone();
+    }
+
+    /**
+     * 仅关闭新协议接管的材料；旧不可变String路径不改变语义，也不宣称可擦除。
+     * 设计见 docs/superpowers/specs/2026-10-15-renyue-qnm-szcard-detailed-design.md#32-ticket扩展。
+     */
+    @Override
+    public void close() {
+        if (resolvedCredentialMaterial != null) resolvedCredentialMaterial.close();
     }
 
     @JsonSerialize(using = FulfillmentInternalOnlySerializer.class)
