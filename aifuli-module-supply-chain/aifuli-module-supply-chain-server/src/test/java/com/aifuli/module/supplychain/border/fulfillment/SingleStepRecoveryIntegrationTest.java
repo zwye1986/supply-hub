@@ -31,6 +31,218 @@ class SingleStepRecoveryIntegrationTest {
     @BeforeEach void start() { fixture.startWith(ExecutionConfig.class); }
     @AfterEach void stop() { fixture.stop(); }
 
+    @ParameterizedTest @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void thirdIndependentNotFoundReleasesOriginalPriceOnceEvenOnLastLegalQuery(boolean lastBudget) throws Exception {
+        var op = accept("THREE-NOT-FOUND-" + lastBudget);
+        executor().observation = SingleStepSupplierFact.Observation.RESPONSE_UNKNOWN;
+        runner().runExecute(op.getOperationNo(), "unknown-create");
+        for (int i = 1; i <= 2; i++) {
+            clock().fixed = operation().getNextRecoverAt();
+            var permit = claim(SingleStepAction.QUERY);
+            var result = fact(permit, SingleStepSupplierFact.Observation.NOT_FOUND, clock().now());
+            runner().applyResult(permit, result, "not-found");
+            var due = operation().getNextRecoverAt();
+            runner().applyResult(permit, result, "duplicate-not-found");
+            assertThat(runtime().progress().consecutiveNotFound()).isEqualTo(i);
+            assertThat(operation().getNextRecoverAt()).isEqualTo(due).isEqualTo(clock().now().plusSeconds(180));
+            held();
+        }
+        var due = operation().getNextRecoverAt();
+        fixture.reopenWith(ExecutionConfig.class);
+        if (lastBudget) fixture.jdbc.update("UPDATE sc_fulfillment_operation SET recovery_count=999");
+        clock().fixed = due;
+        var third = claim(SingleStepAction.QUERY);
+        var thirdResult = fact(third, SingleStepSupplierFact.Observation.NOT_FOUND, clock().now());
+        if (lastBudget) {
+            fixture.jdbc.execute("ALTER TABLE sc_outbox_event ADD CONSTRAINT fail_nf_result CHECK "
+                    + "(NOT (event_type='SUPPLY_CHAIN_ORDER_CHANGED' AND JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.orderStatus'))='FAILED'))");
+            assertThatThrownBy(() -> runner().applyResult(third, thirdResult, "third-outbox-failed")).isInstanceOf(RuntimeException.class);
+            assertThat(operation().getRecoveryCount()).isEqualTo(1000);
+            assertThat(runtime().progress().consecutiveNotFound()).isEqualTo(2);
+            held();
+            fixture.jdbc.execute("ALTER TABLE sc_outbox_event DROP CHECK fail_nf_result");
+        }
+        assertThat(runner().applyResult(third, thirdResult, "third-not-found")).isEqualTo("NOT_FOUND_EXHAUSTED");
+        assertThat(operation().getStatus()).isEqualTo(com.aifuli.module.supplychain.border.order.domain.SupplierOrderOperationStatus.FAILED.getCode());
+        assertThat(operation().getNextRecoverAt()).isNull();
+        assertThat(runtime().terminalEvidence().fact().observation()).isEqualTo(SingleStepSupplierFact.Observation.NOT_FOUND);
+        assertThat(runtime().terminalEvidence().fact().zeroDeliveryConfirmed()).isFalse();
+        assertThat(fixture.jdbc.queryForObject("SELECT terminal_reason_code FROM sc_b_order", String.class)).isEqualTo("SINGLE_STEP_NOT_FOUND_EXHAUSTED");
+        assertThat(fixture.jdbc.queryForObject("SELECT released_amount FROM sc_fund_reservation", Long.class)).isEqualTo(1000);
+        assertThat(fixture.jdbc.queryForObject("SELECT frozen FROM sc_buyer_account", Long.class)).isZero();
+        assertThat(fixture.jdbc.queryForObject("SELECT balance FROM sc_buyer_account", Long.class)).isEqualTo(25000);
+        runner().applyResult(third, thirdResult, "duplicate-third");
+        assertThat(fixture.jdbc.queryForObject("SELECT COUNT(*) FROM sc_account_ledger WHERE entry_type='RELEASE'", Long.class)).isEqualTo(1);
+        assertThat(fixture.jdbc.queryForObject("SELECT COUNT(*) FROM sc_account_ledger WHERE entry_type='COMMIT'", Long.class)).isZero();
+        assertThat(fixture.jdbc.queryForObject("SELECT COUNT(*) FROM sc_supply_chain_order WHERE order_status=40", Long.class)).isEqualTo(1);
+        assertThat(terminalEvents()).isEqualTo(1);
+        runner().applyResult(third, fact(third, SingleStepSupplierFact.Observation.SUCCESS, clock().now()), "late-success-after-release");
+        assertThat(runtime().successEvidence()).isNotNull();
+        assertThat(operation().getStatus()).isEqualTo(com.aifuli.module.supplychain.border.order.domain.SupplierOrderOperationStatus.FAILED.getCode());
+        assertThat(fixture.jdbc.queryForObject("SELECT reason_code FROM sc_fulfillment_exception_case", String.class)).isEqualTo("SINGLE_STEP_TERMINAL_CONFLICT");
+        assertThat(fixture.jdbc.queryForObject("SELECT balance FROM sc_buyer_account", Long.class)).isEqualTo(25000);
+        assertThat(fixture.jdbc.queryForObject("SELECT COUNT(*) FROM sc_account_ledger WHERE entry_type='COMMIT'", Long.class)).isZero();
+    }
+
+    @ParameterizedTest @org.junit.jupiter.params.provider.NullSource
+    @org.junit.jupiter.params.provider.ValueSource(longs = {884, 900, 1100})
+    void trustedSuccessCommitsOriginalBuyerPriceOnceAndDoesNotInventSupplierCost(Long reported) {
+        var op = accept("SETTLE-" + reported);
+        // 项目日后变更结算方不能把旧单的确认移到新账户；原请求快照仍拥有1000分预留。
+        fixture.jdbc.update("UPDATE sc_buyer_project SET settlement_buyer_id=987654");
+        executor().observation = SingleStepSupplierFact.Observation.SUCCESS;
+        executor().reported = reported;
+        runner().runExecute(op.getOperationNo(), "success");
+        assertThat(operation().getStatus()).isEqualTo(com.aifuli.module.supplychain.border.order.domain.SupplierOrderOperationStatus.SUCCEEDED.getCode());
+        assertThat(operation().getNextRecoverAt()).isNull();
+        assertThat(operation().getExecutionLeaseUntil()).isNull();
+        assertThat(fixture.jdbc.queryForObject("SELECT committed_amount FROM sc_fund_reservation", Long.class)).isEqualTo(1000);
+        assertThat(fixture.jdbc.queryForObject("SELECT frozen FROM sc_buyer_account", Long.class)).isZero();
+        assertThat(fixture.jdbc.queryForObject("SELECT reported_supplier_settlement_amount FROM sc_b_order", Long.class)).isEqualTo(reported);
+        assertThat(fixture.jdbc.queryForObject("SELECT confirmed_supplier_settlement_amount FROM sc_b_order", Long.class))
+                .isEqualTo(Long.valueOf(884).equals(reported) ? reported : null);
+        assertThat(fixture.jdbc.queryForObject("SELECT settlement_status FROM sc_b_order", Short.class))
+                .isEqualTo(reported == null ? (short) 0 : Long.valueOf(884).equals(reported) ? (short) 10 : (short) 20);
+        assertThat(fixture.jdbc.queryForObject("SELECT active_flag FROM sc_b_order", Boolean.class)).isNull();
+        runner().runExecute(op.getOperationNo(), "duplicate");
+        assertThat(fixture.jdbc.queryForObject("SELECT COUNT(*) FROM sc_account_ledger WHERE entry_type='COMMIT'", Long.class)).isEqualTo(1);
+        assertThat(terminalEvents()).isEqualTo(1);
+    }
+
+    @ParameterizedTest @org.junit.jupiter.params.provider.ValueSource(booleans = {true, false})
+    void failureRequiresExplicitVerifiedZeroDeliveryBeforeReleasingOriginalReservation(boolean zeroDelivery) {
+        var op = accept("FAILURE-" + zeroDelivery);
+        executor().observation = SingleStepSupplierFact.Observation.FAILURE;
+        executor().zeroDelivery = zeroDelivery;
+        runner().runExecute(op.getOperationNo(), "failure");
+        if (zeroDelivery) {
+            assertThat(operation().getStatus()).isEqualTo(com.aifuli.module.supplychain.border.order.domain.SupplierOrderOperationStatus.FAILED.getCode());
+            assertThat(fixture.jdbc.queryForObject("SELECT released_amount FROM sc_fund_reservation", Long.class)).isEqualTo(1000);
+            assertThat(fixture.jdbc.queryForObject("SELECT COUNT(*) FROM sc_account_ledger WHERE entry_type='RELEASE'", Long.class)).isEqualTo(1);
+        } else held();
+    }
+
+    @ParameterizedTest @org.junit.jupiter.params.provider.ValueSource(strings = {"COMMIT", "OUTBOX"})
+    void successProtectionSurvivesFundsRollbackAndRestartWithoutAnotherHttpCall(String fault) throws Exception {
+        var op = accept("SUCCESS-ROLLBACK-" + fault);
+        executor().observation = SingleStepSupplierFact.Observation.SUCCESS;
+        String table = "COMMIT".equals(fault) ? "sc_account_ledger" : "sc_outbox_event";
+        String condition = "COMMIT".equals(fault) ? "entry_type<>'COMMIT'"
+                : "NOT (event_type='SUPPLY_CHAIN_ORDER_CHANGED' AND JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.orderStatus'))='SUCCEEDED')";
+        fixture.jdbc.execute("ALTER TABLE " + table + " ADD CONSTRAINT fail_single_step_result CHECK (" + condition + ")");
+        assertThatThrownBy(() -> runner().runExecute(op.getOperationNo(), "success"))
+                .as("可信成功必须尝试原预留确认；提交失败应向任务边界传播").isInstanceOf(RuntimeException.class);
+        assertThat(runtime().progress().trustedExists()).isTrue();
+        assertThat(operation().getCheckpointSchemaVersion()).isEqualTo(3);
+        assertThat(runtime().successEvidence().fact().observation()).isEqualTo(SingleStepSupplierFact.Observation.SUCCESS);
+        assertThat(runtime().terminalEvidence()).isNull();
+        assertThat(fixture.jdbc.queryForObject("SELECT COUNT(*) FROM sc_raw_status_observation WHERE external_status='SUCCESS'", Long.class)).isEqualTo(1);
+        assertThat(fixture.jdbc.queryForObject("SELECT order_status FROM sc_supply_chain_order", Short.class)).isEqualTo((short) 10);
+        assertThat(fixture.jdbc.queryForObject("SELECT COUNT(*) FROM sc_order_status_log WHERE to_order_status=30", Long.class)).isZero();
+        assertThat(terminalEvents()).isZero();
+        held();
+        var lease = operation().getExecutionLeaseUntil();
+        fixture.jdbc.execute("ALTER TABLE " + table + " DROP CHECK fail_single_step_result");
+        fixture.reopenWith(ExecutionConfig.class);
+        clock().fixed = lease;
+        consume(FulfillmentTimerTaskTypes.SINGLE_STEP_WATCHDOG, 1);
+        assertThat(operation().getStatus()).isEqualTo(com.aifuli.module.supplychain.border.order.domain.SupplierOrderOperationStatus.SUCCEEDED.getCode());
+        assertThat(fixture.jdbc.queryForObject("SELECT committed_amount FROM sc_fund_reservation", Long.class)).isEqualTo(1000);
+        assertThat(fixture.jdbc.queryForObject("SELECT COUNT(*) FROM sc_account_ledger WHERE entry_type='COMMIT'", Long.class)).isEqualTo(1);
+        assertThat(executor().creates.get() + executor().queries.get()).isZero();
+    }
+
+    @Test void protectedSuccessBlocksThirdNotFoundAndRecoveryFinishesLocallyWithoutAnotherQuery() throws Exception {
+        accept("SUCCESS-BEFORE-THIRD-NF");
+        var created = claim(SingleStepAction.CREATE);
+        lifecycle().networkUnknown(created, "create-unknown");
+        for (int i = 0; i < 2; i++) {
+            clock().fixed = operation().getNextRecoverAt();
+            var query = claim(SingleStepAction.QUERY);
+            runner().applyResult(query, fact(query, SingleStepSupplierFact.Observation.NOT_FOUND, clock().now()), "not-found");
+        }
+        clock().fixed = operation().getNextRecoverAt();
+        var third = claim(SingleStepAction.QUERY);
+        // 成功观察已提交，而成功结果事务尚未运行；与重复第三次结果并发仍不能释放。
+        lifecycle().observeSuccess(created, fact(created, SingleStepSupplierFact.Observation.SUCCESS, created.leaseUntil().minusSeconds(5)), "late-success");
+        var thirdResult = fact(third, SingleStepSupplierFact.Observation.NOT_FOUND, clock().now());
+        race(() -> runner().applyResult(third, thirdResult, "third-not-found"));
+        held();
+        assertThat(runtime().successEvidence()).isNotNull();
+        clock().fixed = operation().getNextRecoverAt();
+        consume(FulfillmentTimerTaskTypes.SINGLE_STEP_QUERY, third.generation());
+        assertThat(fixture.jdbc.queryForObject("SELECT committed_amount FROM sc_fund_reservation", Long.class)).isEqualTo(1000);
+        assertThat(executor().queries.get()).isZero();
+    }
+
+    @ParameterizedTest @org.junit.jupiter.params.provider.ValueSource(strings = {"AUTH", "AMOUNT"})
+    void invalidSuccessCannotSettleAndLaterSuccessCannotEraseSecurityConflict(String fault) {
+        accept("INVALID-SUCCESS-" + fault);
+        var permit = claim(SingleStepAction.CREATE);
+        var valid = (SingleStepSupplierFact) fact(permit, SingleStepSupplierFact.Observation.SUCCESS, clock().now()).protocolFact();
+        var invalid = new SingleStepSupplierFact(valid.binding(), valid.source(), valid.billno(), valid.targetDigest(), 1,
+                "AUTH".equals(fault) ? SingleStepSupplierFact.Verification.AUTHENTICATION_FAILED : valid.verification(),
+                valid.observation(), null, valid.receivedAt(), valid.payloadDigest(), "AMOUNT".equals(fault) ? -1L : null, false);
+        runner().applyResult(permit, OperationOutcome.builder().outcomeClass(OperationOutcomeClass.SUCCEEDED)
+                .reportedSettlementAmount(invalid.reportedSettlementAmount()).protocolFact(invalid).build(), "invalid");
+        assertThat(runtime().successEvidence()).isNull();
+        held();
+        var success = fact(permit, SingleStepSupplierFact.Observation.SUCCESS, clock().now());
+        runner().applyResult(permit, success, "retry-success");
+        runner().applyResult(permit, success, "duplicate-success");
+        held();
+        assertThat(runtime().progress().lastFact()).isEqualTo(SingleStepRuntimeCheckpoint.Fact.SECURITY_CONFLICT);
+    }
+
+    @Test void genericResultEntryCannotBypassProtectedSingleStepSettlement() {
+        var op = accept("NO-GENERIC-BYPASS");
+        var permit = claim(SingleStepAction.CREATE);
+        var generic = fixture.context.getBean(com.aifuli.module.supplychain.border.fulfillment.application.SupplierOrderLifecycle.class);
+        assertThatThrownBy(() -> generic.transition(op.getOperationNo(), OperationOutcome.builder()
+                .outcomeClass(OperationOutcomeClass.SUCCEEDED).build(), "generic-bypass")).isInstanceOf(IllegalStateException.class);
+        lifecycle().apply(permit, fact(permit, SingleStepSupplierFact.Observation.SUCCESS, clock().now()), "unprotected-success");
+        assertThat(runtime().successEvidence()).isNull();
+        assertThat(operation().getStatus()).isEqualTo(com.aifuli.module.supplychain.border.order.domain.SupplierOrderOperationStatus.MANUAL.getCode());
+        held();
+    }
+
+    @Test void protectedExternalOrderIdentityCannotBeReplacedBeforeFundsTransaction() {
+        accept("PROTECTED-EXTERNAL-IDENTITY");
+        var permit = claim(SingleStepAction.CREATE);
+        var original = (SingleStepSupplierFact) fact(permit, SingleStepSupplierFact.Observation.SUCCESS, clock().now()).protocolFact();
+        var first = new SingleStepSupplierFact(original.binding(), original.source(), original.billno(), original.targetDigest(), 1,
+                original.verification(), original.observation(), "supplier-order-original", original.receivedAt(), original.payloadDigest(), 884L, false);
+        var second = new SingleStepSupplierFact(original.binding(), original.source(), original.billno(), original.targetDigest(), 1,
+                original.verification(), original.observation(), "supplier-order-other", original.receivedAt(), original.payloadDigest(), 884L, false);
+        var protectedOutcome = OperationOutcome.builder().outcomeClass(OperationOutcomeClass.SUCCEEDED).reportedSettlementAmount(884L).protocolFact(first).build();
+        lifecycle().observeSuccess(permit, protectedOutcome, "first-success");
+        runner().applyResult(permit, OperationOutcome.builder().outcomeClass(OperationOutcomeClass.SUCCEEDED)
+                .reportedSettlementAmount(884L).protocolFact(second).build(), "conflicting-external-order");
+        held();
+        assertThat(runtime().successEvidence().fact().externalOrderNo()).isEqualTo("supplier-order-original");
+        assertThat(runtime().progress().lastFact()).isEqualTo(SingleStepRuntimeCheckpoint.Fact.SECURITY_CONFLICT);
+        runner().applyResult(permit, protectedOutcome, "duplicate-first-success");
+        held();
+    }
+
+    @Test void thirdNotFoundPersistedAtCalendarCutoffCannotReleaseReservation() {
+        var op = accept("THIRD-AT-CUTOFF");
+        executor().observation = SingleStepSupplierFact.Observation.RESPONSE_UNKNOWN;
+        runner().runExecute(op.getOperationNo(), "unknown-create");
+        executor().observation = SingleStepSupplierFact.Observation.NOT_FOUND;
+        for (int i = 0; i < 2; i++) {
+            clock().fixed = operation().getNextRecoverAt();
+            runner().runRecovery(op.getOperationNo(), operation().getExecutionGeneration(), "not-found");
+        }
+        clock().fixed = operation().getNextRecoverAt();
+        var third = claim(SingleStepAction.QUERY);
+        clock().fixed = operation().getRecoveryDeadlineAt();
+        runner().applyResult(third, fact(third, SingleStepSupplierFact.Observation.NOT_FOUND, clock().now()), "cutoff");
+        assertThat(operation().getNextRecoverAt()).isNull();
+        assertThat(fixture.jdbc.queryForObject("SELECT reason_code FROM sc_fulfillment_exception_case", String.class)).isEqualTo("SINGLE_STEP_DEADLINE_REACHED");
+        held();
+    }
+
     @Test void operationTimerCommitsOneCreateMarkerSixtySecondLeaseAndDurableRecovery() {
         clock().fixed = null; // 此场景使用真实数据库时间，其余边界场景使用可控时钟推进。
         fixture.context.getBean(BuyerFulfillmentCommandFacade.class)
@@ -325,13 +537,21 @@ class SingleStepRecoveryIntegrationTest {
         lifecycle().apply(query, fact(query, SingleStepSupplierFact.Observation.NOT_FOUND, clock().now()), "test");
         assertThat(runtime().progress().trustedExists()).isTrue();
         assertThat(runtime().progress().consecutiveNotFound()).isEqualTo(1);
-        var originalDue = operation().getNextRecoverAt();
-        lifecycle().apply(created, fact(created, SingleStepSupplierFact.Observation.SUCCESS, created.leaseUntil().minusSeconds(5)), "late-success");
-        assertThat(fixture.jdbc.queryForObject("SELECT COUNT(*) FROM sc_raw_status_observation WHERE external_status='SUCCESS'", Long.class)).isEqualTo(1);
-        assertThat(fixture.jdbc.queryForObject("SELECT COUNT(*) FROM sc_fulfillment_exception_case", Long.class)).isEqualTo(1);
-        assertThat(operation().getExecutionGeneration()).isEqualTo(query.generation());
-        assertThat(originalDue).isNotNull();
+        for (int i = 0; i < 2; i++) {
+            clock().fixed = operation().getNextRecoverAt();
+            var next = claim(SingleStepAction.QUERY);
+            runner().applyResult(next, fact(next, SingleStepSupplierFact.Observation.NOT_FOUND, clock().now()), "not-found-after-exists");
+        }
+        assertThat(runtime().progress().consecutiveNotFound()).isEqualTo(3);
         held();
+        var originalDue = operation().getNextRecoverAt();
+        long currentGeneration = operation().getExecutionGeneration();
+        runner().applyResult(created, fact(created, SingleStepSupplierFact.Observation.SUCCESS, created.leaseUntil().minusSeconds(5)), "late-success");
+        assertThat(fixture.jdbc.queryForObject("SELECT COUNT(*) FROM sc_raw_status_observation WHERE external_status='SUCCESS'", Long.class)).isEqualTo(1);
+        assertThat(fixture.jdbc.queryForObject("SELECT COUNT(*) FROM sc_fulfillment_exception_case", Long.class)).isZero();
+        assertThat(operation().getExecutionGeneration()).isEqualTo(currentGeneration);
+        assertThat(originalDue).isNotNull();
+        assertThat(fixture.jdbc.queryForObject("SELECT committed_amount FROM sc_fund_reservation", Long.class)).isEqualTo(1000);
     }
 
     @Test void thousandthCommittedQueryCanReturnCredibleResultButNoThousandAndFirstClaimExists() throws Exception {
@@ -345,11 +565,11 @@ class SingleStepRecoveryIntegrationTest {
         var last = winners.element();
         assertThat(operation().getRecoveryCount()).isEqualTo(1000);
         assertThat(claim(SingleStepAction.QUERY)).isNull();
-        assertThat(lifecycle().apply(last, fact(last, SingleStepSupplierFact.Observation.SUCCESS, clock().now()), "last")).isEqualTo("TERMINAL_OBSERVED");
+        assertThat(runner().applyResult(last, fact(last, SingleStepSupplierFact.Observation.SUCCESS, clock().now()), "last")).isEqualTo("SUCCESS");
         assertThat(fixture.jdbc.queryForObject("SELECT COUNT(*) FROM sc_raw_status_observation WHERE external_status='SUCCESS'", Long.class)).isEqualTo(1);
         assertThat(claim(SingleStepAction.QUERY)).isNull();
         assertThat(operation().getRecoveryCount()).isEqualTo(1000);
-        held();
+        assertThat(fixture.jdbc.queryForObject("SELECT committed_amount FROM sc_fund_reservation", Long.class)).isEqualTo(1000);
     }
 
     @Test void unknownAtThousandthClaimOpensCaseAndKeepsReservation() {
@@ -438,6 +658,10 @@ class SingleStepRecoveryIntegrationTest {
         assertThat(fixture.jdbc.queryForObject("SELECT frozen FROM sc_buyer_account", Long.class)).isEqualTo(1000);
         assertThat(fixture.jdbc.queryForObject("SELECT COUNT(*) FROM sc_account_ledger WHERE entry_type IN ('COMMIT','RELEASE')", Long.class)).isZero();
     }
+    private long terminalEvents() {
+        return fixture.jdbc.queryForObject("SELECT COUNT(*) FROM sc_outbox_event WHERE event_type='SUPPLY_CHAIN_ORDER_CHANGED' "
+                + "AND JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.orderStatus')) IN ('SUCCEEDED','FAILED')", Long.class);
+    }
     private void failTimer(String type) {
         // 真实DB插入故障；只约束新代任务，既有行合法，不需要SUPER/TRIGGER或全局数据库设置。
         long generation = operation().getExecutionGeneration() + (FulfillmentTimerTaskTypes.SINGLE_STEP_WATCHDOG.equals(type) ? 1 : 0);
@@ -472,6 +696,8 @@ class SingleStepRecoveryIntegrationTest {
         final AtomicInteger creates = new AtomicInteger();
         final AtomicInteger queries = new AtomicInteger();
         volatile SingleStepSupplierFact.Observation observation = SingleStepSupplierFact.Observation.ACCEPTED;
+        Long reported;
+        boolean zeroDelivery;
         SingleStepSupplierFact.Verification verification = SingleStepSupplierFact.Verification.VERIFIED;
         RuntimeException failure;
         Runnable beforeFailure = () -> {};
@@ -492,8 +718,9 @@ class SingleStepRecoveryIntegrationTest {
                 var fact = new SingleStepSupplierFact(frozen.binding(), query ? SingleStepAction.QUERY : SingleStepAction.CREATE,
                         ticket.billno(), frozen.business().protectedTargetReference().targetDigest(), 1,
                         verification, observation, null, clock.now(),
-                        java.security.MessageDigest.getInstance("SHA-256").digest((ticket.operationNo() + ticket.executionGeneration() + observation).getBytes(java.nio.charset.StandardCharsets.UTF_8)));
-                return OperationOutcome.builder().outcomeClass(OperationOutcomeClass.RESULT_UNKNOWN).protocolFact(fact).build();
+                        java.security.MessageDigest.getInstance("SHA-256").digest((ticket.operationNo() + ticket.executionGeneration() + observation).getBytes(java.nio.charset.StandardCharsets.UTF_8)),
+                        reported, zeroDelivery);
+                return OperationOutcome.builder().outcomeClass(OperationOutcomeClass.RESULT_UNKNOWN).reportedSettlementAmount(reported).protocolFact(fact).build();
             } catch (Exception failure) { throw new IllegalStateException(failure); }
         }
     }

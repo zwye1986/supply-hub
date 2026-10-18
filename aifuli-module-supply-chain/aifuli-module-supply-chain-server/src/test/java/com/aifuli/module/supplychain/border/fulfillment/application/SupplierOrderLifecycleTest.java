@@ -111,7 +111,7 @@ class SupplierOrderLifecycleTest {
                 hmacFingerprint,
                 businessNoGenerator,
                 databaseClock,
-                objectMapper, frequencyLifecycle
+                objectMapper, frequencyLifecycle, null
         );
     }
 

@@ -2,8 +2,11 @@ package com.aifuli.module.supplychain.border.fulfillment.application.singlestep;
 
 import com.aifuli.module.supplychain.border.fulfillment.domain.AdapterStepCode;
 import com.aifuli.module.supplychain.border.fulfillment.domain.FrozenCredentialSlotIdentity;
+import com.aifuli.module.supplychain.border.fulfillment.domain.SingleStepSupplierFact;
 import com.aifuli.module.supplychain.border.fulfillment.domain.singlestep.SingleStepCheckpoint;
 import com.aifuli.module.supplychain.border.fulfillment.domain.singlestep.SingleStepCheckpoint.*;
+import com.aifuli.module.supplychain.border.fulfillment.domain.singlestep.SingleStepRuntimeCheckpoint;
+import com.aifuli.module.supplychain.border.fulfillment.domain.singlestep.SingleStepAction;
 import com.aifuli.module.supplychain.infrastructure.security.AesGcmEnvelopeCrypto;
 import com.aifuli.module.supplychain.infrastructure.security.EnvelopeCryptoPort;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -127,9 +130,9 @@ class SingleStepCheckpointCodecTest {
                 com.aifuli.module.supplychain.border.fulfillment.domain.singlestep.SingleStepAction.QUERY, 7, true, 2,
                 com.aifuli.module.supplychain.border.fulfillment.domain.singlestep.SingleStepRuntimeCheckpoint.Fact.NOT_FOUND,
                 java.time.LocalDateTime.of(2026, 10, 18, 23, 59, 12, 345_000_000));
-        var runtime = new com.aifuli.module.supplychain.border.fulfillment.domain.singlestep.SingleStepRuntimeCheckpoint(2, frozen, progress);
+        var runtime = new SingleStepRuntimeCheckpoint(3, frozen, progress);
         var stored = codec.encryptRuntime(runtime);
-        assertThat(stored.schemaVersion()).isEqualTo(2);
+        assertThat(stored.schemaVersion()).isEqualTo(3);
         assertThat(codec.decryptRuntime(stored, frozen.binding())).isEqualTo(runtime);
         assertThat(codec.decrypt(stored, frozen.binding())).isEqualTo(frozen);
         assertThat(codec.encodePlaintext(codec.decrypt(stored, frozen.binding()))).isEqualTo(codec.encodePlaintext(frozen));
@@ -137,6 +140,50 @@ class SingleStepCheckpointCodecTest {
                 .isInstanceOf(IllegalArgumentException.class).hasMessage("单步骤检查点无效");
         assertThat(codec.decryptRuntime(codec.encrypt(frozen), frozen.binding()).progress().trustedExists()).isFalse();
         assertThat(codec.decryptRuntime(codec.encrypt(frozen), frozen.binding()).progress().consecutiveNotFound()).isZero();
+    }
+
+    @Test void independentlyEncryptedV2UsesOriginalAadThenPromotesWithoutInventingEvidence() throws Exception {
+        var frozen = checkpoint();
+        String plaintext = "{\"schemaVersion\":2,\"frozen\":" + new String(codec.encodePlaintext(frozen), StandardCharsets.UTF_8)
+                + ",\"progress\":{\"action\":\"QUERY\",\"appliedGeneration\":4,\"trustedExists\":true,\"consecutiveNotFound\":2,\"lastFact\":\"NOT_FOUND\",\"factAt\":\"2026-10-18T23:59:12.345\"}}";
+        // 原V2 AAD独立手写，不能用当前编码器制造旧密文再测自身。
+        String aad = "{\"binding\":{\"adapterStepCode\":\"SEND\",\"adapterType\":\"TEST_SINGLE_STEP\",\"bOrderId\":13,\"configDigest\":\""
+                + "c".repeat(64) + "\",\"connectorVersionId\":7,\"offerVersionId\":5,\"operationNo\":\"OP-original\",\"supplierId\":17},\"purpose\":\"SINGLE_STEP_CHECKPOINT\",\"schemaVersion\":2}";
+        var encrypted = crypto.encrypt(plaintext.getBytes(StandardCharsets.UTF_8), aad.getBytes(StandardCharsets.UTF_8));
+        var original = new SingleStepCheckpointCodec.Stored(2, encrypted.keyVersion(), encrypted.ciphertext());
+        var promoted = codec.decryptRuntime(original, frozen.binding());
+        assertThat(promoted.schemaVersion()).isEqualTo(3);
+        assertThat(promoted.frozen()).isEqualTo(frozen);
+        assertThat(promoted.progress().appliedGeneration()).isEqualTo(4);
+        assertThat(promoted.progress().trustedExists()).isTrue();
+        assertThat(promoted.progress().consecutiveNotFound()).isEqualTo(2);
+        assertThat(promoted.successEvidence()).isNull();
+        assertThat(promoted.terminalEvidence()).isNull();
+        assertThat(codec.encryptRuntime(promoted).schemaVersion()).isEqualTo(3);
+        assertThatThrownBy(() -> codec.decryptRuntime(new SingleStepCheckpointCodec.Stored(3, encrypted.keyVersion(), encrypted.ciphertext()), frozen.binding()))
+                .hasMessage("单步骤检查点无效");
+    }
+
+    @Test void protectedSuccessSurvivesProgressCopiesAndCannotMoveOrDowngrade() throws Exception {
+        var frozen = checkpoint();
+        var received = java.time.LocalDateTime.of(2026, 10, 18, 23, 59, 12, 345_000_000);
+        var fact = new SingleStepSupplierFact(frozen.binding(), SingleStepAction.QUERY, frozen.business().billno(),
+                frozen.business().protectedTargetReference().targetDigest(), 1, SingleStepSupplierFact.Verification.VERIFIED,
+                SingleStepSupplierFact.Observation.SUCCESS, "supplier-original", received, new byte[32], 1100L, false);
+        assertThatThrownBy(() -> json.writeValueAsString(fact)).isInstanceOf(java.io.IOException.class);
+        var evidence = new SingleStepRuntimeCheckpoint.ResultEvidence(7, fact);
+        var progress = new SingleStepRuntimeCheckpoint.Progress(SingleStepAction.QUERY, 7, true, 0,
+                SingleStepRuntimeCheckpoint.Fact.PROCESSING, received);
+        var runtime = new SingleStepRuntimeCheckpoint(3, frozen, progress, evidence, evidence).withProgress(
+                new SingleStepRuntimeCheckpoint.Progress(SingleStepAction.QUERY, 8, true, 0, SingleStepRuntimeCheckpoint.Fact.NETWORK_UNKNOWN, received.plusMinutes(10)));
+        var stored = codec.encryptRuntime(runtime);
+        assertThat(codec.decryptRuntime(stored, frozen.binding())).usingRecursiveComparison().isEqualTo(runtime);
+        assertThat(codec.decrypt(stored, frozen.binding())).isEqualTo(frozen);
+        assertThat(codec.decryptRuntime(stored, frozen.binding()).successEvidence().fact().reportedSettlementAmount()).isEqualTo(1100);
+        assertThatThrownBy(() -> codec.decryptRuntime(new SingleStepCheckpointCodec.Stored(2, stored.keyVersion(), stored.ciphertext()), frozen.binding()))
+                .hasMessage("单步骤检查点无效");
+        var other = new Binding("OP-other", 13, "TEST_SINGLE_STEP", AdapterStepCode.SEND, 17, 7, 5, "c".repeat(64));
+        assertThatThrownBy(() -> codec.decryptRuntime(stored, other)).hasMessage("单步骤检查点无效");
     }
 
     private String digest(String configuration, SingleStepCheckpoint checkpoint) throws Exception {

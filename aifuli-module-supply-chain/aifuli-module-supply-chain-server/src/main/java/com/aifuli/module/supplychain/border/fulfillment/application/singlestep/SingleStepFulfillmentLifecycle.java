@@ -2,6 +2,7 @@ package com.aifuli.module.supplychain.border.fulfillment.application.singlestep;
 
 import com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyLifecycle;
 import com.aifuli.module.supplychain.border.fulfillment.application.RechargeFrequencyLifecycle.LockedExecution;
+import com.aifuli.module.supplychain.border.fulfillment.application.SupplierOrderLifecycle;
 import com.aifuli.module.supplychain.border.fulfillment.dal.dataobject.*;
 import com.aifuli.module.supplychain.border.fulfillment.dal.mysql.*;
 import com.aifuli.module.supplychain.border.fulfillment.domain.*;
@@ -13,6 +14,7 @@ import com.aifuli.module.supplychain.infrastructure.identity.BusinessNoPrefixes;
 import com.aifuli.module.supplychain.infrastructure.security.HmacFingerprintPort;
 import com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock;
 import com.aifuli.module.supplychain.infrastructure.timer.PersistentTimer;
+import com.aifuli.module.supplychain.infrastructure.outbox.OutboxEventRepository;
 import com.aifuli.module.supplychain.supplieradapter.metadata.PublishedConnectorConfigurationResolver;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -30,7 +32,7 @@ import static com.aifuli.module.supplychain.border.fulfillment.domain.singlestep
 
 /**
  * 单步骤唯一持久围栏：频控与外呼资格原子认领，结果/未知事实与下一Timer同事务。
- * 不在锁内准备秘密或发HTTP，不调用通用结果动账；终态观察/安全冲突保留预留进入Case，T04再接资金。
+ * 不在锁内准备秘密或发HTTP；成功保护先独立提交，再委派受控订单资金事务，未知保留预留。
  * 设计：docs/superpowers/specs/2026-10-15-renyue-qnm-szcard-detailed-design.md#47-t03本地执行与恢复接线2026-10-18。
  */
 @Service
@@ -51,6 +53,8 @@ public class SingleStepFulfillmentLifecycle {
     private final ObjectMapper json;
     private final BusinessNoGenerator numbers;
     private final HmacFingerprintPort fingerprint;
+    private final SupplierOrderLifecycle supplierOrders;
+    private final OutboxEventRepository outbox;
 
     /** CREATE先竞争频控，锁后失败必须抛出回滚，不能留下孤立SEND_POSSIBLE。 */
     public SingleStepExecutionPermit claim(String operationNo, SingleStepAction action, long expectedGeneration,
@@ -94,7 +98,7 @@ public class SingleStepFulfillmentLifecycle {
         op.setNextRecoverAt(null);
         op.setStatus(SupplierOrderOperationStatus.EXECUTING.getCode());
         var progress = runtime.progress();
-        save(op, new SingleStepRuntimeCheckpoint(SCHEMA_VERSION, runtime.frozen(), new Progress(action,
+        save(op, runtime.withProgress(new Progress(action,
                 progress.appliedGeneration(), progress.trustedExists(), progress.consecutiveNotFound(), Fact.CLAIMED, now)), now);
         schedule(FulfillmentTimerTaskTypes.SINGLE_STEP_WATCHDOG, op, op.getExecutionLeaseUntil(), originTraceId);
         return new SingleStepExecutionPermit(runtime.frozen().binding(), action, op.getExecutionGeneration(),
@@ -120,20 +124,47 @@ public class SingleStepFulfillmentLifecycle {
                 clock.now(), null, originTraceId);
     }
 
-    /** 原绑定验证先于留证；可信旧代只保留存在保护与观察，不改当前租约/计数/调度。 */
+    /**
+     * 资金事务前独立提交成功保护；不持外层聚合锁调用，不随之后的订单/资金回滚。
+     * 首份成功完整事实保持不变，旧代可信成功仍保护原单；不自动翻转已失败订单。
+     * 设计：docs/superpowers/specs/2026-10-15-renyue-qnm-szcard-detailed-design.md#76-t04公共终态与资金切片2026-10-18。
+     */
+    public void observeSuccess(SingleStepExecutionPermit permit, OperationOutcome outcome, String traceId) {
+        if (!(outcome.protocolFact() instanceof SingleStepSupplierFact fact)
+                || fact.observation() != SingleStepSupplierFact.Observation.SUCCESS) return;
+        var locked = frequency.lockForResult(permit.operationNo());
+        if (locked == null) return;
+        var runtime = runtime(locked);
+        if (!validFact(locked, runtime, permit, outcome)) return;
+        var now = clock.now();
+        persistObservation(locked, permit, fact, now, traceId);
+        if (runtime.successEvidence() == null) {
+            var protectedRuntime = withExists(runtime, true);
+            save(locked.operation(), new SingleStepRuntimeCheckpoint(SCHEMA_VERSION, runtime.frozen(),
+                    protectedRuntime.progress(), new ResultEvidence(permit.generation(), fact), runtime.terminalEvidence()), now);
+        }
+    }
+
+    /** 原绑定验证先于留证；可信旧代不改发送资格，终态资金须经过独立成功保护及共同检查。 */
     public String apply(SingleStepExecutionPermit permit, OperationOutcome outcome, String originTraceId) {
         var locked = frequency.lockForResult(permit.operationNo());
         if (locked == null) return "STALE";
         var runtime = runtime(locked);
         var now = clock.now();
-        if (!(outcome.protocolFact() instanceof SingleStepSupplierFact fact)
-                || !matches(runtime.frozen(), permit, fact) || !outcome.assets().isEmpty()
-                || fact.verification() != SingleStepSupplierFact.Verification.VERIFIED
-                || fact.externalOrderNo() != null && locked.bOrder().getExternalOrderNo() != null
-                && !fact.externalOrderNo().equals(locked.bOrder().getExternalOrderNo())) {
+        if (!validFact(locked, runtime, permit, outcome)) {
             manual(locked, runtime, Fact.SECURITY_CONFLICT, now); return "MANUAL";
         }
+        var fact = (SingleStepSupplierFact) outcome.protocolFact();
         persistObservation(locked, permit, fact, now, originTraceId);
+        if (locked.operation().getStatus() == SupplierOrderOperationStatus.SUCCEEDED.getCode()
+                || locked.operation().getStatus() == SupplierOrderOperationStatus.FAILED.getCode()) {
+            boolean contrary = fact.observation() == SingleStepSupplierFact.Observation.SUCCESS
+                    && locked.operation().getStatus() == SupplierOrderOperationStatus.FAILED.getCode()
+                    || fact.observation() == SingleStepSupplierFact.Observation.FAILURE
+                    && locked.operation().getStatus() == SupplierOrderOperationStatus.SUCCEEDED.getCode();
+            if (contrary) manual(locked, runtime, Fact.TERMINAL_CONFLICT, now);
+            return "ALREADY_COMPLETED";
+        }
         boolean exists = runtime.progress().trustedExists() || switch (fact.observation()) {
             case ACCEPTED, PROCESSING, EXISTS_UNKNOWN, SUCCESS, FAILURE -> true;
             default -> false;
@@ -142,12 +173,20 @@ public class SingleStepFulfillmentLifecycle {
             locked.bOrder().setExternalOrderNo(fact.externalOrderNo()); locked.bOrder().setUpdatedAt(now);
             if (bOrders.updateById(locked.bOrder()) != 1) throw new IllegalStateException("单步骤外部单号版本冲突");
         }
-        if (fact.observation() == SingleStepSupplierFact.Observation.SUCCESS
-                || fact.observation() == SingleStepSupplierFact.Observation.FAILURE) {
-            var protectedRuntime = withExists(runtime, exists);
-            // TODO: T04在受保护观察与原单锁下接资金收敛，当前不把终态观察等同资金已完成。
-            // docs/superpowers/plans/2026-10-15-renyue-qnm-szcard-development-plan.md#t04-回调inbox可信结果与资金4～6人日be-aqa
-            manual(locked, protectedRuntime, Fact.TERMINAL_OBSERVED, now); return "TERMINAL_OBSERVED";
+        if (fact.observation() == SingleStepSupplierFact.Observation.SUCCESS) {
+            if (runtime.successEvidence() == null) {
+                manual(locked, withExists(runtime, true), Fact.TERMINAL_OBSERVED, now); return "TERMINAL_OBSERVED";
+            }
+            return settle(locked, runtime, runtime.successEvidence(), false, now, originTraceId);
+        }
+        if (runtime.successEvidence() != null && fact.observation() == SingleStepSupplierFact.Observation.FAILURE) {
+            manual(locked, runtime, Fact.TERMINAL_CONFLICT, now); return "MANUAL";
+        }
+        if (fact.observation() == SingleStepSupplierFact.Observation.FAILURE) {
+            if (!current(locked, runtime, permit) || !fact.zeroDeliveryConfirmed()) {
+                manual(locked, withExists(runtime, true), Fact.UNCONFIRMED_FAILURE, now); return "MANUAL";
+            }
+            return settle(locked, withExists(runtime, true), new ResultEvidence(permit.generation(), fact), false, now, originTraceId);
         }
         if (!current(locked, runtime, permit)) {
             if (exists != runtime.progress().trustedExists()) save(locked.operation(), withExists(runtime, true), now);
@@ -161,6 +200,13 @@ public class SingleStepFulfillmentLifecycle {
         };
         int count = factKind == Fact.NOT_FOUND && permit.action() == SingleStepAction.QUERY
                 ? Math.min(runtime.progress().consecutiveNotFound() + 1, runtime.frozen().recoveryContract().notFoundConsecutiveThreshold()) : 0;
+        if (factKind == Fact.NOT_FOUND && permit.action() == SingleStepAction.QUERY
+                && count >= runtime.frozen().recoveryContract().notFoundConsecutiveThreshold()
+                && !exists && runtime.successEvidence() == null && now.isBefore(locked.operation().getRecoveryDeadlineAt())) {
+            // 最后合法QUERY可到1000次；截止优先，但不能被预算判断提前丢弃第三份有效事实。
+            var closed = runtime.withProgress(new Progress(permit.action(), permit.generation(), false, count, Fact.NOT_FOUND_EXHAUSTED, now));
+            return settle(locked, closed, new ResultEvidence(permit.generation(), fact), true, now, originTraceId);
+        }
         return defer(locked, runtime, factKind, count, exists, now, fact.receivedAt(), originTraceId);
     }
 
@@ -179,6 +225,7 @@ public class SingleStepFulfillmentLifecycle {
             manual(locked, null, Fact.LOCAL_PREPARATION_FAILED, now);
             return "MANUAL";
         }
+        if (runtime.successEvidence() != null) return settle(locked, runtime, runtime.successEvidence(), false, now, originTraceId);
         if (runtime.progress().appliedGeneration() >= expectedGeneration) return "STALE";
         return defer(locked, runtime, runtime.progress().action() == SingleStepAction.CREATE
                 ? Fact.CREATE_LEASE_EXPIRED : Fact.QUERY_LEASE_EXPIRED, 0, runtime.progress().trustedExists(), now, null, originTraceId);
@@ -224,16 +271,13 @@ public class SingleStepFulfillmentLifecycle {
         op.setNextRecoverAt(base.plusSeconds(seconds));
         op.setStatus(SupplierOrderOperationStatus.RESULT_UNKNOWN.getCode());
         op.setResultClass(OperationOutcomeClass.RESULT_UNKNOWN.name());
-        var updated = new SingleStepRuntimeCheckpoint(SCHEMA_VERSION, runtime.frozen(),
-                new Progress(p.action(), op.getExecutionGeneration(), exists, count, fact, now));
+        var updated = runtime.withProgress(new Progress(p.action(), op.getExecutionGeneration(), exists, count, fact, now));
         if (!now.isBefore(op.getRecoveryDeadlineAt())) {
             manual(locked, updated, Fact.DEADLINE_REACHED, now); return "MANUAL";
         }
         if (op.getRecoveryCount() >= c.maxQueryClaims()) {
             manual(locked, updated, Fact.BUDGET_EXHAUSTED, now); return "MANUAL";
         }
-        // TODO: 三次NOT_FOUND只冻结计数；T04补齐受保护历史/并发成功校验后再允许一次释放。
-        // docs/superpowers/specs/2026-10-15-renyue-qnm-szcard-detailed-design.md#45-连续查无单的平台风险关单主要计数规则已确认恢复合同未完成
         save(op, updated, now);
         var fireAt = op.getNextRecoverAt().isBefore(op.getRecoveryDeadlineAt()) ? op.getNextRecoverAt() : op.getRecoveryDeadlineAt();
         schedule(FulfillmentTimerTaskTypes.SINGLE_STEP_QUERY, op, fireAt, originTraceId);
@@ -287,8 +331,47 @@ public class SingleStepFulfillmentLifecycle {
     }
     private static SingleStepRuntimeCheckpoint withExists(SingleStepRuntimeCheckpoint runtime, boolean exists) {
         var p = runtime.progress();
-        return new SingleStepRuntimeCheckpoint(SCHEMA_VERSION, runtime.frozen(), new Progress(p.action(), p.appliedGeneration(),
+        return runtime.withProgress(new Progress(p.action(), p.appliedGeneration(),
                 exists, p.consecutiveNotFound(), p.lastFact(), p.factAt()));
+    }
+
+    private static boolean validFact(LockedExecution locked, SingleStepRuntimeCheckpoint runtime,
+                                     SingleStepExecutionPermit permit, OperationOutcome outcome) {
+        return outcome.protocolFact() instanceof SingleStepSupplierFact fact && matches(runtime.frozen(), permit, fact)
+                && locked.operation().getBusinessSendPossibleAt() != null && permit.generation() > 0
+                && permit.generation() <= locked.operation().getExecutionGeneration()
+                && (permit.action() != SingleStepAction.CREATE || permit.generation() == 1)
+                && fact.verification() == SingleStepSupplierFact.Verification.VERIFIED && outcome.assets().isEmpty()
+                && (fact.reportedSettlementAmount() == null || fact.reportedSettlementAmount() >= 0)
+                && Objects.equals(outcome.reportedSettlementAmount(), fact.reportedSettlementAmount())
+                && (!fact.zeroDeliveryConfirmed() || fact.observation() == SingleStepSupplierFact.Observation.FAILURE)
+                && (outcome.externalOrderNo() == null || Objects.equals(outcome.externalOrderNo(), fact.externalOrderNo()))
+                && (fact.externalOrderNo() == null || locked.bOrder().getExternalOrderNo() == null
+                    || fact.externalOrderNo().equals(locked.bOrder().getExternalOrderNo()))
+                && (fact.externalOrderNo() == null || runtime.successEvidence() == null
+                    || runtime.successEvidence().fact().externalOrderNo() == null
+                    || fact.externalOrderNo().equals(runtime.successEvidence().fact().externalOrderNo()));
+    }
+
+    /** 已保护的终态与本地资金/事件同事务；失败保留原证据，绝不兜底退款。设计同§7.6。 */
+    private String settle(LockedExecution locked, SingleStepRuntimeCheckpoint runtime, ResultEvidence evidence,
+                          boolean notFoundClosure, LocalDateTime now, String traceId) {
+        if (!active(locked) || runtime.progress().lastFact() == Fact.SECURITY_CONFLICT) {
+            manual(locked, runtime, Fact.TERMINAL_CONFLICT, now); return "MANUAL";
+        }
+        var completed = new SingleStepRuntimeCheckpoint(SCHEMA_VERSION, runtime.frozen(), runtime.progress(), runtime.successEvidence(), evidence);
+        var op = locked.operation();
+        op.setExecutionLeaseUntil(null); op.setNextRecoverAt(null);
+        save(op, completed, now);
+        if (!supplierOrders.completeSingleStep(locked, completed, notFoundClosure, traceId)) {
+            manual(locked, completed, Fact.FUNDS_CONFLICT, now); return "MANUAL";
+        }
+        outbox.appendLocal(FulfillmentOutboxCodes.AGGREGATE_SUPPLY_CHAIN_ORDER, locked.order().getOrderNo(), locked.order().getDetailVersion(),
+                FulfillmentOutboxCodes.EVENT_SUPPLY_CHAIN_ORDER_CHANGED, FulfillmentOutboxCodes.TARGET_SUPPLY_CHAIN_ORDER_EVENT,
+                java.util.Map.of("orderNo", locked.order().getOrderNo(), "requestNo", locked.request().getRequestNo(),
+                        "orderStatus", com.aifuli.module.supplychain.api.order.dto.SupplyChainOrderStatus.fromCode(locked.order().getOrderStatus()).name()),
+                traceId, null, op.getOperationNo(), now);
+        return notFoundClosure ? Fact.NOT_FOUND_EXHAUSTED.name() : evidence.fact().observation().name();
     }
     private void manual(LockedExecution locked, SingleStepRuntimeCheckpoint runtime, Fact reason, LocalDateTime now) {
         var op = locked.operation();
@@ -300,12 +383,14 @@ public class SingleStepFulfillmentLifecycle {
                     .evidenceRef(ref).evidenceDigest(fingerprint.fingerprint("EXCEPTION_CASE", ref.getBytes(StandardCharsets.UTF_8)))
                     .activeCaseFlag(1).version(0L).createdAt(now).updatedAt(now).build());
         }
-        // 已有业务终态只留Case，不翻转成MANUAL；当前切片不会产生资金终态。
+        // 已有业务终态只留Case，不翻转成MANUAL。
         if (op.getStatus() == SupplierOrderOperationStatus.SUCCEEDED.getCode() || op.getStatus() == SupplierOrderOperationStatus.FAILED.getCode()) return;
         op.setStatus(SupplierOrderOperationStatus.MANUAL.getCode()); op.setNextRecoverAt(null);
         if (runtime != null) {
             var p = runtime.progress();
-            runtime = new SingleStepRuntimeCheckpoint(SCHEMA_VERSION, runtime.frozen(), new Progress(p.action(),
+            // 后续重复事实不能抹掉安全冲突，再借可信成功绕过人工核实。设计见§7.6。
+            if (p.lastFact() == Fact.SECURITY_CONFLICT) reason = Fact.SECURITY_CONFLICT;
+            runtime = runtime.withProgress(new Progress(p.action(),
                     Math.max(p.appliedGeneration(), op.getExecutionGeneration()), p.trustedExists(), p.consecutiveNotFound(), reason, now));
         }
         save(op, runtime, now);

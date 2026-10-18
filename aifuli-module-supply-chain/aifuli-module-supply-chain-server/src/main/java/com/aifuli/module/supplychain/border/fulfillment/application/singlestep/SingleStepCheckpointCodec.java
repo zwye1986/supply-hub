@@ -61,19 +61,31 @@ public final class SingleStepCheckpointCodec {
         return decryptRuntime(stored, expectedBinding).frozen();
     }
 
-    /** V1只读提升为初始运行态；V2必须认证自己的版本与原SEND身份，不能降级重解。 */
+    /** V1/V2按原AAD认证后提升；V3成功保护不能降级重解。设计同详细设计§7.6。 */
     public SingleStepRuntimeCheckpoint decryptRuntime(Stored stored, SingleStepCheckpoint.Binding expectedBinding) {
         byte[] plaintext = null;
         try {
             require(stored != null && (Objects.equals(stored.schemaVersion(), SingleStepCheckpoint.SCHEMA_VERSION)
+                    || Objects.equals(stored.schemaVersion(), SingleStepRuntimeCheckpoint.LEGACY_SCHEMA_VERSION)
                     || Objects.equals(stored.schemaVersion(), SingleStepRuntimeCheckpoint.SCHEMA_VERSION))
                     && validKey(stored.keyVersion()) && stored.ciphertext() != null
                     && stored.ciphertext().length > 0 && stored.ciphertext().length <= MAX_BYTES + 1024 && expectedBinding != null);
             plaintext = crypto.decrypt(stored.ciphertext(), stored.keyVersion(), aad(expectedBinding, stored.schemaVersion()));
             require(plaintext != null && plaintext.length > 0 && plaintext.length <= MAX_BYTES);
-            var runtime = stored.schemaVersion() == SingleStepCheckpoint.SCHEMA_VERSION
-                    ? SingleStepRuntimeCheckpoint.initial(JSON.readValue(plaintext, SingleStepCheckpoint.class))
-                    : JSON.readValue(plaintext, SingleStepRuntimeCheckpoint.class);
+            SingleStepRuntimeCheckpoint runtime;
+            if (stored.schemaVersion() == SingleStepCheckpoint.SCHEMA_VERSION) {
+                runtime = SingleStepRuntimeCheckpoint.initial(JSON.readValue(plaintext, SingleStepCheckpoint.class));
+            } else if (stored.schemaVersion() == SingleStepRuntimeCheckpoint.LEGACY_SCHEMA_VERSION) {
+                var node = JSON.readTree(plaintext);
+                require(node.isObject() && node.size() == 3 && node.has("frozen") && node.has("progress")
+                        && node.path("schemaVersion").isInt()
+                        && node.path("schemaVersion").intValue() == SingleStepRuntimeCheckpoint.LEGACY_SCHEMA_VERSION);
+                ((ObjectNode) node).put("schemaVersion", SingleStepRuntimeCheckpoint.SCHEMA_VERSION)
+                        .putNull("successEvidence").putNull("terminalEvidence");
+                runtime = JSON.treeToValue(node, SingleStepRuntimeCheckpoint.class);
+            } else {
+                runtime = JSON.readValue(plaintext, SingleStepRuntimeCheckpoint.class);
+            }
             validateTree(JSON.valueToTree(runtime), 1);
             require(runtime.frozen().binding().equals(expectedBinding));
             return runtime;
@@ -84,7 +96,7 @@ public final class SingleStepCheckpointCodec {
         }
     }
 
-    /** 运行态更新不改变frozen/configDigest；使用独立V2 AAD，临时明文仍按原边界擦除。 */
+    /** 运行态更新不改变frozen/configDigest；使用独立V3 AAD，临时明文仍按原边界擦除。 */
     public Stored encryptRuntime(SingleStepRuntimeCheckpoint runtime) {
         byte[] plaintext = null;
         try {
@@ -182,10 +194,15 @@ public final class SingleStepCheckpointCodec {
                 .disable(DeserializationFeature.ACCEPT_FLOAT_AS_INT)
                 .enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, DeserializationFeature.FAIL_ON_TRAILING_TOKENS,
                         DeserializationFeature.FAIL_ON_MISSING_CREATOR_PROPERTIES, DeserializationFeature.FAIL_ON_NULL_FOR_PRIMITIVES).build();
+        // 只在认证密文内部编码；不解除FulfillmentProtocolFact对普通JSON/日志的输出保护。设计见§7.6。
+        mapper.addMixIn(com.aifuli.module.supplychain.border.fulfillment.domain.SingleStepSupplierFact.class, ProtectedFactEncoding.class);
         mapper.coercionConfigFor(LogicalType.Textual).setCoercion(CoercionInputShape.Integer, CoercionAction.Fail)
                 .setCoercion(CoercionInputShape.Float, CoercionAction.Fail).setCoercion(CoercionInputShape.Boolean, CoercionAction.Fail);
         return mapper;
     }
+
+    @JsonSerialize(using = com.fasterxml.jackson.databind.JsonSerializer.None.class)
+    private abstract static class ProtectedFactEncoding { }
 
     private static boolean validKey(String key) { return key != null && !key.isBlank() && key.length() <= 64; }
     private static void require(boolean valid) { if (!valid) throw invalid(); }

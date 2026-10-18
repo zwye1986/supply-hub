@@ -19,6 +19,15 @@ public final class FulfillmentExceptionReasonCodes {
     /** 华昇本地准备或 checkpoint 无法核实，保留原单与资金；设计同 §4.2、§5.3。 */
     public static final String HUASHENG_PREPARATION_FAILED = "HUASHENG_PREPARATION_FAILED";
 
+    /** 单步可信成功，提交原采购预留；设计见三家详细设计§7.6。 */
+    public static final String SINGLE_STEP_SUCCEEDED = "SINGLE_STEP_SUCCEEDED";
+
+    /** 单步可信零交付失败，释放原采购预留；设计同§7.6。 */
+    public static final String SINGLE_STEP_TRUSTED_FAILURE = "SINGLE_STEP_TRUSTED_FAILURE";
+
+    /** 三次查无单的平台风险关单，不是供应商零交付证明；设计同§4.5/7.6。 */
+    public static final String SINGLE_STEP_NOT_FOUND_EXHAUSTED = "SINGLE_STEP_NOT_FOUND_EXHAUSTED";
+
     private FulfillmentExceptionReasonCodes() {
     }
 

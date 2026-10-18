@@ -47,6 +47,12 @@ public class SingleStepFulfillmentRunner {
         return run(operationNo, SingleStepAction.QUERY, expectedGeneration, originTraceId);
     }
 
+    /** 成功保护独立提交后才动原预留；本入口不持外层事务或锁。设计见详细设计§7.6。 */
+    public String applyResult(SingleStepExecutionPermit permit, OperationOutcome outcome, String traceId) {
+        lifecycle.observeSuccess(permit, outcome, traceId);
+        return lifecycle.apply(permit, outcome, traceId);
+    }
+
     private String run(String operationNo, SingleStepAction action, Long expectedGeneration, String originTraceId) {
         var op = operations.selectOne(FulfillmentOperationDO::getOperationNo, operationNo);
         if (op == null) return "NOT_FOUND";
@@ -57,8 +63,10 @@ public class SingleStepFulfillmentRunner {
                 || op.getStatus() == SupplierOrderOperationStatus.FAILED.getCode()) return "ALREADY_COMPLETED";
         if (expectedGeneration != null && expectedGeneration.longValue() != op.getExecutionGeneration()) return "STALE";
         if (action == SingleStepAction.CREATE && op.getBusinessSendPossibleAt() != null) return "CREATE_ALREADY_MARKED";
-        if (action == SingleStepAction.QUERY && op.getStatus() == SupplierOrderOperationStatus.EXECUTING.getCode()) {
-            return lifecycle.watchdog(operationNo, op.getExecutionGeneration(), originTraceId);
+        if (action == SingleStepAction.QUERY) {
+            // QUERY任务也先补交独立成功；进度已落未知时不能绕过保护再次外呼。设计见§7.6。
+            var localResult = lifecycle.watchdog(operationNo, op.getExecutionGeneration(), originTraceId);
+            if (op.getStatus() == SupplierOrderOperationStatus.EXECUTING.getCode() || !"STALE".equals(localResult)) return localResult;
         }
         OperationTicket ticket;
         try {
@@ -87,7 +95,7 @@ public class SingleStepFulfillmentRunner {
                 throw safeFailure(failure, 0);
             }
             // 结果持久化失败必须让Timer重试；已提交认领和watchdog不回滚、不重发CREATE。
-            return lifecycle.apply(permit, outcome, originTraceId);
+            return applyResult(permit, outcome, originTraceId);
         }
     }
 

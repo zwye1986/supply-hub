@@ -26,6 +26,8 @@ import com.aifuli.module.supplychain.border.fulfillment.domain.OperationAssetFac
 import com.aifuli.module.supplychain.border.fulfillment.domain.OperationOutcome;
 import com.aifuli.module.supplychain.border.fulfillment.domain.OperationOutcomeClass;
 import com.aifuli.module.supplychain.border.fulfillment.domain.RawObservationFact;
+import com.aifuli.module.supplychain.border.fulfillment.domain.SingleStepSupplierFact;
+import com.aifuli.module.supplychain.border.fulfillment.domain.singlestep.SingleStepRuntimeCheckpoint;
 import com.aifuli.module.supplychain.border.order.dal.dataobject.OrderStatusLogDO;
 import com.aifuli.module.supplychain.border.order.dal.dataobject.SupplyChainOrderDO;
 import com.aifuli.module.supplychain.border.order.dal.mysql.OrderStatusLogMapper;
@@ -43,6 +45,7 @@ import com.aifuli.module.supplychain.infrastructure.security.EnvelopeCryptoPort;
 import com.aifuli.module.supplychain.infrastructure.security.HmacFingerprintPort;
 import com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock;
 import com.aifuli.module.supplychain.supplieradapter.qnm.QnmMaskingUtils;
+import com.aifuli.module.supplychain.supplieradapter.metadata.PublishedConnectorConfigurationResolver;
 import com.aifuli.module.supplychain.border.fulfillment.application.huashengflow.HuashengType201AssetCodec;
 import com.aifuli.module.supplychain.tradecore.account.application.FundReservationService;
 import com.aifuli.module.supplychain.tradecore.account.domain.FundReferenceType;
@@ -58,6 +61,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -108,6 +113,7 @@ public class SupplierOrderLifecycle {
     private final SupplyChainDatabaseClock databaseClock;
     private final ObjectMapper objectMapper;
     private final RechargeFrequencyLifecycle frequencyLifecycle;
+    private final ObjectProvider<PublishedConnectorConfigurationResolver> configurations;
 
     /**
      * 根据执行结果状态事实推进 BOrder、Operation、Request、Order 及资金/资产闭环。
@@ -131,6 +137,55 @@ public class SupplierOrderLifecycle {
     public TransitionResult confirmTrustedOutcome(String operationNo, OperationOutcome outcome, String traceId,
                                                    RechargeFrequencyExecutionPermit permit) {
         return transitionInternal(operationNo, outcome, traceId, true, permit, null);
+    }
+
+    /**
+     * 单步受控终态的订单/资金所有者；调用者已持完整原单锁并认证检查点，本入口不授予外呼资格。
+     * 原预留必须完整未动，成功必须已有独立提交保护，三次查无单不能伪装供应商零交付。
+     * 设计：docs/superpowers/specs/2026-10-15-renyue-qnm-szcard-detailed-design.md#76-t04公共终态与资金切片2026-10-18。
+     */
+    @Transactional(transactionManager = TRANSACTION_MANAGER, propagation = Propagation.MANDATORY,
+            rollbackFor = Exception.class)
+    public boolean completeSingleStep(RechargeFrequencyLifecycle.LockedExecution locked,
+                                      SingleStepRuntimeCheckpoint runtime, boolean notFoundClosure, String traceId) {
+        var evidence = Objects.requireNonNull(runtime.terminalEvidence());
+        var fact = evidence.fact();
+        var operation = locked.operation(); var bOrder = locked.bOrder();
+        var request = locked.request(); var order = locked.order();
+        boolean success = fact.observation() == SingleStepSupplierFact.Observation.SUCCESS;
+        if (!fact.binding().equals(runtime.frozen().binding()) || !operation.getOperationNo().equals(fact.binding().operationNo())
+                || !Objects.equals(operation.getBOrderId(), fact.binding().bOrderId()) || !outcomeEligible(fact, runtime, notFoundClosure)
+                || locked.relatedBOrders().stream().anyMatch(row -> row.getFulfilledQuantity() != null && row.getFulfilledQuantity() > 0)
+                || locked.relatedOperations().stream().anyMatch(row -> !row.getId().equals(operation.getId())
+                    && (row.getBusinessSendPossibleAt() != null || row.getStatus() == SupplierOrderOperationStatus.SUCCEEDED.getCode()))
+                || assetMapper.selectCount(new LambdaQueryWrapper<FulfillmentAssetDO>()
+                    .eq(FulfillmentAssetDO::getFulfillmentRequestId, request.getId())) > 0) return false;
+        var reservation = fundReservationService.lockSnapshotByReference(request.fundsBuyerId(), FundReferenceType.CARD_ORDER.code(), request.getRequestNo());
+        if (reservation == null || reservation.status() != FundReservationService.RESERVED
+                || reservation.committedAmount() != 0 || reservation.releasedAmount() != 0
+                || reservation.totalAmount() != order.getBuyerSettlementAmount() || reservation.remainingAmount() != reservation.totalAmount()) return false;
+        var now = databaseClock.now();
+        String reason = notFoundClosure ? FulfillmentExceptionReasonCodes.SINGLE_STEP_NOT_FOUND_EXHAUSTED
+                : success ? FulfillmentExceptionReasonCodes.SINGLE_STEP_SUCCEEDED : FulfillmentExceptionReasonCodes.SINGLE_STEP_TRUSTED_FAILURE;
+        var outcome = OperationOutcome.builder().outcomeClass(success ? OperationOutcomeClass.SUCCEEDED : OperationOutcomeClass.REJECTED)
+                .externalOrderNo(fact.externalOrderNo()).reportedSettlementAmount(fact.reportedSettlementAmount())
+                .externalErrorCode(reason).protocolFact(fact).build();
+        bOrder.setTerminalReasonCode(reason);
+        if (success) handleSucceeded(operation, bOrder, request, order, outcome, traceId, now, true, true);
+        else handleRejected(operation, bOrder, request, order, outcome, traceId, now, true);
+        frequencyLifecycle.reconcile(locked);
+        logAfterCommit("[singleStepResult][原单终态资金已提交] operationNo={}, result={}, traceId={}", operation.getOperationNo(), reason, traceId);
+        return true;
+    }
+
+    private static boolean outcomeEligible(SingleStepSupplierFact fact, SingleStepRuntimeCheckpoint runtime, boolean notFoundClosure) {
+        return switch (fact.observation()) {
+            case SUCCESS -> !notFoundClosure && runtime.successEvidence() != null;
+            case FAILURE -> !notFoundClosure && fact.zeroDeliveryConfirmed() && runtime.successEvidence() == null;
+            case NOT_FOUND -> notFoundClosure && runtime.successEvidence() == null && !runtime.progress().trustedExists()
+                    && runtime.progress().consecutiveNotFound() >= runtime.frozen().recoveryContract().notFoundConsecutiveThreshold();
+            default -> false;
+        };
     }
 
     /**
@@ -764,6 +819,12 @@ public class SupplierOrderLifecycle {
         if (bOrder == null) {
             throw new IllegalStateException("BOrder does not exist for operation: " + operationNo);
         }
+        var resolver = configurations == null ? null : configurations.getIfAvailable();
+        if (outcome.protocolFact() instanceof SingleStepSupplierFact
+                || resolver != null && resolver.singleStepRecoveryContract(bOrder.getConnectorVersionId()) != null
+                || resolver == null && operation.getCheckpointCiphertext() != null) {
+            throw new IllegalStateException("单步骤原单必须使用受保护终态入口");
+        }
         FulfillmentRequestDO request = locked != null ? locked.request() : requestMapper.selectById(bOrder.getFulfillmentRequestId());
         if (request == null) {
             throw new IllegalStateException("FulfillmentRequest does not exist: " + bOrder.getFulfillmentRequestId());
@@ -872,6 +933,12 @@ public class SupplierOrderLifecycle {
     private void handleSucceeded(FulfillmentOperationDO operation, BOrderDO bOrder,
                                  FulfillmentRequestDO request, SupplyChainOrderDO order,
                                  OperationOutcome outcome, String traceId, LocalDateTime now, boolean frequencyHolding) {
+        handleSucceeded(operation, bOrder, request, order, outcome, traceId, now, frequencyHolding, false);
+    }
+
+    private void handleSucceeded(FulfillmentOperationDO operation, BOrderDO bOrder,
+                                 FulfillmentRequestDO request, SupplyChainOrderDO order,
+                                 OperationOutcome outcome, String traceId, LocalDateTime now, boolean frequencyHolding, boolean singleStep) {
         boolean isCardIssuing = AdapterStepCode.SEND_KM.name().equals(operation.getAdapterStepCode());
         boolean emptyCards = outcome.assets() == null || outcome.assets().isEmpty();
 
@@ -970,14 +1037,22 @@ public class SupplierOrderLifecycle {
         bOrder.setFulfillmentStatus(BOrderFulfillmentStatus.SUCCEEDED.getCode());
         bOrder.setFulfilledQuantity(bOrder.getRequestedQuantity());
         bOrder.setActiveFlag(null); // 终态 activeFlag 置空
-        if (outcome.reportedSettlementAmount() != null) {
+        if (singleStep) {
+            // 履约成功与成本核对分离，不以冻结供价冒充实报；旧协议分支保持原行为。设计同§7.3/7.6。
+            Long reported = outcome.reportedSettlementAmount();
+            boolean matched = reported != null && reported.equals(bOrder.getExpectedSupplierSettlementAmount());
+            bOrder.setReportedSupplierSettlementAmount(reported);
+            bOrder.setConfirmedSupplierSettlementAmount(matched ? reported : null);
+            bOrder.setSettlementStatus(reported == null ? BOrderSettlementStatus.PENDING.getCode()
+                    : matched ? BOrderSettlementStatus.MATCHED.getCode() : BOrderSettlementStatus.MISMATCH.getCode());
+        } else if (outcome.reportedSettlementAmount() != null) {
             bOrder.setReportedSupplierSettlementAmount(outcome.reportedSettlementAmount());
             bOrder.setConfirmedSupplierSettlementAmount(outcome.reportedSettlementAmount());
         } else {
             bOrder.setReportedSupplierSettlementAmount(bOrder.getExpectedSupplierSettlementAmount());
             bOrder.setConfirmedSupplierSettlementAmount(bOrder.getExpectedSupplierSettlementAmount());
         }
-        bOrder.setSettlementStatus(BOrderSettlementStatus.MATCHED.getCode());
+        if (!singleStep) bOrder.setSettlementStatus(BOrderSettlementStatus.MATCHED.getCode());
         if (outcome.externalOrderNo() != null && !outcome.externalOrderNo().isBlank()) {
             bOrder.setExternalOrderNo(outcome.externalOrderNo());
         }

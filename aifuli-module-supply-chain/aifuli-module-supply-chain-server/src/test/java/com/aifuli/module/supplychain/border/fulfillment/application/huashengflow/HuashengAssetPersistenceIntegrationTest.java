@@ -88,7 +88,7 @@ class HuashengAssetPersistenceIntegrationTest {
         // 未用依赖刻意留空；若资产方法错误调用资金或聚合终结，将直接失败。
         lifecycle = new SupplierOrderLifecycle(null, null, null, null, mapper, null, null, null, null, null,
                 new CardOrderSummaryPolicy(), storageCrypto, storageCrypto, new BusinessNoGenerator(new UlidGenerator()),
-                null, json, null);
+                null, json, null, null);
     }
 
     @AfterEach

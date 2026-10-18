@@ -491,3 +491,18 @@ mvn -pl aifuli-module-supply-chain/aifuli-module-supply-chain-server -am \
 **最终验证／10:10／PASS**：组合`verify`完成，API125、server单测/架构2334，所选集成/契约193（18类，包含新恢复24及既有频控、QNM、华昇、Timer回归），失败/错误/跳过均0，耗时19分05秒。日志`.amp/in/artifacts/t03-combined-regression.log`；按该日志实际收集类核对并保全XML，`t03-reports/unit/`249份/2459项，`integration-contract/`18份/193项及Failsafe汇总，派生计数见`summary.json`。RED/GREEN、夹具错误及去围栏反例详见`docs/集成测试.md`的本批记录，不把失败日志文件名中的green当通过。
 
 **交付边界**：C-04第24项仍PARTIAL，T03整体及三家端到端验收尚未完成。到店创建/并发两项继续延期，不改断言；本批无新增迁移、共享数据库操作、清库、通知、真实供应商调用、提交、推送或部署。§11、§12的未接线描述保留其历史时点，以本节为当前进度。
+
+## 14. T04公共资金核心执行顺序（2026-10-18）
+
+用户已批准按成功留证→原子资金收敛→三次NOT_FOUND风险关单的顺序本地实施。沿用本计划与DDD§7.6，不另开生产协议、通知或商户限额子项目；使用executing-plans在当前Dev-1031隔离工作树串行实现。
+
+- [x] **A：成功保护RED/GREEN**。扩展现有`T/border/fulfillment/SingleStepRecoveryIntegrationTest.java`，由公开受理及Runner产生可信SUCCESS，使用隔离MySQL CHECK约束使COMMIT/结果Outbox写入失败；应保留加密成功证据但订单未成功、预留未动。修改`J/border/fulfillment/domain/SingleStepSupplierFact.java`、`domain/singlestep/SingleStepRuntimeCheckpoint.java`与`application/singlestep/SingleStepCheckpointCodec.java`，增加金额/零交付事实及认证V3证据，保留V1/V2读取；扩展现有Codec测试验证跨版本AAD和原冻结内容不变。Runner调用顺序固定为`lifecycle.observeSuccess(permit,outcome,traceId); lifecycle.apply(permit,outcome,traceId)`，前者独立提交、后者失败不能清除保护。
+- [x] **B：资金收敛RED/GREEN**。扩展同一恢复集成文件的终态行为，核成功一次COMMIT1000、可信零交付失败一次RELEASE1000、实报缺失PENDING/884匹配/900及1100差异；未知与无零交付依据的失败不释放。`SupplierOrderLifecycle`新增MANDATORY单步终态入口并复用既有状态/资金职责，旧通用入口拒绝已启用单步的原单。`SingleStepFulfillmentLifecycle`核证据、原预留及原单资格后调用，终态与一条既有本地订单Outbox同事务；watchdog优先补交已保护成功，不再外呼。真实结果Outbox失败必须回滚订单及账本；独立成功证据不回滚。
+- [x] **C：三次NOT_FOUND RED/GREEN**。在同一公开恢复入口覆盖前两次保持冻结、第3次平台失败且一次RELEASE、重复结果不多计、历史受理永久退出、网络异常清零、截止先到仍保留。第三次与成功并发，已持久成功阻断释放；平台失败提交后迟到成功只留证转Case。采用DDD§7.6的稳定关单原因，不伪造供应商失败或再次采购。
+- [x] **D：组合门禁与实录**。执行供应链全部单测/架构以及`SingleStepRecoveryIntegrationTest,SingleStepFrozenConfigurationIntegrationTest,FulfillmentAcceptanceIntegrationTest,FrozenCredentialTicketIntegrationTest,RechargeFrequencyExecutionIntegrationTest,RechargeFrequencyTimerIntegrationTest,RechargeFrequencyLifecycleIntegrationTest,HuashengSettlementIntegrationTest,HuashengRestartIntegrationTest,SingleStepHttpCallFactoryContractTest,QnmSupplierAdapterContractTest,HuashengOperationExecutorContractTest,HuashengHttpContractTest`所选真实MySQL/契约。命令沿§12.5的verify，仅替换`-Dit.test`列表；核日志实际执行类而非历史XML总数。在`docs/集成测试.md`记录RED/GREEN、失败夹具、真实回滚及重开容器证据，保留未跑全量集成、到店两项延期、回调Inbox和真实协议未接线的界限。
+
+**最终验证／14:28／PASS**：组合`verify`退出0、BUILD SUCCESS，耗时18分55秒；API125、server单测/架构2336，所选集成/契约211（13类，含恢复40、华昇结算26及既有频控/QNM/HTTP回归），失败/错误/跳过均0。日志`.amp/in/artifacts/t04-combined-regression.log`；逐一匹配日志实际执行类与本轮新XML后，保全于`t04-reports/unit/`249份/2461项、`integration-contract/`13份/211项及Failsafe汇总，派生计数为`summary.json`。恢复40已含原24项及本批新增16次执行，不能重复加总；其中外部单号保护反例在修复前1断言失败、修复后通过。
+
+**收口结果**：成功保护独立于订单/资金回滚，结果Outbox与订单/账本同事务；已保护成功由持久watchdog或QUERY任务本地补交，不再外呼。限定第三次NOT_FOUND按平台原因失败并一次释放，历史存在/安全冲突/截止阻止错误释放；已释放后迟到成功只留证开Case。细节与RED/GREEN见`docs/集成测试.md`本批实录。
+
+**当前边界**：本节覆盖§13中“完整终态证据及资金/三次释放未接线”的历史状态；T04公共核心完成，不代表回调HTTP/Inbox或T04整体完成。三家真实协议、商户总限额及逐家准入仍未接线，生产Metadata保持关闭，第24项PARTIAL，不发布供给。到店两项继续延期，未跑全量MySQL集成门禁；本批全部本地未提交，未推送、部署或操作共享数据库。
