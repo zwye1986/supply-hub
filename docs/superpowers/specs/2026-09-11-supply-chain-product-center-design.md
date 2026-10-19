@@ -955,6 +955,8 @@ system-server 通过追加变更集 `011-suggested-sale-price-operator-dictionar
 
 ### 5.3.1 销售建议价基准来源字典与历史规则兼容（2026-10-18）
 
+> 本节记录 2026-10-18 已实现范围。2026-10-19 用户追加“供应价”新选项、自动重算和无供给待计算需求；后续方案见 §5.3.2。不得把下述“只开放市场价”理解为新需求仍只需增加前端字典项。
+
 用户已批准：页面不再提供“销售建议价”作为新选择，后端继续兼容历史规则。新增、编辑商品及编辑中的新增 SKU 共用此约束，不影响分销价/销售价通用定价中的同名基数。
 
 - system-server 追加 `018-suggested-sale-price-base-dictionary`，新增字典 `supply_chain_suggested_sale_price_base`（SKU销售建议价基准来源），仅初始化启用项 `MARKET_PRICE`（市场价，排序1）。`script/deploy/aifuli-test/sql/system-supply-chain-suggested-sale-price-base-dict.sql` 提供等价幂等热更 SQL。保持已发布变更集不变，不删除管理员额外数据。
@@ -965,6 +967,12 @@ system-server 通过追加变更集 `011-suggested-sale-price-operator-dictionar
 - 顺带修正表单预览中等于市场价模式使用旧值 `MARKET` 的判断，统一为契约值 `EQUAL_MARKET_PRICE`，保证切换模式后公式文案正确。
 
 验证包含：真实 Vue SFC 渲染字典标签与请求提交；字典缺失/未知项/历史基数误配防护；历史只读与无关编辑不重复调价；主动改价和模式往返；后端既有计算/保留语义与 OpenAPI 契约；真实 MySQL 执行 Liquibase 字典迁移及热更脚本两次，验证唯一性、启用态、标签和人工额外项保留。联调步骤与实测证据维护 `docs/集成测试.md`，自动化通过不代表已部署验收。
+
+### 5.3.2 供应价基准自动重算与无供给待计算（2026-10-19，方案待评审）
+
+用户已确认：新规则增加 `SUPPLY_PRICE`（供应价），供应价变化自动重算建议价；无有效供应价可保存公式并进入待计算，供给恢复后自动计算。`SUGGESTED_SALE_PRICE` 继续仅为历史兼容。
+
+完整方案见 [SKU 销售建议价以供应价为基准自动重算设计](2026-10-19-suggested-sale-price-supply-base-design.md)。推荐通过独立建议价计算状态、供给主动变更同步编排、持久化 Timer 的有效期边界检查和读侧实时校验实现；下游以可空快照表达缺失，历史订单与永久报价不重签。现有 `018` 保持不变，system 另追加字典迁移，供应链独立追加状态表和快照空值迁移。方案待评审，尚未修改运行代码或执行迁移。
 
 ## 6. 测试策略
 
