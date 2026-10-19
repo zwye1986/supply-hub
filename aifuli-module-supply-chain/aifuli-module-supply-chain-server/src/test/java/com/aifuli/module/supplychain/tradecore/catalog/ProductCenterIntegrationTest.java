@@ -341,6 +341,42 @@ class ProductCenterIntegrationTest {
                 assertThat(sku.suggestedSalePriceRule().operator()).isEqualTo("ADD");
             });
 
+            // 历史基数仍支持旧客户端显式改价；新版页面无关编辑省略规则，不得把4980再次代入80%+1元。
+            // 设计见 docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#531-销售建议价基准来源字典与历史规则兼容2026-10-18。
+            SuggestedSalePriceRule historicalRule = new SuggestedSalePriceRule(
+                    SuggestedSalePriceRule.Mode.CUSTOM, SuggestedSalePriceRule.Base.SUGGESTED_SALE_PRICE,
+                    new BigDecimal("80"), SuggestedSalePriceRule.Operator.ADD,
+                    new BigDecimal("1.00"), null, null);
+            SaveSkuLine historicalLine = new SaveSkuLine(
+                    "SKU_001_100", "商品中心直充100元", "DIRECT_RECHARGE",
+                    10_000L, 12_000L, null, historicalRule, 1L, 10L, CatalogEntityStatus.ACTIVE.getCode());
+            commandService.updateProduct(spuCode, new SaveSpuCommand(
+                    spuCode, "商品中心虚拟直充", "兼容历史建议价", brandId, categoryId, List.of(),
+                    "EQUITY", "EQUITY_PRODUCT", "VIRTUAL_CARD", null, List.of(), "测试说明",
+                    "测试详情", "VIRTUAL", "DIRECT_RECHARGE", 1L, 100L,
+                    CatalogEntityStatus.ACTIVE.getCode(), List.of(historicalLine), 1L));
+            PlatformSkuDO historicalSku = skuMapper.selectByCode("SKU_001_100");
+            assertThat(historicalSku.getSuggestedSalePrice()).isEqualTo(4_980L);
+            assertThat(historicalSku.getSuggestedSalePriceRuleJson().basePriceSnapshotCents()).isEqualTo(6_100L);
+
+            SaveSkuLine keepHistoricalLine = new SaveSkuLine(
+                    "SKU_001_100", "修改规格名称", "DIRECT_RECHARGE",
+                    10_000L, 13_000L, null, 1L, 10L, CatalogEntityStatus.ACTIVE.getCode());
+            commandService.updateProduct(spuCode, new SaveSpuCommand(
+                    spuCode, "修改商品名称", "无关编辑保留价格", brandId, categoryId, List.of(),
+                    "EQUITY", "EQUITY_PRODUCT", "VIRTUAL_CARD", null, List.of(), "测试说明",
+                    "测试详情", "VIRTUAL", "DIRECT_RECHARGE", 1L, 100L,
+                    CatalogEntityStatus.ACTIVE.getCode(), List.of(keepHistoricalLine), 1L));
+            PlatformSkuDO preservedSku = skuMapper.selectByCode("SKU_001_100");
+            assertThat(preservedSku.getMarketPrice()).isEqualTo(13_000L);
+            assertThat(preservedSku.getSuggestedSalePrice()).isEqualTo(4_980L);
+            assertThat(preservedSku.getSuggestedSalePriceRuleJson()).isEqualTo(historicalSku.getSuggestedSalePriceRuleJson());
+            assertThat(queryService.detail(spuCode).skus()).singleElement().satisfies(sku -> {
+                assertThat(sku.suggestedSalePrice()).isEqualTo(4_980L);
+                assertThat(sku.suggestedSalePriceRule().base()).isEqualTo("SUGGESTED_SALE_PRICE");
+                assertThat(sku.suggestedSalePriceRule().basePriceSnapshotCents()).isEqualTo(6_100L);
+            });
+
             commandService.changeSkuStatus("SKU_001_100", CatalogEntityStatus.INACTIVE, 1L);
             commandService.changeSpuStatus(spuCode, CatalogEntityStatus.INACTIVE, 1L);
             commandService.changeSpuStatus(spuCode, CatalogEntityStatus.ACTIVE, 1L);

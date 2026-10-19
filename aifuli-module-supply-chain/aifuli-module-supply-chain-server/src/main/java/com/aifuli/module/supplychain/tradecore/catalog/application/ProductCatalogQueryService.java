@@ -957,7 +957,7 @@ public class ProductCatalogQueryService {
     @Schema(description = "SKU销售建议价生成规则")
     public record SuggestedSalePriceRuleView(
             @Schema(description = "建议价模式（字典supply_chain_suggested_sale_price_mode）：EQUAL_MARKET_PRICE、CUSTOM、FIXED") String mode,
-            @Schema(description = "CUSTOM基数：MARKET_PRICE、SUGGESTED_SALE_PRICE") String base,
+            @Schema(description = "CUSTOM基数（新选项字典supply_chain_suggested_sale_price_base）：MARKET_PRICE市场价；SUGGESTED_SALE_PRICE修改前销售建议价仅保留历史兼容") String base,
             @Schema(description = "CUSTOM百分比") BigDecimal percentage,
             @Schema(description = "CUSTOM运算符（字典supply_chain_suggested_sale_price_operator）：ADD加、SUBTRACT减、MULTIPLY乘、DIVIDE除") String operator,
             @Schema(description = "CUSTOM运算数；加减单位元，乘除为系数") BigDecimal operand,

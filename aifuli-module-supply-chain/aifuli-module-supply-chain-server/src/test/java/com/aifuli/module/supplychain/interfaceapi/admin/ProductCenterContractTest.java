@@ -208,6 +208,9 @@ class ProductCenterContractTest {
         assertThat(ProductAdminController.SuggestedSalePriceRuleReqVO.class.getDeclaredField("mode")
                 .getAnnotation(Schema.class).description())
                 .contains("supply_chain_suggested_sale_price_mode");
+        assertThat(ProductAdminController.SuggestedSalePriceRuleReqVO.class.getDeclaredField("base")
+                .getAnnotation(Schema.class).description())
+                .contains("supply_chain_suggested_sale_price_base", "历史");
         assertThat(ProductAdminController.SuggestedSalePriceRuleReqVO.class.getDeclaredField("operator")
                 .getAnnotation(Schema.class).description())
                 .contains("supply_chain_suggested_sale_price_operator");
@@ -219,6 +222,11 @@ class ProductCenterContractTest {
                         .getProperties().get("mode");
         assertThat(modeSchema.getDescription())
                 .contains("supply_chain_suggested_sale_price_mode");
+        io.swagger.v3.oas.models.media.Schema<?> baseSchema =
+                (io.swagger.v3.oas.models.media.Schema<?>) ruleSchemas.get("SuggestedSalePriceRuleView")
+                        .getProperties().get("base");
+        assertThat(baseSchema.getDescription())
+                .contains("supply_chain_suggested_sale_price_base", "历史");
         io.swagger.v3.oas.models.media.Schema<?> operatorSchema =
                 (io.swagger.v3.oas.models.media.Schema<?>) ruleSchemas.get("SuggestedSalePriceRuleView")
                         .getProperties().get("operator");

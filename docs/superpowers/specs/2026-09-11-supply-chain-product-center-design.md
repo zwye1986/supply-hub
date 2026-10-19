@@ -109,7 +109,7 @@ ALTER TABLE sc_platform_sku
 | 字段 | 语义 |
 | --- | --- |
 | `mode` | `EQUAL_MARKET_PRICE`、`CUSTOM`、`FIXED` |
-| `base` | `CUSTOM` 必填：`MARKET_PRICE` 或 `SUGGESTED_SALE_PRICE`；后者使用本次修改前建议价快照，创建时禁止使用 |
+| `base` | `CUSTOM` 必填：页面新选使用字典 `supply_chain_suggested_sale_price_base` 的 `MARKET_PRICE`；服务端保留 `SUGGESTED_SALE_PRICE` 历史兼容，使用本次修改前建议价快照且创建时禁止使用 |
 | `percentage` | 大于 0、最多 2 位小数 |
 | `operator` | `ADD`、`SUBTRACT`、`MULTIPLY`、`DIVIDE` |
 | `operand` | 加减时单位元且最多 2 位小数；乘除时为无量纲系数且最多 4 位小数；除数不得为 0 |
@@ -951,7 +951,20 @@ system-server 通过追加变更集 `011-suggested-sale-price-operator-dictionar
 * **进程与数据所有权边界**：
   - 字典只负责管理端展示与选项下发，由 system-server 写入 system 库；供应链进程不得读取 `system_dict_type` 或 `system_dict_data`，请求校验继续使用 `SuggestedSalePriceRule.Mode` 封闭枚举。
   - `SuggestedSalePriceRuleReqVO` 与 `SuggestedSalePriceRuleView` 的 `mode`、`operator` OpenAPI 描述必须分别声明模式、运算符字典标识；自动化测试同时锁定 Liquibase、热更 SQL、字典值与 Java 枚举一致。
-  - 本次不修改前端；前端后续接入时可使用既有 system 字典查询能力读取该字典，并通过既有 SPU+SKU 复合创建/编辑接口提交规则。
+  - 模式与运算符前端使用既有 system 字典能力，并通过 SPU+SKU 复合创建/编辑接口提交规则；2026-10-18 基准来源前端接入与历史兼容见 §5.3.1。
+
+### 5.3.1 销售建议价基准来源字典与历史规则兼容（2026-10-18）
+
+用户已批准：页面不再提供“销售建议价”作为新选择，后端继续兼容历史规则。新增、编辑商品及编辑中的新增 SKU 共用此约束，不影响分销价/销售价通用定价中的同名基数。
+
+- system-server 追加 `018-suggested-sale-price-base-dictionary`，新增字典 `supply_chain_suggested_sale_price_base`（SKU销售建议价基准来源），仅初始化启用项 `MARKET_PRICE`（市场价，排序1）。`script/deploy/aifuli-test/sql/system-supply-chain-suggested-sale-price-base-dict.sql` 提供等价幂等热更 SQL。保持已发布变更集不变，不删除管理员额外数据。
+- 前端 `/Users/mac/codespace/supplychainhubweb` 的商品复合表单使用已有 system 字典能力取得标签、值和顺序；当前可选值限定为领域已支持的新选基数 `MARKET_PRICE`，即使管理员误加 `SUGGESTED_SALE_PRICE` 或未知编码也不作为新选项。新增规则默认选择字典中首个可用基数；字典缺失/停用时不回退硬编码选项，展示配置提示并阻止 CUSTOM 提交。公式文案使用同一字典标签。
+- 历史 `CUSTOM + SUGGESTED_SALE_PRICE` 在编辑页只读展示原公式，明确提示“当前使用历史基准：修改前销售建议价”。提供“重新设置建议价”入口，主动点击后建立新 CUSTOM 规则并从字典选择基数；切换到等于市场价/固定值后再切回 CUSTOM，也不能带回历史基数。
+- 未重新设置的历史规则保存时省略 SKU 请求中的 `suggestedSalePriceRule` 和 `suggestedSalePrice`，复用应用服务现有省略规则语义，保留事务中读取的既有物化金额、规则和快照，避免按本次修改前金额重复执行公式。所有历史 SKU 独立判断，混合新旧规则的多 SKU 请求按原事务提交。
+- 后端 `SuggestedSalePriceRule.Base`、计算器及历史 JSON 不删除、不洗数；请求/响应 OpenAPI 的 `base` 描述补充字典标识与历史兼容说明。供应链进程继续只按领域枚举校验，不访问 system 字典表。
+- 顺带修正表单预览中等于市场价模式使用旧值 `MARKET` 的判断，统一为契约值 `EQUAL_MARKET_PRICE`，保证切换模式后公式文案正确。
+
+验证包含：真实 Vue SFC 渲染字典标签与请求提交；字典缺失/未知项/历史基数误配防护；历史只读与无关编辑不重复调价；主动改价和模式往返；后端既有计算/保留语义与 OpenAPI 契约；真实 MySQL 执行 Liquibase 字典迁移及热更脚本两次，验证唯一性、启用态、标签和人工额外项保留。联调步骤与实测证据维护 `docs/集成测试.md`，自动化通过不代表已部署验收。
 
 ## 6. 测试策略
 

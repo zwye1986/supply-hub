@@ -261,3 +261,14 @@ databaseChangeLog:
             encoding: UTF-8
             splitStatements: true
             stripComments: false
+  - changeSet:
+      id: 018-suggested-sale-price-base-dictionary
+      author: supply-chain
+      runInTransaction: true
+      changes:
+        - sqlFile:
+            path: 018-suggested-sale-price-base-dictionary.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false

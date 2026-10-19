@@ -588,7 +588,7 @@ public class ProductAdminController {
         @Schema(description = "建议价模式（字典supply_chain_suggested_sale_price_mode）：EQUAL_MARKET_PRICE等于市场价、CUSTOM自定义设置、FIXED固定值",
                 example = "CUSTOM")
         private String mode;
-        @Schema(description = "CUSTOM基数：MARKET_PRICE市场价、SUGGESTED_SALE_PRICE修改前销售建议价",
+        @Schema(description = "CUSTOM基数（新选项字典supply_chain_suggested_sale_price_base）：MARKET_PRICE市场价；SUGGESTED_SALE_PRICE修改前销售建议价仅保留历史兼容",
                 example = "MARKET_PRICE")
         private String base;
         @Schema(description = "CUSTOM百分比，大于0且最多2位小数", example = "50")
