@@ -33,7 +33,9 @@ class MerchantQuotaIntegrationTest {
         var config = quota.configure(new Configure(RENYUE, "Merchant", 1, 5, null, 1L, "隔离测试"));
         assertThat(config).isNotNull();
         tx.executeWithoutResult(s -> quota.admit(RENYUE, "Merchant", "OP-A", 1, now().plusSeconds(60)));
-        quota.release("OP-A", 1);
+        assertThat(quota.release("OP-A", 1)).isTrue();
+        assertThat(quota.release("OP-A", 1)).as("重复释放可确认已释放的真实租约").isTrue();
+        assertThat(quota.release("OP-empty", 1)).as("空租约不作为数据库回收恢复证据").isFalse();
         assertThatThrownBy(() -> tx.executeWithoutResult(s -> quota.admit(RENYUE, "Merchant", "OP-B", 1, now().plusSeconds(60))))
                 .isInstanceOf(CapacityUnavailable.class);
         assertThatThrownBy(() -> quota.configure(new Configure(RENYUE, "Merchant", 5, 5, 99L, 1L, "错误版本"))).isInstanceOf(IllegalStateException.class);

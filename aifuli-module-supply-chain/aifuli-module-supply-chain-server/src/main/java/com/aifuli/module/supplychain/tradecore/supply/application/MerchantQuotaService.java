@@ -110,16 +110,21 @@ public class MerchantQuotaService {
                 .in(MerchantCallLeaseDO::getId, expired.stream().map(MerchantCallLeaseDO::getId).toList()));
     }
 
-    /** 只释放原代次并发；已过期/清理/重复结束均幂等，不向上回调原单或增加速率额度。 */
+    /**
+     * 只释放原代次并发；已过期/清理/重复结束均幂等，不向上回调原单或增加速率额度。
+     * 返回true仅说明确认已有租约释放，事务代理提交成功后才供Runner记恢复；空租约不能作为恢复证据。
+     * 设计：docs/superpowers/specs/2026-10-18-single-step-merchant-quota-design.md#64-释放故障注入与诊断收敛2026-10-19补充。
+     */
     @Transactional(transactionManager = TX, propagation = Propagation.REQUIRES_NEW, rollbackFor = Exception.class)
-    public void release(String operation, long generation) {
+    public boolean release(String operation, long generation) {
         var row = leases.selectOne(new LambdaQueryWrapper<MerchantCallLeaseDO>().eq(MerchantCallLeaseDO::getOperationNo, operation)
                 .eq(MerchantCallLeaseDO::getExecutionGeneration, generation));
-        if (row == null) return;
+        if (row == null) return false;
         var quota = quotas.selectOneForUpdate(MerchantQuotaDO::getId, row.getQuotaId());
         if (quota == null) throw new IllegalStateException("商户额度身份丢失");
-        leases.update(null, new LambdaUpdateWrapper<MerchantCallLeaseDO>().eq(MerchantCallLeaseDO::getId, row.getId())
+        int released = leases.update(null, new LambdaUpdateWrapper<MerchantCallLeaseDO>().eq(MerchantCallLeaseDO::getId, row.getId())
                 .isNull(MerchantCallLeaseDO::getReleasedAt).set(MerchantCallLeaseDO::getReleasedAt, clock.now()));
+        return released == 1 || row.getReleasedAt() != null;
     }
     private static void identity(MerchantQuotaPlatform platform, String account) {
         if (platform == null || account == null || account.isBlank() || account.length() > 128) throw new IllegalArgumentException("商户额度身份无效");

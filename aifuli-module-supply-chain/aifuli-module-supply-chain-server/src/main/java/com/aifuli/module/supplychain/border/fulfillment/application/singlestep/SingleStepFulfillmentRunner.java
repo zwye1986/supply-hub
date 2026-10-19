@@ -23,7 +23,6 @@ import java.util.HexFormat;
  */
 @Service
 @RequiredArgsConstructor
-@lombok.extern.slf4j.Slf4j
 @Transactional(transactionManager = "supplyChainTransactionManager", propagation = Propagation.NOT_SUPPORTED)
 public class SingleStepFulfillmentRunner {
     private final FulfillmentOperationMapper operations;
@@ -36,6 +35,7 @@ public class SingleStepFulfillmentRunner {
     private final SingleStepFulfillmentLifecycle lifecycle;
     private final OperationExecutorPort executor;
     private final com.aifuli.module.supplychain.tradecore.supply.application.MerchantQuotaService merchantQuota;
+    private final MerchantQuotaReleaseDiagnostics quotaReleaseDiagnostics = new MerchantQuotaReleaseDiagnostics(System::nanoTime);
 
     public boolean supports(Long connectorVersionId) {
         return connectors.singleStepRecoveryContract(connectorVersionId) != null;
@@ -121,14 +121,14 @@ public class SingleStepFulfillmentRunner {
      * 设计：docs/superpowers/specs/2026-10-18-single-step-merchant-quota-design.md#63-锁序与释放。
      */
     private void releaseQuota(String operationNo, long generation) {
-        try { merchantQuota.release(operationNo, generation); }
-        catch (RuntimeException releaseFailure) {
-            log.error("[merchantQuotaRelease][商户调用占用回收降级] operationNo={}, generation={}",
-                    operationNo, generation, safeFailure(releaseFailure, 0));
+        try {
+            if (merchantQuota.release(operationNo, generation)) quotaReleaseDiagnostics.recovered(operationNo, generation);
+        } catch (RuntimeException releaseFailure) {
+            quotaReleaseDiagnostics.failed(operationNo, generation, releaseFailure);
         }
     }
 
-    private static IllegalStateException safeFailure(Throwable failure, int depth) {
+    static IllegalStateException safeFailure(Throwable failure, int depth) {
         var safe = new IllegalStateException("单步骤执行故障: " + failure.getClass().getName(),
                 failure.getCause() == null || depth >= 8 ? null : safeFailure(failure.getCause(), depth + 1));
         safe.setStackTrace(failure.getStackTrace());
