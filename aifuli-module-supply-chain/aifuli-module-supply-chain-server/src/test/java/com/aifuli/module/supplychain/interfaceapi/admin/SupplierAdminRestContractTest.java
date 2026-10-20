@@ -33,7 +33,7 @@ class SupplierAdminRestContractTest {
                 .filter(component -> "suggestedSalePriceCents".equals(component.getName())).findFirst().orElse(null);
         assertThat(sale).as("SKU销售建议价必须成为独立JSON字段").isNotNull();
         assertThat(sale.getAccessor().getAnnotation(io.swagger.v3.oas.annotations.media.Schema.class).description())
-                .isEqualTo("建议零售价/销售建议价，单位为分");
+                .isEqualTo("当前有效销售建议价，单位CNY分；供应价规则待计算或失败时为空");
         ObjectMapper mapper = new ObjectMapper();
         OfferListItem item = mapper.convertValue(java.util.Map.of(
                 "offerNo", "OFR_1", "suggestedSalePriceCents", 9600L, "suggestPriceCents", 8000L,

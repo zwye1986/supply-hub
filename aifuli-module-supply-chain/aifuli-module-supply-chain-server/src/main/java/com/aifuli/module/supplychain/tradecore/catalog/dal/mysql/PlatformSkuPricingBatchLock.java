@@ -18,4 +18,28 @@ public final class PlatformSkuPricingBatchLock {
         skuIds.stream().distinct().sorted().forEach(id -> roots.put(id, mapper.selectBySkuIdForUpdate(id)));
         return roots;
     }
+
+    /**
+     * 收齐全批唯一根后才允许进入子层。缺行时插入UNPRICED身份，唯一键串行化并发初始化，
+     * 不生成配置/价格版本，不反向锁SKU。设计见docs/superpowers/specs/2026-10-19-suggested-sale-price-supply-base-design.md#52-锁与写入责任。
+     */
+    public static Map<Long, PlatformSkuPricingDO> lockOrCreateByIds(PlatformSkuPricingMapper mapper,
+            Collection<Long> skuIds, java.time.LocalDateTime now) {
+        Map<Long, PlatformSkuPricingDO> roots = new HashMap<>();
+        skuIds.stream().filter(java.util.Objects::nonNull).distinct().sorted().forEach(id -> {
+            var root = mapper.selectBySkuIdForUpdate(id);
+            if (root == null) {
+                root = PlatformSkuPricingDO.builder().platformSkuId(id)
+                        .pricingStatus(com.aifuli.module.supplychain.tradecore.catalog.pricing.GenericPricingCalculator.PricingStatus.UNPRICED.name())
+                        .version(0L).createdAt(now).updatedAt(now).build();
+                try { mapper.insert(root); }
+                catch (org.springframework.dao.DuplicateKeyException concurrentInitialization) {
+                    root = mapper.selectBySkuIdForUpdate(id);
+                    if (root == null) throw new IllegalStateException("platform pricing root initialization failed", concurrentInitialization);
+                }
+            }
+            roots.put(id, root);
+        });
+        return roots;
+    }
 }

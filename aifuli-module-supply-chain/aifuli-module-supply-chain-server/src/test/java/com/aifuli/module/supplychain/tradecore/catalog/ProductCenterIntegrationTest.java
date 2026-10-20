@@ -377,6 +377,47 @@ class ProductCenterIntegrationTest {
                 assertThat(sku.suggestedSalePriceRule().basePriceSnapshotCents()).isEqualTo(6_100L);
             });
 
+            // 真实复合保存与HTTP读：无供给也保存公式，当前金额必须NULL，兼容列旧金额不能泄漏。
+            var supplyRule = new SuggestedSalePriceRule(SuggestedSalePriceRule.Mode.CUSTOM,
+                    SuggestedSalePriceRule.Base.SUPPLY_PRICE,new BigDecimal("110"),
+                    SuggestedSalePriceRule.Operator.ADD,BigDecimal.ONE,null,99999L);
+            var dynamicLine = new SaveSkuLine("SKU_001_100","供应价公式规格","DIRECT_RECHARGE",10000L,
+                    13000L,null,supplyRule,1L,10L,CatalogEntityStatus.ACTIVE.getCode());
+            commandService.updateProduct(spuCode,new SaveSpuCommand(spuCode,"供应价公式商品",null,
+                    brandId,categoryId,List.of(),"EQUITY","EQUITY_PRODUCT","VIRTUAL_CARD",null,List.of(),"说明",
+                    "详情","VIRTUAL","DIRECT_RECHARGE",1L,100L,CatalogEntityStatus.ACTIVE.getCode(),List.of(dynamicLine),1L));
+            assertThat(queryService.detail(spuCode).skus()).singleElement().satisfies(item -> {
+                assertThat(item.suggestedSalePrice()).isNull();
+                assertThat(item.suggestedSalePriceStatus()).isEqualTo("DEPENDENCY_MISSING");
+                assertThat(item.suggestedSalePriceRule().base()).isEqualTo("SUPPLY_PRICE");
+                assertThat(item.suggestedSalePriceRule().basePriceSnapshotCents()).isNull();
+            });
+            var stateMapper=context.getBean(com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.SkuSuggestedPriceStateMapper.class);
+            var beforeGet=stateMapper.selectById(preservedSku.getId());
+            var mvc=org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(
+                    new com.aifuli.module.supplychain.interfaceapi.admin.ProductAdminController(queryService,commandService,
+                            mock(com.aifuli.module.supplychain.tradecore.supply.application.OfferFulfillmentScoreService.class)))
+                    .setMessageConverters(new org.springframework.http.converter.json.MappingJackson2HttpMessageConverter(objectMapper)).build();
+            mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/supply-chain/products/spus/"+spuCode))
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.data.skus[0].suggestedSalePrice").isEmpty())
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.data.skus[0].suggestedSalePriceStatus").value("DEPENDENCY_MISSING"))
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.data.skus[0].suggestedPriceResolution").doesNotExist());
+            assertThat(stateMapper.selectById(preservedSku.getId())).isEqualTo(beforeGet);
+            String pendingSpu=commandService.createProduct(new SaveSpuCommand("SPU_002","无供给商品",null,
+                    brandId,categoryId,List.of(),"EQUITY","EQUITY_PRODUCT","VIRTUAL_CARD",null,List.of(),"说明",
+                    "详情","VIRTUAL","DIRECT_RECHARGE",1L,100L,CatalogEntityStatus.ACTIVE.getCode(),
+                    List.of(new SaveSkuLine("SKU_002_001","无供给规格","DIRECT_RECHARGE",10000L,13000L,
+                            null,supplyRule,1L,10L,CatalogEntityStatus.ACTIVE.getCode())),1L));
+            assertThat(queryService.detail(pendingSpu).skus()).singleElement().satisfies(item -> {
+                assertThat(item.suggestedSalePrice()).isNull();
+                assertThat(item.suggestedSalePriceStatus()).isEqualTo("DEPENDENCY_MISSING");
+            });
+            var newSku=skuMapper.selectByCode("SKU_002_001");
+            assertThat(newSku.getSuggestedSalePrice()).isZero();
+            assertThat(stateMapper.selectById(newSku.getId()).getEffectivePriceCents()).isNull();
+
+
             commandService.changeSkuStatus("SKU_001_100", CatalogEntityStatus.INACTIVE, 1L);
             commandService.changeSpuStatus(spuCode, CatalogEntityStatus.INACTIVE, 1L);
             commandService.changeSpuStatus(spuCode, CatalogEntityStatus.ACTIVE, 1L);

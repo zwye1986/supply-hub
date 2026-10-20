@@ -67,7 +67,8 @@ class PlatformSkuAdminContractTest {
         assertThat(properties.keySet()).containsExactlyInAnyOrder(
                 "id", "skuCode", "skuName", "spuCode", "spuName", "sellableCategory", "productType",
                 "productClassification", "suggestPriceCents", "marketPriceCents",
-                "categoryName", "supplyPriceCents");
+                "categoryName", "supplyPriceCents", "suggestedSalePriceStatus", "suggestedSalePriceUnavailableReason",
+                "lastValidSuggestedSalePrice", "lastValidSuggestedSalePriceCalculatedAt");
         properties.forEach((name, property) -> {
             assertThat(property.getDescription())
                     .as("OpenAPI schema SkuListItem.%s 缺少字段说明", name)

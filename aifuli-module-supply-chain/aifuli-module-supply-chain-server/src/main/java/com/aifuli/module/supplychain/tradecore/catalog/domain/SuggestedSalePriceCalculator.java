@@ -31,6 +31,16 @@ public final class SuggestedSalePriceCalculator {
      */
     public static Calculation calculate(SuggestedSalePriceRule requestedRule, long marketPriceCents,
                                         Long previousSuggestedSalePriceCents) {
+        return calculate(requestedRule, marketPriceCents, previousSuggestedSalePriceCents, null);
+    }
+
+    /**
+     * 供应价由应用层按同一数据库时间解析；缺失时保留合法公式并返回空金额，真实0仍参与计算。
+     * 所有快照重新生成，不信任客户端的basePriceSnapshotCents。
+     * 设计见 docs/superpowers/specs/2026-10-19-suggested-sale-price-supply-base-design.md#21-新选项与公式。
+     */
+    public static Calculation calculate(SuggestedSalePriceRule requestedRule, long marketPriceCents,
+                                        Long previousSuggestedSalePriceCents, Long supplyPriceCents) {
         Objects.requireNonNull(requestedRule, "suggested sale price rule is required");
         if (marketPriceCents < 0 || requestedRule.mode() == null) {
             throw new IllegalArgumentException("market price and rule mode must be valid");
@@ -39,7 +49,7 @@ public final class SuggestedSalePriceCalculator {
             case EQUAL_MARKET_PRICE -> new Calculation(marketPriceCents,
                     SuggestedSalePriceRule.equalMarketPrice());
             case FIXED -> fixed(requestedRule.fixedPriceCents());
-            case CUSTOM -> custom(requestedRule, marketPriceCents, previousSuggestedSalePriceCents);
+            case CUSTOM -> custom(requestedRule, marketPriceCents, previousSuggestedSalePriceCents, supplyPriceCents);
         };
     }
 
@@ -51,7 +61,7 @@ public final class SuggestedSalePriceCalculator {
     }
 
     private static Calculation custom(SuggestedSalePriceRule requestedRule, long marketPriceCents,
-                                      Long previousSuggestedSalePriceCents) {
+                                      Long previousSuggestedSalePriceCents, Long supplyPriceCents) {
         if (requestedRule.base() == null || requestedRule.operator() == null) {
             throw new IllegalArgumentException("custom rule base and operator are required");
         }
@@ -68,6 +78,16 @@ public final class SuggestedSalePriceCalculator {
             }
             basePriceCents = previousSuggestedSalePriceCents;
             snapshot = previousSuggestedSalePriceCents;
+        } else if (requestedRule.base() == SuggestedSalePriceRule.Base.SUPPLY_PRICE) {
+            if (supplyPriceCents == null) {
+                return new Calculation(null, new SuggestedSalePriceRule(requestedRule.mode(), requestedRule.base(),
+                        requestedRule.percentage(), requestedRule.operator(), requestedRule.operand(), null, null));
+            }
+            if (supplyPriceCents < 0) {
+                throw new IllegalArgumentException("supply price must be non-negative");
+            }
+            basePriceCents = supplyPriceCents;
+            snapshot = supplyPriceCents;
         } else {
             throw new IllegalArgumentException("unsupported suggested sale price base");
         }
@@ -120,6 +140,6 @@ public final class SuggestedSalePriceCalculator {
         return Math.max(0, value.stripTrailingZeros().scale());
     }
 
-    public record Calculation(long suggestedSalePriceCents, SuggestedSalePriceRule normalizedRule) {
+    public record Calculation(Long suggestedSalePriceCents, SuggestedSalePriceRule normalizedRule) {
     }
 }

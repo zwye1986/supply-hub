@@ -41,9 +41,9 @@ public class PlatformSkuDO {
     private Long faceValue;
     /** 市场划线价/吊牌价，单位为分 */
     private Long marketPrice;
-    /** 建议零售价/销售建议价，单位为分 */
+    /** 非供应价基准销售建议价，单位CNY分；供应价规则当前金额取计算状态表 */
     private Long suggestedSalePrice;
-    /** SKU销售建议价生成规则JSON；物化结果保存在suggested_sale_price */
+    /** SKU销售建议价人工公式JSON；供应价规则当前结果取计算状态表 */
     @TableField(typeHandler = JacksonTypeHandler.class, updateStrategy = FieldStrategy.ALWAYS)
     private SuggestedSalePriceRule suggestedSalePriceRuleJson;
     /** 税率，如0.0600表示6%；仅记录展示，不参与价格计算；标准商品结算以分销商/项目通用定价为准 */

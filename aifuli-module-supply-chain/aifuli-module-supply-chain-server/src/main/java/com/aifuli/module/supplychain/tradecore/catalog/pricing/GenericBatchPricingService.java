@@ -51,8 +51,12 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
 @Slf4j
 @Service
 @RequiredArgsConstructor
-@Import(PlatformSkuPricingInputReader.class)
+@Import({PlatformSkuPricingInputReader.class, SuggestedSalePriceCoordinator.class})
 public class GenericBatchPricingService {
+    @jakarta.annotation.Resource
+    private SuggestedSalePriceResolver suggestedPriceResolver;
+    @jakarta.annotation.Resource
+    private SuggestedSalePriceCoordinator suggestedPriceCoordinator;
     private static final String TX = "supplyChainTransactionManager";
     /** 单次批量定价允许的最大 SKU 数，与设计不变量及请求 {@code @Size(max)} 一致。 */
     public static final int MAX_BATCH = 200;
@@ -143,8 +147,10 @@ public class GenericBatchPricingService {
         Map<String, PlatformSkuDO> lockedSkus = PlatformSkuBatchLock.lockByCodes(skuMapper, codes);
         List<PlatformSkuDO> targets = codes.stream().map(code -> requireSku(code, lockedSkus.get(code))).toList();
         lockPricingRoots(targets);
+        now = clock.now();
         List<CalculatedPlatform> calculated = new ArrayList<>();
         for (PlatformSkuDO sku : targets) {
+            refreshSuggestedPrice(sku, now);
             PriceDependencies dependencies = dependencies(sku, now);
             calculated.add(new CalculatedPlatform(sku, dependencies,
                     calculator.calculate(normalized, dependencies)));
@@ -198,6 +204,7 @@ public class GenericBatchPricingService {
         PricingConfig normalized = withTax(defaults, tax);
         LocalDateTime now = clock.now();
         for (PlatformSkuDO sku : unpricedSkus) {
+            refreshSuggestedPrice(sku, now);
             PriceDependencies dependencies = dependencies(sku, now);
             PricingResult result = calculator.calculate(normalized, dependencies);
             PlatformSkuPricingVersionDO version = publishPlatform(sku, normalized, dependencies, result,
@@ -234,6 +241,9 @@ public class GenericBatchPricingService {
         LocalDateTime now = clock.now();
         List<ProductContext> targets = codes.stream().map(code -> requireProduct(buyer.getId(), code, true)).toList();
         lockPricingRoots(targets.stream().map(ProductContext::sku).toList());
+        targets.stream().map(item -> item.sku().getId()).distinct().sorted()
+                .forEach(id -> recalculatePlatformSku(new PricingDependencyChangedEvent(id)));
+        now = clock.now();
         List<CalculatedProduct> calculated = new ArrayList<>();
         for (ProductContext item : targets) {
             item = new ProductContext(item.product(), reloadPricingSku(item.sku().getId()));
@@ -281,6 +291,9 @@ public class GenericBatchPricingService {
         LocalDateTime now = clock.now();
         List<ListingContext> targets = codes.stream().map(code -> requireListing(project, code, true)).toList();
         lockPricingRoots(targets.stream().map(ListingContext::sku).toList());
+        targets.stream().map(item -> item.sku().getId()).distinct().sorted()
+                .forEach(id -> recalculatePlatformSku(new PricingDependencyChangedEvent(id)));
+        now = clock.now();
         List<CalculatedListing> calculated = new ArrayList<>();
         for (ListingContext context : targets) {
             context = new ListingContext(context.listing(), context.product(), reloadPricingSku(context.sku().getId()));
@@ -300,8 +313,9 @@ public class GenericBatchPricingService {
      * 为尚未做项目覆盖的商品建立继承快照，并在供货有效期跨界后按需补偿重算。
      * 报价入口调用本方法，因此不会把过期供货价继续签发给新订单。
      */
-    @Transactional(transactionManager = TX, rollbackFor = Exception.class)
+    @Transactional(transactionManager = TX, rollbackFor = Exception.class, isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public CurrentProjectPricing ensureCurrentProjectVersion(String projectCode, String platformSkuCode) {
+        com.aifuli.module.supplychain.tradecore.supply.application.SupplierLifecycleTransactions.requireReadCommitted();
         BuyerProjectDO project = requireProject(projectCode, true);
         PlatformSkuDO sku = skuMapper.selectByCode(platformSkuCode);
         PlatformSpuDO spu = sku == null ? null : spuMapper.selectById(sku.getSpuId());
@@ -316,6 +330,15 @@ public class GenericBatchPricingService {
         ProjectListingDO listing = listingMapper.selectByProjectAndBuyerProduct(project.getId(), product.getId());
         if (listing == null || listing.getStatus() != ProjectListingStatus.AVAILABLE.getCode()) {
             throw new ProductNotSaleableException("project SKU is not in catalog");
+        }
+        // 首次冻结前根→分销→项目同步推进，延迟Timer不能让新订单冻结过期建议价。
+        // 设计见 docs/superpowers/specs/2026-10-19-suggested-sale-price-supply-base-design.md#52-锁与写入责任。
+        recalculatePlatformSku(new PricingDependencyChangedEvent(sku.getId()));
+        sku = reloadPricingSku(sku.getId());
+        PlatformSpuDO currentSpu = spuMapper.selectById(sku.getSpuId());
+        if (sku.getStatus() != CatalogEntityStatus.ACTIVE.getCode() || currentSpu == null
+                || currentSpu.getStatus() != CatalogEntityStatus.ACTIVE.getCode()) {
+            throw new ProductNotSaleableException("platform SKU is not currently saleable");
         }
         BuyerConfigSnapshot buyer = requireBuyerConfig(product.getId(), true);
         ProjectSkuPricingDO identity = projectPricingMapper.selectByListingIdForUpdate(listing.getId());
@@ -350,17 +373,26 @@ public class GenericBatchPricingService {
      * 商品基础价或供应商品当前版本变化后的同步重算入口。监听失败必须向上传播并回滚上游主数据事务。
      */
     @EventListener
-    @Transactional(transactionManager = TX, rollbackFor = Exception.class)
+    @Transactional(transactionManager = TX, rollbackFor = Exception.class, isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public void recalculatePlatformSku(PricingDependencyChangedEvent event) {
+        com.aifuli.module.supplychain.tradecore.supply.application.SupplierLifecycleTransactions.requireReadCommitted();
         Long platformSkuId = event.platformSkuId();
         PlatformSkuDO sku = skuMapper.selectById(platformSkuId);
         if (sku == null) return;
         LocalDateTime now = clock.now();
         PlatformSkuPricingDO identity = platformPricingMapper.selectBySkuIdForUpdate(platformSkuId);
-        if (identity == null || identity.getCurrentVersionId() == null) return;
+        if (identity == null && SuggestedSalePriceResolver.isDynamic(sku)) {
+            identity = PlatformSkuPricingBatchLock.lockOrCreateByIds(platformPricingMapper, List.of(platformSkuId), now).get(platformSkuId);
+        }
+        if (identity == null) return;
         sku = reloadPricingSku(platformSkuId);
+        now = clock.now();
+        refreshSuggestedPrice(sku, now);
+        if (identity.getCurrentVersionId() == null) return;
         PlatformSkuPricingVersionDO current = platformVersionMapper.selectById(identity.getCurrentVersionId());
-        if (current == null) return;
+        if (current == null || !Objects.equals(current.getPlatformSkuId(), platformSkuId)) {
+            throw new IllegalStateException("platform pricing current version is missing or mismatched");
+        }
         identity.setPricingStatus(PricingStatus.RECALCULATING.name());
         identity.setUnavailableReason(PricingUnavailableReason.PRICE_DEPENDENCY_CHANGED.name());
         identity.setUpdatedAt(now);
@@ -368,6 +400,22 @@ public class GenericBatchPricingService {
         PricingConfig config = configFrom(current);
         PriceDependencies dependencies = dependencies(sku, now);
         PricingResult result = calculator.calculate(config, dependencies);
+        // 金额、供给依赖与状态均未变化时只刷新建议价事实/到期调度，不重复发布冻结版本。
+        // 设计见 docs/superpowers/specs/2026-10-19-suggested-sale-price-supply-base-design.md#21-新选项与公式。
+        if (Objects.equals(current.getMarketPriceCents(), dependencies.marketPriceCents())
+                && Objects.equals(current.getSuggestedSalePriceCents(), dependencies.suggestedSalePriceCents())
+                && Objects.equals(current.getSupplyPriceCents(), dependencies.supplyPriceCents())
+                && Objects.equals(current.getDistributionPriceCents(), result.distributionPriceCents())
+                && Objects.equals(current.getSalesPriceCents(), result.salesPriceCents())
+                && Objects.equals(current.getPricingStatus(), result.status().name())
+                && Objects.equals(current.getUnavailableReason(), result.unavailableReason())) {
+            platformPricingMapper.update(null, new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<PlatformSkuPricingDO>()
+                    .eq(PlatformSkuPricingDO::getPlatformSkuId, platformSkuId)
+                    .set(PlatformSkuPricingDO::getPricingStatus, result.status().name())
+                    .set(PlatformSkuPricingDO::getUnavailableReason, result.unavailableReason())
+                    .set(PlatformSkuPricingDO::getUpdatedAt, now));
+            return;
+        }
         PlatformSkuPricingVersionDO next = publishPlatform(sku, config, dependencies, result, null, now);
         rebuildBuyers(sku, next, null, now);
     }
@@ -388,6 +436,7 @@ public class GenericBatchPricingService {
         if (product == null || product.getStatus() != BuyerProductStatus.ACTIVE.getCode()) return;
         PlatformSkuDO sku = skuMapper.selectById(product.getPlatformSkuId());
         if (sku == null) return;
+        recalculatePlatformSku(new PricingDependencyChangedEvent(sku.getId()));
         PlatformSkuPricingDO platformIdentity = platformPricingMapper.selectBySkuIdForUpdate(sku.getId());
         if (platformIdentity == null || platformIdentity.getCurrentVersionId() == null) return;
         sku = reloadPricingSku(sku.getId());
@@ -395,8 +444,7 @@ public class GenericBatchPricingService {
                 platformIdentity.getCurrentVersionId());
         if (platformVersion == null) return;
         BuyerSkuPricingDO buyerIdentity = buyerPricingMapper.selectByBuyerProductIdForUpdate(product.getId());
-        BuyerSkuPricingVersionDO current = buyerIdentity == null || buyerIdentity.getCurrentVersionId() == null
-                ? null : buyerVersionMapper.selectById(buyerIdentity.getCurrentVersionId());
+        BuyerSkuPricingVersionDO current = currentBuyerVersion(buyerIdentity);
         ProjectOverrides overrides = current == null ? ProjectOverrides.allInherited()
                 : fromJson(current.getOverrideJson(), ProjectOverrides.class);
         PricingConfig effective = ProjectPricingConfigMerger.merge(configFrom(platformVersion), overrides);
@@ -426,15 +474,14 @@ public class GenericBatchPricingService {
         if (product == null || product.getStatus() != BuyerProductStatus.ACTIVE.getCode()) return;
         PlatformSkuDO sku = skuMapper.selectById(product.getPlatformSkuId());
         if (sku == null) return;
+        recalculatePlatformSku(new PricingDependencyChangedEvent(sku.getId()));
         platformPricingMapper.selectBySkuIdForUpdate(sku.getId());
         sku = reloadPricingSku(sku.getId());
         BuyerSkuPricingDO buyerIdentity = buyerPricingMapper.selectByBuyerProductId(product.getId());
         if (buyerIdentity == null || buyerIdentity.getCurrentVersionId() == null) return;
-        BuyerSkuPricingVersionDO buyerVersion = buyerVersionMapper.selectById(buyerIdentity.getCurrentVersionId());
-        if (buyerVersion == null) return;
+        BuyerSkuPricingVersionDO buyerVersion = currentBuyerVersion(buyerIdentity);
         ProjectSkuPricingDO projectIdentity = projectPricingMapper.selectByListingIdForUpdate(listing.getId());
-        ProjectSkuPricingVersionDO current = projectIdentity == null || projectIdentity.getCurrentVersionId() == null
-                ? null : projectVersionMapper.selectById(projectIdentity.getCurrentVersionId());
+        ProjectSkuPricingVersionDO current = currentProjectVersion(projectIdentity);
         ProjectOverrides overrides = current == null ? ProjectOverrides.allInherited()
                 : fromJson(current.getOverrideJson(), ProjectOverrides.class);
         PricingConfig effective = ProjectPricingConfigMerger.merge(configFrom(buyerVersion), overrides);
@@ -453,6 +500,12 @@ public class GenericBatchPricingService {
                     .pricingStatus(PricingStatus.UNPRICED.name()).version(0L)
                     .createdAt(now).updatedAt(now).build();
             platformPricingMapper.insert(identity);
+        }
+        if (identity.getCurrentVersionId() != null) {
+            var current = platformVersionMapper.selectById(identity.getCurrentVersionId());
+            if (current == null || !Objects.equals(sku.getId(), current.getPlatformSkuId())) {
+                throw new IllegalStateException("platform pricing current version is missing or mismatched");
+            }
         }
         PlatformSkuPricingVersionDO latest = platformVersionMapper.selectLatest(sku.getId());
         int versionNo = latest == null ? 1 : latest.getVersionNo() + 1;
@@ -486,8 +539,7 @@ public class GenericBatchPricingService {
         PricingConfig parent = configFrom(platformVersion);
         for (BuyerProductDO product : buyerProductMapper.selectActiveByPlatformSkuId(sku.getId())) {
             BuyerSkuPricingDO identity = buyerPricingMapper.selectByBuyerProductIdForUpdate(product.getId());
-            BuyerSkuPricingVersionDO current = identity == null || identity.getCurrentVersionId() == null ? null
-                    : buyerVersionMapper.selectById(identity.getCurrentVersionId());
+            BuyerSkuPricingVersionDO current = currentBuyerVersion(identity);
             ProjectOverrides overrides = current == null ? ProjectOverrides.allInherited()
                     : fromJson(current.getOverrideJson(), ProjectOverrides.class);
             PricingConfig effective = ProjectPricingConfigMerger.merge(parent, overrides);
@@ -511,6 +563,7 @@ public class GenericBatchPricingService {
                     .createdAt(now).updatedAt(now).build();
             buyerPricingMapper.insert(identity);
         }
+        currentBuyerVersion(identity);
         BuyerSkuPricingVersionDO latest = buyerVersionMapper.selectLatest(identity.getId());
         int versionNo = latest == null ? 1 : latest.getVersionNo() + 1;
         BuyerSkuPricingVersionDO version = BuyerSkuPricingVersionDO.builder()
@@ -547,8 +600,7 @@ public class GenericBatchPricingService {
                                           Long operatorId, LocalDateTime now) {
         for (ProjectListingDO listing : listingMapper.selectAvailableByBuyerProductId(context.product().getId())) {
             ProjectSkuPricingDO identity = projectPricingMapper.selectByListingId(listing.getId());
-            ProjectSkuPricingVersionDO current = identity == null || identity.getCurrentVersionId() == null ? null
-                    : projectVersionMapper.selectById(identity.getCurrentVersionId());
+            ProjectSkuPricingVersionDO current = currentProjectVersion(identity);
             ProjectOverrides overrides = current == null ? ProjectOverrides.allInherited()
                     : fromJson(current.getOverrideJson(), ProjectOverrides.class);
             PricingConfig buyerConfig = configFrom(buyerVersion);
@@ -569,6 +621,7 @@ public class GenericBatchPricingService {
                     .createdAt(now).updatedAt(now).build();
             projectPricingMapper.insert(identity);
         }
+        currentProjectVersion(identity);
         ProjectSkuPricingVersionDO latest = projectVersionMapper.selectLatest(identity.getId());
         int versionNo = latest == null ? 1 : latest.getVersionNo() + 1;
         ProjectSkuPricingVersionDO version = ProjectSkuPricingVersionDO.builder()
@@ -594,6 +647,29 @@ public class GenericBatchPricingService {
                     .eq(ProjectSkuPricingDO::getCurrentVersionId, version.getId())
                     .set(ProjectSkuPricingDO::getUnavailableReason, null));
         }
+    }
+
+    /**
+     * 非空当前指针代表已发布人工配置，缺行或错归属必须回滚，不能降为首次全继承覆盖。
+     * 设计见 docs/superpowers/specs/2026-10-19-suggested-sale-price-supply-base-design.md#22-待计算失败和恢复。
+     */
+    private BuyerSkuPricingVersionDO currentBuyerVersion(BuyerSkuPricingDO identity) {
+        if (identity == null || identity.getCurrentVersionId() == null) return null;
+        var version = buyerVersionMapper.selectById(identity.getCurrentVersionId());
+        if (version == null || !Objects.equals(identity.getId(), version.getPricingId())) {
+            throw new IllegalStateException("buyer pricing current version is missing or mismatched");
+        }
+        return version;
+    }
+
+    /** 子层与父层使用同一完整性契约，不以继承重算修复损坏指针。见 docs/superpowers/specs/2026-10-19-suggested-sale-price-supply-base-design.md#22-待计算失败和恢复。 */
+    private ProjectSkuPricingVersionDO currentProjectVersion(ProjectSkuPricingDO identity) {
+        if (identity == null || identity.getCurrentVersionId() == null) return null;
+        var version = projectVersionMapper.selectById(identity.getCurrentVersionId());
+        if (version == null || !Objects.equals(identity.getId(), version.getPricingId())) {
+            throw new IllegalStateException("project pricing current version is missing or mismatched");
+        }
+        return version;
     }
 
     private ProjectOverrides normalizeTax(ProjectOverrides overrides) {
@@ -666,7 +742,7 @@ public class GenericBatchPricingService {
         com.aifuli.module.supplychain.tradecore.supply.application.SupplierLifecycleTransactions.requireReadCommitted();
         List<Long> ids = codes.stream().filter(Objects::nonNull).map(String::trim).filter(code -> !code.isEmpty())
                 .map(skuMapper::selectByCode).filter(Objects::nonNull).map(PlatformSkuDO::getId).toList();
-        PlatformSkuPricingBatchLock.lockByIds(platformPricingMapper, ids);
+        PlatformSkuPricingBatchLock.lockOrCreateByIds(platformPricingMapper, ids, clock.now());
     }
 
     /**
@@ -675,7 +751,7 @@ public class GenericBatchPricingService {
      * 设计见 docs/superpowers/specs/2026-10-11-supplier-offer-lifecycle-design.md#34-闭环四同步重算的锁顺序与并发事务规范。
      */
     private Map<Long, PlatformSkuPricingDO> lockPricingRoots(List<PlatformSkuDO> skus) {
-        return PlatformSkuPricingBatchLock.lockByIds(platformPricingMapper, skus.stream().map(PlatformSkuDO::getId).toList());
+        return PlatformSkuPricingBatchLock.lockOrCreateByIds(platformPricingMapper, skus.stream().map(PlatformSkuDO::getId).toList(), clock.now());
     }
 
     /**
@@ -688,7 +764,18 @@ public class GenericBatchPricingService {
 
     private PriceDependencies dependencies(PlatformSkuDO sku, LocalDateTime now) {
         Long minimum = eligibilityService.resolveMinimumSupplyPrices(List.of(sku.getId()), now).get(sku.getId());
-        return new PriceDependencies(sku.getMarketPrice(), sku.getSuggestedSalePrice(), minimum);
+        var price = SuggestedSalePriceResolver.isDynamic(sku)
+                ? Objects.requireNonNull(suggestedPriceResolver, "suggested price resolver unavailable").resolve(sku, now)
+                : SuggestedSalePriceResolver.evaluate(sku, minimum, null, now);
+        return new PriceDependencies(sku.getMarketPrice(), price.amountCents(), minimum);
+    }
+
+    private void refreshSuggestedPrice(PlatformSkuDO sku, LocalDateTime now) {
+        if (suggestedPriceCoordinator != null) {
+            suggestedPriceCoordinator.refresh(sku, now);
+        } else if (SuggestedSalePriceResolver.isDynamic(sku)) {
+            throw new IllegalStateException("suggested price coordinator unavailable");
+        }
     }
 
     private BuyerDO requireBuyer(String code, boolean forUpdate) {
@@ -822,7 +909,7 @@ public class GenericBatchPricingService {
     }
 
     public record PricingPreview(String scopeItemCode, String platformSkuCode,
-                                 long marketPriceCents, long suggestedSalePriceCents, Long supplyPriceCents,
+                                 long marketPriceCents, Long suggestedSalePriceCents, Long supplyPriceCents,
                                  Long distributionPriceCents, Long salesPriceCents,
                                  java.math.BigDecimal distributionMarginPercent,
                                  java.math.BigDecimal effectiveHideThresholdPercent,

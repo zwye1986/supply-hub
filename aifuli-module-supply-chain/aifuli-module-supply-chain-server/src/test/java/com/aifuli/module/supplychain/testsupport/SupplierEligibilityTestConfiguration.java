@@ -10,11 +10,14 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
 import org.springframework.context.annotation.Bean;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Import;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.SuggestedSalePriceResolver;
 import org.springframework.core.env.Environment;
 import java.util.List;
 
 /** 显式Bean集成测试共用真实资格解析器；白名单仍取测试配置，空配置保持拒绝。 */
 @Configuration(proxyBeanMethods = false)
+@Import(SuggestedSalePriceResolver.class)
 public class SupplierEligibilityTestConfiguration {
     @Bean @ConditionalOnMissingBean
     SupplierOfferEligibilityService supplierOfferEligibilityService(SupplierMapper suppliers,

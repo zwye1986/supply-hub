@@ -1,5 +1,11 @@
 package com.aifuli.module.supplychain.tradecore.catalog.application;
 
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.SuggestedSalePriceResolver;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.SuggestedSalePriceResolver.Resolution;
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import jakarta.annotation.Resource;
+
 import com.aifuli.framework.common.exception.ServiceException;
 import com.aifuli.framework.common.pojo.PageParam;
 import com.aifuli.framework.common.pojo.PageResult;
@@ -82,6 +88,12 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
 @Service
 @RequiredArgsConstructor
 public class BuyerProductQueryService {
+
+    @Resource
+    private com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock databaseClock;
+
+    @Resource
+    private SuggestedSalePriceResolver suggestedSalePriceResolver;
 
     private static final int DEFAULT_PAGE_NO = 1;
     private static final int DEFAULT_PAGE_SIZE = 20;
@@ -219,9 +231,14 @@ public class BuyerProductQueryService {
     }
 
     private PageResult<BuyerProductListItem> toListPage(PageResult<BuyerProductDO> page) {
+        var skus = new java.util.HashMap<Long, PlatformSkuDO>();
+        page.getList().stream().map(BuyerProductDO::getPlatformSkuId).filter(Objects::nonNull).distinct()
+                .forEach(id -> { var sku = skuMapper.selectById(id); if (sku != null) skus.put(id, sku); });
+        var dynamic = skus.values().stream().anyMatch(SuggestedSalePriceResolver::isDynamic);
+        var prices = resolveSuggestedPrices(skus.values(), dynamic ? databaseClock.now() : null);
         List<BuyerProductListItem> items = new ArrayList<>();
         for (BuyerProductDO product : page.getList()) {
-            items.add(toListItem(product));
+            items.add(toListItem(product, skus.get(product.getPlatformSkuId()), prices.get(product.getPlatformSkuId())));
         }
         return new PageResult<>(items, page.getTotal());
     }
@@ -293,8 +310,7 @@ public class BuyerProductQueryService {
         return List.copyOf(codes);
     }
 
-    private BuyerProductListItem toListItem(BuyerProductDO product) {
-        PlatformSkuDO sku = product.getPlatformSkuId() == null ? null : skuMapper.selectById(product.getPlatformSkuId());
+    private BuyerProductListItem toListItem(BuyerProductDO product, PlatformSkuDO sku, Resolution suggestedPrice) {
         PlatformSpuDO spu = sku == null || sku.getSpuId() == null ? null : spuMapper.selectById(sku.getSpuId());
         Long l1Cents = sku == null ? null : loadL1Cents(sku.getId());
         BuyerProductL2OverrideVersionDO overrideVersion = loadOverrideVersion(product.getId());
@@ -330,7 +346,7 @@ public class BuyerProductQueryService {
                 spu == null ? null : spu.getProductClassification(),
                 sku == null ? null : sku.getMarketPrice(),
                 l1Cents,
-                sku == null ? null : sku.getSuggestedSalePrice(),
+                suggestedPrice == null ? null : suggestedPrice.amountCents(),
                 platformBasePriceCents,
                 pricingRule(buyerPricingVersion, buyerPricingOverrides, overrideVersion),
                 tax == null ? null : tax.taxIncluded(),
@@ -347,7 +363,7 @@ public class BuyerProductQueryService {
                 catalog.publicationState(), catalog.availabilityStatus(), catalog.catalogRefreshReason(),
                 catalog.sourceBuyerPricingVersionId(), catalog.lastEvaluatedAt(), catalog.nextEvaluateAt(),
                 buyerPricing.currentVersionId(), buyerPricing.pricingStatus(),
-                buyerPricingOverrides == null ? null : BuyerPricingConfigView.from(buyerPricingOverrides));
+                buyerPricingOverrides == null ? null : BuyerPricingConfigView.from(buyerPricingOverrides), suggestedPrice);
     }
 
     /**
@@ -670,7 +686,7 @@ public class BuyerProductQueryService {
             @Schema(description = "商品分类封闭枚举名") String productClassification,
             @Schema(description = "平台SKU市场划线价或吊牌价，单位CNY分") Long marketPriceCents,
             @Schema(description = "建议结算价，取当前L1，单位CNY分") Long suggestPriceCents,
-            @Schema(description = "平台SKU销售建议价，单位CNY分") Long suggestedSalePriceCents,
+            @Schema(description = "当前有效销售建议价，单位CNY分；供应价规则待计算或失败时为空", nullable = true) Long suggestedSalePriceCents,
             @Schema(description = "项目旧调价模式的B端平台基价，单位CNY分") Long platformBasePriceCents,
             @Schema(description = "定价规则文案；通用定价为继承商品默认 / 等于市场价 / 自定义公式，历史链兼容继承L1 / 等于L1") String pricingRule,
             @Schema(description = "有效通用定价是否含税；仅用于展示") Boolean taxIncluded,
@@ -694,7 +710,33 @@ public class BuyerProductQueryService {
             @Schema(description = "供给可用性投影下次必须重建的时间，Asia/Shanghai；历史未评估为空") LocalDateTime nextEvaluateAt,
             @JsonInclude(JsonInclude.Include.ALWAYS) @Schema(description = "当前通用定价版本主键，空表示未定价；逻辑引用sc_buyer_sku_pricing_version.id") Long currentPricingVersionId,
             @Schema(description = "当前定价状态：UNPRICED未定价，READY可售，RECALCULATING重算中，DEPENDENCY_MISSING依赖缺失，CALCULATION_FAILED计算失败，MARGIN_HIDDEN利润隐藏；取身份处理状态，无当前指针时为UNPRICED") String pricingStatus,
-            @JsonInclude(JsonInclude.Include.ALWAYS) @Schema(description = "当前版本保存的原始五组覆盖配置；无当前指针时为空") BuyerPricingConfigView buyerPricingConfig) {
+            @JsonInclude(JsonInclude.Include.ALWAYS) @Schema(description = "当前版本保存的原始五组覆盖配置；无当前指针时为空") BuyerPricingConfigView buyerPricingConfig,
+            @JsonIgnore @Schema(hidden = true) Resolution suggestedPriceResolution) {
+
+        @JsonProperty(value = "suggestedSalePriceStatus", access = JsonProperty.Access.READ_ONLY)
+        @Schema(description = "当前销售建议价状态：READY可用、DEPENDENCY_MISSING待计算、CALCULATION_FAILED计算失败")
+        public String suggestedSalePriceStatus() {
+            return suggestedPriceResolution == null ? null : suggestedPriceResolution.status().name();
+        }
+
+        @JsonProperty(value = "suggestedSalePriceUnavailableReason", access = JsonProperty.Access.READ_ONLY)
+        @Schema(description = "当前销售建议价不可用原因编码；READY时为空")
+        public String suggestedSalePriceUnavailableReason() {
+            return suggestedPriceResolution == null ? null : suggestedPriceResolution.unavailableReason();
+        }
+
+        @JsonProperty(value = "lastValidSuggestedSalePrice", access = JsonProperty.Access.READ_ONLY)
+        @Schema(description = "最近一次成功计算的销售建议价，仅供历史参考，单位CNY分")
+        public Long lastValidSuggestedSalePrice() {
+            return suggestedPriceResolution == null ? null : suggestedPriceResolution.lastValidPriceCents();
+        }
+
+        @JsonProperty(value = "lastValidSuggestedSalePriceCalculatedAt", access = JsonProperty.Access.READ_ONLY)
+        @Schema(description = "最近一次成功计算销售建议价的数据库时间，毫秒时间戳，仅供历史参考", type = "integer", format = "int64")
+        public LocalDateTime lastValidSuggestedSalePriceCalculatedAt() {
+            return suggestedPriceResolution == null ? null : suggestedPriceResolution.lastValidCalculatedAt();
+        }
+
     }
     /**
      * 分销商当前版本的原始五组覆盖视图，独立于持久化对象；规则和继承标记逐字段保留。
@@ -788,5 +830,23 @@ public class BuyerProductQueryService {
             return source == null ? null : new BuyerTaxMetadataView(
                     source.taxIncluded(), source.taxRateCode(), source.taxRateLabel());
         }
+    }
+
+    /**
+     * 同页动态规则共用数据库时刻并批量解析；非动态规则保持原金额来源，动态规则绝不回退兼容列。
+     * 设计见 docs/superpowers/specs/2026-10-19-suggested-sale-price-supply-base-design.md#4-数据模型与唯一取值入口。
+     */
+    private java.util.Map<Long, Resolution> resolveSuggestedPrices(java.util.Collection<PlatformSkuDO> skus,
+                                                                  LocalDateTime now) {
+        var dynamic = skus.stream().filter(SuggestedSalePriceResolver::isDynamic).toList();
+        var resolved = dynamic.isEmpty() ? java.util.Map.<Long, Resolution>of()
+                : suggestedSalePriceResolver.resolve(dynamic, now);
+        java.util.Map<Long, Resolution> prices = new java.util.HashMap<>(resolved);
+        for (PlatformSkuDO sku : skus) {
+            if (!SuggestedSalePriceResolver.isDynamic(sku)) {
+                prices.put(sku.getId(), SuggestedSalePriceResolver.evaluate(sku, null, null, now));
+            }
+        }
+        return prices;
     }
 }

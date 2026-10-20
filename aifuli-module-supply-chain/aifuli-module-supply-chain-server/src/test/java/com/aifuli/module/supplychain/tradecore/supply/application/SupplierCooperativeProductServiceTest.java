@@ -431,6 +431,30 @@ class SupplierCooperativeProductServiceTest {
                         .status(CatalogEntityStatus.ACTIVE.getCode()).build()));
     }
 
+    @Test
+    void dynamicSuggestedPriceMissingRejectsDiscountDespitePositiveCompatibilityAmount() {
+        stubCreatePath();
+        stubSupplierAndOffer(OfferStatus.PUBLISHED);
+        when(skuMapper.selectByCode("MOVIE_100")).thenReturn(PlatformSkuDO.builder()
+                .id(11L).skuCode("MOVIE_100").spuId(21L).suggestedSalePrice(9600L)
+                .suggestedSalePriceRuleJson(new com.aifuli.module.supplychain.tradecore.catalog.domain.SuggestedSalePriceRule(
+                        com.aifuli.module.supplychain.tradecore.catalog.domain.SuggestedSalePriceRule.Mode.CUSTOM,
+                        com.aifuli.module.supplychain.tradecore.catalog.domain.SuggestedSalePriceRule.Base.SUPPLY_PRICE,
+                        new java.math.BigDecimal("100"),
+                        com.aifuli.module.supplychain.tradecore.catalog.domain.SuggestedSalePriceRule.Operator.ADD,
+                        java.math.BigDecimal.ZERO, null, null))
+                .status(CatalogEntityStatus.ACTIVE.getCode()).build());
+        DraftLine line = new DraftLine("MOVIE_100", "DISCOUNT", null, 9000, 10000L,
+                "API_DIRECT", 80L, 1L, "external");
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "suggestedSalePriceResolver",
+                new com.aifuli.module.supplychain.tradecore.catalog.pricing.SuggestedSalePriceResolver(eligibilityService,
+                        mock(com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.SkuSuggestedPriceStateMapper.class)));
+        assertThatThrownBy(() -> service.updateCommercial("SPL_A", "OFR_1", line, 1L))
+                .isInstanceOf(ServiceException.class)
+                .hasMessage("折扣模式要求SKU销售建议价大于0，请先在商品中心配置");
+        verify(offerMapper, never()).updateById(any(SupplierOfferDO.class));
+    }
+
     /** 销售建议价来自SKU；旧L1为空或不同均不能改变新响应字段。 */
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.CsvSource({"9600,8000", "9600,", "0,8000", ",8000"})

@@ -106,6 +106,25 @@ class BuyerProductQueryServiceTest {
     }
 
     @Test
+    void missingDynamicSuggestedPriceDoesNotExposeCompatibilityAmount() {
+        var sku = PlatformSkuDO.builder().id(11L).spuId(21L).skuCode("SKU")
+                .marketPrice(10000L).suggestedSalePrice(99999L)
+                .suggestedSalePriceRuleJson(ProductCatalogQueryServiceTest.supplyRule()).build();
+        when(skuMapper.selectById(11L)).thenReturn(sku);
+        when(productMapper.selectPage(any(PageParam.class), any())).thenReturn(new PageResult<>(List.of(
+                BuyerProductDO.builder().id(31L).buyerId(9L).platformSkuId(11L).buyerProductCode("BP").build()), 1L));
+        var resolver = new com.aifuli.module.supplychain.tradecore.catalog.pricing.SuggestedSalePriceResolver(
+                mock(com.aifuli.module.supplychain.tradecore.supply.application.SupplierOfferEligibilityService.class),
+                mock(com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.SkuSuggestedPriceStateMapper.class));
+        var clock = mock(com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock.class);
+        when(clock.now()).thenReturn(java.time.LocalDateTime.of(2026, 10, 19, 12, 0));
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "suggestedSalePriceResolver", resolver);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "databaseClock", clock);
+        var row = service.page("BYR_A", List.of(), 1, 20).getList().getFirst();
+        assertThat(row.suggestedSalePriceCents()).isNull();
+    }
+
+    @Test
     void rejectsMissingBuyer() {
         when(buyerMapper.selectByBuyerCode("BYR_MISSING")).thenReturn(null);
 

@@ -1,5 +1,11 @@
 package com.aifuli.module.supplychain.tradecore.catalog.application;
 
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.SuggestedSalePriceResolver;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.SuggestedSalePriceResolver.Resolution;
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import jakarta.annotation.Resource;
+
 import com.aifuli.framework.common.pojo.PageParam;
 import com.aifuli.framework.common.pojo.PageResult;
 import com.aifuli.framework.mybatis.core.util.MyBatisUtils;
@@ -44,6 +50,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -67,6 +74,12 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
 @Service
 @RequiredArgsConstructor
 public class ProjectListingQueryService {
+
+    @Resource
+    private com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock databaseClock;
+
+    @Resource
+    private SuggestedSalePriceResolver suggestedSalePriceResolver;
 
     private static final int DEFAULT_PAGE_NO = 1;
     private static final int DEFAULT_PAGE_SIZE = 20;
@@ -131,6 +144,9 @@ public class ProjectListingQueryService {
         }
         Map<Long, ProjectSkuPricingVersionDO> pricingVersions = currentPricingVersions(page.getList());
         Map<Long, ProductContext> products = loadProducts(page.getList());
+        var skus = products.values().stream().map(ProductContext::sku).filter(Objects::nonNull).toList();
+        var suggestedPrices = resolveSuggestedPrices(skus,
+                skus.stream().anyMatch(SuggestedSalePriceResolver::isDynamic) ? databaseClock.now() : null);
         Map<Long, PlatformSpuDO> spus = loadSpus(products.values());
         Map<String, String> typeNames = loadTypeNames(spus.values());
         Map<Long, String> categoryNames = loadCategoryNames(spus.values());
@@ -141,7 +157,8 @@ public class ProjectListingQueryService {
             PlatformSpuDO spu = product == null || product.sku() == null ? null
                     : spus.get(product.sku().getSpuId());
             items.add(toListItem(listing, pricingVersions.get(listing.getId()), product, spu,
-                    typeNames, categoryNames, project.getProjectName(), buyerName));
+                    typeNames, categoryNames, project.getProjectName(), buyerName,
+                    product == null || product.sku() == null ? null : suggestedPrices.get(product.sku().getId())));
         }
         return new PageResult<>(items, page.getTotal());
     }
@@ -267,7 +284,7 @@ public class ProjectListingQueryService {
     private ProjectListingListItem toListItem(ProjectListingDO listing, ProjectSkuPricingVersionDO pricingVersion,
                                               ProductContext context, PlatformSpuDO spu,
                                               Map<String, String> typeNames, Map<Long, String> categoryNames,
-                                              String projectName, String buyerName) {
+                                              String projectName, String buyerName, Resolution suggestedPrice) {
         BuyerProductDO product = context == null ? null : context.product();
         PlatformSkuDO sku = context == null ? null : context.sku();
         PriceBasis basis = product == null ? null : priceSource.resolve(product);
@@ -296,7 +313,7 @@ public class ProjectListingQueryService {
                         ? null : categoryNames.get(spu.getPrimaryCategoryId()),
                 sku == null ? null : sku.getMarketPrice(),
                 suggestPriceCents,
-                sku == null ? null : sku.getSuggestedSalePrice(),
+                suggestedPrice == null ? null : suggestedPrice.amountCents(),
                 platformBasePriceCents,
                 distPriceCents,
                 covered ? finalPriceCents : null,
@@ -306,7 +323,7 @@ public class ProjectListingQueryService {
                 covered,
                 savedOverrides == null ? null : ProjectPricingConfigView.from(savedOverrides),
                 sku == null ? null : sku.getTargetSchemaCode(),
-                sku == null ? null : sku.getTargetSchemaVersion());
+                sku == null ? null : sku.getTargetSchemaVersion(), suggestedPrice);
     }
 
     /** 当前版本未发布时返回 null；已发布却无法解析时保留异常因果，禁止伪造全继承配置。 */
@@ -344,7 +361,7 @@ public class ProjectListingQueryService {
             @Schema(description = "平台主类目的类目名称；主类目缺失时为空") String categoryName,
             @Schema(description = "市场划线价/吊牌价，单位为分；平台 SKU 缺失时为空，0 为有效值") Long marketPriceCents,
             @Schema(description = "历史 L1 建议结算价兼容字段，单位 CNY 分；无旧 L1 时为空") Long suggestPriceCents,
-            @Schema(description = "平台 SKU 销售建议价，单位 CNY 分；平台 SKU 缺失时为空") Long suggestedSalePriceCents,
+            @Schema(description = "当前有效销售建议价，单位CNY分；平台SKU缺失、供应价规则待计算或失败时为空", nullable = true) Long suggestedSalePriceCents,
             @Schema(description = "旧 L3 调价模式使用的 B 端平台基价，单位 CNY 分；无有效基价时为空") Long platformBasePriceCents,
             @Schema(description = "当前分销商有效分销价，优先通用定价版本，单位 CNY 分；未定价时为空") Long distPriceCents,
             @Schema(description = "项目通用定价显式覆盖分销价时取当前项目版本分销价；否则旧冻结版本为 L3 时取冻结价，单位 CNY 分") Long projectPriceCents,
@@ -356,7 +373,32 @@ public class ProjectListingQueryService {
             @Schema(description = "当前项目综合定价版本保存的五组继承开关及覆盖规则；无当前版本时为空")
             ProjectPricingConfigView projectPricingConfig,
             @Schema(description = "履约目标封闭Schema编码") String targetSchemaCode,
-            @Schema(description = "履约目标Schema版本") Integer targetSchemaVersion) {
+            @Schema(description = "履约目标Schema版本") Integer targetSchemaVersion,
+            @JsonIgnore @Schema(hidden = true) Resolution suggestedPriceResolution) {
+
+        @JsonProperty(value = "suggestedSalePriceStatus", access = JsonProperty.Access.READ_ONLY)
+        @Schema(description = "当前销售建议价状态：READY可用、DEPENDENCY_MISSING待计算、CALCULATION_FAILED计算失败")
+        public String suggestedSalePriceStatus() {
+            return suggestedPriceResolution == null ? null : suggestedPriceResolution.status().name();
+        }
+
+        @JsonProperty(value = "suggestedSalePriceUnavailableReason", access = JsonProperty.Access.READ_ONLY)
+        @Schema(description = "当前销售建议价不可用原因编码；READY时为空")
+        public String suggestedSalePriceUnavailableReason() {
+            return suggestedPriceResolution == null ? null : suggestedPriceResolution.unavailableReason();
+        }
+
+        @JsonProperty(value = "lastValidSuggestedSalePrice", access = JsonProperty.Access.READ_ONLY)
+        @Schema(description = "最近一次成功计算的销售建议价，仅供历史参考，单位CNY分")
+        public Long lastValidSuggestedSalePrice() {
+            return suggestedPriceResolution == null ? null : suggestedPriceResolution.lastValidPriceCents();
+        }
+
+        @JsonProperty(value = "lastValidSuggestedSalePriceCalculatedAt", access = JsonProperty.Access.READ_ONLY)
+        @Schema(description = "最近一次成功计算销售建议价的数据库时间，毫秒时间戳，仅供历史参考", type = "integer", format = "int64")
+        public LocalDateTime lastValidSuggestedSalePriceCalculatedAt() {
+            return suggestedPriceResolution == null ? null : suggestedPriceResolution.lastValidCalculatedAt();
+        }
     }
 
     /**
@@ -450,5 +492,23 @@ public class ProjectListingQueryService {
             return source == null ? null : new ProjectTaxMetadataView(
                     source.taxIncluded(), source.taxRateCode(), source.taxRateLabel());
         }
+    }
+
+    /**
+     * 同页动态规则共用数据库时刻并批量解析；非动态规则保持原金额来源，动态规则绝不回退兼容列。
+     * 设计见 docs/superpowers/specs/2026-10-19-suggested-sale-price-supply-base-design.md#4-数据模型与唯一取值入口。
+     */
+    private java.util.Map<Long, Resolution> resolveSuggestedPrices(java.util.Collection<PlatformSkuDO> skus,
+                                                                  LocalDateTime now) {
+        var dynamic = skus.stream().filter(SuggestedSalePriceResolver::isDynamic).toList();
+        var resolved = dynamic.isEmpty() ? java.util.Map.<Long, Resolution>of()
+                : suggestedSalePriceResolver.resolve(dynamic, now);
+        java.util.Map<Long, Resolution> prices = new java.util.HashMap<>(resolved);
+        for (PlatformSkuDO sku : skus) {
+            if (!SuggestedSalePriceResolver.isDynamic(sku)) {
+                prices.put(sku.getId(), SuggestedSalePriceResolver.evaluate(sku, null, null, now));
+            }
+        }
+        return prices;
     }
 }

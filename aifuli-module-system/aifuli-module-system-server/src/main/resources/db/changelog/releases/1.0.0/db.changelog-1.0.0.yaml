@@ -272,3 +272,14 @@ databaseChangeLog:
             encoding: UTF-8
             splitStatements: true
             stripComments: false
+  - changeSet:
+      id: 019-suggested-sale-price-supply-base
+      author: supply-chain
+      runInTransaction: true
+      changes:
+        - sqlFile:
+            path: 019-suggested-sale-price-supply-base.sql
+            relativeToChangelogFile: true
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false

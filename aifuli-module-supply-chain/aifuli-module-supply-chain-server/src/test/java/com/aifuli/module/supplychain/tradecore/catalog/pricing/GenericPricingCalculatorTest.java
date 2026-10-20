@@ -13,6 +13,18 @@ class GenericPricingCalculatorTest {
     private final GenericPricingCalculator calculator = new GenericPricingCalculator();
 
     @Test
+    void missingSuggestedPriceIsNotZeroAndOnlyBlocksDependentFormula() {
+        assertThat(PriceDependencies.class.getRecordComponents()[1].getType()).isEqualTo(Long.class);
+        PricingResult dependent = calculator.calculate(config(
+                formula(PriceBase.SUGGESTED_SALE_PRICE, "100", FixedOperator.ADD, "1"), direct()),
+                new PriceDependencies(1000, (Long) null, 800L));
+        assertThat(dependent.distributionPriceCents()).isNull();
+        assertThat(dependent.status()).isEqualTo(PricingStatus.DEPENDENCY_MISSING);
+        assertThat(calculator.calculate(config(direct(), direct()),
+                new PriceDependencies(1000, (Long) null, 800L)).status()).isEqualTo(PricingStatus.READY);
+    }
+
+    @Test
     void calculatesFromLeftToRightAndRoundsOnlyFinalCent() {
         PricingConfig invalidConfig = config(
                 formula(PriceBase.MARKET_PRICE, "33.33", FixedOperator.MULTIPLY, "3.0000"),

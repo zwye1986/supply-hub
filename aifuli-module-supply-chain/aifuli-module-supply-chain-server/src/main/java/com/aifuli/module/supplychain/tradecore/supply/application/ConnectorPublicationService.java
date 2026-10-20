@@ -48,6 +48,8 @@ public class ConnectorPublicationService {
     private static final String TRANSACTION_MANAGER = "supplyChainTransactionManager";
     private static final String OUTBOX_TARGET = "supplier-config-cache-invalidation";
 
+    @jakarta.annotation.Resource
+    private com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuPricingMapper pricingMapper;
     private final SupplierMapper supplierMapper;
     private final SupplierOfferMapper offerMapper;
     private final ApplicationEventPublisher eventPublisher;
@@ -199,12 +201,14 @@ public class ConnectorPublicationService {
         if (supplierId == null) {
             return;
         }
-        offerMapper.selectPublishedBySupplier(supplierId).stream()
+        var skuIds = offerMapper.selectPublishedBySupplier(supplierId).stream()
                 .map(SupplierOfferDO::getPlatformSkuId)
                 .filter(java.util.Objects::nonNull)
                 .distinct()
-                .sorted()
-                .forEach(skuId -> eventPublisher.publishEvent(new PricingDependencyChangedEvent(skuId)));
+                .sorted().toList();
+        com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuPricingBatchLock.lockOrCreateByIds(
+                pricingMapper, skuIds, databaseClock.now());
+        skuIds.forEach(skuId -> eventPublisher.publishEvent(new PricingDependencyChangedEvent(skuId)));
     }
 
     private void publishMappings(Long connectorVersionId, LocalDateTime now) {

@@ -765,6 +765,10 @@ class ProjectStandardAcceptanceIntegrationTest {
          * 使报价的 platformSkuId/listingId 与受理链路实际锁定的商品一致。
          * 写法参照 StandardPricingQuotePermanentKeyIntegrationTest 的定价 stub。
          */
+        @Bean com.aifuli.module.supplychain.tradecore.catalog.pricing.SuggestedSalePriceCoordinator suggestedSalePriceCoordinator() {
+            return mock(com.aifuli.module.supplychain.tradecore.catalog.pricing.SuggestedSalePriceCoordinator.class);
+        }
+
         @Bean
         GenericBatchPricingService genericBatchPricingService(PlatformSkuMapper skuMapper,
                                                               BuyerListingMapper listingMapper,
