@@ -19,6 +19,7 @@ import com.aifuli.module.supplychain.tradecore.catalog.pricing.PricingTaxRateCod
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierCooperativeProductService;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierCooperativeProductService.DraftLine;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierOfferPublicationService;
+import com.aifuli.module.supplychain.tradecore.supply.application.SupplierSupplyScopeService;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierSupplyScopeDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierMapper;
@@ -259,6 +260,127 @@ class SupplierSupplyScopeMatchingIntegrationTest {
         assertThat(normal.getTotal()).isEqualTo(1L);
     }
 
+    /** 真实保存配置造成旧引用失效后，列表重匹配当前配置，分页前过滤且查询不写Offer。 */
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void configuredOffersSurviveScopeReplacementAndKeepPaginationAndCommercialValues(boolean useParent) {
+        Fixture f = fixture();
+        var original = scope(f, "PHYSICAL", "EQUITY_PRODUCT", leaf, 100L);
+        var selected = productSkus(f, "EQUITY_PRODUCT", leaf, 3);
+        offers.createPublished(f.supplier().getSupplierCode(), selected.stream()
+                .map(SupplierSupplyScopeMatchingIntegrationTest::line).toList(), 1L);
+        var before = offerRows(f);
+        var versionsBefore = offerVersionRows(f);
+        Category replacement = useParent ? root : leaf;
+        replaceScopes(f, "MOVIE", "EQUITY_PRODUCT", replacement);
+        assertThat(context.getBean(SupplierSupplyScopeMapper.class).selectById(original.getId())).isNull();
+        var current = context.getBean(SupplierSupplyScopeMapper.class).selectBySupplierId(f.supplier().getId()).getFirst();
+        assertThat(current.getId()).isNotEqualTo(original.getId());
+        var seen = new HashSet<String>();
+        for (int page = 1; page <= 3; page++) {
+            var result = offers.page(f.supplier().getSupplierCode(), "MOVIE", "EQUITY_PRODUCT", replacement.code(), page, 1);
+            assertThat(result.getTotal()).isEqualTo(3L);
+            assertThat(result.getList()).singleElement().satisfies(row -> {
+                seen.add(row.platformSkuCode());
+                assertThat(row.sellableCategory()).isEqualTo("MOVIE");
+                assertThat(row.productType()).isEqualTo("EQUITY_PRODUCT");
+                assertThat(row.productClassification()).isEqualTo(replacement.code());
+                assertThat(row.maxQuantity()).isEqualTo(100L);
+                assertThat(row.status()).isEqualTo("SUSPENDED");
+            });
+        }
+        assertThat(seen).containsExactlyInAnyOrderElementsOf(selected.stream().map(PlatformSkuDO::getSkuCode).toList());
+        assertThat(offers.page(f.supplier().getSupplierCode(), null, "EQUITY_PRODUCT", null, 4, 1).getList()).isEmpty();
+        assertThat(offers.page(f.supplier().getSupplierCode(), "PHYSICAL", null, null, 1, 20).getTotal()).isZero();
+        assertThat(offers.page(f.supplier().getSupplierCode(), null, null, null, 1, 20).getList())
+                .allSatisfy(row -> assertThat(row.productClassification()).isEqualTo(replacement.code()));
+        assertThat(aggregate(f, 1, 20).getTotal()).isZero();
+        assertThat(pool(f, 1, 20).getTotal()).isZero();
+        assertThat(offerRows(f)).isEqualTo(before);
+        assertThat(offerVersionRows(f)).isEqualTo(versionsBefore);
+    }
+
+    /** 尚未删除的旧配置也不能替代当前最具体匹配；筛选不得先裁配置再回退浅层。 */
+    @Test
+    void configuredOfferFiltersUseMostSpecificCurrentScopeBeforeApplyingRequestFilters() {
+        Fixture f = fixture();
+        scope(f, "PHYSICAL", "EQUITY_PRODUCT", root, 100L);
+        var sku = sku(f, "EQUITY_PRODUCT", leaf);
+        offers.createPublished(f.supplier().getSupplierCode(), List.of(line(sku)), 1L);
+        scope(f, "MOVIE", "EQUITY_PRODUCT", leaf, 50L);
+        var result = offers.page(f.supplier().getSupplierCode(), null, "EQUITY_PRODUCT", null, 1, 20);
+        assertThat(result.getTotal()).isEqualTo(1L);
+        assertThat(result.getList().getFirst().productClassification()).isEqualTo(leaf.code());
+        assertThat(result.getList().getFirst().sellableCategory()).isEqualTo("MOVIE");
+        assertThat(offers.page(f.supplier().getSupplierCode(), "PHYSICAL", null, root.code(), 1, 20).getTotal()).isZero();
+        assertThat(offers.page(f.supplier().getSupplierCode(), "MOVIE", null, leaf.code(), 1, 20).getTotal()).isEqualTo(1L);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void configuredOffersOutsideNewTypeOrClassificationStayHiddenOnlyWhenFiltered(boolean wrongType) {
+        Fixture f = fixture();
+        scope(f, "PHYSICAL", "EQUITY_PRODUCT", leaf, 100L);
+        var sku = sku(f, "EQUITY_PRODUCT", leaf);
+        offers.createPublished(f.supplier().getSupplierCode(), List.of(line(sku)), 1L);
+        var before = offerRows(f);
+        replaceScopes(f, "PHYSICAL", wrongType ? "MOVIE" : "EQUITY_PRODUCT", wrongType ? leaf : other);
+        assertThat(offers.page(f.supplier().getSupplierCode(), null, "EQUITY_PRODUCT", null, 1, 20).getTotal()).isZero();
+        assertThat(offers.page(f.supplier().getSupplierCode(), null, "MOVIE", null, 1, 20).getTotal()).isZero();
+        assertThat(offers.page(f.supplier().getSupplierCode(), null, null, null, 1, 20).getTotal()).isEqualTo(1L);
+        assertThat(offerRows(f)).isEqualTo(before);
+    }
+
+    @Test
+    void configuredOffersWithNoCurrentScopeOrAmbiguityRemainInUnfilteredManagement() {
+        Fixture f = fixture();
+        scope(f, "PHYSICAL", "EQUITY_PRODUCT", leaf, 100L);
+        var sku = sku(f, "EQUITY_PRODUCT", leaf);
+        offers.createPublished(f.supplier().getSupplierCode(), List.of(line(sku)), 1L);
+        var before = offerRows(f);
+        context.getBean(SupplierSupplyScopeService.class).replaceAll(f.supplier().getSupplierCode(), List.of(), 1L);
+        assertThat(offers.page(f.supplier().getSupplierCode(), null, "EQUITY_PRODUCT", null, 1, 20).getTotal()).isZero();
+        assertThat(offers.page(f.supplier().getSupplierCode(), null, null, null, 1, 20).getTotal()).isEqualTo(1L);
+        scope(f, "PHYSICAL", "EQUITY_PRODUCT", root, 100L);
+        scope(f, "PHYSICAL", "EQUITY_PRODUCT", leaf, 100L);
+        scope(f, "MOVIE", "EQUITY_PRODUCT", leaf, 100L);
+        assertThat(offers.page(f.supplier().getSupplierCode(), null, "EQUITY_PRODUCT", null, 1, 20).getTotal()).isZero();
+        assertThat(offers.page(f.supplier().getSupplierCode(), "PHYSICAL", null, root.code(), 1, 20).getTotal()).isZero();
+        assertThat(offers.page(f.supplier().getSupplierCode(), null, null, null, 1, 20).getTotal()).isEqualTo(1L);
+        assertThat(offerRows(f)).isEqualTo(before);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void configuredInactiveProductsRemainManageableAfterScopeReplacement(boolean inactiveParent) {
+        Fixture f = fixture();
+        scope(f, "PHYSICAL", "EQUITY_PRODUCT", leaf, 100L);
+        var sku = sku(f, "EQUITY_PRODUCT", leaf);
+        offers.createPublished(f.supplier().getSupplierCode(), List.of(line(sku)), 1L);
+        replaceScopes(f, "PHYSICAL", "EQUITY_PRODUCT", root);
+        if (inactiveParent) {
+            jdbc.update("UPDATE sc_platform_spu SET status=? WHERE id=?", CatalogEntityStatus.INACTIVE.getCode(), sku.getSpuId());
+        } else {
+            jdbc.update("UPDATE sc_platform_sku SET status=? WHERE id=?", CatalogEntityStatus.INACTIVE.getCode(), sku.getId());
+        }
+        assertThat(offers.page(f.supplier().getSupplierCode(), null, "EQUITY_PRODUCT", null, 1, 20).getTotal()).isEqualTo(1L);
+    }
+
+    private static void replaceScopes(Fixture f, String sellableCategory, String type, Category category) {
+        context.getBean(SupplierSupplyScopeService.class).replaceAll(f.supplier().getSupplierCode(), List.of(
+                new SupplierSupplyScopeService.ScopeLine(sellableCategory, type, category.code(),
+                        List.of("API_DIRECT"), 999L, 1L)), 1L);
+    }
+
+    private static List<Map<String, Object>> offerRows(Fixture f) {
+        return jdbc.queryForList("SELECT * FROM sc_supplier_offer WHERE supplier_id=? ORDER BY id", f.supplier().getId());
+    }
+
+    private static List<Map<String, Object>> offerVersionRows(Fixture f) {
+        return jdbc.queryForList("SELECT v.* FROM sc_supplier_offer_version v JOIN sc_supplier_offer o ON o.id=v.offer_id "
+                + "WHERE o.supplier_id=? ORDER BY v.id", f.supplier().getId());
+    }
+
     private static Fixture fixture() {
         int id = SEQUENCE.incrementAndGet();
         LocalDateTime now = LocalDateTime.now();
@@ -328,7 +450,8 @@ class SupplierSupplyScopeMatchingIntegrationTest {
     @Configuration(proxyBeanMethods = false)
     @Import({SupplyChainDataSourceConfiguration.class, UlidGenerator.class, BusinessNoGenerator.class,
             ProductCatalogCommandService.class, ProductCatalogQueryService.class, PlatformSkuQueryService.class,
-            GenericBatchPricingService.class, SupplierCooperativeProductService.class, ProductCenterTestConfiguration.class})
+            GenericBatchPricingService.class, SupplierCooperativeProductService.class,
+            SupplierSupplyScopeService.class, ProductCenterTestConfiguration.class})
     static class TestConfiguration {
         @Bean ObjectMapper objectMapper() { return new ObjectMapper().findAndRegisterModules(); }
         @Bean SupplierOfferPublicationService publicationService() { return mock(SupplierOfferPublicationService.class); }

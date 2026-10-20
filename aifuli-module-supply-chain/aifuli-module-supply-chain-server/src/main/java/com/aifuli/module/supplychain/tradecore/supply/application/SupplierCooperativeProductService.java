@@ -42,6 +42,8 @@ import org.springframework.transaction.annotation.Isolation;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.List;
 import java.util.Set;
 
@@ -244,17 +246,19 @@ public class SupplierCooperativeProductService {
         if (supplier == null) {
             throw exception(SUPPLIER_NOT_FOUND);
         }
+        List<SupplierSupplyScopeDO> scopes = scopeMapper.selectBySupplierId(supplier.getId());
+        ProductCategoryCoverageService.CoverageResolver coverage = categoryCoverageService.loadResolver();
         LambdaQueryWrapper<SupplierOfferDO> wrapper = new LambdaQueryWrapper<SupplierOfferDO>()
                 .eq(SupplierOfferDO::getSupplierId, supplier.getId())
                 .ne(SupplierOfferDO::getStatus, OfferStatus.RETIRED.getCode())
                 .orderByDesc(SupplierOfferDO::getCreatedAt);
         if (sellableCategory != null || productType != null || productClassification != null) {
-            Set<Long> scopeIds = matchingScopeIds(supplier.getId(), sellableCategory, productType,
-                    productClassification);
-            if (scopeIds.isEmpty()) {
+            Set<Long> skuIds = matchingConfiguredSkuIds(supplier.getId(), scopes, coverage,
+                    sellableCategory, productType, productClassification);
+            if (skuIds.isEmpty()) {
                 return new PageResult<>(List.of(), 0L);
             }
-            wrapper.in(SupplierOfferDO::getSupplyScopeId, scopeIds);
+            wrapper.in(SupplierOfferDO::getPlatformSkuId, skuIds);
         }
         PageParam pageParam = new PageParam();
         pageParam.setPageNo(pageNo == null ? DEFAULT_PAGE_NO : pageNo);
@@ -262,7 +266,7 @@ public class SupplierCooperativeProductService {
         PageResult<SupplierOfferDO> page = offerMapper.selectPage(pageParam, wrapper);
         List<OfferListItem> items = new ArrayList<>();
         for (SupplierOfferDO offer : page.getList()) {
-            items.add(toListItem(offer, supplier));
+            items.add(toListItem(offer, supplier, scopes, coverage));
         }
         return new PageResult<>(items, page.getTotal());
     }
@@ -373,22 +377,54 @@ public class SupplierCooperativeProductService {
         return offer;
     }
 
-    private Set<Long> matchingScopeIds(Long supplierId, String sellableCategory, String productType,
-                                       String productClassification) {
-        Set<Long> ids = new HashSet<>();
-        for (SupplierSupplyScopeDO scope : scopeMapper.selectBySupplierId(supplierId)) {
-            if (sellableCategory != null && !sellableCategory.equals(scope.getSellableCategory())) {
-                continue;
-            }
-            if (productType != null && !productType.equals(scope.getProductType())) {
-                continue;
-            }
-            if (productClassification != null && !productClassification.equals(scope.getProductClassification())) {
-                continue;
-            }
-            ids.add(scope.getId());
+    /**
+     * 配置删除重建后，以已有Offer关联商品重新匹配当前范围，不依赖旧supply_scope_id。
+     * 先用全部配置决定最具体唯一匹配，再应用显式检索；在数据库分页前筛SKU，保证total与翻页一致。
+     * 不检查商品启用状态，已下架商品仍须可管理；本方法只读，不重新绑定或继承商业条款。
+     * 设计见 docs/superpowers/specs/2026-10-20-supplier-supply-scope-matching-design.md#43-已配置合作商品列表重匹配2026-10-20追加用户批准最小读侧修复。
+     */
+    private Set<Long> matchingConfiguredSkuIds(Long supplierId, List<SupplierSupplyScopeDO> scopes,
+                                              ProductCategoryCoverageService.CoverageResolver coverage,
+                                              String sellableCategory, String productType, String productClassification) {
+        if (scopes.isEmpty()) {
+            return Set.of();
         }
-        return ids;
+        Set<Long> skuIds = new HashSet<>();
+        for (SupplierOfferDO offer : offerMapper.selectList(new LambdaQueryWrapper<SupplierOfferDO>()
+                .eq(SupplierOfferDO::getSupplierId, supplierId)
+                .ne(SupplierOfferDO::getStatus, OfferStatus.RETIRED.getCode()))) {
+            if (offer.getPlatformSkuId() != null) {
+                skuIds.add(offer.getPlatformSkuId());
+            }
+        }
+        if (skuIds.isEmpty()) {
+            return Set.of();
+        }
+        List<PlatformSkuDO> skus = skuMapper.selectBatchIds(skuIds);
+        Set<Long> spuIds = new HashSet<>();
+        for (PlatformSkuDO sku : skus) {
+            if (sku.getSpuId() != null) {
+                spuIds.add(sku.getSpuId());
+            }
+        }
+        if (spuIds.isEmpty()) {
+            return Set.of();
+        }
+        Map<Long, PlatformSpuDO> spus = new HashMap<>();
+        for (PlatformSpuDO spu : spuMapper.selectBatchIds(spuIds)) {
+            spus.put(spu.getId(), spu);
+        }
+        Set<Long> matchedSkuIds = new HashSet<>();
+        for (PlatformSkuDO sku : skus) {
+            SupplierSupplyScopeDO scope = SupplierSupplyScopeMatcher.match(scopes, spus.get(sku.getSpuId()), coverage).scope();
+            if (scope != null
+                    && (sellableCategory == null || sellableCategory.equals(scope.getSellableCategory()))
+                    && (productType == null || productType.equals(scope.getProductType()))
+                    && (productClassification == null || productClassification.equals(scope.getProductClassification()))) {
+                matchedSkuIds.add(sku.getId());
+            }
+        }
+        return matchedSkuIds;
     }
 
     /**
@@ -413,11 +449,16 @@ public class SupplierCooperativeProductService {
         return drift ? FulfillmentStatus.STALE : FulfillmentStatus.READY;
     }
 
-    private OfferListItem toListItem(SupplierOfferDO offer, SupplierDO supplier) {
+    /** 当前配置匹配仅用于字段投影；无筛选的旧关系不可因范围收窄或歧义被隐式删除。 */
+    private OfferListItem toListItem(SupplierOfferDO offer, SupplierDO supplier,
+                                     List<SupplierSupplyScopeDO> scopes,
+                                     ProductCategoryCoverageService.CoverageResolver coverage) {
         PlatformSkuDO sku = skuMapper.selectById(offer.getPlatformSkuId());
         PlatformSpuDO spu = sku == null ? null : spuMapper.selectById(sku.getSpuId());
-        SupplierSupplyScopeDO scope = offer.getSupplyScopeId() == null
-                ? null : scopeMapper.selectById(offer.getSupplyScopeId());
+        SupplierSupplyScopeDO scope = SupplierSupplyScopeMatcher.match(scopes, spu, coverage).scope();
+        if (scope == null && offer.getSupplyScopeId() != null) {
+            scope = scopeMapper.selectById(offer.getSupplyScopeId());
+        }
         SupplierOfferVersionDO currentVersion = offer.getCurrentVersionId() == null
                 ? null : offerVersionMapper.selectById(offer.getCurrentVersionId());
         SupplierOfferEligibilityService.PublishEligibility eligibility =
