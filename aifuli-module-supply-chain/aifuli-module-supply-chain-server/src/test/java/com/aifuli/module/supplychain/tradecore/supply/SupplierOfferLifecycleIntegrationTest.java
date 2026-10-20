@@ -792,7 +792,8 @@ class SupplierOfferLifecycleIntegrationTest {
     @Configuration(proxyBeanMethods = false)
     @Import({SupplyChainDataSourceConfiguration.class, UlidGenerator.class, BusinessNoGenerator.class,
             OutboxEventRepository.class, ProductCenterTestConfiguration.class, ClosedJsonSchemaValidator.class,
-            SupplierCooperativeProductService.class, SupplierOfferPublicationService.class, GenericBatchPricingService.class,
+            SupplierCooperativeProductService.class, SupplierSupplyScopeService.class,
+            SupplierOfferPublicationService.class, GenericBatchPricingService.class,
             StandardPricingQuoteService.class, ProjectPricingAdmissionService.class,
             SupplierProfileCommandService.class, com.aifuli.module.supplychain.tradecore.catalog.application.ProductCatalogCommandService.class,
             com.aifuli.module.supplychain.tradecore.buyer.application.BuyerResolver.class,
@@ -831,6 +832,9 @@ class SupplierOfferLifecycleIntegrationTest {
             public void onPricing(PricingDependencyChangedEvent event) {
                 if (failScopePricing) throw new IllegalStateException("fixture pricing failure");
             }
+        }
+        @Bean com.aifuli.module.supplychain.infrastructure.security.EnvelopeCryptoPort envelopeCrypto() {
+            return mock(com.aifuli.module.supplychain.infrastructure.security.EnvelopeCryptoPort.class);
         }
         @Bean ObjectMapper objectMapper() { return new ObjectMapper().findAndRegisterModules(); }
         @Bean TaxRateDictionaryAdapter dictionary() {

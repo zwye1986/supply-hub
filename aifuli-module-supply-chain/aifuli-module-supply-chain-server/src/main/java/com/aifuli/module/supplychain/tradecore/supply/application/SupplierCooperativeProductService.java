@@ -348,7 +348,7 @@ public class SupplierCooperativeProductService {
         List<OfferListItem> items = new ArrayList<>();
         for (SupplierOfferDO offer : page.getList()) {
             items.add(toListItem(offer, supplier, skus.get(offer.getPlatformSkuId()),
-                    suggestedPrices.get(offer.getPlatformSkuId())));
+                    suggestedPrices.get(offer.getPlatformSkuId()), scopes, coverage));
         }
         return new PageResult<>(items, page.getTotal());
     }
@@ -536,11 +536,15 @@ public class SupplierCooperativeProductService {
         return drift ? FulfillmentStatus.STALE : FulfillmentStatus.READY;
     }
 
-    /** 当前配置匹配仅用于字段投影；无筛选的旧关系不可因范围收窄或歧义被隐式删除。 */
-    private OfferListItem toListItem(SupplierOfferDO offer, SupplierDO supplier,
+    /**
+     * 当前配置匹配仅用于字段投影；无筛选的旧关系不可因范围收窄或歧义被隐式删除。
+     * 复用分页已加载的SKU和统一建议价解析结果，避免动态规则回退到SKU兼容金额或历史金额。
+     * 设计见 {@code docs/superpowers/specs/2026-10-19-suggested-sale-price-supply-base-design.md#12-与供货范围变更合并的修复约束2026-10-20}。
+     */
+    private OfferListItem toListItem(SupplierOfferDO offer, SupplierDO supplier, PlatformSkuDO sku,
+                                     Resolution suggestedPrice,
                                      List<SupplierSupplyScopeDO> scopes,
                                      ProductCategoryCoverageService.CoverageResolver coverage) {
-        PlatformSkuDO sku = skuMapper.selectById(offer.getPlatformSkuId());
         PlatformSpuDO spu = sku == null ? null : spuMapper.selectById(sku.getSpuId());
         SupplierSupplyScopeDO scope = SupplierSupplyScopeMatcher.match(scopes, spu, coverage).scope();
         if (scope == null && offer.getSupplyScopeId() != null) {

@@ -43,7 +43,8 @@ class ProductCatalogQueryServiceTest {
                 mock(ProductCategoryMapper.class), mock(ProductTypeMapper.class), mock(SupplierOfferMapper.class),
                 mock(SupplierOfferVersionMapper.class), mock(SupplierMapper.class),
                 mock(ProductTypeValidationService.class), mock(ProductSellabilityService.class),
-                mock(BuyerMapper.class), mock(BuyerProductMapper.class), clock, eligibility);
+                mock(BuyerMapper.class), mock(BuyerProductMapper.class), clock, eligibility,
+                mock(SupplierSupplyScopeMapper.class), mock(ProductCategoryCoverageService.class));
 
         var states = mock(SkuSuggestedPriceStateMapper.class);
         when(states.selectList(any())).thenReturn(List.of(SkuSuggestedPriceStateDO.builder()
