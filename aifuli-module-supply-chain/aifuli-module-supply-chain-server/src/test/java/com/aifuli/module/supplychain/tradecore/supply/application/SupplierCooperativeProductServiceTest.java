@@ -85,6 +85,25 @@ class SupplierCooperativeProductServiceTest {
     }
 
     @Test
+    void scopeRetirementWritesAllStatesBeforePublishingSortedDistinctSkuEvents() {
+        var supplier = SupplierDO.builder().id(9L).supplierCode("SPL_A").build();
+        var scope = SupplierSupplyScopeDO.builder().id(88L).build();
+        var a = SupplierOfferDO.builder().id(1L).supplyScopeId(88L).platformSkuId(30L).status(OfferStatus.PUBLISHED.getCode()).build();
+        var b = SupplierOfferDO.builder().id(2L).supplyScopeId(88L).platformSkuId(10L).status(OfferStatus.SUSPENDED.getCode()).build();
+        var c = SupplierOfferDO.builder().id(3L).supplyScopeId(88L).platformSkuId(30L).status(OfferStatus.SUSPENDED.getCode()).build();
+        when(offerMapper.selectList(any(com.baomidou.mybatisplus.core.conditions.Wrapper.class))).thenReturn(List.of(a, b, c));
+        service.retireForScopeChanges(supplier, List.of(scope), java.util.Set.of(88L), 7L);
+        var order = org.mockito.Mockito.inOrder(offerMapper, eventPublisher);
+        order.verify(offerMapper).updateById(a);
+        order.verify(offerMapper).updateById(b);
+        order.verify(offerMapper).updateById(c);
+        order.verify(eventPublisher).publishEvent(new PricingDependencyChangedEvent(10L));
+        order.verify(eventPublisher).publishEvent(new PricingDependencyChangedEvent(30L));
+        order.verifyNoMoreInteractions();
+        assertThat(List.of(a, b, c)).allSatisfy(offer -> assertThat(offer.getStatus()).isEqualTo(OfferStatus.RETIRED.getCode()));
+    }
+
+    @Test
     void createUsesOneInsteadOfReservedScopeMinQuantity() {
         stubCreatePath();
         when(businessNoGenerator.next(BusinessNoPrefixes.OFR)).thenReturn("OFR_PUBLISHED1");

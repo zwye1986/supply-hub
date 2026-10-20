@@ -19,6 +19,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.annotation.Isolation;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -27,6 +28,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.Objects;
 
 import static com.aifuli.framework.common.exception.util.ServiceExceptionUtil.exception;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.SUPPLIER_NOT_FOUND;
@@ -56,19 +58,30 @@ public class SupplierSupplyScopeService {
     private final SupplierSupplyScopeModeMapper modeMapper;
     private final ProductTypeValidationService productTypeValidationService;
     private final ProductClassificationValidationService productClassificationValidationService;
+    private final SupplierCooperativeProductService cooperativeProductService;
 
     /**
-     * 全量替换供应商供货配置。无 FK，必须先按现有 scope id 删除模式子表再删主表。
-     * 设计见 {@code docs/superpowers/specs/2026-09-07-供应链管理端表单字典与标品标签设计.md#41-rest}。
+     * 全量保存供应商配置，带id行保留身份。类型或分类改变前，以旧配置确定原合作商品并退役；
+     * 不因新配置或其它范围仍能覆盖而转移关系。校验、退役、同步定价与配置替换同一RC事务，失败全回滚。
+     * 先锁供应商串行化生命周期写，拒绝非RC外层；无FK，先删除模式再替换范围。
+     * 设计见 {@code docs/superpowers/specs/2026-10-20-supply-scope-change-retirement-design.md#4-事务定价与并发}。
      */
-    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
+    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class,
+            isolation = Isolation.READ_COMMITTED)
     public void replaceAll(String supplierCode, List<ScopeLine> lines, Long operatorId) {
+        SupplierLifecycleTransactions.requireReadCommitted();
         log.info("保存供货配置 supplierCode={} lineCount={} operatorId={}",
                 supplierCode, lines == null ? 0 : lines.size(), operatorId);
         SupplierDO supplier = supplierMapper.selectByCodeForUpdate(supplierCode);
         if (supplier == null) {
             throw exception(SUPPLIER_NOT_FOUND);
         }
+        List<SupplierSupplyScopeDO> existing = scopeMapper.selectBySupplierId(supplier.getId());
+        Map<Long, SupplierSupplyScopeDO> existingById = new HashMap<>();
+        existing.forEach(scope -> existingById.put(scope.getId(), scope));
+        Set<Long> retainedIds = new HashSet<>();
+        Set<Long> changedIds = new HashSet<>();
+        List<ScopeLine> resolved = new ArrayList<>();
         Set<String> triples = new HashSet<>();
         List<ScopeLine> normalized = lines == null ? List.of() : lines;
         Map<String, String> normalizedProductTypes = new HashMap<>();
@@ -86,32 +99,59 @@ public class SupplierSupplyScopeService {
             }
             List<String> modes = validatedModeCodes(line.supplyModes());
             modeCount += modes.size();
+            Long id = line.id();
+            if (id == null) {
+                // 兼容旧客户端的原样保存；只能按完整三元组对应，不按请求位置猜测行身份。
+                id = existing.stream().filter(scope -> sellableCategory.equals(scope.getSellableCategory())
+                                && productType.equals(scope.getProductType())
+                                && productClassification.equals(scope.getProductClassification()))
+                        .map(SupplierSupplyScopeDO::getId).findFirst().orElse(null);
+            }
+            if (id != null) {
+                SupplierSupplyScopeDO original = existingById.get(id);
+                if (original == null || !retainedIds.add(id)) {
+                    throw exception(SUPPLIER_SCOPE_CONFLICT);
+                }
+                if (!Objects.equals(original.getProductType(), productType)
+                        || !Objects.equals(original.getProductClassification(), productClassification)) {
+                    changedIds.add(id);
+                }
+            }
+            resolved.add(new ScopeLine(id, sellableCategory, productType, productClassification,
+                    modes, line.maxQuantity(), line.minQuantity()));
             if (line.minQuantity() == null || line.maxQuantity() == null
                     || line.minQuantity() < 1 || line.maxQuantity() < 1) {
                 throw new IllegalArgumentException("Supply scope quantity is invalid");
             }
         }
+        if (resolved.stream().anyMatch(line -> line.id() == null) && retainedIds.size() < existing.size()) {
+            // 旧端未传身份且新旧行无法对应：拒绝，而不是静默绕过变更退役。
+            throw exception(SUPPLIER_SCOPE_CONFLICT);
+        }
+        cooperativeProductService.retireForScopeChanges(supplier, existing, changedIds, operatorId);
         log.info("保存供货配置校验完成 supplierCode={} lineCount={} modeCount={} operatorId={}",
                 supplierCode, normalized.size(), modeCount, operatorId);
         LocalDateTime now = databaseClock.now();
-        List<Long> existingIds = scopeMapper.selectBySupplierId(supplier.getId()).stream()
+        List<Long> existingIds = existing.stream()
                 .map(SupplierSupplyScopeDO::getId)
                 .toList();
         modeMapper.deleteByScopeIds(existingIds);
         scopeMapper.deleteBySupplierId(supplier.getId());
         try {
-            for (ScopeLine line : normalized) {
-                List<String> modes = validatedModeCodes(line.supplyModes());
+            for (ScopeLine line : resolved) {
+                List<String> modes = line.supplyModes();
+                SupplierSupplyScopeDO original = existingById.get(line.id());
                 SupplierSupplyScopeDO scope = SupplierSupplyScopeDO.builder()
+                        .id(line.id())
                         .supplierId(supplier.getId())
                         .sellableCategory(ClosedEnums.parseRequired(SellableCategory.class, line.sellableCategory()).name())
-                        .productType(normalizedProductTypes.get(line.productType()))
-                        .productClassification(normalizedClassifications.get(line.productClassification()))
+                        .productType(line.productType())
+                        .productClassification(line.productClassification())
                         .maxQuantity(line.maxQuantity())
                         .minQuantity(line.minQuantity())
-                        .version(0L)
-                        .createdBy(operatorId)
-                        .createdAt(now)
+                        .version(original == null ? 0L : original.getVersion() + 1)
+                        .createdBy(original == null ? operatorId : original.getCreatedBy())
+                        .createdAt(original == null ? now : original.getCreatedAt())
                         .updatedBy(operatorId)
                         .updatedAt(now)
                         .build();
@@ -169,7 +209,12 @@ public class SupplierSupplyScopeService {
      * 也不参与供货范围命中、合作商品默认值或下单校验。
      * 设计见 {@code docs/superpowers/specs/2026-09-07-供应链管理端表单字典与标品标签设计.md#41-rest}。
      */
-    public record ScopeLine(String sellableCategory, String productType, String productClassification,
+    public record ScopeLine(Long id, String sellableCategory, String productType, String productClassification,
                             List<String> supplyModes, Long maxQuantity, Long minQuantity) {
+        /** 兼容既有Java调用；已有行编辑须携带id，不能依赖本构造猜测变更来源。 */
+        public ScopeLine(String sellableCategory, String productType, String productClassification,
+                         List<String> supplyModes, Long maxQuantity, Long minQuantity) {
+            this(null, sellableCategory, productType, productClassification, supplyModes, maxQuantity, minQuantity);
+        }
     }
 }

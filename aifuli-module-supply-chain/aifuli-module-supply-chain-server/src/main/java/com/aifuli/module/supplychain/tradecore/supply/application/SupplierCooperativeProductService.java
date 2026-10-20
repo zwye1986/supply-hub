@@ -46,6 +46,8 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.List;
 import java.util.Set;
+import java.util.Collection;
+import java.util.TreeSet;
 
 import static com.aifuli.framework.common.exception.util.ServiceExceptionUtil.exception;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.SUPPLIER_NOT_FOUND;
@@ -224,13 +226,78 @@ public class SupplierCooperativeProductService {
             throw exception(SUPPLIER_NOT_FOUND);
         }
         SupplierOfferDO offer = requireLiveOffer(supplierCode, offerNo);
-        offer.setStatus(OfferStatus.RETIRED.getCode());
-        offer.setUpdatedBy(operatorId);
-        offer.setUpdatedAt(databaseClock.now());
-        offerMapper.updateById(offer);
-        // 已发布版本仍然保留，但 RETIRED 身份不再属于最低有效供货价候选，必须同步生成新价格版本。
-        // 设计见 docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#5-版本继承与可售状态。
-        eventPublisher.publishEvent(new PricingDependencyChangedEvent(offer.getPlatformSkuId()));
+        retireOffers(List.of(offer), operatorId);
+    }
+
+    /**
+     * 配置保存持有供应商锁后调用：只看旧配置归属，不能用新范围为原关系“续命”。
+     * 有效旧引用优先；历史悬空引用按旧范围唯一重匹配。歧义涉及编辑行时拒绝，不任意选择或漏退役。
+     * 所有目标先退役，再按SKU升序同步重算；本方法不另开事务，任何失败由保存入口整体回滚。
+     * 设计见 docs/superpowers/specs/2026-10-20-supply-scope-change-retirement-design.md#3-原配置对应商品的判定。
+     */
+    void retireForScopeChanges(SupplierDO supplier, List<SupplierSupplyScopeDO> oldScopes,
+                               Set<Long> changedScopeIds, Long operatorId) {
+        if (changedScopeIds.isEmpty()) {
+            return;
+        }
+        var coverage = categoryCoverageService.loadResolver();
+        Map<Long, SupplierSupplyScopeDO> byId = new HashMap<>();
+        oldScopes.forEach(scope -> byId.put(scope.getId(), scope));
+        List<SupplierOfferDO> live = offerMapper.selectList(new LambdaQueryWrapper<SupplierOfferDO>()
+                .eq(SupplierOfferDO::getSupplierId, supplier.getId())
+                .ne(SupplierOfferDO::getStatus, OfferStatus.RETIRED.getCode()));
+        Set<Long> danglingSkuIds = new HashSet<>();
+        for (SupplierOfferDO offer : live) {
+            if (!byId.containsKey(offer.getSupplyScopeId()) && offer.getPlatformSkuId() != null) {
+                danglingSkuIds.add(offer.getPlatformSkuId());
+            }
+        }
+        Map<Long, PlatformSkuDO> skus = new HashMap<>();
+        if (!danglingSkuIds.isEmpty()) {
+            skuMapper.selectBatchIds(danglingSkuIds).forEach(sku -> skus.put(sku.getId(), sku));
+        }
+        Set<Long> spuIds = new HashSet<>();
+        skus.values().forEach(sku -> { if (sku.getSpuId() != null) spuIds.add(sku.getSpuId()); });
+        Map<Long, PlatformSpuDO> spus = new HashMap<>();
+        if (!spuIds.isEmpty()) {
+            spuMapper.selectBatchIds(spuIds).forEach(spu -> spus.put(spu.getId(), spu));
+        }
+        List<SupplierOfferDO> retiring = new ArrayList<>();
+        for (SupplierOfferDO offer : live) {
+            Long originalId = offer.getSupplyScopeId();
+            if (!byId.containsKey(originalId)) {
+                PlatformSkuDO sku = skus.get(offer.getPlatformSkuId());
+                PlatformSpuDO spu = sku == null ? null : spus.get(sku.getSpuId());
+                var match = SupplierSupplyScopeMatcher.match(oldScopes, spu, coverage);
+                if (match.conflict()) {
+                    // 仅拒绝归属歧义可能影响本次编辑的商品，无关类型不阻断保存。
+                    var changed = oldScopes.stream().filter(scope -> changedScopeIds.contains(scope.getId())).toList();
+                    if (changed.stream().anyMatch(scope -> SupplierSupplyScopeMatcher.match(List.of(scope), spu, coverage).matched())) {
+                        throw exception(SUPPLIER_SCOPE_CONFLICT);
+                    }
+                }
+                originalId = match.scope() == null ? null : match.scope().getId();
+            }
+            if (changedScopeIds.contains(originalId)) {
+                retiring.add(offer);
+            }
+        }
+        retireOffers(retiring, operatorId);
+    }
+
+    /** 手动/配置变更共用移除语义；保留冻结历史，事件失败不得吞掉。 */
+    private void retireOffers(Collection<SupplierOfferDO> offers, Long operatorId) {
+        if (offers.isEmpty()) return;
+        LocalDateTime now = databaseClock.now();
+        Set<Long> skuIds = new TreeSet<>();
+        for (SupplierOfferDO offer : offers) {
+            offer.setStatus(OfferStatus.RETIRED.getCode());
+            offer.setUpdatedBy(operatorId);
+            offer.setUpdatedAt(now);
+            offerMapper.updateById(offer);
+            skuIds.add(offer.getPlatformSkuId());
+        }
+        skuIds.forEach(id -> eventPublisher.publishEvent(new PricingDependencyChangedEvent(id)));
     }
 
     /**

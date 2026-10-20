@@ -253,12 +253,12 @@ public class SupplierAdminController {
     @PutMapping("/{supplierCode}/supply-scopes")
     @PreAuthorize(SUPPLIER_UPDATE_EXPRESSION)
     @Operation(summary = "保存供货配置",
-            description = "全量替换。身份用 supplierCode。空 supplyModes 为 SUPPLY_SCOPE_MODE_INVALID；"
+            description = "全量保存。已有行须携带id；商品类型或分类改变会移除原合作商品，保留历史。身份用 supplierCode。空 supplyModes 为 SUPPLY_SCOPE_MODE_INVALID；"
                     + "重复三码组合为 SUPPLIER_SCOPE_CONFLICT；未知枚举码为 ENUM_NOT_OPEN。")
     public CommonResult<Boolean> saveScopes(@PathVariable String supplierCode,
                                               @Valid @RequestBody SaveScopesReqVO request) {
         scopeService.replaceAll(supplierCode, request.getLines().stream()
-                .map(line -> new ScopeLine(line.getSellableCategory(), line.getProductType(),
+                .map(line -> new ScopeLine(line.getId(), line.getSellableCategory(), line.getProductType(),
                         line.getProductClassification(), line.getSupplyModes(),
                         line.getMaxQuantity(), line.getMinQuantity()))
                 .toList(), getLoginUserId());
@@ -682,6 +682,8 @@ public class SupplierAdminController {
     @Data
     @Schema(description = "供货配置行")
     public static class ScopeReqVO {
+        @Schema(description = "供货配置主键；已有行编辑必传，新行为空")
+        private Long id;
         @NotBlank
         @Schema(description = "可售品类枚举名")
         private String sellableCategory;

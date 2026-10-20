@@ -153,6 +153,96 @@ class SupplierOfferLifecycleIntegrationTest {
         assertThat(jdbc.queryForObject("SELECT unavailable_reason FROM sc_platform_sku_pricing WHERE platform_sku_id=1",String.class)).isNull();
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_inventory_source",Long.class)).isEqualTo(1L);
     }
+    @Test void scopeTypeEditRetiresPublishedOfferAndInvalidatesCostWithoutChangingFrozenVersion() {
+        connector(1); publication.listOnShelf(command());
+        var frozen = jdbc.queryForList("SELECT * FROM sc_supplier_offer_version WHERE offer_id=?", offer().getId());
+        Long version = offer().getCurrentVersionId();
+        Long pricingBefore = jdbc.queryForObject("SELECT current_version_id FROM sc_platform_sku_pricing WHERE platform_sku_id=1", Long.class);
+        assertThat(cost()).isEqualTo(9500L);
+        editScopeType();
+        assertThat(offer().getStatus()).isEqualTo(OfferStatus.RETIRED.getCode());
+        assertThat(offer().getCurrentVersionId()).isEqualTo(version);
+        assertThat(cost()).isNull();
+        assertThat(jdbc.queryForObject("SELECT current_version_id FROM sc_platform_sku_pricing WHERE platform_sku_id=1", Long.class)).isNotEqualTo(pricingBefore);
+        assertThat(jdbc.queryForObject("SELECT v.supply_price_cents FROM sc_platform_sku_pricing p JOIN sc_platform_sku_pricing_version v ON p.current_version_id=v.id WHERE p.platform_sku_id=1", Long.class)).isNull();
+        assertThat(jdbc.queryForList("SELECT * FROM sc_supplier_offer_version WHERE offer_id=?", offer().getId())).isEqualTo(frozen);
+    }
+
+    @Test void scopeSaveRollsBackConfigurationOffersAndPricingWhenSynchronousRecalculationFails() {
+        connector(1); publication.listOnShelf(command());
+        var before = jdbc.queryForList("SELECT * FROM sc_supplier_offer");
+        var scopeBefore = jdbc.queryForList("SELECT * FROM sc_supplier_supply_scope");
+        var pricingBefore = jdbc.queryForList("SELECT * FROM sc_platform_sku_pricing");
+        Long versionsBefore = jdbc.queryForObject("SELECT COUNT(*) FROM sc_platform_sku_pricing_version", Long.class);
+        failScopePricing = true;
+        try {
+            assertThatThrownBy(this::editScopeType).isInstanceOf(IllegalStateException.class).hasMessageContaining("fixture pricing failure");
+        } finally { failScopePricing = false; }
+        assertThat(jdbc.queryForList("SELECT * FROM sc_supplier_offer")).isEqualTo(before);
+        assertThat(jdbc.queryForList("SELECT * FROM sc_supplier_supply_scope")).isEqualTo(scopeBefore);
+        assertThat(jdbc.queryForList("SELECT * FROM sc_platform_sku_pricing")).isEqualTo(pricingBefore);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_platform_sku_pricing_version", Long.class)).isEqualTo(versionsBefore);
+    }
+
+    @Test void failingScopeInsertAfterRetirementRestoresDeletedModesAndPricingHistory() {
+        connector(1); publication.listOnShelf(command());
+        context.getBean(SupplierSupplyScopeService.class).replaceAll("SUP_1", List.of(new SupplierSupplyScopeService.ScopeLine(
+                1L, "EQUITY", "EQUITY_PRODUCT", "VIRTUAL_CARD", List.of("API_DIRECT"), 100L, 1L)), 1L);
+        var before = jdbc.queryForList("SELECT * FROM sc_supplier_offer");
+        var scopesBefore = jdbc.queryForList("SELECT * FROM sc_supplier_supply_scope");
+        var modesBefore = jdbc.queryForList("SELECT * FROM sc_supplier_supply_scope_mode WHERE supply_scope_id=1");
+        var pricesBefore = jdbc.queryForList("SELECT * FROM sc_platform_sku_pricing");
+        Long versionsBefore = jdbc.queryForObject("SELECT COUNT(*) FROM sc_platform_sku_pricing_version", Long.class);
+        // 仅独占测试库注入约束，模拟配置重建后段失败；不需要SUPER权限、不更改生产DDL。
+        jdbc.execute("ALTER TABLE sc_supplier_supply_scope ADD CONSTRAINT fixture_reject_scope CHECK (product_type<>'MOVIE')");
+        try {
+            assertThatThrownBy(this::editScopeType).hasStackTraceContaining("fixture_reject_scope");
+        } finally { jdbc.execute("ALTER TABLE sc_supplier_supply_scope DROP CHECK fixture_reject_scope"); }
+        assertThat(jdbc.queryForList("SELECT * FROM sc_supplier_offer")).isEqualTo(before);
+        assertThat(jdbc.queryForList("SELECT * FROM sc_supplier_supply_scope")).isEqualTo(scopesBefore);
+        assertThat(jdbc.queryForList("SELECT * FROM sc_supplier_supply_scope_mode WHERE supply_scope_id=1")).isEqualTo(modesBefore);
+        assertThat(jdbc.queryForList("SELECT * FROM sc_platform_sku_pricing")).isEqualTo(pricesBefore);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_platform_sku_pricing_version", Long.class)).isEqualTo(versionsBefore);
+    }
+
+    @Test void scopeSaveRejectsActualRepeatableReadBeforeWriting() {
+        transaction(TransactionDefinition.ISOLATION_REPEATABLE_READ).executeWithoutResult(status -> {
+            assertThatThrownBy(this::editScopeType).isInstanceOf(IllegalStateException.class).hasMessageContaining("READ_COMMITTED");
+            status.setRollbackOnly();
+        });
+        assertThat(offer().getStatus()).isEqualTo(OfferStatus.SUSPENDED.getCode());
+    }
+
+    @Test void concurrentCreateWaitsForScopeEditAndCannotCreateAgainstOldType() throws Exception {
+        cooperative.retire("SUP_1", offerNo, 1L);
+        var edited = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        var attempting = new CountDownLatch(1);
+        var threads = Executors.newFixedThreadPool(2);
+        try {
+            var saving = threads.submit(() -> transaction(TransactionDefinition.ISOLATION_READ_COMMITTED).executeWithoutResult(status -> {
+                editScopeType(); edited.countDown(); await(release);
+            }));
+            assertThat(edited.await(10, TimeUnit.SECONDS)).isTrue();
+            var creating = threads.submit(() -> {
+                attempting.countDown();
+                return catchThrowable(() -> cooperative.createPublished("SUP_1", List.of(line(9500L)), 1L));
+            });
+            assertThat(attempting.await(10, TimeUnit.SECONDS)).isTrue();
+            assertThatThrownBy(() -> creating.get(150, TimeUnit.MILLISECONDS)).isInstanceOf(TimeoutException.class);
+            release.countDown(); saving.get(10, TimeUnit.SECONDS);
+            assertThat(creating.get(10, TimeUnit.SECONDS)).isInstanceOf(com.aifuli.framework.common.exception.ServiceException.class);
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sc_supplier_offer WHERE status<>?", Long.class, OfferStatus.RETIRED.getCode())).isZero();
+        } finally { release.countDown(); threads.shutdownNow(); }
+    }
+
+    void editScopeType() {
+        context.getBean(SupplierSupplyScopeService.class).replaceAll("SUP_1", List.of(new SupplierSupplyScopeService.ScopeLine(
+                1L, "EQUITY", "MOVIE", "VIRTUAL_CARD", List.of("API_DIRECT"), 100L, 1L)), 1L);
+    }
+
+    private static volatile boolean failScopePricing;
+
     @Test void invalidValidityWindowRollsBackInventoryAndVersionPublication() {
         connector(1);
         assertThatThrownBy(() -> publication.listOnShelf(new SupplierOfferPublicationService.ListOnShelfCommand(
@@ -346,7 +436,7 @@ class SupplierOfferLifecycleIntegrationTest {
     @Configuration(proxyBeanMethods = false)
     @Import({SupplyChainDataSourceConfiguration.class, UlidGenerator.class, BusinessNoGenerator.class,
             OutboxEventRepository.class, ProductCenterTestConfiguration.class, ClosedJsonSchemaValidator.class,
-            SupplierCooperativeProductService.class, SupplierOfferPublicationService.class, GenericBatchPricingService.class,
+            SupplierCooperativeProductService.class, SupplierSupplyScopeService.class, SupplierOfferPublicationService.class, GenericBatchPricingService.class,
             ConnectorPublicationService.class, ConnectorCredentialBindingValidator.class,
             com.aifuli.module.supplychain.infrastructure.security.AdapterTypeAllowList.class,
             com.aifuli.module.supplychain.supplieradapter.metadata.QnmGameOrderV1Metadata.class,
@@ -372,6 +462,14 @@ class SupplierOfferLifecycleIntegrationTest {
                             });
                 }
             };
+        }
+        @Bean ScopePricingFailure scopePricingFailure() { return new ScopePricingFailure(); }
+        static class ScopePricingFailure {
+            @org.springframework.context.event.EventListener
+            @org.springframework.core.annotation.Order(org.springframework.core.Ordered.LOWEST_PRECEDENCE)
+            public void onPricing(PricingDependencyChangedEvent event) {
+                if (failScopePricing) throw new IllegalStateException("fixture pricing failure");
+            }
         }
         @Bean ObjectMapper objectMapper() { return new ObjectMapper().findAndRegisterModules(); }
         @Bean TaxRateDictionaryAdapter dictionary() {

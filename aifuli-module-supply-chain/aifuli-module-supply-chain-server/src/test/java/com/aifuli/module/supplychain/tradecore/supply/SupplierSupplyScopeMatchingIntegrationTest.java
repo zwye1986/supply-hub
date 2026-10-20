@@ -366,10 +366,138 @@ class SupplierSupplyScopeMatchingIntegrationTest {
         assertThat(offers.page(f.supplier().getSupplierCode(), null, "EQUITY_PRODUCT", null, 1, 20).getTotal()).isEqualTo(1L);
     }
 
+    /** 只构造旧版本删除重建留下的历史数据；新保存语义不得用来制造这一历史夹具。 */
     private static void replaceScopes(Fixture f, String sellableCategory, String type, Category category) {
+        var mapper = context.getBean(SupplierSupplyScopeMapper.class);
+        mapper.deleteBySupplierId(f.supplier().getId());
+        scope(f, sellableCategory, type, category, 999L);
+    }
+
+    /** 新配置仍覆盖商品也须移除原关系，不是仅在读取时隐藏。 */
+    @Test
+    void editingClassificationRetiresOriginalOffersEvenIfNewParentStillCoversThem() {
+        Fixture f = fixture();
+        var original = scope(f, "PHYSICAL", "EQUITY_PRODUCT", leaf, 100L);
+        var selected = productSkus(f, "EQUITY_PRODUCT", leaf, 3);
+        var numbers = offers.createPublished(f.supplier().getSupplierCode(), selected.stream()
+                .map(SupplierSupplyScopeMatchingIntegrationTest::line).toList(), 1L);
+        var mapper = new ObjectMapper().configure(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+        var edited = mapper.convertValue(Map.of("id", original.getId(), "sellableCategory", "PHYSICAL",
+                "productType", "EQUITY_PRODUCT", "productClassification", root.code(),
+                "supplyModes", List.of("API_DIRECT"), "maxQuantity", 100L, "minQuantity", 1L),
+                SupplierSupplyScopeService.ScopeLine.class);
+        context.getBean(SupplierSupplyScopeService.class).replaceAll(f.supplier().getSupplierCode(), List.of(edited), 1L);
+        assertThat(numbers).allSatisfy(no -> assertThat(context.getBean(SupplierOfferMapper.class)
+                .selectByNo(no).getStatus()).isEqualTo(OfferStatus.RETIRED.getCode()));
+        assertThat(offers.page(f.supplier().getSupplierCode(), null, null, null, 1, 20).getTotal()).isZero();
+        assertThat(pool(f, 1, 20).getTotal()).isEqualTo(3L);
+        assertThat(aggregate(f, 1, 20).getTotal()).isEqualTo(1L);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void editingTypeOrClassificationRetiresDanglingOffersDespiteOtherMatchingConfiguration(boolean typeChanged) {
+        Fixture f = fixture();
+        var stale = scope(f, "PHYSICAL", "EQUITY_PRODUCT", leaf, 100L);
+        var sku = sku(f, "EQUITY_PRODUCT", leaf);
+        String no = offers.createPublished(f.supplier().getSupplierCode(), List.of(line(sku)), 1L).getFirst();
+        replaceScopes(f, "PHYSICAL", "EQUITY_PRODUCT", leaf);
+        var current = context.getBean(SupplierSupplyScopeMapper.class).selectBySupplierId(f.supplier().getId()).getFirst();
+        var fallback = scope(f, "MOVIE", "EQUITY_PRODUCT", root, 100L);
         context.getBean(SupplierSupplyScopeService.class).replaceAll(f.supplier().getSupplierCode(), List.of(
-                new SupplierSupplyScopeService.ScopeLine(sellableCategory, type, category.code(),
-                        List.of("API_DIRECT"), 999L, 1L)), 1L);
+                scopeLine(current, typeChanged ? "MOVIE" : "EQUITY_PRODUCT", typeChanged ? leaf : root),
+                scopeLine(fallback, "EQUITY_PRODUCT", root)), 7L);
+        var saved = context.getBean(SupplierOfferMapper.class).selectByNo(no);
+        assertThat(saved.getStatus()).isEqualTo(OfferStatus.RETIRED.getCode());
+        assertThat(saved.getSupplyScopeId()).isEqualTo(stale.getId());
+        assertThat(saved.getUpdatedBy()).isEqualTo(7L);
+        assertThat(saved.getDraftUnitPrice()).isEqualTo(9500L);
+        assertThat(offers.page(f.supplier().getSupplierCode(), null, null, null, 1, 20).getTotal()).isZero();
+        // 分类改父层后两条父配置会歧义，选品仍按既有规则隐藏；不为重新添加放宽准入。
+        assertThat(pool(f, 1, 20).getTotal()).isEqualTo(typeChanged ? 1L : 0L);
+        context.getBean(SupplierSupplyScopeService.class).replaceAll(f.supplier().getSupplierCode(), List.of(
+                scopeLine(current, "EQUITY_PRODUCT", leaf), scopeLine(fallback, "EQUITY_PRODUCT", root)), 7L);
+        assertThat(offers.page(f.supplier().getSupplierCode(), null, null, null, 1, 20).getTotal()).isZero();
+        String newNo = offers.createPublished(f.supplier().getSupplierCode(), List.of(line(sku)), 1L).getFirst();
+        assertThat(newNo).isNotEqualTo(no);
+        assertThat(context.getBean(SupplierOfferMapper.class).selectByNo(newNo).getStatus()).isEqualTo(OfferStatus.SUSPENDED.getCode());
+    }
+
+    @Test
+    void unchangedIdentitySurvivesRepeatedSaveAndNonMatchingEditsDoNotRetireOtherRows() {
+        Fixture f = fixture();
+        var original = scope(f, "PHYSICAL", "EQUITY_PRODUCT", leaf, 100L);
+        var unrelated = scope(f, "MOVIE", "MOVIE", other, 100L);
+        var sku = sku(f, "EQUITY_PRODUCT", leaf);
+        String no = offers.createPublished(f.supplier().getSupplierCode(), List.of(line(sku)), 1L).getFirst();
+        var before = offerRows(f);
+        var service = context.getBean(SupplierSupplyScopeService.class);
+        var keep = new SupplierSupplyScopeService.ScopeLine(original.getId(), "MOVIE", "EQUITY_PRODUCT", leaf.code(),
+                List.of("H5"), 200L, 2L);
+        service.replaceAll(f.supplier().getSupplierCode(), List.of(scopeLine(unrelated, "MOVIE", root), keep), 1L);
+        service.replaceAll(f.supplier().getSupplierCode(), List.of(keep, scopeLine(unrelated, "MOVIE", root)), 1L);
+        assertThat(offerRows(f)).isEqualTo(before);
+        assertThat(context.getBean(SupplierSupplyScopeMapper.class).selectById(original.getId()).getMaxQuantity()).isEqualTo(200L);
+        assertThat(offers.page(f.supplier().getSupplierCode(), "MOVIE", "EQUITY_PRODUCT", null, 1, 20).getTotal()).isEqualTo(1L);
+        service.replaceAll(f.supplier().getSupplierCode(), List.of(scopeLine(original, "MOVIE", other),
+                scopeLine(unrelated, "MOVIE", root)), 1L);
+        assertThat(context.getBean(SupplierOfferMapper.class).selectByNo(no).getStatus()).isEqualTo(OfferStatus.RETIRED.getCode());
+    }
+
+    @Test
+    void danglingAmbiguousOldOwnershipRejectsChangeAndRollsBackEverything() {
+        Fixture f = fixture();
+        scope(f, "PHYSICAL", "EQUITY_PRODUCT", leaf, 100L);
+        var sku = sku(f, "EQUITY_PRODUCT", leaf);
+        offers.createPublished(f.supplier().getSupplierCode(), List.of(line(sku)), 1L);
+        replaceScopes(f, "PHYSICAL", "EQUITY_PRODUCT", leaf);
+        var current = context.getBean(SupplierSupplyScopeMapper.class).selectBySupplierId(f.supplier().getId()).getFirst();
+        var duplicate = scope(f, "MOVIE", "EQUITY_PRODUCT", leaf, 100L);
+        var before = offerRows(f);
+        assertThatThrownBy(() -> context.getBean(SupplierSupplyScopeService.class).replaceAll(
+                f.supplier().getSupplierCode(), List.of(scopeLine(current, "EQUITY_PRODUCT", root),
+                        scopeLine(duplicate, "EQUITY_PRODUCT", leaf)), 1L))
+                .hasMessageContaining(SUPPLIER_SCOPE_CONFLICT.getMsg());
+        assertThat(offerRows(f)).isEqualTo(before);
+        assertThat(context.getBean(SupplierSupplyScopeMapper.class).selectById(current.getId()).getProductClassification()).isEqualTo(leaf.code());
+    }
+
+    @Test
+    void validOldReferenceWinsOverOtherMoreSpecificConfiguration() {
+        Fixture f = fixture();
+        var original = scope(f, "PHYSICAL", "EQUITY_PRODUCT", root, 100L);
+        var sku = sku(f, "EQUITY_PRODUCT", leaf);
+        String no = offers.createPublished(f.supplier().getSupplierCode(), List.of(line(sku)), 1L).getFirst();
+        var specific = scope(f, "MOVIE", "EQUITY_PRODUCT", leaf, 100L);
+        context.getBean(SupplierSupplyScopeService.class).replaceAll(f.supplier().getSupplierCode(), List.of(
+                scopeLine(original, "MOVIE", root), scopeLine(specific, "EQUITY_PRODUCT", leaf)), 1L);
+        assertThat(context.getBean(SupplierOfferMapper.class).selectByNo(no).getStatus()).isEqualTo(OfferStatus.RETIRED.getCode());
+    }
+
+    @Test
+    void foreignScopeIdentityIsRejectedAndDoesNotAffectEitherSupplier() {
+        Fixture first = fixture();
+        Fixture second = fixture();
+        var own = scope(first, "PHYSICAL", "EQUITY_PRODUCT", leaf, 100L);
+        var foreign = scope(second, "PHYSICAL", "EQUITY_PRODUCT", leaf, 100L);
+        var sku = sku(first, "EQUITY_PRODUCT", leaf);
+        offers.createPublished(first.supplier().getSupplierCode(), List.of(line(sku)), 1L);
+        offers.createPublished(second.supplier().getSupplierCode(), List.of(line(sku)), 1L);
+        var firstBefore = offerRows(first);
+        var secondBefore = offerRows(second);
+        assertThatThrownBy(() -> context.getBean(SupplierSupplyScopeService.class).replaceAll(
+                first.supplier().getSupplierCode(), List.of(scopeLine(foreign, "MOVIE", root)), 1L))
+                .hasMessageContaining(SUPPLIER_SCOPE_CONFLICT.getMsg());
+        assertThat(offerRows(first)).isEqualTo(firstBefore);
+        assertThat(offerRows(second)).isEqualTo(secondBefore);
+        context.getBean(SupplierSupplyScopeService.class).replaceAll(first.supplier().getSupplierCode(),
+                List.of(scopeLine(own, "MOVIE", root)), 1L);
+        assertThat(offerRows(second)).isEqualTo(secondBefore);
+    }
+
+    private static SupplierSupplyScopeService.ScopeLine scopeLine(SupplierSupplyScopeDO original, String type, Category category) {
+        return new SupplierSupplyScopeService.ScopeLine(original.getId(), original.getSellableCategory(), type,
+                category.code(), List.of("API_DIRECT"), 100L, 1L);
     }
 
     private static List<Map<String, Object>> offerRows(Fixture f) {

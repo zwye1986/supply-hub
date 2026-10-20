@@ -163,6 +163,7 @@ class SupplierAdminRestContractTest {
     void scopeReqSerializesSupplyModesArray() throws Exception {
         ObjectMapper mapper = new ObjectMapper();
         SupplierAdminController.ScopeReqVO vo = new SupplierAdminController.ScopeReqVO();
+        vo.setId(48L);
         vo.setSellableCategory("MOVIE");
         vo.setProductType("MOVIE");
         vo.setProductClassification("MOVIE_TICKET");
@@ -172,6 +173,24 @@ class SupplierAdminRestContractTest {
         String json = mapper.writeValueAsString(vo);
         assertThat(json).contains("supplyModes").contains("API_DIRECT").contains("H5");
         assertThat(json).doesNotContain("\"supplyMode\"");
+        assertThat(mapper.readTree(json).get("id").longValue()).isEqualTo(48L);
+        assertThat(Arrays.stream(SupplierAdminController.class.getDeclaredMethods())
+                .filter(method -> method.getName().equals("saveScopes")).findFirst().orElseThrow()
+                .getAnnotation(Operation.class).description()).contains("id", "商品类型或分类改变会移除原合作商品");
+    }
+
+    @Test
+    void scopeSaveForwardsOriginalRowIdentityToApplication() throws Exception {
+        var scopes = org.mockito.Mockito.mock(com.aifuli.module.supplychain.tradecore.supply.application.SupplierSupplyScopeService.class);
+        var controller = new SupplierAdminController(null, null, scopes, null, null, null, null);
+        var request = new ObjectMapper().readValue("{\"lines\":[{\"id\":48,\"sellableCategory\":\"PHYSICAL\","
+                + "\"productType\":\"MOVIE\",\"productClassification\":\"MOVIE_TICKET\","
+                + "\"supplyModes\":[\"API_DIRECT\"],\"maxQuantity\":100,\"minQuantity\":1}]}",
+                SupplierAdminController.SaveScopesReqVO.class);
+        controller.saveScopes("SPL_007", request);
+        org.mockito.Mockito.verify(scopes).replaceAll(org.mockito.ArgumentMatchers.eq("SPL_007"),
+                org.mockito.ArgumentMatchers.argThat(lines -> lines.size() == 1 && Long.valueOf(48L).equals(lines.getFirst().id())),
+                org.mockito.ArgumentMatchers.isNull());
     }
 
     @Test
