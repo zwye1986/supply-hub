@@ -36,7 +36,9 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
 /**
  * 供货配置整表替换。供货模式落在子表，一行对应多种模式；三码（可售品类/商品类型/商品分类）互相独立，
  * 不校验父子链，唯一性以供应商内三码组合判重。允许最低起订量为预留字段，仅存储和回显。
- * 商品分类写入与 SPU 相同：封闭枚举名或类目 {@code category_code}，命中仍按字符串全等。
+ * 商品分类写入与SPU相同：封闭枚举名或类目 {@code category_code}。保存校验与三元组唯一键保持兼容；
+ * 合作商品命中仅比较类型和分类祖先覆盖，不比较可售品类，见
+ * {@code docs/superpowers/specs/2026-10-20-supplier-supply-scope-matching-design.md#3-写入口与保留边界}。
  * 设计见 {@code docs/superpowers/specs/2026-09-07-供应链管理端表单字典与标品标签设计.md#41-rest}、
  * {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线}（d34）。
  */

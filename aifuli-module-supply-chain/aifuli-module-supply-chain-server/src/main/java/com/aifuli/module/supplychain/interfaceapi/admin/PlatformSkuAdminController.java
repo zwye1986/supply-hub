@@ -61,7 +61,8 @@ public class PlatformSkuAdminController {
     @Operation(summary = "标品 SKU 分页",
             description = "仅返回启用 SKU 与启用 SPU。keyword 为包含匹配，同时命中 SKU 名称、SKU 编码、SPU 名称、SPU 编码；"
                     + "省略或空白不筛选。"
-                    + "supplierCode 只返回三码命中供货配置且尚无未退役 Offer 的 SKU。"
+                    + "supplierCode 只返回商品类型相同、分类命中供货配置且尚无未退役 Offer 的 SKU；"
+                    + "支持父分类覆盖子分类、最具体优先，不按可售品类匹配，歧义配置不展示。"
                     + "buyerCode 只排除该分销商未移除的分销商品，已移除的 SKU 会再次出现；"
                     + "不按分销商档案的可售品类或商品类型收窄，类型筛选请传 productType。"
                     + "projectCode 只返回所属分销商已有分销商品且项目目录尚未关联的 SKU。"

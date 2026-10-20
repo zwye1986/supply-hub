@@ -210,8 +210,51 @@ class SupplierCooperativeProductServiceTest {
         verify(offerMapper, never()).updateById(any(SupplierOfferDO.class));
     }
 
+    /** 可售品类不参与供货准入，新增与编辑均沿用唯一配置及其供货上限。 */
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.NullSource
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"PHYSICAL", ""})
+    void createAndUpdateIgnoreSpuSellableCategory(String sellableCategory) {
+        stubCreatePath();
+        stubSupplierAndOffer(OfferStatus.SUSPENDED);
+        when(spuMapper.selectById(21L)).thenReturn(PlatformSpuDO.builder()
+                .id(21L).sellableCategory(sellableCategory).productType("MOVIE")
+                .productClassification("MOVIE_TICKET").status(CatalogEntityStatus.ACTIVE.getCode()).build());
+        when(businessNoGenerator.next(BusinessNoPrefixes.OFR)).thenReturn("OFR_CROSS_CATEGORY");
+        DraftLine line = new DraftLine("MOVIE_100", "FIXED", 9800L, null, null,
+                "API_DIRECT", null, null, "external");
+
+        org.assertj.core.api.Assertions.assertThatCode(() -> {
+            service.createPublished("SPL_A", List.of(line), 1L);
+            service.updateCommercial("SPL_A", "OFR_1", line, 1L);
+        }).doesNotThrowAnyException();
+
+        ArgumentCaptor<SupplierOfferDO> inserted = ArgumentCaptor.forClass(SupplierOfferDO.class);
+        verify(offerMapper).insert(inserted.capture());
+        assertThat(inserted.getValue().getSupplyScopeId()).isEqualTo(101L);
+        assertThat(inserted.getValue().getDraftMaxQuantity()).isEqualTo(100L);
+        verify(offerMapper).updateById(any(SupplierOfferDO.class));
+        verifyNoInteractions(eventPublisher);
+    }
+
     @Test
-    void rejectsWhenSpuMissingAnyOfTheThreeCodes() {
+    void differentSellableCategoriesWithSameTypeAndClassificationAreConflicting() {
+        stubCreatePath();
+        when(scopeMapper.selectBySupplierId(9L)).thenReturn(List.of(
+                SupplierSupplyScopeDO.builder().id(101L).sellableCategory("MOVIE").productType("MOVIE")
+                        .productClassification("MOVIE_TICKET").maxQuantity(100L).build(),
+                SupplierSupplyScopeDO.builder().id(102L).sellableCategory("PHYSICAL").productType("MOVIE")
+                        .productClassification("MOVIE_TICKET").maxQuantity(200L).build()));
+        assertThatThrownBy(() -> service.createPublished("SPL_A", List.of(
+                new DraftLine("MOVIE_100", "FIXED", 9800L, null, null, "API_DIRECT", null, null, "external")), 1L))
+                .isInstanceOf(ServiceException.class)
+                .hasFieldOrPropertyWithValue("code",
+                        com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.SUPPLIER_SCOPE_CONFLICT.getCode());
+        verify(offerMapper, never()).insert(any(SupplierOfferDO.class));
+    }
+
+    @Test
+    void rejectsWhenSpuMissingProductType() {
         stubCreatePath();
         when(spuMapper.selectById(21L)).thenReturn(PlatformSpuDO.builder()
                 .id(21L).sellableCategory("MOVIE").productType(null).productClassification("MOVIE_TICKET")

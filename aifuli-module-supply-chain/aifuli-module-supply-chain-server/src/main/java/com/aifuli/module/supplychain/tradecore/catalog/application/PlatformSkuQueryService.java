@@ -19,6 +19,7 @@ import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSp
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSettlementPriceVersionMapper;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierOfferEligibilityService;
+import com.aifuli.module.supplychain.tradecore.supply.application.SupplierSupplyScopeMatcher;
 import com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSpuMapper;
@@ -54,8 +55,9 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
 
 /**
  * 管理端标品 SKU 池分页查询。金额单位均为 CNY 分；0 元 L1 视为已定价。
- * 三码直接来自 {@code sc_platform_spu}，不再走类目树祖先链；供应商过滤按三码整体相等命中供货配置。
- * 设计见 {@code docs/superpowers/specs/2026-09-07-供应链管理端表单字典与标品标签设计.md#42-平台spu}。
+ * 供应商选品按类型相等、分类祖先覆盖及最具体唯一配置匹配，可售品类不参与范围准入。
+ * 类目树由catalog归属服务统一加载，筛选发生在SKU分页前，不因歧义配置暴露不可新增商品。
+ * 设计见 {@code docs/superpowers/specs/2026-10-20-supplier-supply-scope-matching-design.md#41-旧sku池}。
  */
 @Slf4j
 @Service
@@ -78,9 +80,10 @@ public class PlatformSkuQueryService {
     private final ProjectListingMapper projectListingMapper;
 
     private final SupplierOfferEligibilityService eligibilityService;
+    private final ProductCategoryCoverageService categoryCoverageService;
 
     /**
-     * 分页查询启用标品 SKU。供应商三码集合为空或候选 SPU 三码无一命中时返回空页；
+     * 分页查询启用标品 SKU。供应商范围为空或候选SPU无唯一匹配配置时返回空页；
      * 供应商/分销商/项目编码缺失抛业务错误。
      */
     public PageResult<SkuListItem> page(SkuPageQuery query) {
@@ -92,18 +95,14 @@ public class PlatformSkuQueryService {
 
         Set<Long> includeSkuIds = null;
         Set<Long> excludeSkuIds = new HashSet<>();
-        Set<String> supplierTripleKeys = null;
+        List<SupplierSupplyScopeDO> supplierScopes = null;
         if (hasText(query.supplierCode())) {
             SupplierDO supplier = supplierMapper.selectByCode(query.supplierCode());
             if (supplier == null) {
                 throw exception(SUPPLIER_NOT_FOUND);
             }
-            supplierTripleKeys = new HashSet<>();
-            for (SupplierSupplyScopeDO scope : scopeMapper.selectBySupplierId(supplier.getId())) {
-                supplierTripleKeys.add(tripleKey(scope.getSellableCategory(), scope.getProductType(),
-                        scope.getProductClassification()));
-            }
-            if (supplierTripleKeys.isEmpty()) {
+            supplierScopes = scopeMapper.selectBySupplierId(supplier.getId());
+            if (supplierScopes.isEmpty()) {
                 return emptyPage();
             }
             List<SupplierOfferDO> offers = offerMapper.selectList(new LambdaQueryWrapper<SupplierOfferDO>()
@@ -134,11 +133,11 @@ public class PlatformSkuQueryService {
                 .eq(hasText(query.productClassification()), PlatformSpuDO::getProductClassification,
                         query.productClassification());
         List<PlatformSpuDO> spus = spuMapper.selectList(spuWrapper);
-        if (supplierTripleKeys != null) {
-            Set<String> allowedKeys = supplierTripleKeys;
+        if (supplierScopes != null) {
+            List<SupplierSupplyScopeDO> scopes = supplierScopes;
+            ProductCategoryCoverageService.CoverageResolver coverage = categoryCoverageService.loadResolver();
             spus = spus.stream()
-                    .filter(spu -> allowedKeys.contains(tripleKey(
-                            spu.getSellableCategory(), spu.getProductType(), spu.getProductClassification())))
+                    .filter(spu -> SupplierSupplyScopeMatcher.match(scopes, spu, coverage).matched())
                     .toList();
         }
         if (spus.isEmpty()) {
@@ -316,10 +315,6 @@ public class PlatformSkuQueryService {
             return null;
         }
         return version.getUnitPriceCents();
-    }
-
-    private static String tripleKey(String sellableCategory, String productType, String productClassification) {
-        return sellableCategory + "|" + productType + "|" + productClassification;
     }
 
     private static PageResult<SkuListItem> emptyPage() {

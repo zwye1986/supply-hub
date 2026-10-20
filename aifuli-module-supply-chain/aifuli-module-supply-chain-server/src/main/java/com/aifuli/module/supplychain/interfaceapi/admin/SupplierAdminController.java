@@ -300,8 +300,10 @@ public class SupplierAdminController {
     @PostMapping("/{supplierCode}/offers")
     @PreAuthorize(SUPPLIER_UPDATE_EXPRESSION)
     @Operation(summary = "批量新增合作商品",
-            description = "body.items 优先，兼容 lines。新增即 PUBLISHED。供货上限为空则继承供货配置；"
-                    + "最低起购量为空固定取1，不继承供货配置预留字段。")
+            description = "body.items 优先，兼容 lines。新增默认 SUSPENDED，正式上架需另行发布。供货上限为空则继承供货配置；"
+                    + "最低起购量为空固定取1，不继承供货配置预留字段。"
+                    + "供货范围要求商品类型相同，支持父分类覆盖子分类、最具体优先，不按可售品类匹配；"
+                    + "无匹配返回 SUPPLIER_OFFER_OUT_OF_SCOPE，最深层配置歧义返回 SUPPLIER_SCOPE_CONFLICT。")
     public CommonResult<List<String>> createOffers(@PathVariable String supplierCode,
                                                      @Valid @RequestBody OfferItemsReqVO request) {
         return success(cooperativeProductService.createPublished(supplierCode,
@@ -311,7 +313,9 @@ public class SupplierAdminController {
     @PutMapping("/{supplierCode}/offers/{offerNo}")
     @PreAuthorize(SUPPLIER_UPDATE_EXPRESSION)
     @Operation(summary = "编辑合作商品",
-            description = "校验价格与供货配置后更新身份列，不写报价版本。")
+            description = "校验价格与供货配置后更新身份列，不写报价版本。"
+                    + "供货范围要求商品类型相同，支持父分类覆盖子分类、最具体优先，不按可售品类匹配；"
+                    + "无匹配返回 SUPPLIER_OFFER_OUT_OF_SCOPE，最深层配置歧义返回 SUPPLIER_SCOPE_CONFLICT。")
     public CommonResult<Boolean> updateOffer(@PathVariable String supplierCode,
                                                @PathVariable String offerNo,
                                                @Valid @RequestBody DraftReqVO request) {

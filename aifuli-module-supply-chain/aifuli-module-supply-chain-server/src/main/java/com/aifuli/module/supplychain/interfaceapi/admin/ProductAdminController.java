@@ -176,7 +176,8 @@ public class ProductAdminController {
                     + "新增分销商品选品只返回至少有一个正常供应商未退役 Offer 的 SKU，供应商列表也只展示正常供应商。"
                     + "buyerCode 排除该分销商未移除的分销商品，已移除 SKU 会再次出现，且不按档案商品类型收窄。"
                     + "excludeAddedSupplierOffers=true 时排除该供应商未退役的供应商品，已退役 SKU 会再次出现；"
-                    + "该新增供应商品场景允许尚无供应商的 SKU；省略该开关时 supplierCode 仍只保留正常供应商已供商品。"
+                    + "该新增供应商品场景允许尚无供应商的 SKU，按供货配置商品类型及分类匹配，支持父分类覆盖子分类、最具体优先，"
+                    + "不按可售品类匹配，歧义配置不展示；省略该开关时 supplierCode 仍只保留正常供应商已供商品。"
                     + "supplyPrice 为当前最低有效供货价：有效报价版本优先，否则回退合作商品身份列，单位 CNY 分。")
     public CommonResult<PageResult<ProductCatalogQueryService.ProductManagementSpuItem>> managementPage(
             @Parameter(description = "业务 Tab 标识", example = "VIRTUAL_CARD") @RequestParam(required = false) String tabCode,
@@ -205,7 +206,8 @@ public class ProductAdminController {
             @Parameter(description = "是否排除该供应商已添加且未退役的供应商品。省略或 false 不排除，"
                     + "supplierCode 仍表示只看该供应商已供商品。"
                     + "true 时必须同时传 supplierCode，去掉未退役 Offer，已退役 SKU 会再次出现，"
-                    + "且不再按已供商品收窄，也不按供货配置三码收窄。"
+                    + "且不再按已供商品收窄；分页前按供货配置的商品类型和分类收窄，支持父分类覆盖子分类，"
+                    + "最具体优先，不按可售品类匹配，歧义配置不展示。"
                     + "supplierCode 空白返回 SUPPLIER_CODE_REQUIRED；供应商不存在返回 SUPPLIER_NOT_FOUND",
                     example = "true")
             @RequestParam(required = false) Boolean excludeAddedSupplierOffers,

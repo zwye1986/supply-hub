@@ -55,7 +55,7 @@
 | **d43** | **SKU×供应商履约能力评分人工挂点** | 稳定性/时效评分写在 `sc_supplier_offer` 身份列（Liquibase `042`/`043`），新建默认 80。供应商合作商品与 `GET/PUT /supply-chain/products/skus/{skuCode}/fulfillment-scores` 读写同一事实。`management-page` 的 `suppliers[]` 不加分数。路由引擎本期不读分。权威契约见 `docs/superpowers/specs/2026-09-21-offer-fulfillment-score-design.md`。 | 对齐新 PRD 8.4.1.1 / 8.1.3.4，纠正独立路由能力配置挂点 |
 | **d44** | **最低有效供货价版本优先、身份列回退** | 商品列表、标品 SKU 查询与通用定价共用最低有效供货价：当前报价版本有效则用 `supplier_settlement_unit_price`；否则 `FIXED` 用 `draft_unit_price`，`DISCOUNT` 用建议价×折扣基点并 `HALF_UP` 到分，`REALTIME` 仍为空。不伪造缺连接器的 OfferVersion。权威口径见 `docs/superpowers/specs/2026-09-22-effective-supply-price-identity-fallback-design.md`。 | 管理端合作商品只写身份列时列表供应价不再全空 |
 | **d45** | **SPU+SKU 复合保存自动初始化平台默认定价** | `POST /supply-chain/products/spus` 与 `PUT /supply-chain/products/spus/{spuCode}` 在同一供应链事务内，为新增 SKU 或仍无当前平台定价版本的 `UNPRICED` SKU 发布第一版系统默认定价；已有人工定价版本绝不覆盖。系统默认规则固定为：分销价与销售价均直接等于市场价、服务费为零且隐藏自定义文案、分销区与销售区利润隐藏阈值均为 0、税务为不含税且 `NON_TAXABLE`。没有有效供货价时版本正常发布为 `DEPENDENCY_MISSING`；市场价低于供货价时以 0 阈值进入 `MARGIN_HIDDEN`，不得阻断商品主数据保存。已定价 SKU 的市场价或销售建议价变化继续复用原配置重算，禁止同一保存同时初始化和依赖重算而生成双版本。详细约束见 `docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#5-版本继承与可售状态`。 | 消除前端未额外执行平台定价保存导致新 SKU 长期 `UNPRICED`、分销商品关联被阻断的问题 |
-| **d46** | **商品聚合列表按显式参数排除已添加供应商品** | `GET /supply-chain/products/management-page` 同时服务商品列表和新增供应商品选品。`supplierCode` 在省略 `excludeAddedSupplierOffers` 或其为 `false` 时，仍只保留该供应商已有未退役 Offer 的 SPU；供应商不存在或没有未退役 Offer 时返回空页。排除已添加供应商品必须显式传 `excludeAddedSupplierOffers=true`，并同时传入 `supplierCode`。此时从候选和返回明细中去掉该供应商未退役 Offer 的平台 SKU，已退役 SKU 会再次出现；这次请求不再按「仅该供应商已供商品」收窄，也不按供货配置三码收窄。`buyerCode` 排除未移除分销商品的行为不变。`supplierCode` 空白返回 `SUPPLIER_CODE_REQUIRED`（1050001133）；供应商不存在返回 `SUPPLIER_NOT_FOUND`。`POST /supply-chain/suppliers/{supplierCode}/offers` 仍拒绝未退役重复，不把本次新增改成更新。 | 共用列表的供应商筛选保持原义，新增供应商品选品可跳过已添加 SKU |
+| **d46** | **商品聚合列表按显式参数排除已添加供应商品** | `GET /supply-chain/products/management-page` 同时服务商品列表和新增供应商品选品。`supplierCode` 在省略 `excludeAddedSupplierOffers` 或其为 `false` 时，仍只保留该供应商已有未退役 Offer 的 SPU；供应商不存在或没有未退役 Offer 时返回空页。排除已添加供应商品必须显式传 `excludeAddedSupplierOffers=true`，并同时传入 `supplierCode`。此时从候选和返回明细中去掉该供应商未退役 Offer 的平台 SKU，已退役 SKU 会再次出现；这次请求不再按「仅该供应商已供商品」收窄；按2026-10-20修订，在分页前匹配供货配置商品类型及分类祖先覆盖，不比较可售品类，最深歧义不展示（§4.20）。`buyerCode` 排除未移除分销商品的行为不变。`supplierCode` 空白返回 `SUPPLIER_CODE_REQUIRED`（1050001133）；供应商不存在返回 `SUPPLIER_NOT_FOUND`。`POST /supply-chain/suppliers/{supplierCode}/offers` 仍拒绝未退役重复，不把本次新增改成更新。 | 共用列表的供应商筛选保持原义，新增供应商品选品可跳过已添加 SKU |
 | **d47** | **商品列表只展示正常供应商及其商品** | 商品列表页供应商下拉 `GET /supply-chain/suppliers?view=simple` 只返回 `ACTIVE`（正常）供应商。`GET /supply-chain/products/management-page` 在普通商品列表及新增分销商品选品场景中，只保留至少关联一个 `ACTIVE` 供应商未退役 Offer 的 SKU；`suppliers[]` 也只展示 `ACTIVE` 供应商，暂停、黑名单、归档供应商的 Offer 不参与商品可见性、供应商筛选或最低有效供货价。为避免首个供应商无法关联任何商品，新增供应商品选品 `excludeAddedSupplierOffers=true` 不施加“必须已有正常供应商 Offer”的准入条件，但返回的 `suppliers[]` 仍只展示正常供应商。显式 `supplierCode` 指向非正常供应商时返回空页。 | 防止商品列表展示暂停/黑名单供应商及其独占商品，同时保留新增供应商品闭环 |
 | **d48** | **普通商品管理列表展示全部未归档 SKU** | 修订 d47 的普通列表准入：`GET /supply-chain/products/management-page` 未传 `supplierCode`、`buyerCode` 且未启用 `excludeAddedSupplierOffers` 时，返回符合 SKU 状态、兑换方式、市场价等行级条件的全部未归档 SKU，不要求其关联正常供应商未退役 Offer。无此类 Offer 时仍返回 SKU 主数据，`suppliers=[]`、`supplyPrice=null`、`supplyPriceExclusive=null`、`taxAmount=null`。供货价区间沿用既有 SPU 候选筛选口径：至少一个 SKU 的有效供货价命中区间时保留该 SPU，返回明细仍含符合行级条件的其他 SKU；无有效供货价的独立 SPU 不命中。供应商下拉与 `suppliers[]` 继续只显示 `ACTIVE` 供应商；传入 `buyerCode` 的新增分销商品选品、显式 `supplierCode` 筛选及 `excludeAddedSupplierOffers=true` 的新增供应商品选品保持 d46/d47 原有口径。SPU 分页候选不得再因无合作 Offer 被提前排除，响应明细也不得再次剔除。 | 商品管理列表与详情的未归档 SKU 数量一致，退役合作商品后仍可管理该 SKU |
 
@@ -629,7 +629,7 @@ PRD 8.4.1 的列表 Tab 支持从 `GET /supply-chain/product-types` 动态拉取
   * `marketPriceMin` / `marketPriceMax` (Long, 可选): 市场价区间（单位：分）
   * `supplyPriceMin` / `supplyPriceMax` (Long, 可选): 供货价区间（单位：分）
   * `supplierCode` (String, 可选): 供应商编码。省略 `excludeAddedSupplierOffers` 或其为 `false` 时，只保留该正常（`ACTIVE`）供应商已有未退役 Offer 的 SPU；供应商不存在、状态非正常或没有未退役 Offer 时返回空页。`excludeAddedSupplierOffers=true` 时改为排除范围，不再做这层收窄。
-  * `excludeAddedSupplierOffers` (Boolean, 可选): 是否排除该供应商已添加且未退役的供应商品。省略或 `false` 不排除。`true` 时必须同时传 `supplierCode`，从候选和返回明细中去掉未退役 Offer 对应的平台 SKU；已退役 SKU 会再次出现。不按供货配置三码收窄，也不改变 `buyerCode` 对未移除分销商品的排除。`supplierCode` 空白返回 `SUPPLIER_CODE_REQUIRED`（1050001133）；供应商不存在返回 `SUPPLIER_NOT_FOUND`。供货价区间在该开关打开时仍按全部未退役 Offer 计算，不限定到该供应商。新增供应商品选品传 `true`。关联写入仍拒绝未退役重复，见 d46。
+  * `excludeAddedSupplierOffers` (Boolean, 可选): 是否排除该供应商已添加且未退役的供应商品。省略或 `false` 不排除。`true` 时必须同时传 `supplierCode`，从候选和返回明细中去掉未退役 Offer 对应的平台 SKU；已退役 SKU 会再次出现。按§4.20在分页前匹配供货配置类型/分类（祖先覆盖、最具体优先），不比较可售品类，歧义不展示；不改变`buyerCode`对未移除分销商品的排除。`supplierCode` 空白返回 `SUPPLIER_CODE_REQUIRED`（1050001133）；供应商不存在返回 `SUPPLIER_NOT_FOUND`。供货价区间在该开关打开时仍按全部未退役 Offer 计算，不限定到该供应商。新增供应商品选品传 `true`。关联写入仍拒绝未退役重复，见 d46。
   * `buyerCode` (String, 可选): 分销商永久业务编码。传入后从候选和返回明细中排除该分销商未移除的分销商品，已移除 SKU 会再次出现。不按分销商档案上的商品类型收窄；类型筛选仍由调用方传 `productType` 或 `tabCode`。分销商不存在时返回 `BUYER_PROFILE_NOT_FOUND`。省略时商品中心列表不排除任何分销商品。
   * `unshelveMode` (String, 可选): 下架方式（`MANUAL_UNSHELVE` 手动下架，`SYSTEM_UNSHELVE` 系统下架）
   * `updateTimeStart` / `updateTimeEnd` (LocalDateTime, 可选): SPU 更新时间区间
@@ -859,6 +859,10 @@ system-server 通过追加变更集 `006-product-list-filter-dictionaries` 写�
 
 ---
 
+### 4.20 供应商选品范围统一修订（2026-10-20）
+
+以[供应商供货范围按类型与分类匹配设计](2026-10-20-supplier-supply-scope-matching-design.md)为准，修订d46和§4.19：`excludeAddedSupplierOffers=true`的聚合选品除排除已有合作商品外，须在分页前按供应商配置的商品类型与商品分类收窄；分类支持祖先覆盖，最具体优先，最深层多条命中不展示。可售品类不参与供货匹配。`GET /products/skus`的供应商选品同步使用该规则，取代§5.1的三码匹配。普通商品管理与未打开该开关的已供商品筛选不改变；请求/响应字段及显式检索条件保持兼容。
+
 ### 4.5 存量主数据接口治理：`M1MasterDataAdminController`
 * `POST /supply-chain/master-data/brands`：接口保留为明确的退役响应，不再创建品牌；无论请求体内容如何，固定返回 `BRAND_LEGACY_API_DEPRECATED`（`1_050_001_106`），并提示改用 `POST /supply-chain/brands`。该错误不可重试，调用方必须迁移接口。
 * `/supply-chain/master-data/categories`、`/spus`、`/skus`：保留旧请求契约作为兼容入口，分别委托 `CategoryCommandService`、`ProductCatalogCommandService` 的统一写方法；不再保留独立校验和持久化逻辑。
@@ -881,7 +885,7 @@ system-server 通过追加变更集 `006-product-list-filter-dictionaries` 写�
    - 严格以 `platform_sku_id` 主键驱动联合查询，避免跨包对象深层侵入。
 2. **供应商加购选品池一致性**：
    - 现有的 `PlatformSkuAdminController.page`（`GET /supply-chain/products/skus`）作为选品核心。
-   - 当传入 `supplierCode` 时，严格匹配 SPU 的 `(sellableCategory, productType, productClassification)` 三码落在该供应商的供货范围之内，且该 SKU 必须满足 `effectiveSellable == true`（即 `SPU.ACTIVE && SKU.ACTIVE`）。
+   - 当传入`supplierCode`时，按§4.20匹配SPU的商品类型与分类祖先覆盖，不比较可售品类，最具体唯一配置才可选；同时SKU必须满足`effectiveSellable == true`（即`SPU.ACTIVE && SKU.ACTIVE`）。
 3. **分销商选品池一致性**：
    - 当传入 `buyerCode` 时，只返回 `effectiveSellable == true` 且该分销商尚未关联平台 SKU（未加入 `sc_buyer_product`）的记录。
    - `keyword` 同时匹配名称与 SPU/SKU 编码；响应另含主类目展示名 `categoryName` 与最低有效供货价 `supplyPriceCents`。筛选与价格口径见 `docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#44-标品-sku-分页`。

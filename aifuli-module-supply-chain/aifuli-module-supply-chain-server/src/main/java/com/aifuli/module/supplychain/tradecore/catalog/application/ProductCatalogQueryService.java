@@ -3,6 +3,9 @@ package com.aifuli.module.supplychain.tradecore.catalog.application;
 import com.aifuli.framework.common.pojo.PageParam;
 import com.aifuli.framework.common.pojo.PageResult;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierOfferEligibilityService;
+import com.aifuli.module.supplychain.tradecore.supply.application.SupplierSupplyScopeMatcher;
+import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierSupplyScopeDO;
+import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierSupplyScopeMapper;
 import com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerDO;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerProductDO;
@@ -86,6 +89,8 @@ public class ProductCatalogQueryService {
     private final BuyerProductMapper buyerProductMapper;
     private final SupplyChainDatabaseClock databaseClock;
     private final SupplierOfferEligibilityService eligibilityService;
+    private final SupplierSupplyScopeMapper scopeMapper;
+    private final ProductCategoryCoverageService categoryCoverageService;
 
     public PageResult<SpuListItem> page(SpuPageQuery query) {
         TabFilter tab = resolveTab(query.tabCode());
@@ -453,7 +458,12 @@ public class ProductCatalogQueryService {
         Set<Long> excludedSkuIds = new HashSet<>(excludedActiveBuyerSkuIds(query.buyerCode()));
         boolean excludeAddedSupplierOffers = Boolean.TRUE.equals(query.excludeAddedSupplierOffers());
         if (excludeAddedSupplierOffers) {
-            excludedSkuIds.addAll(liveSupplierOfferSkuIds(query.supplierCode()));
+            SupplierDO supplier = requireSelectionSupplier(query.supplierCode());
+            excludedSkuIds.addAll(liveSupplierOfferSkuIds(supplier));
+            candidateSpuIds = matchingSupplierScopeSpuIds(supplier.getId());
+            if (candidateSpuIds.isEmpty()) {
+                return new PageResult<>(List.of(), 0L);
+            }
         }
 
         // 普通商品管理列表展示全部未归档 SKU；分销商选品与显式供应商筛选继续要求正常供应商的未退役 Offer。
@@ -796,11 +806,8 @@ public class ProductCatalogQueryService {
         return new KeywordSkuMatch(skuIds, spuIds);
     }
 
-    /**
-     * 新增供应商品选品要去掉该供应商未退役 Offer。已退役行不排除，供货配置三码不参与。
-     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线}（d46）。
-     */
-    private Set<Long> liveSupplierOfferSkuIds(String supplierCode) {
+    /** 新增选品必须指定真实供应商；普通商品列表不调用此方法。 */
+    private SupplierDO requireSelectionSupplier(String supplierCode) {
         if (!hasText(supplierCode)) {
             throw exception(SUPPLIER_CODE_REQUIRED);
         }
@@ -808,6 +815,31 @@ public class ProductCatalogQueryService {
         if (supplier == null) {
             throw exception(SUPPLIER_NOT_FOUND);
         }
+        return supplier;
+    }
+
+    /**
+     * 先按类型集合缩小SPU读取，再按同一条配置的类型/分类匹配，禁止将两列分别取并集。
+     * 返回的ID必须在SPU分页前与其余条件取交集，避免后置过滤造成total与页容量失真。
+     * 设计见 {@code docs/superpowers/specs/2026-10-20-supplier-supply-scope-matching-design.md#42-聚合选品}。
+     */
+    private Set<Long> matchingSupplierScopeSpuIds(Long supplierId) {
+        List<SupplierSupplyScopeDO> scopes = scopeMapper.selectBySupplierId(supplierId);
+        Set<String> productTypes = scopes.stream().map(SupplierSupplyScopeDO::getProductType)
+                .filter(ProductCatalogQueryService::hasText).collect(Collectors.toSet());
+        if (productTypes.isEmpty()) {
+            return Set.of();
+        }
+        ProductCategoryCoverageService.CoverageResolver coverage = categoryCoverageService.loadResolver();
+        return spuMapper.selectList(new LambdaQueryWrapper<PlatformSpuDO>()
+                        .eq(PlatformSpuDO::getStatus, CatalogEntityStatus.ACTIVE.getCode())
+                        .in(PlatformSpuDO::getProductType, productTypes)).stream()
+                .filter(spu -> SupplierSupplyScopeMatcher.match(scopes, spu, coverage).matched())
+                .map(PlatformSpuDO::getId).collect(Collectors.toSet());
+    }
+
+    /** 已退役行不排除，范围准入独立在分页前处理，避免影响普通已供商品筛选。 */
+    private Set<Long> liveSupplierOfferSkuIds(SupplierDO supplier) {
         List<SupplierOfferDO> offers = offerMapper.selectList(new LambdaQueryWrapper<SupplierOfferDO>()
                 .eq(SupplierOfferDO::getSupplierId, supplier.getId())
                 .ne(SupplierOfferDO::getStatus, OfferStatus.RETIRED.getCode()));

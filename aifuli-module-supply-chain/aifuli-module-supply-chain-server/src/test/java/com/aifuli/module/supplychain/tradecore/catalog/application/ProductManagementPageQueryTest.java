@@ -77,11 +77,16 @@ class ProductManagementPageQueryTest {
     private final BuyerMapper buyerMapper = mock(BuyerMapper.class);
     private final BuyerProductMapper buyerProductMapper = mock(BuyerProductMapper.class);
     private final SupplyChainDatabaseClock databaseClock = mock(SupplyChainDatabaseClock.class);
+    private final com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierSupplyScopeMapper scopeMapper =
+            mock(com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierSupplyScopeMapper.class);
+    private final ProductCategoryCoverageService categoryCoverageService = mock(ProductCategoryCoverageService.class);
 
     private final ProductCatalogQueryService service = new ProductCatalogQueryService(
             spuMapper, skuMapper, brandMapper, categoryMapper, typeMapper,
             offerMapper, offerVersionMapper, supplierMapper,
-            typeValidationService, sellabilityService, buyerMapper, buyerProductMapper, databaseClock, SupplierEligibilityTestFixture.create(supplierMapper, offerMapper, offerVersionMapper, skuMapper, spuMapper));
+            typeValidationService, sellabilityService, buyerMapper, buyerProductMapper, databaseClock,
+            SupplierEligibilityTestFixture.create(supplierMapper, offerMapper, offerVersionMapper, skuMapper, spuMapper),
+            scopeMapper, categoryCoverageService);
 
     private static final LocalDateTime NOW = LocalDateTime.of(2026, 9, 22, 12, 0);
 
@@ -93,6 +98,7 @@ class ProductManagementPageQueryTest {
         TableInfoHelper.initTableInfo(new MapperBuilderAssistant(new MybatisConfiguration(), ""), ProductCategoryDO.class);
         TableInfoHelper.initTableInfo(new MapperBuilderAssistant(new MybatisConfiguration(), ""), BuyerProductDO.class);
         when(databaseClock.now()).thenReturn(NOW);
+        when(categoryCoverageService.loadResolver()).thenReturn(new ProductCategoryCoverageService.CoverageResolver(List.of()));
         // 分销商选品与显式供应商筛选的用例沿用已有正常供应商合作关系；普通列表不依赖此集合。
         when(supplierMapper.selectActiveIds()).thenReturn(List.of(11L));
         when(offerMapper.selectLiveSkuIdsBySupplierIds(any()))
@@ -618,6 +624,22 @@ class ProductManagementPageQueryTest {
                         .containsExactly("IQY-GOLD-M"));
     }
 
+    /** 没有供货配置时不能把整个商品池暴露为可新增范围。 */
+    @Test
+    void supplierSelectionWithoutSupplyScopeReturnsEmptyPage() {
+        when(supplierMapper.selectByCode("SPL_EMPTY")).thenReturn(SupplierDO.builder().id(13L).build());
+        when(spuMapper.selectPage(any(PageParam.class), any())).thenReturn(new PageResult<>(List.of(
+                PlatformSpuDO.builder().id(1001L).spuCode("SPU_UNSCOPED")
+                        .status(CatalogEntityStatus.ACTIVE.getCode()).updatedAt(NOW).build()), 1L));
+        when(skuMapper.selectList(any())).thenReturn(List.of(PlatformSkuDO.builder().id(2001L)
+                .spuId(1001L).skuCode("SKU_UNSCOPED").status(CatalogEntityStatus.ACTIVE.getCode()).build()));
+        var result = service.managementPage(new ProductManagementPageQuery(
+                null, null, null, null, null, null, null, null,
+                null, null, null, null, "SPL_EMPTY", null, null, 1, 20, null, true));
+        assertThat(result.getTotal()).isZero();
+        assertThat(result.getList()).isEmpty();
+    }
+
     @Test
     void managementPageUnknownBuyerCodeIsRejected() {
         when(buyerMapper.selectByBuyerCode("BYR_MISSING")).thenReturn(null);
@@ -631,9 +653,7 @@ class ProductManagementPageQueryTest {
     @Test
     @SuppressWarnings({"rawtypes", "unchecked"})
     void managementPageExcludeAddedSupplierOffersDropsLiveSkuAndKeepsRetiredSibling() {
-        PlatformSpuDO spu = PlatformSpuDO.builder()
-                .id(1001L).spuCode("SPU_IQY").spuName("爱奇艺黄金会员").status(CatalogEntityStatus.ACTIVE.getCode())
-                .updatedAt(NOW).build();
+        PlatformSpuDO spu = stubSelectionScope();
         PlatformSkuDO kept = PlatformSkuDO.builder()
                 .id(2001L).spuId(1001L).skuCode("IQY-GOLD-M").skuName("月卡")
                 .status(CatalogEntityStatus.ACTIVE.getCode()).build();
@@ -672,6 +692,7 @@ class ProductManagementPageQueryTest {
     @Test
     @SuppressWarnings({"rawtypes", "unchecked"})
     void supplierSelectionRequiresActiveParentAndSkuEvenWithoutStatusParameter() {
+        stubSelectionScope();
         when(supplierMapper.selectByCode("SPL_A")).thenReturn(SupplierDO.builder().id(11L).build());
         PlatformSkuDO sku = PlatformSkuDO.builder().id(2001L).spuId(1001L).skuCode("SKU_A")
                 .status(CatalogEntityStatus.ACTIVE.getCode()).build();
@@ -687,6 +708,19 @@ class ProductManagementPageQueryTest {
         verify(skuMapper).selectList(child.capture());
         assertThat(child.getValue().getSqlSegment()).contains("status =");
         assertThat(child.getValue().getParamNameValuePairs().values()).contains(CatalogEntityStatus.ACTIVE.getCode());
+    }
+
+    /** 旧用例显式补齐有效范围；跨品类仍命中，不能靠默认无范围夹具绕过新准入。 */
+    private PlatformSpuDO stubSelectionScope() {
+        PlatformSpuDO spu = PlatformSpuDO.builder().id(1001L).spuCode("SPU_IQY").spuName("爱奇艺黄金会员")
+                .sellableCategory("EQUITY").productType("PT_CARD").productClassification("VIRTUAL_CARD")
+                .status(CatalogEntityStatus.ACTIVE.getCode()).updatedAt(NOW).build();
+        when(scopeMapper.selectBySupplierId(11L)).thenReturn(List.of(
+                com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierSupplyScopeDO.builder()
+                        .id(101L).sellableCategory("PHYSICAL").productType("PT_CARD")
+                        .productClassification("VIRTUAL_CARD").build()));
+        when(spuMapper.selectList(any())).thenReturn(List.of(spu));
+        return spu;
     }
 
     @Test

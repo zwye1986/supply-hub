@@ -60,6 +60,8 @@ class PlatformSkuQueryServiceTest {
     private final BuyerProjectMapper buyerProjectMapper = mock(BuyerProjectMapper.class);
     private final ProjectListingMapper projectListingMapper = mock(ProjectListingMapper.class);
     private final SupplierMapper supplierMapper = mock(SupplierMapper.class);
+    private final SupplierSupplyScopeMapper scopeMapper = mock(SupplierSupplyScopeMapper.class);
+    private final ProductCategoryCoverageService categoryCoverageService = mock(ProductCategoryCoverageService.class);
     private final SupplierOfferMapper offerMapper = mock(SupplierOfferMapper.class);
     private final SupplierOfferVersionMapper offerVersionMapper = mock(SupplierOfferVersionMapper.class);
     private final CategoryQueryService categoryQueryService = mock(CategoryQueryService.class);
@@ -70,12 +72,35 @@ class PlatformSkuQueryServiceTest {
     void setUp() {
         TableInfoHelper.initTableInfo(new MapperBuilderAssistant(new MybatisConfiguration(), ""), PlatformSkuDO.class);
         when(databaseClock.now()).thenReturn(LocalDateTime.of(2026, 9, 22, 11, 0));
+        when(categoryCoverageService.loadResolver()).thenReturn(new ProductCategoryCoverageService.CoverageResolver(List.of()));
         service = new PlatformSkuQueryService(
                 skuMapper, spuMapper, priceMapper, versionMapper,
-                supplierMapper, mock(SupplierSupplyScopeMapper.class),
+                supplierMapper, scopeMapper,
                 offerMapper, offerVersionMapper, categoryQueryService, databaseClock,
                 mock(BuyerMapper.class),
-                buyerProductMapper, buyerProjectMapper, projectListingMapper, SupplierEligibilityTestFixture.create(supplierMapper, offerMapper, offerVersionMapper, skuMapper, spuMapper));
+                buyerProductMapper, buyerProjectMapper, projectListingMapper,
+                SupplierEligibilityTestFixture.create(supplierMapper, offerMapper, offerVersionMapper, skuMapper, spuMapper),
+                categoryCoverageService);
+    }
+
+    @Test
+    void supplierSelectionIgnoresSellableCategory() {
+        TableInfoHelper.initTableInfo(new MapperBuilderAssistant(new MybatisConfiguration(), ""), SupplierOfferDO.class);
+        when(supplierMapper.selectByCode("SPL_A")).thenReturn(SupplierDO.builder().id(9L).build());
+        when(scopeMapper.selectBySupplierId(9L)).thenReturn(List.of(
+                com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.SupplierSupplyScopeDO.builder()
+                        .id(101L).sellableCategory("PHYSICAL").productType("MOVIE")
+                        .productClassification("MOVIE_TICKET").build()));
+        when(spuMapper.selectList(any())).thenReturn(List.of(PlatformSpuDO.builder()
+                .id(8L).sellableCategory("MOVIE").productType("MOVIE")
+                .productClassification("MOVIE_TICKET").status(CatalogEntityStatus.ACTIVE.getCode()).build()));
+        when(skuMapper.selectPage(any(PageParam.class), any())).thenReturn(new PageResult<>(List.of(
+                PlatformSkuDO.builder().id(11L).spuId(8L).skuCode("SKU_CROSS_CATEGORY")
+                        .status(CatalogEntityStatus.ACTIVE.getCode()).build()), 1L));
+        var result = service.page(new PlatformSkuQueryService.SkuPageQuery(
+                null, null, null, null, "SPL_A", null, null, 1, 20));
+        assertThat(result.getList()).extracting(PlatformSkuQueryService.SkuListItem::skuCode)
+                .containsExactly("SKU_CROSS_CATEGORY");
     }
 
     @Test

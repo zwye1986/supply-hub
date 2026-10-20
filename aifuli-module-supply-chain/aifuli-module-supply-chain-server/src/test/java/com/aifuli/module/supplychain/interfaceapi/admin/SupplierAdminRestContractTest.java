@@ -52,6 +52,20 @@ class SupplierAdminRestContractTest {
     }
 
     @Test
+    void offerWritesDocumentTypeAndAncestorScopeMatching() {
+        var methods = Arrays.stream(SupplierAdminController.class.getDeclaredMethods())
+                .filter(method -> List.of("createOffers", "updateOffer").contains(method.getName())).toList();
+        assertThat(methods).hasSize(2);
+        for (Method method : methods) {
+            assertThat(method.getAnnotation(Operation.class).description())
+                    .contains("商品类型", "父分类覆盖子分类", "不按可售品类匹配", "SUPPLIER_SCOPE_CONFLICT");
+        }
+        assertThat(methods.stream().filter(method -> method.getName().equals("createOffers"))
+                .findFirst().orElseThrow().getAnnotation(Operation.class).description())
+                .contains("SUSPENDED").doesNotContain("新增即 PUBLISHED");
+    }
+
+    @Test
     void simpleSupplierProjectionDocumentsActiveOnly() {
         Method page = Arrays.stream(SupplierAdminController.class.getDeclaredMethods())
                 .filter(method -> method.getName().equals("page"))

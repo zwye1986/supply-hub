@@ -93,6 +93,7 @@ class SupplyChainModuleArchitectureTest {
      */
     static final ArchRule supply_matching_does_not_read_category_tree = noClasses()
             .that().haveSimpleName("SupplierCooperativeProductService")
+            .or().haveSimpleName("SupplierSupplyScopeMatcher")
             .or().haveSimpleName("PlatformSkuQueryService")
             .or().haveSimpleName("BuyerProductQueryService")
             .should().dependOnClassesThat().haveSimpleName("ProductCategoryMapper");

@@ -631,6 +631,22 @@ class ProductCenterContractTest {
      * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#419-管理端商品列表聚合查询get-supply-chainproductsmanagement-page}。
      */
     @Test
+    void supplierSelectionDocumentsTypeAndAncestorCoverageWithoutSellableCategoryMatching() {
+        Method aggregate = Arrays.stream(ProductAdminController.class.getDeclaredMethods())
+                .filter(method -> method.getName().equals("managementPage")).findFirst().orElseThrow();
+        Method skuPool = Arrays.stream(PlatformSkuAdminController.class.getDeclaredMethods())
+                .filter(method -> method.getName().equals("page")).findFirst().orElseThrow();
+        for (Method method : List.of(aggregate, skuPool)) {
+            assertThat(method.getAnnotation(Operation.class).description())
+                    .contains("商品类型", "父分类覆盖子分类", "不按可售品类匹配", "歧义配置不展示");
+        }
+        String excludeDescription = Arrays.stream(aggregate.getParameters())
+                .filter(parameter -> parameter.getName().equals("excludeAddedSupplierOffers"))
+                .findFirst().orElseThrow().getAnnotation(Parameter.class).description();
+        assertThat(excludeDescription).contains("分页前", "供货配置").doesNotContain("不按供货配置三码收窄");
+    }
+
+    @Test
     void managementPageDocumentsKeywordAndBuyerCodeForDistributorSelect() {
         Method managementPage = Arrays.stream(ProductAdminController.class.getDeclaredMethods())
                 .filter(method -> method.getName().equals("managementPage"))

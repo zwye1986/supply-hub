@@ -470,43 +470,20 @@ public class SupplierCooperativeProductService {
     }
 
     /**
-     * 归属命中（2026-09-23 修订，取代三码全等）：SPU 三码须全部非空；{@code sellableCategory}、
-     * {@code productType} 仍字符串全等；{@code productClassification} 由
-     * {@link ProductCategoryCoverageService.CoverageResolver#covers} 判定——两边都是类目码时，
-     * 配置码是 SPU 码祖先（或相等）即命中，枚举名仍只认全等。多条命中取类目层级最深（最具体）的一条；
-     * 树性质下同层不可能双命中，若因脏数据出现同层多命中仍判失败。0 条命中抛
-     * {@code SUPPLIER_OFFER_OUT_OF_SCOPE}。
-     * 设计见 {@code docs/superpowers/specs/2026-09-07-供应链管理端表单字典与标品标签设计.md#1-已确认决策}（d3）。
+     * 与选品入口共用类型/分类归属匹配，不比较可售品类。最深层多配置命中明确返回配置冲突，
+     * 避免任取配置导致供货上限与supply_scope_id漂移；无匹配仍返回范围外错误。
+     * 设计见 {@code docs/superpowers/specs/2026-10-20-supplier-supply-scope-matching-design.md#2-唯一匹配算法}。
      */
     private SupplierSupplyScopeDO matchScope(List<SupplierSupplyScopeDO> scopes, PlatformSpuDO spu,
                                              ProductCategoryCoverageService.CoverageResolver coverage) {
-        if (spu.getSellableCategory() == null || spu.getProductType() == null
-                || spu.getProductClassification() == null) {
+        SupplierSupplyScopeMatcher.Match match = SupplierSupplyScopeMatcher.match(scopes, spu, coverage);
+        if (match.conflict()) {
+            throw exception(SUPPLIER_SCOPE_CONFLICT);
+        }
+        if (!match.matched()) {
             throw exception(SUPPLIER_OFFER_OUT_OF_SCOPE);
         }
-        SupplierSupplyScopeDO matched = null;
-        int matchedDepth = -1;
-        boolean tieAtDeepest = false;
-        for (SupplierSupplyScopeDO scope : scopes) {
-            if (!spu.getSellableCategory().equals(scope.getSellableCategory())
-                    || !spu.getProductType().equals(scope.getProductType())
-                    || !coverage.covers(scope.getProductClassification(), spu.getProductClassification())) {
-                continue;
-            }
-            int depth = coverage.depth(scope.getProductClassification());
-            if (depth > matchedDepth) {
-                matched = scope;
-                matchedDepth = depth;
-                tieAtDeepest = false;
-            } else if (depth == matchedDepth) {
-                // 树性质 + 三元组唯一下同层不可能双命中；出现即数据异常，保持失败语义
-                tieAtDeepest = true;
-            }
-        }
-        if (matched == null || tieAtDeepest) {
-            throw exception(SUPPLIER_OFFER_OUT_OF_SCOPE);
-        }
-        return matched;
+        return match.scope();
     }
 
     /**
