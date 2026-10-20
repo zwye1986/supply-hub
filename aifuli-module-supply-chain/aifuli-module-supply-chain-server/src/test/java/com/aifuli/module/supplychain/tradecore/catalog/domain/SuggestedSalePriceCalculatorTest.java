@@ -21,6 +21,37 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class SuggestedSalePriceCalculatorTest {
 
     @Test
+    void supplyPriceUsesAuthoritativeInputAndRecordsSnapshot() throws Exception {
+        var result = supplyCalculation("110", ADD, "1", 8_000L);
+        assertThat(result.suggestedSalePriceCents()).isEqualTo(8_900L);
+        assertThat(result.normalizedRule().basePriceSnapshotCents()).isEqualTo(8_000L);
+        assertThat(supplyCalculation("110", ADD, "1", 9_000L).suggestedSalePriceCents())
+                .isEqualTo(10_000L);
+    }
+
+    @Test
+    void missingSupplyKeepsNormalizedRuleAndNullAmountWhileRealZeroCalculates() throws Exception {
+        var missing = supplyCalculation("110", ADD, "1", null);
+        assertThat(missing.suggestedSalePriceCents()).isNull();
+        assertThat(missing.normalizedRule().basePriceSnapshotCents()).isNull();
+        assertThat(supplyCalculation("110", ADD, "1", 0L).suggestedSalePriceCents()).isEqualTo(100L);
+    }
+
+    private static SuggestedSalePriceCalculator.Calculation supplyCalculation(
+            String percent, SuggestedSalePriceRule.Operator operator, String operand, Long supply) throws Exception {
+        return SuggestedSalePriceCalculator.calculate(custom(SuggestedSalePriceRule.Base.SUPPLY_PRICE, percent, operator, operand),
+                20_000L, 99_999L, supply);
+    }
+
+    @Test void supplyRulesValidateEvenWithoutDependencyAndRejectOverflow() {
+        var base = SuggestedSalePriceRule.Base.SUPPLY_PRICE;
+        assertThatThrownBy(() -> SuggestedSalePriceCalculator.calculate(custom(base,"0",ADD,"1"),10000,null,null)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> SuggestedSalePriceCalculator.calculate(custom(base,"110",DIVIDE,"0"),10000,null,null)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> SuggestedSalePriceCalculator.calculate(custom(base,"110",ADD,"0"),10000,null,Long.MAX_VALUE)).isInstanceOf(ArithmeticException.class);
+        assertThatThrownBy(() -> SuggestedSalePriceCalculator.calculate(custom(base,"100",SUBTRACT,"90"),10000,null,8000L)).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
     void supportsEqualMarketAndFixedModesIncludingZero() {
         assertThat(SuggestedSalePriceCalculator.calculate(
                 SuggestedSalePriceRule.equalMarketPrice(), 12_345L, null).suggestedSalePriceCents())

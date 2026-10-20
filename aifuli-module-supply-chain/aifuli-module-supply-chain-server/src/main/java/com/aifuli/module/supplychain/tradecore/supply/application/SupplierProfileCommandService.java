@@ -81,6 +81,8 @@ public class SupplierProfileCommandService {
     private static final int MAX_FILE_KEYS = 5;
     private static final String FILE_LIMIT_MESSAGE = "最多5个文件";
 
+    @jakarta.annotation.Resource
+    private com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuPricingMapper pricingMapper;
     private final SupplierMapper supplierMapper;
     private final SupplierOfferMapper supplierOfferMapper;
     private final ApplicationEventPublisher eventPublisher;
@@ -230,12 +232,14 @@ public class SupplierProfileCommandService {
         }
         // 供应商状态属于“最低有效供货价”的有效性条件；按SKU去重后同步切换价格版本与可售状态。
         // 设计见 docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#3-供货价与利润隐藏。
-        supplierOfferMapper.selectPublishedBySupplier(supplier.getId()).stream()
+        var skuIds = supplierOfferMapper.selectPublishedBySupplier(supplier.getId()).stream()
                 .map(offer -> offer.getPlatformSkuId())
                 .filter(java.util.Objects::nonNull)
                 .distinct()
-                .sorted()
-                .forEach(id -> eventPublisher.publishEvent(new PricingDependencyChangedEvent(id)));
+                .sorted().toList();
+        com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuPricingBatchLock.lockOrCreateByIds(
+                pricingMapper, skuIds, databaseClock.now());
+        skuIds.forEach(id -> eventPublisher.publishEvent(new PricingDependencyChangedEvent(id)));
     }
 
     private SupplierDO requireForUpdate(String supplierCode) {

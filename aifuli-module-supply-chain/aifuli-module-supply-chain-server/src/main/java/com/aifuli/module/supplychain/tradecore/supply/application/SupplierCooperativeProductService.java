@@ -1,5 +1,11 @@
 package com.aifuli.module.supplychain.tradecore.supply.application;
 
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.SuggestedSalePriceResolver;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.SuggestedSalePriceResolver.Resolution;
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import jakarta.annotation.Resource;
+
 import com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock;
 
 import com.aifuli.framework.common.pojo.PageParam;
@@ -60,6 +66,9 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
 @Service
 @RequiredArgsConstructor
 public class SupplierCooperativeProductService {
+
+    @Resource
+    private SuggestedSalePriceResolver suggestedSalePriceResolver;
 
     private final SupplyChainDatabaseClock databaseClock;
 
@@ -260,9 +269,15 @@ public class SupplierCooperativeProductService {
         pageParam.setPageNo(pageNo == null ? DEFAULT_PAGE_NO : pageNo);
         pageParam.setPageSize(pageSize == null ? DEFAULT_PAGE_SIZE : pageSize);
         PageResult<SupplierOfferDO> page = offerMapper.selectPage(pageParam, wrapper);
+        var skus = new java.util.HashMap<Long, PlatformSkuDO>();
+        page.getList().stream().map(SupplierOfferDO::getPlatformSkuId).filter(java.util.Objects::nonNull).distinct()
+                .forEach(id -> { var sku = skuMapper.selectById(id); if (sku != null) skus.put(id, sku); });
+        var dynamic = skus.values().stream().anyMatch(SuggestedSalePriceResolver::isDynamic);
+        var suggestedPrices = resolveSuggestedPrices(skus.values(), dynamic ? databaseClock.now() : null);
         List<OfferListItem> items = new ArrayList<>();
         for (SupplierOfferDO offer : page.getList()) {
-            items.add(toListItem(offer, supplier));
+            items.add(toListItem(offer, supplier, skus.get(offer.getPlatformSkuId()),
+                    suggestedPrices.get(offer.getPlatformSkuId())));
         }
         return new PageResult<>(items, page.getTotal());
     }
@@ -345,7 +360,12 @@ public class SupplierCooperativeProductService {
         SupplierSupplyScopeDO scope = matchScope(scopes, spu, coverage);
         OfferPriceMode priceMode = OfferPriceMode.fromCode(line.priceMode());
         SupplyMode supplyMode = SupplyMode.fromCode(line.supplyMode());
-        validatePrice(priceMode, line, sku.getSuggestedSalePrice());
+        // 折扣只接受当前有效建议价，待计算/失败不能借用兼容列或历史成功金额。
+        // 设计见 docs/superpowers/specs/2026-10-19-suggested-sale-price-supply-base-design.md#4-数据模型与唯一取值入口。
+        Long suggestedPrice = priceMode == OfferPriceMode.DISCOUNT && SuggestedSalePriceResolver.isDynamic(sku)
+                ? suggestedSalePriceResolver.resolve(sku, databaseClock.now()).amountCents()
+                : SuggestedSalePriceResolver.evaluate(sku, null, null, null).amountCents();
+        validatePrice(priceMode, line, suggestedPrice);
         Long maxQuantity = line.maxQuantity() != null ? line.maxQuantity() : scope.getMaxQuantity();
         Long minQuantity = line.minQuantity() != null ? line.minQuantity() : DEFAULT_OFFER_MIN_QUANTITY;
         if (minQuantity == null || maxQuantity == null
@@ -413,8 +433,8 @@ public class SupplierCooperativeProductService {
         return drift ? FulfillmentStatus.STALE : FulfillmentStatus.READY;
     }
 
-    private OfferListItem toListItem(SupplierOfferDO offer, SupplierDO supplier) {
-        PlatformSkuDO sku = skuMapper.selectById(offer.getPlatformSkuId());
+    private OfferListItem toListItem(SupplierOfferDO offer, SupplierDO supplier, PlatformSkuDO sku,
+                                     Resolution suggestedPrice) {
         PlatformSpuDO spu = sku == null ? null : spuMapper.selectById(sku.getSpuId());
         SupplierSupplyScopeDO scope = offer.getSupplyScopeId() == null
                 ? null : scopeMapper.selectById(offer.getSupplyScopeId());
@@ -436,7 +456,7 @@ public class SupplierCooperativeProductService {
                 scope == null ? null : scope.getProductType(),
                 scope == null ? null : scope.getProductClassification(),
                 resolveSuggestPriceCents(offer.getPlatformSkuId()),
-                sku == null ? null : sku.getSuggestedSalePrice(),
+                suggestedPrice == null ? null : suggestedPrice.amountCents(),
                 offer.getPriceMode(),
                 offer.getDraftUnitPrice(),
                 offer.getDiscountBp(),
@@ -451,7 +471,7 @@ public class SupplierCooperativeProductService {
                 offer.getVersion(),
                 computeFulfillmentStatus(offer, currentVersion).code(),
                 eligibility.canPublish(),
-                eligibility.publishBlockedReason());
+                eligibility.publishBlockedReason(), suggestedPrice);
     }
 
     private Long resolveSuggestPriceCents(Long skuId) {
@@ -551,7 +571,7 @@ public class SupplierCooperativeProductService {
     }
 
     /**
-     * 合作商品列表行。金额单位 CNY 分；status 为枚举名。销售建议价取SKU，旧suggestPriceCents保留L1原义。
+     * 合作商品列表行。金额单位 CNY 分；status 为枚举名。销售建议价取统一解析入口当前有效金额，旧suggestPriceCents保留L1原义。
      * 价格口径见 docs/superpowers/specs/2026-10-11-supplier-offer-sale-price-alignment-design.md#3-后端响应与兼容契约。
      * 设计见 {@code docs/superpowers/specs/2026-10-03-supplier-offer-publication-admin-design.md#67-listoffers-投影扩展m1-沿用--i-b}。
      */
@@ -565,7 +585,7 @@ public class SupplierCooperativeProductService {
             @Schema(description = "动态商品类型编码") String productType,
             @Schema(description = "商品分类封闭枚举名") String productClassification,
             @Schema(description = "L1 B端结算单价，CNY分，允许0") Long suggestPriceCents,
-            @Schema(description = "建议零售价/销售建议价，单位为分") Long suggestedSalePriceCents,
+            @Schema(description = "当前有效销售建议价，单位CNY分；供应价规则待计算或失败时为空", nullable = true) Long suggestedSalePriceCents,
             @Schema(description = "供应价模式（字典supply_chain_offer_price_mode）：FIXED固定值，REALTIME实时更新，DISCOUNT按供货折扣") String priceMode,
             @Schema(description = "草稿供应价，CNY分；REALTIME为空") Long unitPriceCents,
             @Schema(description = "折扣基点，10000=100%") Integer discountBp,
@@ -580,6 +600,49 @@ public class SupplierCooperativeProductService {
             @Schema(description = "Offer 聚合乐观锁版本号，上架须回传作为 expectedOfferVersion") Long offerVersion,
             @Schema(description = "履约发布投影：NOT_CONFIGURED未发布版本，STALE待发布变更，READY已发布且无待发布变更") String fulfillmentStatus,
             @Schema(description = "是否可上架/发布变更") Boolean canPublish,
-            @Schema(description = "不可上架/发布变更时的中文原因提示，可发布时为空") String publishBlockedReason) {
+            @Schema(description = "不可上架/发布变更时的中文原因提示，可发布时为空") String publishBlockedReason,
+            @JsonIgnore @Schema(hidden = true) Resolution suggestedPriceResolution) {
+
+        @JsonProperty(value = "suggestedSalePriceStatus", access = JsonProperty.Access.READ_ONLY)
+        @Schema(description = "当前销售建议价状态：READY可用、DEPENDENCY_MISSING待计算、CALCULATION_FAILED计算失败")
+        public String suggestedSalePriceStatus() {
+            return suggestedPriceResolution == null ? null : suggestedPriceResolution.status().name();
+        }
+
+        @JsonProperty(value = "suggestedSalePriceUnavailableReason", access = JsonProperty.Access.READ_ONLY)
+        @Schema(description = "当前销售建议价不可用原因编码；READY时为空")
+        public String suggestedSalePriceUnavailableReason() {
+            return suggestedPriceResolution == null ? null : suggestedPriceResolution.unavailableReason();
+        }
+
+        @JsonProperty(value = "lastValidSuggestedSalePrice", access = JsonProperty.Access.READ_ONLY)
+        @Schema(description = "最近一次成功计算的销售建议价，仅供历史参考，单位CNY分")
+        public Long lastValidSuggestedSalePrice() {
+            return suggestedPriceResolution == null ? null : suggestedPriceResolution.lastValidPriceCents();
+        }
+
+        @JsonProperty(value = "lastValidSuggestedSalePriceCalculatedAt", access = JsonProperty.Access.READ_ONLY)
+        @Schema(description = "最近一次成功计算销售建议价的数据库时间，毫秒时间戳，仅供历史参考", type = "integer", format = "int64")
+        public LocalDateTime lastValidSuggestedSalePriceCalculatedAt() {
+            return suggestedPriceResolution == null ? null : suggestedPriceResolution.lastValidCalculatedAt();
+        }
+    }
+
+    /**
+     * 同页动态规则共用数据库时刻并批量解析；非动态规则保持原金额来源，动态规则绝不回退兼容列。
+     * 设计见 docs/superpowers/specs/2026-10-19-suggested-sale-price-supply-base-design.md#4-数据模型与唯一取值入口。
+     */
+    private java.util.Map<Long, Resolution> resolveSuggestedPrices(java.util.Collection<PlatformSkuDO> skus,
+                                                                  LocalDateTime now) {
+        var dynamic = skus.stream().filter(SuggestedSalePriceResolver::isDynamic).toList();
+        var resolved = dynamic.isEmpty() ? java.util.Map.<Long, Resolution>of()
+                : suggestedSalePriceResolver.resolve(dynamic, now);
+        java.util.Map<Long, Resolution> prices = new java.util.HashMap<>(resolved);
+        for (PlatformSkuDO sku : skus) {
+            if (!SuggestedSalePriceResolver.isDynamic(sku)) {
+                prices.put(sku.getId(), SuggestedSalePriceResolver.evaluate(sku, null, null, now));
+            }
+        }
+        return prices;
     }
 }

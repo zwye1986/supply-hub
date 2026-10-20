@@ -62,6 +62,18 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class ProductCenterContractTest {
 
     @Test
+    void dynamicSuggestedPriceStatusAndHistoryHaveExplicitOpenApiProperties() {
+        for (Class<?> type : List.of(SkuDetail.class, ProductCatalogQueryService.ProductManagementSkuItem.class)) {
+            var schemas = ModelConverters.getInstance().read(type);
+            var schema = schemas.get(type.getSimpleName());
+            assertThat(schema.getProperties()).containsKeys("suggestedSalePrice", "suggestedSalePriceStatus",
+                    "suggestedSalePriceUnavailableReason", "lastValidSuggestedSalePrice",
+                    "lastValidSuggestedSalePriceCalculatedAt", "supplyPrice");
+            assertThat(schema.getProperties()).doesNotContainKey("suggestedPriceResolution");
+        }
+    }
+
+    @Test
     void batchSyncModeAndGroupsAreExplicitInHttpContract() {
         assertThat(Arrays.stream(ProductAdminController.ProductBatchStatusReqVO.class.getDeclaredFields()).map(f -> f.getName()))
                 .contains("syncSkuOnShelf");
@@ -374,7 +386,7 @@ class ProductCenterContractTest {
                 "描述", "DIRECT_RECHARGE",
                 10_000L, 9_700L, 10_500L, null, false, null, 1L, 10L,
                 true, "DAY", 1L, false, true, "DAY", 1L, 1000L,
-                "DIRECT_RECHARGE_TARGET", 1, "DIRECT_RECHARGE_RESULT", 1, (short) 0, false);
+                "DIRECT_RECHARGE_TARGET", 1, "DIRECT_RECHARGE_RESULT", 1, (short) 0, false, null, null);
 
         JsonNode json = new ObjectMapper().valueToTree(sku);
 
@@ -395,7 +407,7 @@ class ProductCenterContractTest {
         SkuDetail sku = new SkuDetail("SKU_1", "规格", null, null, "描述", "DIRECT_RECHARGE",
                 10_000L, 9_700L, 10_500L, null, false, null, 1L, 10L,
                 true, "DAY", 1L, false, true, "DAY", 1L, 0L,
-                "DIRECT_RECHARGE_TARGET", 1, "DIRECT_RECHARGE_RESULT", 1, (short) 0, false);
+                "DIRECT_RECHARGE_TARGET", 1, "DIRECT_RECHARGE_RESULT", 1, (short) 0, false, null, null);
         JsonNode skuJson = mapper.valueToTree(sku);
         assertThat(skuJson.get("status").isTextual()).isTrue();
         assertThat(skuJson.get("status").asText()).isEqualTo("0");
@@ -408,7 +420,7 @@ class ProductCenterContractTest {
 
         var managementSku = new ProductCatalogQueryService.ProductManagementSkuItem(
                 "SKU_1", "规格", 9_700L, 10_500L, null, null, null, false, null, null, null,
-                List.of(), 0L, "DIRECT_RECHARGE", "虚拟直充", (short) 20);
+                List.of(), 0L, "DIRECT_RECHARGE", "虚拟直充", (short) 20, null);
         JsonNode managementSkuJson = mapper.valueToTree(managementSku);
         assertThat(managementSkuJson.get("status").isTextual()).isTrue();
         assertThat(managementSkuJson.get("status").asText()).isEqualTo("20");
@@ -890,9 +902,10 @@ class ProductCenterContractTest {
         assertThat(schema).as("未生成 OpenAPI schema %s", recordType.getSimpleName()).isNotNull();
         Map<String, io.swagger.v3.oas.models.media.Schema> properties = schema.getProperties();
         String[] componentNames = Arrays.stream(recordType.getRecordComponents())
+                .filter(component -> !component.getAccessor().isAnnotationPresent(com.fasterxml.jackson.annotation.JsonIgnore.class))
                 .map(component -> component.getName())
                 .toArray(String[]::new);
-        // 允许额外序列化前端别名（如 SkuDetail.picUrl），但 record 组件本身必须全部出现在 OpenAPI 中。
+        // 允许前端别名；显式@JsonIgnore内部投影不属于HTTP契约，其余record组件须出现在OpenAPI中。
         assertThat(properties.keySet()).contains(componentNames);
         properties.forEach((name, property) -> {
             String description = property.getDescription();

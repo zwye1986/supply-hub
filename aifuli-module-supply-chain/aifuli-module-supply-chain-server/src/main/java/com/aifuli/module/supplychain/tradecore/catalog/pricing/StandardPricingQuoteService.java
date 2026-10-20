@@ -74,7 +74,7 @@ public class StandardPricingQuoteService {
      * 已有同键报价（无论 ISSUED 或 CONSUMED、无论历史 expiresAt 是否过期）在不变量一致时
      * 直接重放首次冻结结果，不重新定价、不更换 token。</p>
      */
-    @Transactional(transactionManager = TX, rollbackFor = Exception.class)
+    @Transactional(transactionManager = TX, rollbackFor = Exception.class, isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public StandardPricingQuoteRespDTO quote(StandardPricingQuoteReqDTO request) {
         LocalDateTime now = clock.now();
         BuyerResolver.BuyerSnapshot buyer = buyerResolver.resolve(request.getSourceSystem(),
@@ -132,7 +132,7 @@ public class StandardPricingQuoteService {
      * 已有报价只复用首次金额/token，但每个新尝试仍核验当前项目选品；来源两列为空，不解析外部租户。
      * 设计见 docs/superpowers/specs/2026-10-03-standard-project-direct-order-price-freeze-design.md#2-http-编排与两段事务、#3-定价身份与当前准入。
      */
-    @Transactional(transactionManager = TX, rollbackFor = Exception.class, propagation = Propagation.REQUIRES_NEW)
+    @Transactional(transactionManager = TX, rollbackFor = Exception.class, propagation = Propagation.REQUIRES_NEW, isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public FrozenQuote freezeForProject(ProjectQuoteKeyContext context) {
         Objects.requireNonNull(context, "project quote key context is required");
         log.info("项目直接下单首次价格冻结 projectId={} buyerId={} platformSkuId={} buyerOrderNo={} quantity={}",

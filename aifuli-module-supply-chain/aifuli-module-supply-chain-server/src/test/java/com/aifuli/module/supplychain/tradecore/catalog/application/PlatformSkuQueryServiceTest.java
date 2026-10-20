@@ -79,6 +79,33 @@ class PlatformSkuQueryServiceTest {
     }
 
     @Test
+    void supplyBasedSuggestedPriceNeverProjectsCompatibilityAmountWhenSupplyIsMissing() {
+        PlatformSpuDO spu = PlatformSpuDO.builder().id(8L).spuCode("SPU")
+                .status(CatalogEntityStatus.ACTIVE.getCode()).build();
+        PlatformSkuDO sku = PlatformSkuDO.builder().id(11L).spuId(8L).skuCode("SKU")
+                .marketPrice(12_000L).suggestedSalePrice(17_000L)
+                .suggestedSalePriceRuleJson(new com.aifuli.module.supplychain.tradecore.catalog.domain.SuggestedSalePriceRule(
+                        com.aifuli.module.supplychain.tradecore.catalog.domain.SuggestedSalePriceRule.Mode.CUSTOM,
+                        com.aifuli.module.supplychain.tradecore.catalog.domain.SuggestedSalePriceRule.Base.SUPPLY_PRICE,
+                        new java.math.BigDecimal("100"),
+                        com.aifuli.module.supplychain.tradecore.catalog.domain.SuggestedSalePriceRule.Operator.ADD,
+                        java.math.BigDecimal.ZERO, null, 99_999L))
+                .status(CatalogEntityStatus.ACTIVE.getCode()).build();
+        when(spuMapper.selectList(any())).thenReturn(List.of(spu));
+        when(skuMapper.selectPage(any(PageParam.class), ArgumentMatchers.any()))
+                .thenReturn(new PageResult<>(List.of(sku), 1L));
+
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "suggestedSalePriceResolver",
+                new com.aifuli.module.supplychain.tradecore.catalog.pricing.SuggestedSalePriceResolver(
+                        SupplierEligibilityTestFixture.create(supplierMapper, offerMapper, offerVersionMapper, skuMapper, spuMapper),
+                        mock(com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.SkuSuggestedPriceStateMapper.class)));
+        var row = service.page(new PlatformSkuQueryService.SkuPageQuery(
+                null, null, null, null, null, null, null, 1, 20)).getList().getFirst();
+
+        assertThat(row.marketPriceCents()).isNull();
+    }
+
+    @Test
     void filtersByKeywordAndProjectsSuggestedSalePriceInsteadOfFaceOrMarketPrice() {
         PlatformSpuDO spu = PlatformSpuDO.builder()
                 .id(8L).spuCode("MOVIE_TICKET").spuName("电影票")

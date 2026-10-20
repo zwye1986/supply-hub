@@ -91,6 +91,8 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
 @Slf4j
 @Service
 public class ProductCatalogCommandService {
+    @jakarta.annotation.Resource
+    private com.aifuli.module.supplychain.tradecore.catalog.pricing.SuggestedSalePriceResolver suggestedPriceResolver;
 
     private final SupplyChainDatabaseClock databaseClock;
     private final ApplicationEventPublisher eventPublisher;
@@ -339,17 +341,17 @@ public class ProductCatalogCommandService {
         categoryCommandService.changeStatus(code, target, operatorId);
     }
 
-    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
+    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class, isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public void changeSpuStatus(String code, CatalogEntityStatus target, Long operatorId) {
         applySpuStatus(code, target, UnshelveMode.MANUAL_UNSHELVE.getCode(), operatorId);
     }
 
-    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
+    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class, isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public void changeSpuStatus(String code, CatalogEntityStatus target, String unshelveMode, Long operatorId) {
         applySpuStatus(code, target, unshelveMode, operatorId);
     }
 
-    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
+    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class, isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public void changeSkuStatus(String code, CatalogEntityStatus target, Long operatorId) {
         applySkuStatus(code, target, operatorId);
     }
@@ -505,6 +507,7 @@ public class ProductCatalogCommandService {
             sku.setUpdatedAt(timestamp);
             requireUpdated(skuMapper.updateById(sku));
         }
+        refreshPriceDependencies(members.stream().map(PlatformSkuDO::getId).toList());
     }
 
     private record ShelfMember(Long id, String skuCode) { }
@@ -599,6 +602,7 @@ public class ProductCatalogCommandService {
     }
 
     private void applySpuStatus(String code, CatalogEntityStatus target, String unshelveMode, Long operatorId) {
+        com.aifuli.module.supplychain.tradecore.supply.application.SupplierLifecycleTransactions.requireReadCommitted();
         log.info("变更平台 SPU 状态 spuCode={} targetStatus={} unshelveMode={} operatorId={}", code, target, unshelveMode, operatorId);
         PlatformSpuDO entity = requireSpuForUpdate(code);
         checkTransition(entity.getStatus(), target, entity.getSpuCode(), entity.getSpuName());
@@ -614,10 +618,13 @@ public class ProductCatalogCommandService {
         entity.setUpdatedBy(operatorId);
         entity.setUpdatedAt(now());
         requireUpdated(spuMapper.updateById(entity));
+        refreshPriceDependencies(skuMapper.selectList(new LambdaQueryWrapper<PlatformSkuDO>()
+                .eq(PlatformSkuDO::getSpuId, entity.getId())).stream().map(PlatformSkuDO::getId).toList());
     }
 
     /** SKU 状态迁移，事务边界约束同 {@link #applySpuStatus}。 */
     private void applySkuStatus(String code, CatalogEntityStatus target, Long operatorId) {
+        com.aifuli.module.supplychain.tradecore.supply.application.SupplierLifecycleTransactions.requireReadCommitted();
         log.info("变更平台 SKU 状态 skuCode={} targetStatus={} operatorId={}", code, target, operatorId);
         // 归档改变同步成员范围，必须先锁父行，再锁子行，防止与整商品同步上架死锁。
         // 设计见 docs/superpowers/specs/2026-10-11-platform-product-batch-shelf-sync-design.md#4-分组事务与并发。
@@ -641,6 +648,7 @@ public class ProductCatalogCommandService {
         entity.setUpdatedBy(operatorId);
         entity.setUpdatedAt(now());
         requireUpdated(skuMapper.updateById(entity));
+        refreshPriceDependencies(List.of(entity.getId()));
     }
 
     /**
@@ -734,6 +742,7 @@ public class ProductCatalogCommandService {
             throw exception(PRODUCT_SKU_REQUIRED);
         }
         PlatformSpuDO spu = requireSpuForUpdate(spuCode);
+        boolean spuStatusChanged = command.status() != null && command.status() != spu.getStatus();
         CatalogEntityStatus spuStatus = writableStatus(command.status(), CatalogEntityStatus.fromCode(spu.getStatus()));
         BrandDO brand = resolveBrand(command.brandId(), command.brandCode(), spuStatus == CatalogEntityStatus.ACTIVE);
         ProductCategoryDO primary = requireCategoryById(command.primaryCategoryId(), spuStatus == CatalogEntityStatus.ACTIVE);
@@ -820,15 +829,20 @@ public class ProductCatalogCommandService {
                 defaultPricingInitializationSkuCodes.add(code);
                 defaultPricingInitializationSkuIds.add(inserted.getId());
             } else {
+                Short previousSkuStatus = sku.getStatus();
                 Long previousMarketPrice = sku.getMarketPrice();
                 Long previousSuggestedSalePrice = sku.getSuggestedSalePrice();
+                SuggestedSalePriceRule previousSuggestedRule = sku.getSuggestedSalePriceRuleJson();
                 applySku(sku, inheritedLine, skuStatus, schema, command.operatorId(), now);
                 requireUpdated(skuMapper.updateById(sku));
                 PlatformSkuPricingDO pricing = platformSkuPricingMapper.selectById(sku.getId());
                 if (pricing == null || pricing.getCurrentVersionId() == null) {
                     defaultPricingInitializationSkuCodes.add(code);
                     defaultPricingInitializationSkuIds.add(sku.getId());
-                } else if (!java.util.Objects.equals(previousMarketPrice, sku.getMarketPrice())
+                } else if (spuStatusChanged || !java.util.Objects.equals(previousSkuStatus, sku.getStatus())
+                        || (sku.getSuggestedSalePriceRuleJson() != null && sku.getSuggestedSalePriceRuleJson().usesSupplyPrice())
+                        || (previousSuggestedRule != null && previousSuggestedRule.usesSupplyPrice())
+                        || !java.util.Objects.equals(previousMarketPrice, sku.getMarketPrice())
                         || !java.util.Objects.equals(previousSuggestedSalePrice, sku.getSuggestedSalePrice())) {
                     priceDependencyChangedSkuIds.add(sku.getId());
                 }
@@ -841,15 +855,18 @@ public class ProductCatalogCommandService {
                     sku.setUpdatedBy(command.operatorId());
                     sku.setUpdatedAt(now);
                     requireUpdated(skuMapper.updateById(sku));
+                    priceDependencyChangedSkuIds.add(sku.getId());
                 }
             }
+            if (spuStatusChanged) priceDependencyChangedSkuIds.add(sku.getId());
         }
+        priceDependencyChangedSkuIds.removeAll(defaultPricingInitializationSkuIds);
         // 初始化与重算的合并目标先统一锁定，避免高ID初始化后低ID重算与供给批次形成锁环。
         // 设计见docs/superpowers/specs/2026-10-11-supplier-offer-lifecycle-design.md#34-闭环四同步重算的锁顺序与并发事务规范。
         List<Long> allPricingSkuIds = new ArrayList<>(priceDependencyChangedSkuIds);
         allPricingSkuIds.addAll(defaultPricingInitializationSkuIds);
-        com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuPricingBatchLock.lockByIds(
-                platformSkuPricingMapper, allPricingSkuIds);
+        com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuPricingBatchLock.lockOrCreateByIds(
+                platformSkuPricingMapper, allPricingSkuIds, now);
         // 复合保存把尚未发布平台定价的 SKU 初始化为系统默认规则；已有版本只在基础价变化时按原规则重算。
         // 两个集合互斥，确保一个 SKU 在单次保存中最多生成一个平台定价版本。
         // 设计见 docs/superpowers/specs/2026-09-15-generic-batch-pricing-design.md#5-版本继承与可售状态。
@@ -885,15 +902,26 @@ public class ProductCatalogCommandService {
      * 导致行锁、4 表引用校验与归档写入分处不同事务。
      * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#416-spu-逻辑删除-deletesupply-chainproductsspusspucode}。
      */
-    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
+    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class, isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public void deleteSpu(String spuCode, Long operatorId) {
         applySpuStatus(spuCode, CatalogEntityStatus.ARCHIVED, operatorId);
     }
 
     /** SKU 逻辑删除（归档），事务边界约束同 {@link #deleteSpu}。 */
-    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
+    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class, isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public void deleteSku(String skuCode, Long operatorId) {
         applySkuStatus(skuCode, CatalogEntityStatus.ARCHIVED, operatorId);
+    }
+
+    /**
+     * 平台启停影响供给资格，须收齐全批根后才逐个同步刷新，不能持某个子层锁再锁后续根。
+     * 设计见 docs/superpowers/specs/2026-10-19-suggested-sale-price-supply-base-design.md#61-主动变化。
+     */
+    private void refreshPriceDependencies(java.util.Collection<Long> ids) {
+        var targets = ids.stream().filter(java.util.Objects::nonNull).distinct().sorted().toList();
+        com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSkuPricingBatchLock.lockOrCreateByIds(
+                platformSkuPricingMapper, targets, now());
+        targets.forEach(id -> eventPublisher.publishEvent(new PricingDependencyChangedEvent(id)));
     }
 
     private PlatformSkuDO insertSku(PlatformSpuDO spu, String skuCode, SaveSkuLine line,
@@ -1196,10 +1224,16 @@ public class ProductCatalogCommandService {
      * 管理端原样回传未变化市场价与建议价时保留存量规则，避免编辑其它字段把已保存规则重置或降级。
      * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#4112-sku-销售建议价规则写入收口}。
      */
-    private static SuggestedSalePriceCalculator.Calculation resolveSuggestedSalePrice(
+    private SuggestedSalePriceCalculator.Calculation resolveSuggestedSalePrice(
             SaveSkuLine line, long marketPrice, PlatformSkuDO existing) {
         SuggestedSalePriceRule requestedRule = line.suggestedSalePriceRule();
         if (requestedRule == null) {
+            if (existing != null && existing.getSuggestedSalePriceRuleJson() != null
+                    && existing.getSuggestedSalePriceRuleJson().usesSupplyPrice() && line.suggestedSalePrice() != null) {
+                // 旧页面金额不是改成FIXED的意图证明，避免并发供给变化被旧金额静默覆盖。
+                // 设计见 docs/superpowers/specs/2026-10-19-suggested-sale-price-supply-base-design.md#7-前端与接口。
+                throw exception(PRODUCT_SUGGESTED_PRICE_RULE_INVALID);
+            }
             if (line.suggestedSalePrice() != null) {
                 // 未升级的管理端会在编辑其它字段时原样回传金额。市场价与建议价都未变化时保留已保存规则，
                 // 避免一次无关编辑把 CUSTOM/EQUAL_MARKET_PRICE 静默降级成 FIXED。
@@ -1215,10 +1249,23 @@ public class ProductCatalogCommandService {
                 requestedRule = SuggestedSalePriceRule.fixed(DEFAULT_PRICE_FEN);
             }
         }
-        SuggestedSalePriceCalculator.Calculation calculation = calculateSuggestedSalePrice(
-                requestedRule, marketPrice, existing == null ? null : existing.getSuggestedSalePrice());
+        // 公式先校验并保存；供应价的有效金额由根锁内独立状态提供，兼容列不能写NULL或客户端旧金额。
+        // 设计见 docs/superpowers/specs/2026-10-19-suggested-sale-price-supply-base-design.md#41-独立建议价计算状态。
+        if (requestedRule.usesSupplyPrice()) {
+            if (line.suggestedSalePrice() != null) throw exception(PRODUCT_SUGGESTED_PRICE_RULE_INVALID);
+            var normalized = calculateSuggestedSalePrice(requestedRule, marketPrice, null).normalizedRule();
+            return new SuggestedSalePriceCalculator.Calculation(existing == null ? DEFAULT_PRICE_FEN
+                    : defaultLong(existing.getSuggestedSalePrice(), DEFAULT_PRICE_FEN), normalized);
+        }
+        Long previousPrice = existing == null ? null : existing.getSuggestedSalePrice();
+        if (existing != null && existing.getSuggestedSalePriceRuleJson() != null
+                && existing.getSuggestedSalePriceRuleJson().usesSupplyPrice()
+                && requestedRule.base() == SuggestedSalePriceRule.Base.SUGGESTED_SALE_PRICE) {
+            previousPrice = suggestedPriceResolver.resolve(existing, now()).amountCents();
+        }
+        SuggestedSalePriceCalculator.Calculation calculation = calculateSuggestedSalePrice(requestedRule, marketPrice, previousPrice);
         if (line.suggestedSalePrice() != null
-                && line.suggestedSalePrice() != calculation.suggestedSalePriceCents()) {
+                && !line.suggestedSalePrice().equals(calculation.suggestedSalePriceCents())) {
             throw exception(PRODUCT_SUGGESTED_PRICE_RULE_INVALID);
         }
         return calculation;

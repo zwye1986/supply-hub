@@ -63,6 +63,61 @@ import static org.mockito.Mockito.when;
  */
 class ProductCatalogCommandServiceTest {
 
+    @Test
+    void supplyBasedRuleCanSaveWithoutSupplyAndDoesNotNullCompatibilityColumn() {
+        givenUpdateWithOneOmittedSku();
+        SuggestedSalePriceRule rule = new SuggestedSalePriceRule(SuggestedSalePriceRule.Mode.CUSTOM,
+                SuggestedSalePriceRule.Base.SUPPLY_PRICE, new BigDecimal("110"),
+                SuggestedSalePriceRule.Operator.ADD, BigDecimal.ONE, null, 99999L);
+        var line = new ProductCatalogCommandService.SaveSkuLine("SKU_KEEP", "保留SKU",
+                FulfillmentType.CARD_CODE_SECRET.code(), 100L, 10000L, null, rule,
+                1L, 10L, CatalogEntityStatus.ACTIVE.getCode());
+        service.updateProduct(SPU_CODE, saveCommand(line));
+        var captor = ArgumentCaptor.forClass(PlatformSkuDO.class);
+        verify(skuMapper, atLeastOnce()).updateById(captor.capture());
+        assertThat(captor.getAllValues()).filteredOn(row -> row.getSkuCode().equals("SKU_KEEP"))
+                .allSatisfy(row -> {
+                    assertThat(row.getSuggestedSalePrice()).as("兼容非空列不能写成NULL").isNotNull();
+                    assertThat(row.getSuggestedSalePriceRuleJson().basePriceSnapshotCents()).isNull();
+                });
+        verify(eventPublisher).publishEvent(new PricingDependencyChangedEvent(10L));
+    }
+
+    @Test
+    void platformSpuStatusChangeRefreshesAllChildPriceDependenciesInOrder() {
+        var parent = PlatformSpuDO.builder().id(1L).spuCode(SPU_CODE).spuName("商品")
+                .status(CatalogEntityStatus.ACTIVE.getCode()).build();
+        when(spuMapper.selectByCodeForUpdate(SPU_CODE)).thenReturn(parent);
+        when(spuMapper.updateById(parent)).thenReturn(1);
+        when(skuMapper.selectList(any(com.baomidou.mybatisplus.core.conditions.Wrapper.class))).thenReturn(List.of(
+                PlatformSkuDO.builder().id(9L).build(), PlatformSkuDO.builder().id(4L).build()));
+        service.changeSpuStatus(SPU_CODE, CatalogEntityStatus.INACTIVE, 1L);
+        var order = org.mockito.Mockito.inOrder(platformSkuPricingMapper, eventPublisher);
+        order.verify(platformSkuPricingMapper).selectBySkuIdForUpdate(4L);
+        order.verify(platformSkuPricingMapper).selectBySkuIdForUpdate(9L);
+        order.verify(eventPublisher).publishEvent(new PricingDependencyChangedEvent(4L));
+        order.verify(eventPublisher).publishEvent(new PricingDependencyChangedEvent(9L));
+    }
+
+    @Test
+    void amountOnlyOldClientCannotReplaceExistingSupplyFormula() {
+        givenUpdateWithOneOmittedSku();
+        var rule = new SuggestedSalePriceRule(SuggestedSalePriceRule.Mode.CUSTOM,
+                SuggestedSalePriceRule.Base.SUPPLY_PRICE, new BigDecimal("110"),
+                SuggestedSalePriceRule.Operator.ADD, BigDecimal.ONE, null, null);
+        var sku = PlatformSkuDO.builder().id(10L).spuId(1L).skuCode("SKU_KEEP")
+                .fulfillmentType(FulfillmentType.CARD_CODE_SECRET.code()).marketPrice(10000L)
+                .suggestedSalePrice(0L).suggestedSalePriceRuleJson(rule).status(CatalogEntityStatus.ACTIVE.getCode()).build();
+        when(skuMapper.selectList(any())).thenReturn(List.of(sku));
+        var oldLine = new ProductCatalogCommandService.SaveSkuLine("SKU_KEEP", "改名称",
+                FulfillmentType.CARD_CODE_SECRET.code(),100L,10000L,8900L,1L,10L,CatalogEntityStatus.ACTIVE.getCode());
+        assertThatThrownBy(() -> service.updateProduct(SPU_CODE,saveCommand(oldLine)))
+                .isInstanceOf(com.aifuli.framework.common.exception.ServiceException.class)
+                .extracting(error -> ((com.aifuli.framework.common.exception.ServiceException)error).getCode())
+                .isEqualTo(com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_SUGGESTED_PRICE_RULE_INVALID.getCode());
+        verify(skuMapper,never()).updateById(sku);
+    }
+
     private static final String SPU_CODE = "SPU_1";
 
     private final SupplyChainDatabaseClock clock = mock(SupplyChainDatabaseClock.class);
@@ -202,7 +257,8 @@ class ProductCatalogCommandServiceTest {
                     assertThat(sku.getSuggestedSalePrice()).isEqualTo(5_100L);
                     assertThat(sku.getSuggestedSalePriceRuleJson()).isEqualTo(customRule);
                 });
-        verify(eventPublisher, never()).publishEvent(new PricingDependencyChangedEvent(10L));
+        // 金额与规则保留，但SKU从启用转为草稿会改变供给资格，仍须重算。
+        verify(eventPublisher).publishEvent(new PricingDependencyChangedEvent(10L));
     }
 
     /** 历史未定价 SKU 在复合更新时补发系统默认定价初始化，价格变化也不得再触发第二次依赖重算。 */

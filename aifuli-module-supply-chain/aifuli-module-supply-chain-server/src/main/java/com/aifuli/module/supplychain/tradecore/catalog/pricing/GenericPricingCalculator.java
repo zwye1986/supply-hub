@@ -185,8 +185,14 @@ public final class GenericPricingCalculator {
                                 ServiceFeeRule serviceFeeRule, HideRule hideRule,
                                 TaxMetadata taxMetadata) { }
 
-    public record PriceDependencies(long marketPriceCents, long suggestedSalePriceCents,
-                                    Long supplyPriceCents) { }
+    /** 待计算建议价为NULL，禁止将缺失金额解释成0。设计见2026-10-19建议价设计§4.2。 */
+    public record PriceDependencies(long marketPriceCents, Long suggestedSalePriceCents,
+                                    Long supplyPriceCents) {
+        /** 保留旧调用方的数值字面量构造契约。 */
+        public PriceDependencies(long marketPriceCents, int suggestedSalePriceCents, Long supplyPriceCents) {
+            this(marketPriceCents, Long.valueOf(suggestedSalePriceCents), supplyPriceCents);
+        }
+    }
 
     public record PricingResult(Long distributionPriceCents, Long salesPriceCents,
                                 BigDecimal distributionMarginPercent,

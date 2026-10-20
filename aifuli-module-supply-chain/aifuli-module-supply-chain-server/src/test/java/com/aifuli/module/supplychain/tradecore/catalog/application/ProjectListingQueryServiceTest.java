@@ -58,6 +58,49 @@ import static org.mockito.Mockito.when;
  * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#72-项目商品}。
  */
 class ProjectListingQueryServiceTest {
+    @Test
+    void dynamicSuggestedPricesAreResolvedOnceForWholePage() {
+        var projects = mock(BuyerProjectMapper.class);
+        var listings = mock(ProjectListingMapper.class);
+        var products = mock(BuyerProductMapper.class);
+        var skus = mock(PlatformSkuMapper.class);
+        var resolver = mock(com.aifuli.module.supplychain.tradecore.catalog.pricing.SuggestedSalePriceResolver.class);
+        var clock = mock(com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock.class);
+        var now = java.time.LocalDateTime.of(2026, 10, 19, 12, 0);
+        when(clock.now()).thenReturn(now);
+        when(projects.selectByProjectCode("PRJ_1")).thenReturn(BuyerProjectDO.builder().id(1L).build());
+        when(listings.selectPage(any(PageParam.class), any())).thenReturn(new PageResult<>(List.of(
+                ProjectListingDO.builder().id(2L).buyerProductId(3L).build(),
+                ProjectListingDO.builder().id(4L).buyerProductId(5L).build()), 2L));
+        when(products.selectById(3L)).thenReturn(BuyerProductDO.builder().id(3L).platformSkuId(6L).build());
+        when(products.selectById(5L)).thenReturn(BuyerProductDO.builder().id(5L).platformSkuId(7L).build());
+        var first = PlatformSkuDO.builder().id(6L).spuId(8L).suggestedSalePrice(99999L).marketPrice(10000L)
+                .suggestedSalePriceRuleJson(ProductCatalogQueryServiceTest.supplyRule()).build();
+        var second = PlatformSkuDO.builder().id(7L).spuId(8L).suggestedSalePrice(99999L).marketPrice(10000L)
+                .suggestedSalePriceRuleJson(ProductCatalogQueryServiceTest.supplyRule()).build();
+        when(skus.selectById(6L)).thenReturn(first);
+        when(skus.selectById(7L)).thenReturn(second);
+        when(resolver.resolve(any(java.util.Collection.class), org.mockito.ArgumentMatchers.eq(now)))
+                .thenReturn(java.util.Map.of(6L,
+                        com.aifuli.module.supplychain.tradecore.catalog.pricing.SuggestedSalePriceResolver.evaluate(first, null, null, now),
+                        7L, com.aifuli.module.supplychain.tradecore.catalog.pricing.SuggestedSalePriceResolver.evaluate(second, 0L, null, now)));
+        var service = new ProjectListingQueryService(projects, mock(BuyerMapper.class), listings,
+                mock(ProjectListingVersionMapper.class), mock(ProjectSkuPricingMapper.class), mock(ProjectSkuPricingVersionMapper.class),
+                products, skus, mock(PlatformSpuMapper.class), mock(ProductTypeMapper.class), mock(ProductCategoryMapper.class),
+                mock(ProjectListingPriceSource.class), new ObjectMapper());
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "suggestedSalePriceResolver", resolver);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "databaseClock", clock);
+
+        var page = service.page("PRJ_1", 1, 20);
+
+        assertThat(page.getList().getFirst().suggestedSalePriceCents()).isNull();
+        assertThat(page.getList().getFirst().suggestedSalePriceStatus()).isEqualTo("DEPENDENCY_MISSING");
+        assertThat(page.getList().getLast().suggestedSalePriceCents()).isEqualTo(100L);
+        verify(resolver, times(1)).resolve(org.mockito.ArgumentMatchers.argThat((java.util.Collection<PlatformSkuDO> batch)
+                -> batch.size() == 2), org.mockito.ArgumentMatchers.eq(now));
+        verify(clock, times(1)).now();
+    }
+
     /** 名称取项目关联分销商，不按组织等级或旧 L1/L2 编码改成其他主体；多行共享一次名称读取。 */
     @ParameterizedTest
     @ValueSource(shorts = {1, 2, 3})

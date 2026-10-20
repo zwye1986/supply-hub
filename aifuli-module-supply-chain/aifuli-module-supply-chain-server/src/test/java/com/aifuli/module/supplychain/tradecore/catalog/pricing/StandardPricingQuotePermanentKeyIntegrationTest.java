@@ -295,6 +295,9 @@ class StandardPricingQuotePermanentKeyIntegrationTest {
             return mock(BuyerResolver.class);
         }
 
+        @Bean SuggestedSalePriceResolver suggestedSalePriceResolver() { return mock(SuggestedSalePriceResolver.class); }
+        @Bean SuggestedSalePriceCoordinator suggestedSalePriceCoordinator() { return mock(SuggestedSalePriceCoordinator.class); }
+
         @Bean
         GenericBatchPricingService genericBatchPricingService() {
             return mock(GenericBatchPricingService.class);

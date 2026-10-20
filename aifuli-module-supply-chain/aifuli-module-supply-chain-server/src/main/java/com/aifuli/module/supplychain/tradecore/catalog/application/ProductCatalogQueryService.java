@@ -1,5 +1,11 @@
 package com.aifuli.module.supplychain.tradecore.catalog.application;
 
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.SuggestedSalePriceResolver;
+import com.aifuli.module.supplychain.tradecore.catalog.pricing.SuggestedSalePriceResolver.Resolution;
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import jakarta.annotation.Resource;
+
 import com.aifuli.framework.common.pojo.PageParam;
 import com.aifuli.framework.common.pojo.PageResult;
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierOfferEligibilityService;
@@ -34,7 +40,6 @@ import com.aifuli.module.supplychain.tradecore.supply.domain.OfferStatus;
 import com.aifuli.module.supplychain.tradecore.supply.domain.SupplierStatus;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.annotation.JsonFormat;
-import com.fasterxml.jackson.annotation.JsonProperty;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -71,6 +76,9 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
 @Service
 @RequiredArgsConstructor
 public class ProductCatalogQueryService {
+
+    @Resource
+    private SuggestedSalePriceResolver suggestedSalePriceResolver;
 
     private final PlatformSpuMapper spuMapper;
     private final PlatformSkuMapper skuMapper;
@@ -123,11 +131,16 @@ public class ProductCatalogQueryService {
         BrandDO brand = brandMapper.selectById(spu.getBrandId());
         ProductCategoryDO category = spu.getPrimaryCategoryId() == null ? null
                 : categoryMapper.selectById(spu.getPrimaryCategoryId());
-        List<SkuDetail> skus = skus(List.of(spu.getId()), null).stream()
+        List<PlatformSkuDO> detailSkus = skus(List.of(spu.getId()), null);
+        LocalDateTime now = databaseClock.now();
+        Map<Long, Long> supplyPrices = eligibilityService.resolveMinimumSupplyPrices(
+                detailSkus.stream().map(PlatformSkuDO::getId).toList(), now);
+        Map<Long, Resolution> suggestedPrices = resolveSuggestedPrices(detailSkus, now);
+        List<SkuDetail> skus = detailSkus.stream()
                 .map(sku -> new SkuDetail(sku.getSkuCode(), sku.getSkuName(), sku.getMainImageUrl(),
                         sku.getDetailImageUrls(), sku.getDescription(), sku.getFulfillmentType(),
-                        sku.getFaceValue(), sku.getMarketPrice(), sku.getSuggestedSalePrice(),
-                        toSuggestedSalePriceRuleView(sku.getSuggestedSalePriceRuleJson()),
+                        sku.getFaceValue(), sku.getMarketPrice(), suggestedPrices.get(sku.getId()).amountCents(),
+                        toSuggestedSalePriceRuleView(suggestedPrices.get(sku.getId()).normalizedRule()),
                         sku.getTaxIncluded(), sku.getTaxRate(), sku.getMinQuantity(),
                         sku.getMaxQuantity(), sku.getUserLimitEnabled(), sku.getUserLimitPeriod(),
                         sku.getUserLimitQuantity(), sku.getOrderLimitEnabled(),
@@ -136,7 +149,7 @@ public class ProductCatalogQueryService {
                         sku.getSkuInventory(),
                         sku.getTargetSchemaCode(), sku.getTargetSchemaVersion(),
                         sku.getResultSchemaCode(), sku.getResultSchemaVersion(), sku.getStatus(),
-                        sellabilityService.isSellable(sku, spu)))
+                        sellabilityService.isSellable(sku, spu), supplyPrices.get(sku.getId()), suggestedPrices.get(sku.getId())))
                 .toList();
         SkuDetail firstSku = skus.isEmpty() ? null : skus.getFirst();
         return new SpuDetail(spu.getSpuCode(), spu.getCodeScopeNo(), spu.getSpuName(), spu.getSubtitle(), spu.getBrandId(),
@@ -165,15 +178,16 @@ public class ProductCatalogQueryService {
         if (spus.isEmpty()) {
             return List.of();
         }
-        Map<Long, List<PlatformSkuDO>> skusBySpuId = skus(spus.stream().map(PlatformSpuDO::getId).toList(),
-                fulfillmentType).stream().collect(Collectors.groupingBy(PlatformSkuDO::getSpuId));
+        List<PlatformSkuDO> allSkus = skus(spus.stream().map(PlatformSpuDO::getId).toList(), fulfillmentType);
+        Map<Long, List<PlatformSkuDO>> skusBySpuId = allSkus.stream().collect(Collectors.groupingBy(PlatformSkuDO::getSpuId));
+        Map<Long, Resolution> suggestedPrices = resolveSuggestedPrices(allSkus, databaseClock.now());
         Map<Long, String> brandNames = brandNames(spus.stream().map(PlatformSpuDO::getBrandId).toList());
         Map<Long, String> categoryNames = categoryNames(spus.stream()
                 .map(PlatformSpuDO::getPrimaryCategoryId).toList());
         return spus.stream().map(spu -> {
             List<PlatformSkuDO> skus = skusBySpuId.getOrDefault(spu.getId(), List.of());
             List<Long> prices = skus.stream().filter(sku -> sellabilityService.isSellable(sku, spu))
-                    .map(PlatformSkuDO::getSuggestedSalePrice).filter(Objects::nonNull)
+                    .map(sku -> suggestedPrices.get(sku.getId()).amountCents()).filter(Objects::nonNull)
                     .sorted(Comparator.naturalOrder()).toList();
             String brandName = spu.getBrandId() == null ? null : brandNames.get(spu.getBrandId());
             String categoryName = spu.getPrimaryCategoryId() == null ? null : categoryNames.get(spu.getPrimaryCategoryId());
@@ -389,7 +403,7 @@ public class ProductCatalogQueryService {
             @Schema(description = "履约方式封闭枚举名") String fulfillmentType,
             @Schema(description = "商品标准面值，单位CNY分") Long faceValue,
             @Schema(description = "市场划线价或吊牌价，单位CNY分") Long marketPrice,
-            @Schema(description = "建议零售价或销售建议价，单位CNY分") Long suggestedSalePrice,
+            @Schema(description = "当前有效销售建议价，单位CNY分；供应价规则待计算或失败时为空", nullable = true) Long suggestedSalePrice,
             @Schema(description = "SKU销售建议价生成规则", allOf = SuggestedSalePriceRuleView.class)
             SuggestedSalePriceRuleView suggestedSalePriceRule,
             @Schema(description = "是否含税：1含税，0不含税；仅记录展示，不参与价格计算；标准商品结算以分销商/项目通用定价为准") Boolean taxIncluded,
@@ -410,7 +424,34 @@ public class ProductCatalogQueryService {
             @Schema(description = "履约结果Schema版本") Integer resultSchemaVersion,
             @JsonFormat(shape = JsonFormat.Shape.STRING)
             @Schema(description = "SKU管理状态：0草稿，10启用，20停用；字典值以字符串返回", type = "string") Short status,
-            @Schema(description = "SPU与SKU均启用时为true") boolean effectiveSellable) {
+            @Schema(description = "SPU与SKU均启用时为true") boolean effectiveSellable,
+            @Schema(description = "当前最低有效供货价，单位CNY分；没有有效供给时为空，0是有效价格") Long supplyPrice,
+            @JsonIgnore @Schema(hidden = true) Resolution suggestedPriceResolution) {
+
+        @JsonProperty(value = "suggestedSalePriceStatus", access = JsonProperty.Access.READ_ONLY)
+        @Schema(description = "当前销售建议价状态：READY可用、DEPENDENCY_MISSING待计算、CALCULATION_FAILED计算失败")
+        public String suggestedSalePriceStatus() {
+            return suggestedPriceResolution == null ? null : suggestedPriceResolution.status().name();
+        }
+
+        @JsonProperty(value = "suggestedSalePriceUnavailableReason", access = JsonProperty.Access.READ_ONLY)
+        @Schema(description = "当前销售建议价不可用原因编码；READY时为空")
+        public String suggestedSalePriceUnavailableReason() {
+            return suggestedPriceResolution == null ? null : suggestedPriceResolution.unavailableReason();
+        }
+
+        @JsonProperty(value = "lastValidSuggestedSalePrice", access = JsonProperty.Access.READ_ONLY)
+        @Schema(description = "最近一次成功计算的销售建议价，仅供历史参考，单位CNY分")
+        public Long lastValidSuggestedSalePrice() {
+            return suggestedPriceResolution == null ? null : suggestedPriceResolution.lastValidPriceCents();
+        }
+
+        @JsonProperty(value = "lastValidSuggestedSalePriceCalculatedAt", access = JsonProperty.Access.READ_ONLY)
+        @Schema(description = "最近一次成功计算销售建议价的数据库时间，毫秒时间戳，仅供历史参考", type = "integer", format = "int64")
+        public LocalDateTime lastValidSuggestedSalePriceCalculatedAt() {
+            return suggestedPriceResolution == null ? null : suggestedPriceResolution.lastValidCalculatedAt();
+        }
+
         /**
          * 管理端表单用 picUrl 绑定 SKU 主图；必须与 mainImageUrl 同值回写，否则编辑保存会清空已入库图片。
          * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线}（d35）。
@@ -437,6 +478,7 @@ public class ProductCatalogQueryService {
      * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#419-管理端商品列表聚合查询get-supply-chainproductsmanagement-page}（d39、d40、d42）。
      */
     public PageResult<ProductManagementSpuItem> managementPage(ProductManagementPageQuery query) {
+        LocalDateTime now = databaseClock.now();
         TabFilter tab = resolveTab(query.tabCode());
         List<String> productTypes = normalizeProductTypes(query.productType());
         if (productTypes.isEmpty() && hasText(tab.productType())) {
@@ -518,7 +560,7 @@ public class ProductCatalogQueryService {
             }
 
             if (query.supplyPriceMin() != null || query.supplyPriceMax() != null) {
-                liveOffers = offersInsideEffectiveSupplyRange(liveOffers, query.supplyPriceMin(), query.supplyPriceMax());
+                liveOffers = offersInsideEffectiveSupplyRange(liveOffers, query.supplyPriceMin(), query.supplyPriceMax(), now);
                 if (liveOffers.isEmpty()) {
                     return new PageResult<>(List.of(), 0L);
                 }
@@ -630,7 +672,9 @@ public class ProductCatalogQueryService {
         }
 
         // 5. 组装结果
-        Map<Long, Long> minimumPrices = eligibilityService.resolveMinimumSupplyPrices(skuIds, databaseClock.now());
+        Map<Long, Long> minimumPrices = eligibilityService.resolveMinimumSupplyPrices(skuIds, now);
+        Map<Long, Resolution> suggestedPrices = resolveSuggestedPrices(
+                spuSkuMap.values().stream().flatMap(List::stream).toList(), now);
         List<ProductManagementSpuItem> items = new ArrayList<>(spus.size());
         for (PlatformSpuDO spu : spus) {
             List<PlatformSkuDO> spuSkus = spuSkuMap.getOrDefault(spu.getId(), List.of());
@@ -681,8 +725,8 @@ public class ProductCatalogQueryService {
                         sku.getSkuCode(),
                         sku.getSkuName(),
                         sku.getMarketPrice(),
-                        sku.getSuggestedSalePrice(),
-                        toSuggestedSalePriceRuleView(sku.getSuggestedSalePriceRuleJson()),
+                        suggestedPrices.get(sku.getId()).amountCents(),
+                        toSuggestedSalePriceRuleView(suggestedPrices.get(sku.getId()).normalizedRule()),
                         minSupplyPrice,
                         supplyPriceExclusive,
                         taxIncluded,
@@ -693,7 +737,7 @@ public class ProductCatalogQueryService {
                         sku.getSkuInventory() == null ? 0L : sku.getSkuInventory(),
                         sku.getFulfillmentType(),
                         fulfillmentDisplay,
-                        sku.getStatus()
+                        sku.getStatus(), suggestedPrices.get(sku.getId())
                 ));
             }
             if (skuItems.isEmpty()) {
@@ -864,10 +908,10 @@ public class ProductCatalogQueryService {
      * 设计见 {@code docs/superpowers/specs/2026-09-22-effective-supply-price-identity-fallback-design.md}。
      */
     private List<SupplierOfferDO> offersInsideEffectiveSupplyRange(List<SupplierOfferDO> offers,
-                                                                   Long supplyPriceMin, Long supplyPriceMax) {
+                                                                   Long supplyPriceMin, Long supplyPriceMax, LocalDateTime now) {
         List<Long> skuIds = offers.stream().map(SupplierOfferDO::getPlatformSkuId)
                 .filter(Objects::nonNull).distinct().toList();
-        Map<Long, Long> minimumPrices = eligibilityService.resolveMinimumSupplyPrices(skuIds, databaseClock.now());
+        Map<Long, Long> minimumPrices = eligibilityService.resolveMinimumSupplyPrices(skuIds, now);
         List<SupplierOfferDO> matched = new ArrayList<>();
         for (SupplierOfferDO offer : offers) {
             Long price = minimumPrices.get(offer.getPlatformSkuId());
@@ -925,11 +969,11 @@ public class ProductCatalogQueryService {
             @Schema(description = "平台SKU永久业务编码") String skuCode,
             @Schema(description = "SKU规格名称") String skuName,
             @Schema(description = "市场划线价或吊牌价，单位CNY分") Long marketPrice,
-            @Schema(description = "建议零售价或销售建议价，单位CNY分") Long suggestedSalePrice,
+            @Schema(description = "当前有效销售建议价，单位CNY分；供应价规则待计算或失败时为空", nullable = true) Long suggestedSalePrice,
             @Schema(description = "SKU销售建议价生成规则", allOf = SuggestedSalePriceRuleView.class)
             SuggestedSalePriceRuleView suggestedSalePriceRule,
             @Schema(description = "当前最低有效供货价，单位CNY分。供应商须启用，Offer须已发布；"
-                    + "当前版本有效则用版本单价，否则回退身份列，多条取最低；没有有效报价为空，0是有效价格")
+                    + "仅取结构有效且满足一期数量1的当前已发布版本冻结单价，多条取最低；没有有效报价为空，0是有效价格")
             Long supplyPrice,
             @Schema(description = "不含税供货价，单位CNY分") Long supplyPriceExclusive,
             @Schema(description = "是否含税：1含税，0不含税；仅记录展示，不参与价格计算；标准商品结算以分销商/项目通用定价为准") Boolean taxIncluded,
@@ -941,7 +985,32 @@ public class ProductCatalogQueryService {
             @Schema(description = "履约方式封闭枚举名") String fulfillmentType,
             @Schema(description = "履约方式中文展示名称") String fulfillmentTypeDisplay,
             @JsonFormat(shape = JsonFormat.Shape.STRING)
-            @Schema(description = "SKU管理状态：0草稿，10启用，20停用；字典值以字符串返回", type = "string") Short status) {
+            @Schema(description = "SKU管理状态：0草稿，10启用，20停用；字典值以字符串返回", type = "string") Short status,
+            @JsonIgnore @Schema(hidden = true) Resolution suggestedPriceResolution) {
+
+        @JsonProperty(value = "suggestedSalePriceStatus", access = JsonProperty.Access.READ_ONLY)
+        @Schema(description = "当前销售建议价状态：READY可用、DEPENDENCY_MISSING待计算、CALCULATION_FAILED计算失败")
+        public String suggestedSalePriceStatus() {
+            return suggestedPriceResolution == null ? null : suggestedPriceResolution.status().name();
+        }
+
+        @JsonProperty(value = "suggestedSalePriceUnavailableReason", access = JsonProperty.Access.READ_ONLY)
+        @Schema(description = "当前销售建议价不可用原因编码；READY时为空")
+        public String suggestedSalePriceUnavailableReason() {
+            return suggestedPriceResolution == null ? null : suggestedPriceResolution.unavailableReason();
+        }
+
+        @JsonProperty(value = "lastValidSuggestedSalePrice", access = JsonProperty.Access.READ_ONLY)
+        @Schema(description = "最近一次成功计算的销售建议价，仅供历史参考，单位CNY分")
+        public Long lastValidSuggestedSalePrice() {
+            return suggestedPriceResolution == null ? null : suggestedPriceResolution.lastValidPriceCents();
+        }
+
+        @JsonProperty(value = "lastValidSuggestedSalePriceCalculatedAt", access = JsonProperty.Access.READ_ONLY)
+        @Schema(description = "最近一次成功计算销售建议价的数据库时间，毫秒时间戳，仅供历史参考", type = "integer", format = "int64")
+        public LocalDateTime lastValidSuggestedSalePriceCalculatedAt() {
+            return suggestedPriceResolution == null ? null : suggestedPriceResolution.lastValidCalculatedAt();
+        }
         /**
          * 管理端编辑表单与详情使用 skuInventory；列表既有列仍读 totalInventory。
          * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#1-核心决策与设计基线}（d38）。
@@ -957,12 +1026,12 @@ public class ProductCatalogQueryService {
     @Schema(description = "SKU销售建议价生成规则")
     public record SuggestedSalePriceRuleView(
             @Schema(description = "建议价模式（字典supply_chain_suggested_sale_price_mode）：EQUAL_MARKET_PRICE、CUSTOM、FIXED") String mode,
-            @Schema(description = "CUSTOM基数（新选项字典supply_chain_suggested_sale_price_base）：MARKET_PRICE市场价；SUGGESTED_SALE_PRICE修改前销售建议价仅保留历史兼容") String base,
+            @Schema(description = "CUSTOM基数（新选项字典supply_chain_suggested_sale_price_base）：MARKET_PRICE市场价、SUPPLY_PRICE供应价；SUGGESTED_SALE_PRICE修改前销售建议价仅保留历史兼容") String base,
             @Schema(description = "CUSTOM百分比") BigDecimal percentage,
             @Schema(description = "CUSTOM运算符（字典supply_chain_suggested_sale_price_operator）：ADD加、SUBTRACT减、MULTIPLY乘、DIVIDE除") String operator,
             @Schema(description = "CUSTOM运算数；加减单位元，乘除为系数") BigDecimal operand,
             @Schema(description = "FIXED固定建议价，单位CNY分") Long fixedPriceCents,
-            @Schema(description = "以修改前建议价为基数时的服务端快照，单位CNY分") Long basePriceSnapshotCents) {
+            @Schema(description = "服务端基数快照：供应价规则取当前有效供货价，历史建议价规则取保存时修改前建议价，单位CNY分") Long basePriceSnapshotCents) {
     }
 
     private static SuggestedSalePriceRuleView toSuggestedSalePriceRuleView(SuggestedSalePriceRule rule) {
@@ -992,5 +1061,23 @@ public class ProductCatalogQueryService {
             @Schema(description = "下架方式中文名称") String unshelveModeDisplay,
             @Schema(description = "SPU最后更新时间，Asia/Shanghai") LocalDateTime updatedAt,
             @Schema(description = "该SPU挂载的全部未归档SKU明细列表") List<ProductManagementSkuItem> skus) {
+    }
+
+    /**
+     * 同页动态规则共用数据库时刻并批量解析；非动态规则保持原金额来源，动态规则绝不回退兼容列。
+     * 设计见 docs/superpowers/specs/2026-10-19-suggested-sale-price-supply-base-design.md#4-数据模型与唯一取值入口。
+     */
+    private java.util.Map<Long, Resolution> resolveSuggestedPrices(java.util.Collection<PlatformSkuDO> skus,
+                                                                  LocalDateTime now) {
+        var dynamic = skus.stream().filter(SuggestedSalePriceResolver::isDynamic).toList();
+        var resolved = dynamic.isEmpty() ? java.util.Map.<Long, Resolution>of()
+                : suggestedSalePriceResolver.resolve(dynamic, now);
+        java.util.Map<Long, Resolution> prices = new java.util.HashMap<>(resolved);
+        for (PlatformSkuDO sku : skus) {
+            if (!SuggestedSalePriceResolver.isDynamic(sku)) {
+                prices.put(sku.getId(), SuggestedSalePriceResolver.evaluate(sku, null, null, now));
+            }
+        }
+        return prices;
     }
 }
