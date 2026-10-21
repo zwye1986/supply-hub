@@ -2,16 +2,22 @@ package com.aifuli.module.supplychain.tradecore.supply.application;
 
 import com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.MerchantCallLeaseDO;
+import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.MerchantQuotaAuditDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.dataobject.MerchantQuotaDO;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.MerchantCallLeaseMapper;
+import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.MerchantQuotaAuditMapper;
 import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.MerchantQuotaMapper;
 import com.aifuli.module.supplychain.tradecore.supply.domain.MerchantQuotaPlatform;
 import com.aifuli.module.supplychain.tradecore.supply.domain.MerchantQuotaPolicy;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.*;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import java.time.LocalDateTime;
 
 /**
@@ -19,12 +25,13 @@ import java.time.LocalDateTime;
  * 准入必须加入原单事务，配置与释放独立短事务；同额度根行锁串行化跨实例竞争。
  * 设计：docs/superpowers/specs/2026-10-18-single-step-merchant-quota-design.md#6-准入算法与事务。
  */
-@Service @RequiredArgsConstructor
+@Service @RequiredArgsConstructor @Slf4j
 public class MerchantQuotaService {
     private static final String TX = "supplyChainTransactionManager";
     private static final int CLEANUP_BATCH = 256;
     private final MerchantQuotaMapper quotas;
     private final MerchantCallLeaseMapper leases;
+    private final MerchantQuotaAuditMapper audits;
     private final SupplyChainDatabaseClock clock;
 
     public record Configure(MerchantQuotaPlatform platform,
@@ -44,9 +51,19 @@ public class MerchantQuotaService {
     public static final class MissingConfiguration extends RuntimeException {
         public MissingConfiguration() { super("商户共享额度未配置"); }
     }
+    /** 管理端可明确映射的并发拒绝；不能把其它数据库故障混为业务冲突。 */
+    public static final class VersionConflict extends IllegalStateException {
+        public VersionConflict() { super("商户额度版本冲突"); }
+        public VersionConflict(Throwable cause) { super("商户额度版本冲突", cause); }
+    }
 
-    /** null版本只允许创建；调额不重置窗口/租约，不改变任何原单冻结内容。 */
-    @Transactional(transactionManager = TX, propagation = Propagation.REQUIRES_NEW, rollbackFor = Exception.class)
+    /**
+     * null版本只允许创建；调额不重置窗口/租约，不改变任何原单冻结内容。
+     * 配置与追加审计同事务；READ_COMMITTED避免首次创建空行间隙锁升级死锁，由唯一键裁决竞争。
+     * 设计：docs/superpowers/specs/2026-10-19-merchant-quota-admin-design.md#2-配置与审计原子性。
+     */
+    @Transactional(transactionManager = TX, propagation = Propagation.REQUIRES_NEW,
+            isolation = Isolation.READ_COMMITTED, rollbackFor = Exception.class)
     public Configuration configure(Configure command) {
         if (command == null) throw new IllegalArgumentException("缺少商户额度配置");
         identity(command.platform(), command.merchantAccount());
@@ -54,24 +71,38 @@ public class MerchantQuotaService {
                 || command.reason() == null || command.reason().isBlank() || command.reason().length() > 255
                 || command.expectedVersion() != null && command.expectedVersion() < 0) throw new IllegalArgumentException("商户额度配置无效");
         var row = quotas.lock(command.platform().name(), command.merchantAccount());
+        Integer beforeRate = row == null ? null : row.getRateLimitPerSecond();
+        Integer beforeConcurrency = row == null ? null : row.getConcurrencyLimit();
         var now = clock.now();
         if (row == null) {
-            if (command.expectedVersion() != null) throw new IllegalStateException("商户额度版本冲突");
+            if (command.expectedVersion() != null) throw new VersionConflict();
             row = MerchantQuotaDO.builder().platformCode(command.platform().name()).merchantAccount(command.merchantAccount())
                     .rateLimitPerSecond(command.rateLimitPerSecond()).concurrencyLimit(command.concurrencyLimit()).version(0L)
                     .createdBy(command.operatorId()).createdAt(now).updatedBy(command.operatorId()).updatedAt(now).changeReason(command.reason()).build();
-            quotas.insert(row); // 并发首次创建由唯一键拒绝，不以旧版本覆盖新配置。
+            try { quotas.insert(row); }
+            catch (DuplicateKeyException conflict) { throw new VersionConflict(conflict); }
         } else {
-            if (!row.getVersion().equals(command.expectedVersion())) throw new IllegalStateException("商户额度版本冲突");
+            if (!row.getVersion().equals(command.expectedVersion())) throw new VersionConflict();
             long version = row.getVersion();
             if (quotas.update(null, new LambdaUpdateWrapper<MerchantQuotaDO>().eq(MerchantQuotaDO::getId, row.getId())
                     .eq(MerchantQuotaDO::getVersion, version).set(MerchantQuotaDO::getVersion, version + 1)
                     .set(MerchantQuotaDO::getRateLimitPerSecond, command.rateLimitPerSecond()).set(MerchantQuotaDO::getConcurrencyLimit, command.concurrencyLimit())
                     .set(MerchantQuotaDO::getUpdatedBy, command.operatorId()).set(MerchantQuotaDO::getUpdatedAt, now).set(MerchantQuotaDO::getChangeReason, command.reason())) != 1) {
-                throw new IllegalStateException("商户额度版本冲突");
+                throw new VersionConflict();
             }
             row.setVersion(version + 1); row.setRateLimitPerSecond(command.rateLimitPerSecond()); row.setConcurrencyLimit(command.concurrencyLimit());
         }
+        var result = new Configuration(row.getId(), row.getVersion(), row.getRateLimitPerSecond(), row.getConcurrencyLimit());
+        if (audits.insert(MerchantQuotaAuditDO.builder().quotaId(row.getId()).beforeRateLimitPerSecond(beforeRate)
+                .afterRateLimitPerSecond(row.getRateLimitPerSecond()).beforeConcurrencyLimit(beforeConcurrency)
+                .afterConcurrencyLimit(row.getConcurrencyLimit()).quotaVersion(row.getVersion()).operatorId(command.operatorId())
+                .reason(command.reason()).occurredAt(now).build()) != 1) throw new IllegalStateException("商户额度审计未写入");
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override public void afterCommit() {
+                log.info("[merchantQuotaConfigure][商户额度配置已提交] quotaId={}, version={}, operatorId={}, beforeRate={}, afterRate={}, beforeConcurrency={}, afterConcurrency={}",
+                        result.id(), result.version(), command.operatorId(), beforeRate, result.rateLimitPerSecond(), beforeConcurrency, result.concurrencyLimit());
+            }
+        });
         return new Configuration(row.getId(), row.getVersion(), row.getRateLimitPerSecond(), row.getConcurrencyLimit());
     }
 

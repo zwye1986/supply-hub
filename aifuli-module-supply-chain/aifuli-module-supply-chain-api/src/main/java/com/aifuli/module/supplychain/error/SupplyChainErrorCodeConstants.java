@@ -293,7 +293,15 @@ public interface SupplyChainErrorCodeConstants {
     /** 当日永久预留容量不足；次日或容量问题处理后使用原幂等键重试。 */
     ErrorCode ORDER_NO_CAPACITY_EXHAUSTED = error(1_050_001_181, "当日订单编号可预留容量不足");
 
+    /** 商户额度管理拒绝；不将审计数据库故障误报为版本冲突。 */
+    ErrorCode MERCHANT_QUOTA_NOT_FOUND = error(1_050_001_185, "商户额度不存在");
+    ErrorCode MERCHANT_QUOTA_VERSION_CONFLICT = error(1_050_001_183, "商户额度已存在或版本已变化，请刷新后重新确认");
+    ErrorCode MERCHANT_QUOTA_PARAMETER_INVALID = error(1_050_001_184, "商户额度管理参数不正确");
+
     Map<Integer, RetryDirective> RETRY_DIRECTIVES = Map.ofEntries(
+            entry(MERCHANT_QUOTA_NOT_FOUND, RetryDirective.DO_NOT_RETRY),
+            entry(MERCHANT_QUOTA_VERSION_CONFLICT, RetryDirective.DO_NOT_RETRY),
+            entry(MERCHANT_QUOTA_PARAMETER_INVALID, RetryDirective.DO_NOT_RETRY),
             entry(BUYER_CATALOG_CODE_CONFLICT, RetryDirective.DO_NOT_RETRY),
             entry(BUYER_CATALOG_AUTO_MANAGED, RetryDirective.DO_NOT_RETRY),
             entry(BUYER_CATALOG_NOT_READY, RetryDirective.RETRY_SAME_KEY_AFTER_CONDITION_CHANGE),

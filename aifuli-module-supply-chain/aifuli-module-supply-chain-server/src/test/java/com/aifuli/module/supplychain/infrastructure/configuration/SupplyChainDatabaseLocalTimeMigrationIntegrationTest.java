@@ -81,9 +81,9 @@ class SupplyChainDatabaseLocalTimeMigrationIntegrationTest {
         // 046业务编码域2表、047项目应用凭证审计1表、048限频3表、049迁移覆盖门禁1表后，
         // 054 AD-3 凭据集/凭据项 2 表；053/055/056/057/058/059/060 仅加列/键不增表；
         // 061账本2表、063能力审计1表、065号段2表、066异常命令1表；067/068不增表。
-        // 069新增商户额度/租约/容量等待3表，相对021增加30张（全量132张），主清单71个changeSet。
-        assertThat(businessTableCount(jdbc)).isEqualTo(businessTableCountBefore + 30);
-        assertThat(changeSetCount(jdbc)).isEqualTo(71L);
+        // 070新增额度审计，相对021增加31张（全量133张），主清单72个changeSet。
+        assertThat(businessTableCount(jdbc)).isEqualTo(businessTableCountBefore + 31);
+        assertThat(changeSetCount(jdbc)).isEqualTo(72L);
         assertThat(jdbc.queryForObject("""
                 SELECT COUNT(*) FROM DATABASECHANGELOG WHERE ID = '022-database-local-time'
                 """, Long.class)).isEqualTo(1L);
@@ -94,7 +94,7 @@ class SupplyChainDatabaseLocalTimeMigrationIntegrationTest {
         // + 049迁移取得及核验时间2列 = 291；054凭据集/项各2列 created_at/updated_at（Asia/Shanghai）+4，
         // 053/055/056/057/058/059 不加 datetime 列；060 valid_until 1列、061账本4列，
         // 062追加lease/deadline/send 3列、063审计1列时共304列；065再加3列、066加4列，共311列。
-        // 068只修时区注释；069追加8列时间，总计319列，不对存量时间再次增加八小时。
+        // 068只修时区注释；069追加8列、070审计追加1列，总计320列，不重复偏移存量时间。
         assertThat(jdbc.queryForObject("""
                 SELECT COUNT(*)
                 FROM information_schema.COLUMNS
@@ -103,11 +103,11 @@ class SupplyChainDatabaseLocalTimeMigrationIntegrationTest {
                   AND DATA_TYPE = 'datetime'
                   AND DATETIME_PRECISION = 3
                   AND COLUMN_COMMENT LIKE '%Asia/Shanghai%'
-                """, Long.class)).isEqualTo(319L);
+                """, Long.class)).isEqualTo(320L);
 
         updateRemaining(dataSource);
 
-        assertThat(changeSetCount(jdbc)).isEqualTo(71L);
+        assertThat(changeSetCount(jdbc)).isEqualTo(72L);
         assertThat(brandCreatedAt(jdbc)).isEqualTo(SHANGHAI_WALL_TIME);
     }
 

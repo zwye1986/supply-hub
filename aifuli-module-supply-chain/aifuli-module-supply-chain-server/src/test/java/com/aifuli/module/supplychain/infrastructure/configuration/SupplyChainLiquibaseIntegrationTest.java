@@ -191,10 +191,10 @@ class SupplyChainLiquibaseIntegrationTest {
                 .containsExactly("app_id", "nonce");
         // 065/066/067分别新增号段、异常命令证据、独立结算方；不把文件末号当作变更集总数。
         // 基线核对见 docs/superpowers/specs/2026-10-15-renyue-qnm-szcard-detailed-design.md#104-t00基线收口修订2026-10-16。
-        // 069追加商户额度/调用租约/容量等待三表；不修改历史变更集，累计71个。
+        // 070追加商户额度审计表；不修改历史变更集，累计72个。
         // 设计：docs/superpowers/specs/2026-10-18-single-step-merchant-quota-design.md#5-数据结构与归属。
-        assertThat(firstStartup.changeSetCount()).isEqualTo(71L);
-        assertThat(firstStartup.tableNames()).contains("sc_supplier_merchant_quota", "sc_supplier_merchant_call_lease", "sc_single_step_capacity_wait");
+        assertThat(firstStartup.changeSetCount()).isEqualTo(72L);
+        assertThat(firstStartup.tableNames()).contains("sc_supplier_merchant_quota", "sc_supplier_merchant_call_lease", "sc_single_step_capacity_wait", "sc_supplier_merchant_quota_audit");
         assertThat(firstStartup.uniqueIndexes())
                 .contains("sc_instore_payment_flow.uk_sc_instore_flow_order",
                         "sc_instore_channel_user_binding.uk_sc_instore_user_binding_project",
@@ -278,15 +278,15 @@ class SupplyChainLiquibaseIntegrationTest {
                         FROM information_schema.COLUMNS
                         WHERE TABLE_SCHEMA = DATABASE()
                           AND TABLE_NAME LIKE 'sc\\_%'
-                        """)).isEqualTo(132L);
-                // 069额度2列、租约3列、等待3列时间，累计319个DATETIME(3)。
+                        """)).isEqualTo(133L);
+                // 070额度审计再追加1列时间，累计320个DATETIME(3)。
                 assertThat(queryLong(connection, """
                         SELECT COUNT(*)
                         FROM information_schema.COLUMNS
                         WHERE TABLE_SCHEMA = DATABASE()
                           AND TABLE_NAME LIKE 'sc\\_%'
                           AND DATA_TYPE = 'datetime'
-                        """)).isEqualTo(319L);
+                        """)).isEqualTo(320L);
                 assertThat(queryLong(connection, """
                         SELECT COUNT(*)
                         FROM information_schema.COLUMNS

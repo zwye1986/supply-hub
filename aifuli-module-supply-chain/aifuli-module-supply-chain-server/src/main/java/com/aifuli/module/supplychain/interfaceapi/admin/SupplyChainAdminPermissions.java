@@ -13,6 +13,14 @@ public final class SupplyChainAdminPermissions {
 
     public static final String ADMIN = "supply-chain:admin";
 
+    /** 商户共享额度独立权限，不随供应商档案写权限隐式开放。 */
+    public static final String MERCHANT_QUOTA_QUERY = "supply-chain:merchant-quota:query";
+    public static final String MERCHANT_QUOTA_CREATE = "supply-chain:merchant-quota:create";
+    public static final String MERCHANT_QUOTA_UPDATE = "supply-chain:merchant-quota:update";
+    public static final String MERCHANT_QUOTA_QUERY_EXPRESSION = "@ss.hasAnyPermissions('" + ADMIN + "', '" + MERCHANT_QUOTA_QUERY + "')";
+    public static final String MERCHANT_QUOTA_CREATE_EXPRESSION = "@ss.hasAnyPermissions('" + ADMIN + "', '" + MERCHANT_QUOTA_CREATE + "')";
+    public static final String MERCHANT_QUOTA_UPDATE_EXPRESSION = "@ss.hasAnyPermissions('" + ADMIN + "', '" + MERCHANT_QUOTA_UPDATE + "')";
+
     public static final String SUPPLIER_QUERY = "supply-chain:supplier:query";
     public static final String SUPPLIER_CREATE = "supply-chain:supplier:create";
     public static final String SUPPLIER_UPDATE = "supply-chain:supplier:update";

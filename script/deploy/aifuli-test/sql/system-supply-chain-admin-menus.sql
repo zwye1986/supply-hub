@@ -435,3 +435,41 @@ WHERE @sc_order_page_id IS NOT NULL AND NOT EXISTS (
     WHERE BINARY existing.application_code = BINARY @sc_app
       AND BINARY existing.permission = BINARY buttons.permission AND existing.deleted = b'0'
 );
+
+-- 商户共享额度独立管理；仅写system菜单定义，不授予角色、不初始化供应链生产额度。
+-- 设计：docs/superpowers/specs/2026-10-19-merchant-quota-admin-design.md#4-页面与部署
+INSERT INTO system_menu
+    (application_code, name, permission, type, sort, parent_id, path, icon, component, component_name,
+     status, visible, keep_alive, always_show, creator, create_time, updater, update_time, deleted)
+SELECT @sc_app, '商户共享额度', 'supply-chain:merchant-quota:query', 2, 8, @sc_root_id, 'merchant-quota',
+       'ep:odometer', 'supplier/merchant-quota/index', 'MerchantQuota',
+       0, b'1', b'1', b'1', @sc_creator, NOW(), @sc_creator, NOW(), b'0'
+WHERE @sc_root_id IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM system_menu
+    WHERE BINARY application_code = BINARY @sc_app
+      AND parent_id = @sc_root_id AND BINARY path = BINARY 'merchant-quota' AND deleted = b'0'
+);
+SET @sc_merchant_quota_page_id = (
+    SELECT MIN(id) FROM system_menu
+    WHERE BINARY application_code = BINARY @sc_app
+      AND parent_id = @sc_root_id AND BINARY path = BINARY 'merchant-quota' AND deleted = b'0'
+);
+UPDATE system_menu
+SET name = '商户共享额度', permission = 'supply-chain:merchant-quota:query', type = 2, sort = 8,
+    component = 'supplier/merchant-quota/index', component_name = 'MerchantQuota',
+    updater = @sc_creator, update_time = NOW()
+WHERE id = @sc_merchant_quota_page_id;
+INSERT INTO system_menu
+    (application_code, name, permission, type, sort, parent_id, path, icon, component, component_name,
+     status, visible, keep_alive, always_show, creator, create_time, updater, update_time, deleted)
+SELECT @sc_app, buttons.name, buttons.permission, 3, buttons.sort, @sc_merchant_quota_page_id, '', '', '', NULL,
+       0, b'1', b'0', b'0', @sc_creator, NOW(), @sc_creator, NOW(), b'0'
+FROM (
+    SELECT '新增商户额度' AS name, 'supply-chain:merchant-quota:create' AS permission, 1 AS sort
+    UNION ALL SELECT '调整商户额度', 'supply-chain:merchant-quota:update', 2
+) buttons
+WHERE @sc_merchant_quota_page_id IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM system_menu existing
+    WHERE BINARY existing.application_code = BINARY @sc_app AND existing.parent_id = @sc_merchant_quota_page_id
+      AND BINARY existing.permission = BINARY buttons.permission AND existing.deleted = b'0'
+);
