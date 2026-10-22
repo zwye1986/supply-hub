@@ -24,6 +24,12 @@ import static org.mockito.Mockito.when;
  * 与 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#33-商品分类树管理无限级同级防重与层级重算}。
  */
 class CategoryQueryServiceTest {
+    static {
+        com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(
+                new org.apache.ibatis.builder.MapperBuilderAssistant(new org.apache.ibatis.session.Configuration(), ""),
+                com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSpuDO.class);
+    }
+
 
     private final ProductCategoryMapper categoryMapper = mock(ProductCategoryMapper.class);
     private final PlatformSpuMapper spuMapper = mock(PlatformSpuMapper.class);
@@ -258,6 +264,35 @@ class CategoryQueryServiceTest {
         assertThat(service.resolveCategoryNamesByIds(List.of(3L, 4L)))
                 .containsEntry(3L, "权益商品")
                 .doesNotContainKey(4L);
+    }
+
+    @Test
+    void subtreeCountsIncludeOwnAndAllDescendantsBeforeFilteringAndDeduplicateOneCategory() {
+        stubCategories(
+                category(1L, null, (short) 1, CategoryVisibility.VISIBLE, "CAT_004", "父分类"),
+                category(2L, 1L, (short) 2, CategoryVisibility.VISIBLE, "CAT_016_001", "命中"),
+                category(3L, 1L, (short) 2, CategoryVisibility.VISIBLE, CatalogEntityStatus.INACTIVE, "CAT_016_004", "停用分支"),
+                category(4L, 3L, (short) 3, CategoryVisibility.VISIBLE, "CAT_016_005", "孙分类"));
+        when(spuMapper.selectList(any())).thenReturn(List.of(
+                spu(1L, List.of(1L, 1L), CatalogEntityStatus.DRAFT),
+                spu(2L, List.of(2L, 2L), CatalogEntityStatus.ACTIVE),
+                spu(3L, List.of(), CatalogEntityStatus.INACTIVE),
+                spu(4L, List.of(), CatalogEntityStatus.ACTIVE),
+                spu(4L, List.of(), CatalogEntityStatus.ARCHIVED)));
+
+        var root = service.managementTree().getFirst();
+        assertThat(root.productCount()).isEqualTo(4);
+        assertThat(root.children()).extracting(CategoryQueryService.ManagementCategoryNode::productCount)
+                .containsExactly(1L, 2L);
+        var filtered = service.managementTree("命中", CatalogEntityStatus.ACTIVE.getCode()).getFirst();
+        assertThat(filtered.productCount()).isEqualTo(4);
+        assertThat(filtered.children()).hasSize(1);
+    }
+
+    private static com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSpuDO spu(
+            Long primaryId, List<Long> secondaryIds, CatalogEntityStatus status) {
+        return com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSpuDO.builder()
+                .primaryCategoryId(primaryId).secondaryCategoryIds(secondaryIds).status(status.getCode()).build();
     }
 
     private void assertCategoryNotFound(String categoryCode) {
