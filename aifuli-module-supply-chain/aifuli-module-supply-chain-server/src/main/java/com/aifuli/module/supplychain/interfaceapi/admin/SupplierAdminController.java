@@ -302,6 +302,7 @@ public class SupplierAdminController {
     @Operation(summary = "批量新增合作商品",
             description = "body.items 优先，兼容 lines。新增默认 SUSPENDED，正式上架需另行发布。供货上限为空则继承供货配置；"
                     + "最低起购量为空固定取1，不继承供货配置预留字段。"
+                    + "同供应商未移除商品的外部编码须唯一，下架仍占用；重复返回 SUPPLIER_OFFER_EXTERNAL_SKU_CONFLICT，整批回滚。"
                     + "供货范围要求商品类型相同，支持父分类覆盖子分类、最具体优先，不按可售品类匹配；"
                     + "无匹配返回 SUPPLIER_OFFER_OUT_OF_SCOPE，最深层配置歧义返回 SUPPLIER_SCOPE_CONFLICT。")
     public CommonResult<List<String>> createOffers(@PathVariable String supplierCode,
@@ -314,6 +315,7 @@ public class SupplierAdminController {
     @PreAuthorize(SUPPLIER_UPDATE_EXPRESSION)
     @Operation(summary = "编辑合作商品",
             description = "校验价格与供货配置后更新身份列，不写报价版本。"
+                    + "外部编码排除自身后须在供应商内唯一，重复返回 SUPPLIER_OFFER_EXTERNAL_SKU_CONFLICT。"
                     + "供货范围要求商品类型相同，支持父分类覆盖子分类、最具体优先，不按可售品类匹配；"
                     + "无匹配返回 SUPPLIER_OFFER_OUT_OF_SCOPE，最深层配置歧义返回 SUPPLIER_SCOPE_CONFLICT。")
     public CommonResult<Boolean> updateOffer(@PathVariable String supplierCode,

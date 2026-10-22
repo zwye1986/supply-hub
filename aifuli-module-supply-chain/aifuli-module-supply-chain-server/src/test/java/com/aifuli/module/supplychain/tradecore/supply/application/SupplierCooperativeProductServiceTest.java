@@ -153,6 +153,100 @@ class SupplierCooperativeProductServiceTest {
         verify(offerMapper, never()).insert(any(SupplierOfferDO.class));
     }
 
+    /** 编码占用是业务拒绝，新增与编辑必须在写入前给出当前前端可展示的明确文案。 */
+    @Test
+    void createRejectsExternalCodeOccupiedByAnotherSkuBeforeInsert() {
+        stubCreatePath();
+        stubExternalCodeConflict();
+        assertExternalConflict(() -> service.createPublished("SPL_A", List.of(externalLine()), 1L),
+                "合作商品「MOVIE_200」");
+        verify(offerMapper, never()).insert(any(SupplierOfferDO.class));
+    }
+
+    @Test
+    void editRejectsExternalCodeOccupiedByAnotherSkuBeforeUpdate() {
+        stubCreatePath();
+        stubSupplierAndOffer(OfferStatus.SUSPENDED);
+        stubExternalCodeConflict();
+        assertExternalConflict(() -> service.updateCommercial("SPL_A", "OFR_1", externalLine(), 1L),
+                "合作商品「MOVIE_200」");
+        verify(offerMapper, never()).updateById(any(SupplierOfferDO.class));
+    }
+
+    @Test
+    void missingHistoricalSkuStillReportsOccupyingOfferBusinessNumber() {
+        stubCreatePath();
+        stubExternalCodeConflict();
+        when(skuMapper.selectById(12L)).thenReturn(null);
+        assertExternalConflict(() -> service.createPublished("SPL_A", List.of(externalLine()), 1L),
+                "合作商品「OFR_OTHER」");
+    }
+
+    @Test
+    void externalIndexInsertRaceBecomesBusinessRejectionWithOriginalCause() {
+        stubCreatePath();
+        var duplicate = duplicate("sc_supplier_offer.uk_sc_supplier_offer_external_sku", "EXT");
+        when(offerMapper.insert(any(SupplierOfferDO.class))).thenThrow(duplicate);
+        assertExternalConflict(() -> service.createPublished("SPL_A", List.of(externalLine()), 1L),
+                "其他合作商品");
+        assertThatThrownBy(() -> service.createPublished("SPL_A", List.of(externalLine()), 1L))
+                .hasCause(duplicate);
+    }
+
+    @Test
+    void externalIndexUpdateRaceBecomesBusinessRejection() {
+        stubCreatePath();
+        stubSupplierAndOffer(OfferStatus.SUSPENDED);
+        when(offerMapper.updateById(any(SupplierOfferDO.class)))
+                .thenThrow(duplicate("uk_sc_supplier_offer_external_sku", "EXT"));
+        assertExternalConflict(() -> service.updateCommercial("SPL_A", "OFR_1", externalLine(), 1L),
+                "其他合作商品");
+    }
+
+    @Test
+    void otherUniqueIndexIsNotMisclassifiedEvenWhenValueContainsExternalIndexName() {
+        stubCreatePath();
+        var duplicate = duplicate("sc_supplier_offer.uk_sc_supplier_offer_no",
+                "for key 'sc_supplier_offer.uk_sc_supplier_offer_external_sku'");
+        when(offerMapper.insert(any(SupplierOfferDO.class))).thenThrow(duplicate);
+        assertThatThrownBy(() -> service.createPublished("SPL_A", List.of(externalLine()), 1L))
+                .isSameAs(duplicate);
+    }
+
+    @Test
+    void nonMysqlOrUnverifiedDuplicateIsNotMisclassified() {
+        stubCreatePath();
+        var duplicate = new org.springframework.dao.DuplicateKeyException(
+                "for key 'sc_supplier_offer.uk_sc_supplier_offer_external_sku'",
+                new java.sql.SQLException("for key 'uk_sc_supplier_offer_external_sku'", "23000", 999));
+        when(offerMapper.insert(any(SupplierOfferDO.class))).thenThrow(duplicate);
+        assertThatThrownBy(() -> service.createPublished("SPL_A", List.of(externalLine()), 1L))
+                .isSameAs(duplicate);
+    }
+
+    private void stubExternalCodeConflict() {
+        when(offerMapper.selectOne(any(com.baomidou.mybatisplus.core.conditions.Wrapper.class)))
+                .thenReturn(SupplierOfferDO.builder().id(78L).supplierId(9L).offerNo("OFR_OTHER")
+                        .platformSkuId(12L).externalSkuCode("EXT").status(OfferStatus.SUSPENDED.getCode()).build());
+        when(skuMapper.selectById(12L)).thenReturn(PlatformSkuDO.builder().id(12L).skuCode("MOVIE_200").build());
+    }
+
+    private static DraftLine externalLine() {
+        return new DraftLine("MOVIE_100", "FIXED", 9800L, null, null, "API_DIRECT", 100L, 1L, "EXT");
+    }
+
+    private static org.springframework.dao.DuplicateKeyException duplicate(String key, String value) {
+        return new org.springframework.dao.DuplicateKeyException("Mapper写入失败",
+                new java.sql.SQLIntegrityConstraintViolationException(
+                        "Duplicate entry '" + value + "' for key '" + key + "'", "23000", 1062));
+    }
+
+    private static void assertExternalConflict(Runnable action, String owner) {
+        assertThatThrownBy(action::run).isInstanceOf(ServiceException.class)
+                .hasMessage("供应商商品编码「EXT」已被" + owner + "占用，下架商品仍占用编码，请核对后修改。")
+                .extracting(ex -> ((ServiceException) ex).getCode()).isEqualTo(1_050_001_183);
+    }
+
     @Test
     void patchStatusRejectsRetiredAndUnknown() {
         stubSupplierAndOffer(OfferStatus.PUBLISHED);

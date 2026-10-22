@@ -71,6 +71,12 @@ public interface SupplyChainErrorCodeConstants {
     ErrorCode SUPPLIER_REGION_INVALID = error(1_050_001_055, "配送区域与行政区划码不一致");
     ErrorCode SUPPLIER_OFFER_OUT_OF_SCOPE = error(1_050_001_056, "SKU 不在该供应商供货配置范围内");
     /**
+     * 编码占用提示直达现有管理端。
+     * 设计见 docs/superpowers/specs/2026-10-11-supplier-offer-lifecycle-design.md#35-外部商品编码占用预检与管理端错误契约2026-10-22。
+     */
+    ErrorCode SUPPLIER_OFFER_EXTERNAL_SKU_CONFLICT = error(1_050_001_183,
+            "供应商商品编码「{}」已被{}占用，下架商品仍占用编码，请核对后修改。");
+    /**
      * 折扣报价须使用SKU权威销售建议价。
      * 设计见 docs/superpowers/specs/2026-10-11-supplier-offer-sale-price-alignment-design.md#4-服务端折扣准入。
      */
@@ -367,6 +373,7 @@ public interface SupplyChainErrorCodeConstants {
             entry(SUPPLIER_ENUM_NOT_OPEN, RetryDirective.DO_NOT_RETRY),
             entry(SUPPLIER_CONTACT_REQUIRED, RetryDirective.DO_NOT_RETRY),
             entry(SUPPLIER_SCOPE_CONFLICT, RetryDirective.DO_NOT_RETRY),
+            entry(SUPPLIER_OFFER_EXTERNAL_SKU_CONFLICT, RetryDirective.DO_NOT_RETRY),
             entry(SUPPLIER_REGION_INVALID, RetryDirective.DO_NOT_RETRY),
             entry(SUPPLIER_OFFER_OUT_OF_SCOPE, RetryDirective.DO_NOT_RETRY),
             entry(SUPPLIER_OFFER_SUGGESTED_SALE_PRICE_INVALID, RetryDirective.DO_NOT_RETRY),

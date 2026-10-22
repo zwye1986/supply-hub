@@ -44,7 +44,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.annotation.Isolation;
+import org.springframework.dao.DuplicateKeyException;
 
+import java.sql.SQLException;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -54,10 +56,12 @@ import java.util.List;
 import java.util.Set;
 import java.util.Collection;
 import java.util.TreeSet;
+import java.util.regex.Pattern;
 
 import static com.aifuli.framework.common.exception.util.ServiceExceptionUtil.exception;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.SUPPLIER_NOT_FOUND;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.SUPPLIER_OFFER_OUT_OF_SCOPE;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.SUPPLIER_OFFER_EXTERNAL_SKU_CONFLICT;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.SUPPLIER_OFFER_SUGGESTED_SALE_PRICE_INVALID;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.SUPPLIER_SCOPE_CONFLICT;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.SUPPLIER_STATUS_CONFLICT;
@@ -80,6 +84,9 @@ public class SupplierCooperativeProductService {
     private static final int DEFAULT_PAGE_NO = 1;
     private static final int DEFAULT_PAGE_SIZE = 20;
     private static final long DEFAULT_OFFER_MIN_QUANTITY = 1L;
+    private static final String EXTERNAL_SKU_UNIQUE_INDEX = "uk_sc_supplier_offer_external_sku";
+    private static final Pattern EXTERNAL_SKU_DUPLICATE_KEY = Pattern.compile(
+            " for key '(?:[^']+\\.)?" + Pattern.quote(EXTERNAL_SKU_UNIQUE_INDEX) + "'\\s*$");
 
     private final SupplierMapper supplierMapper;
     private final SupplierSupplyScopeMapper scopeMapper;
@@ -211,6 +218,7 @@ public class SupplierCooperativeProductService {
         if (existing != null && existing > 0) {
             throw exception(SUPPLIER_SCOPE_CONFLICT);
         }
+        requireExternalSkuAvailable(supplier.getId(), line.externalSkuCode(), offer.getId());
         offer.setPlatformSkuId(resolved.sku().getId());
         offer.setExternalSkuCode(line.externalSkuCode());
         offer.setSupplyScopeId(resolved.scope().getId());
@@ -222,7 +230,11 @@ public class SupplierCooperativeProductService {
         offer.setDraftMinQuantity(resolved.minQuantity());
         offer.setUpdatedBy(operatorId);
         offer.setUpdatedAt(databaseClock.now());
-        offerMapper.updateById(offer);
+        try {
+            offerMapper.updateById(offer);
+        } catch (DuplicateKeyException duplicate) {
+            throw translateExternalSkuConflict(duplicate, line.externalSkuCode());
+        }
         // 商业字段仅保存待发布变更，旧冻结版本仍生效，不能触发正式定价重算。
         // 设计见 docs/superpowers/specs/2026-10-11-supplier-offer-lifecycle-design.md#1-核心业务规则。
     }
@@ -379,6 +391,7 @@ public class SupplierCooperativeProductService {
         if (existing != null && existing > 0) {
             throw exception(SUPPLIER_SCOPE_CONFLICT);
         }
+        requireExternalSkuAvailable(supplier.getId(), line.externalSkuCode(), null);
         String offerNo = businessNoGenerator.next(BusinessNoPrefixes.OFR);
         SupplierOfferDO offer = SupplierOfferDO.builder()
                 .offerNo(offerNo)
@@ -402,8 +415,50 @@ public class SupplierCooperativeProductService {
                 .updatedBy(operatorId)
                 .updatedAt(now)
                 .build();
-        offerMapper.insert(offer);
+        try {
+            offerMapper.insert(offer);
+        } catch (DuplicateKeyException duplicate) {
+            throw translateExternalSkuConflict(duplicate, line.externalSkuCode());
+        }
         return offer;
+    }
+
+    /**
+     * 在供应商锁内按数据库比较规则检查未退役身份；商业编辑排除自身，批内可见本事务已插入行。
+     * 下架仍占用编码，退役才释放；不修改编码、不改历史行，正常拒绝必须发生在当前行写入前。
+     * 设计见 {@code docs/superpowers/specs/2026-10-11-supplier-offer-lifecycle-design.md#35-外部商品编码占用预检与管理端错误契约2026-10-22}。
+     */
+    private void requireExternalSkuAvailable(Long supplierId, String externalSkuCode, Long excludedOfferId) {
+        SupplierOfferDO occupied = offerMapper.selectOne(new LambdaQueryWrapper<SupplierOfferDO>()
+                .eq(SupplierOfferDO::getSupplierId, supplierId)
+                .eq(SupplierOfferDO::getExternalSkuCode, externalSkuCode)
+                .ne(SupplierOfferDO::getStatus, OfferStatus.RETIRED.getCode())
+                .ne(excludedOfferId != null, SupplierOfferDO::getId, excludedOfferId)
+                .last("LIMIT 1"));
+        if (occupied == null) {
+            return;
+        }
+        PlatformSkuDO sku = skuMapper.selectById(occupied.getPlatformSkuId());
+        String owner = "合作商品「" + (sku == null ? occupied.getOfferNo() : sku.getSkuCode()) + "」";
+        throw exception(SUPPLIER_OFFER_EXTERNAL_SKU_CONFLICT, externalSkuCode, owner);
+    }
+
+    /**
+     * 唯一键是预检后的最终防线，仅识别MySQL1062/23000且键名精确匹配的错误；其它故障保留原异常。
+     * 键名必须是数据库消息末尾的约束名，不能被重复值内同名文本误导；失败后不再查库，保留原始因果。
+     * 设计见 {@code docs/superpowers/specs/2026-10-11-supplier-offer-lifecycle-design.md#35-外部商品编码占用预检与管理端错误契约2026-10-22}。
+     */
+    private RuntimeException translateExternalSkuConflict(DuplicateKeyException duplicate, String externalSkuCode) {
+        for (Throwable cause = duplicate.getCause(); cause != null; cause = cause.getCause()) {
+            if (cause instanceof SQLException sql && sql.getErrorCode() == 1062
+                    && "23000".equals(sql.getSQLState()) && sql.getMessage() != null
+                    && EXTERNAL_SKU_DUPLICATE_KEY.matcher(sql.getMessage()).find()) {
+                var rejection = exception(SUPPLIER_OFFER_EXTERNAL_SKU_CONFLICT, externalSkuCode, "其他合作商品");
+                rejection.initCause(duplicate);
+                return rejection;
+            }
+        }
+        return duplicate;
     }
 
     /**
