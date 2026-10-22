@@ -455,6 +455,8 @@ Springdoc `components.schemas` 中冲突的通用简单类名。生成契约必�
 
 即 `BuyerProduct` + 该 SKU 的 L2。
 
+分销商详情中已关联「分销商品」列表的「全部商品」Tab 省略 `productType`，展示当前分销商全部未移除的关联记录。档案 `productTypes[]` 只提供具体类型 Tab，选择具体 Tab 时传该类型编码；切换 Tab 重置到第一页。档案未配置、已收窄或商品真实类型已停用，都不得使已有有效关联记录从「全部商品」中消失。该规则与列表 `skuCount` 的本级有效关联统计一致；列表仍按可见子树汇总数量，详情仍只查当前分销商。本次修正仅针对分销商已关联商品列表，不变更新增选品、项目商品页面、后端筛选契约或类型停用规则，不迁移档案和商品数据。
+
 - `GET /supply-chain/buyers/{buyerCode}/products` 分页。可选查询参数 `productType`（动态商品类型编码，可多选）。兼容单个值；重复键 `productType=A&productType=B` 或逗号拼接 `productType=A,B` 均表示命中任一类型。省略、空白或拆分后无有效编码时不筛选；传入后只返回该分销商未移除、且关联平台 SPU 的 `productType` 落在入参集合内的分销商品。无命中返回空页。筛选不改变按 `updatedAt` 倒序，分页默认仍为 `pageNo=1`、`pageSize=20`。命中字段取列表行同源的平台 SPU，而不是供货配置。
 - 项目新增商品弹窗调用同一分页接口时传可选 `projectCode`。后端先校验项目存在且归属路径中的 `buyerCode`；项目不存在或不属于该分销商均返回 `PROJECT_NOT_FOUND`。只排除**该项目** `sc_project_listing.status=AVAILABLE` 所引用的 `buyer_product_id`，不排除同一分销商其它项目的商品；已移除 listing 对应商品重新可选。排除条件与 `productType` 一起在数据库分页前生效，`total` 为过滤后数量。省略或空白 `projectCode` 保持原有分销商品列表语义及响应字段，不从请求来源或会话推断项目。项目商品详情列表仍走项目商品接口。
 - 同一分页接口为项目新增商品弹窗增加可选 `keyword`（页面「商品 名称/编号」）和 `categoryCode`（页面「商品分类」）。`keyword` 去首尾空格后，对当前平台 SPU 的 `spu_name`、`spu_code` 及 SKU 的 `sku_name`、`sku_code` 做大小写不敏感的字面子串匹配，任一字段命中即可；空白不筛选，`%`、`_` 等输入按普通字符处理。`categoryCode` 是 `sc_product_category.category_code`；由 catalog 应用层的 `ProductCategoryCoverageService` 解析该类目及全部下级类目的 ID，分销商品查询不直接访问类目 Mapper，只匹配 `sc_platform_spu.primary_category_id` 落在此集合的商品。未知类目返回空页，不把类目编码当 `product_classification` 比较。两项条件与 `productType`、项目已加入商品排除条件取交集，均在数据库分页与计数前生效；`total` 为最终命中数量，排序沿用分销商品 `updated_at` 倒序。无新增条件的旧请求与金额响应保持原义。前端搜索、重置及分页直接传 `keyword`/`categoryCode`，停止对当前页做本地筛选。
