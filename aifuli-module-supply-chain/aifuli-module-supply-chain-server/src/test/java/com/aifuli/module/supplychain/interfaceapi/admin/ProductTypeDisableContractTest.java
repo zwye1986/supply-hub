@@ -55,7 +55,7 @@ class ProductTypeDisableContractTest {
                                 """ : "{\"targetStatus\":\"20\"}"))
                 .andExpect(status().isOk())
                 .andExpect(header().stringValues("trace-id", "product-type-disable-contract"))
-                .andExpect(jsonPath("$.code").value(1_050_001_184))
+                .andExpect(jsonPath("$.code").value(1_050_001_186))
                 .andExpect(jsonPath("$.msg").value("该商品类型下已存在平台商品，无法禁用。"))
                 .andExpect(jsonPath("$.data").isEmpty());
         verify(types, never()).updateById(any(ProductTypeDO.class));

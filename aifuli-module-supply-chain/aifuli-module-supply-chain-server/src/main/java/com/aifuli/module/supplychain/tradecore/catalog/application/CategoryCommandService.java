@@ -4,7 +4,6 @@ import com.aifuli.module.supplychain.infrastructure.identity.BusinessNoGenerator
 import com.aifuli.module.supplychain.infrastructure.identity.BusinessNoPrefixes;
 import com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService;
 import com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock;
-import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSpuDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProductCategoryDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSpuMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProductCategoryMapper;
@@ -19,13 +18,12 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
 
 import static com.aifuli.framework.common.exception.util.ServiceExceptionUtil.exception;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.CATEGORY_HAS_CHILDREN;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.CATEGORY_HAS_PRODUCTS;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.CATEGORY_DISABLE_HAS_PRODUCTS;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.CATEGORY_NAME_DUPLICATE_UNDER_SAME_PARENT;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.CATEGORY_NOT_FOUND;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.CATEGORY_PARENT_INVALID;
@@ -53,8 +51,9 @@ public class CategoryCommandService {
     private final SupplyChainDatabaseClock databaseClock;
     private final ProductTypeValidationService productTypeValidationService;
 
-    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
+    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class, isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public String create(CreateCommand command) {
+        CategoryProductReferences.lockForWrite(categoryMapper);
         ProductCategoryDO parent = hasText(command.parentCategoryCode())
                 ? requireLive(command.parentCategoryCode(), true) : null;
         List<String> validatedTypeCodes = validateAndResolveTypeCodes(command.typeCodes(), command.productType());
@@ -92,8 +91,9 @@ public class CategoryCommandService {
      * 分类永久编码含创建时父段，因此创建后只能提交原父级或省略父级字段。
      * 设计见 {@code docs/superpowers/specs/2026-09-27-supply-chain-business-code-design.md#4-归属与不可变性}。
      */
-    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
+    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class, isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public void update(String categoryCode, UpdateCommand command) {
+        CategoryProductReferences.lockForWrite(categoryMapper);
         log.info("更新商品分类 categoryCode={} productType={} typeCodes={} parentCategoryCode={} operatorId={}",
                 categoryCode, command.productType(), command.typeCodes(), command.parentCategoryCode(), command.operatorId());
         ProductCategoryDO category = requireLive(categoryCode, true);
@@ -127,12 +127,16 @@ public class CategoryCommandService {
         updateOrDuplicate(category);
     }
 
-    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
+    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class, isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public void changeStatus(String categoryCode, CatalogEntityStatus target, Long operatorId) {
+        CategoryProductReferences.lockForWrite(categoryMapper);
         log.info("变更商品分类状态 categoryCode={} targetStatus={} operatorId={}", categoryCode, target, operatorId);
         ProductCategoryDO category = requireLive(categoryCode, true);
         if (!CatalogEntityStatus.fromCode(category.getStatus()).canTransitionTo(target)) {
             throw exception(PRODUCT_STATUS_INVALID);
+        }
+        if (target == CatalogEntityStatus.INACTIVE) {
+            validateNoProductReferences(category, true);
         }
         if (target == CatalogEntityStatus.ARCHIVED) {
             validateDeletable(category);
@@ -142,8 +146,9 @@ public class CategoryCommandService {
         updateOrDuplicate(category);
     }
 
-    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
+    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class, isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public void delete(String categoryCode, Long operatorId) {
+        CategoryProductReferences.lockForWrite(categoryMapper);
         log.info("删除商品分类 categoryCode={} operatorId={}", categoryCode, operatorId);
         ProductCategoryDO category = requireLive(categoryCode, true);
         validateDeletable(category);
@@ -153,19 +158,28 @@ public class CategoryCommandService {
     }
 
     private void validateDeletable(ProductCategoryDO category) {
+        validateNoProductReferences(category, false);
         Long childCount = categoryMapper.selectCount(new LambdaQueryWrapper<ProductCategoryDO>()
                 .eq(ProductCategoryDO::getParentId, category.getId())
                 .ne(ProductCategoryDO::getStatus, CatalogEntityStatus.ARCHIVED.getCode()));
         if (childCount != null && childCount > 0) {
             throw exception(CATEGORY_HAS_CHILDREN);
         }
-        boolean referenced = spuMapper.selectList(new LambdaQueryWrapper<PlatformSpuDO>()
-                        .ne(PlatformSpuDO::getStatus, CatalogEntityStatus.ARCHIVED.getCode()))
-                .stream().anyMatch(spu -> category.getId().equals(spu.getPrimaryCategoryId())
-                        || (spu.getSecondaryCategoryIds() != null
-                        && spu.getSecondaryCategoryIds().contains(category.getId())));
-        if (referenced) {
-            throw exception(CATEGORY_HAS_PRODUCTS);
+    }
+
+    /**
+     * 商品引用优先于子分类存在性检查，错误由 HTTP 边界统一记录与渲染，不在此重复打印。
+     * 设计见 {@code docs/superpowers/specs/2026-10-22-category-subtree-product-guard-design.md#3-操作与错误契约}。
+     */
+    private void validateNoProductReferences(ProductCategoryDO category, boolean disabling) {
+        List<ProductCategoryDO> categories = new ArrayList<>(categoryMapper.selectList(new LambdaQueryWrapper<>()));
+        if (categories.stream().noneMatch(row -> category.getId().equals(row.getId()))) categories.add(category);
+        ProductCategoryDO referenced = CategoryProductReferences.firstReferenceWithin(category.getId(), categories,
+                CategoryProductReferences.loadLiveSpus(spuMapper));
+        if (referenced != null) {
+            throw exception(disabling ? CATEGORY_DISABLE_HAS_PRODUCTS : CATEGORY_HAS_PRODUCTS,
+                    category.getCategoryName(), category.getCategoryCode(),
+                    referenced.getCategoryName(), referenced.getCategoryCode());
         }
     }
 

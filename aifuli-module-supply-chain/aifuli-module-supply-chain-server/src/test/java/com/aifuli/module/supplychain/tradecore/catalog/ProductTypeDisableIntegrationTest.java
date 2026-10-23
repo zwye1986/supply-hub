@@ -82,6 +82,8 @@ class ProductTypeDisableIntegrationTest {
         spus = context.getBean(PlatformSpuMapper.class);
         types = context.getBean(ProductTypeMapper.class);
         transaction = new TransactionTemplate(context.getBean("supplyChainTransactionManager", PlatformTransactionManager.class));
+        // 兼容最新分类引用写入协议，竞争测试的外层事务也必须使用 RC。
+        transaction.setIsolationLevel(org.springframework.transaction.TransactionDefinition.ISOLATION_READ_COMMITTED);
         brandCode = context.getBean(BrandAdminService.class).create(new BrandAdminService.CreateCommand(
                 null, "类型禁用回归品牌", null, null, null, null, 0, CatalogEntityStatus.ACTIVE.getCode(), 1L));
         categoryCode = context.getBean(CategoryCommandService.class).create(new CategoryCommandService.CreateCommand(

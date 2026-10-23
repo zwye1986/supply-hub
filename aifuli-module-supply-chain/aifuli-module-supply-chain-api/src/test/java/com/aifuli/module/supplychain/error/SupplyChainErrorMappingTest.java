@@ -28,7 +28,7 @@ class SupplyChainErrorMappingTest {
     @Test
     void productTypeDisableRejectionHasExplicitFrontendMessageAndConditionalRetry() {
         assertErrorContract(SupplyChainErrorCodeConstants.PRODUCT_TYPE_DISABLE_FORBIDDEN_HAS_PRODUCTS,
-                1_050_001_184, "该商品类型下已存在平台商品，无法禁用。",
+                1_050_001_186, "该商品类型下已存在平台商品，无法禁用。",
                 RetryDirective.RETRY_SAME_KEY_AFTER_CONDITION_CHANGE);
     }
 

@@ -822,6 +822,8 @@ system-server 通过追加变更集 `006-product-list-filter-dictionaries` 写�
 ---
 
 ### 4.2 商品分类管理：`CategoryAdminController`
+2026-10-22 修订：管理树 SPU 数量包含自身及所有后代，禁用/删除统一检查子树商品引用，并与商品绑定写入串行化；详细口径、父分类删除边界和事务锁协议见 [分类子树 SPU 统计与禁用删除保护](2026-10-22-category-subtree-product-guard-design.md)。下述接口路径保持兼容。
+
 基路径：`/supply-chain/categories`
 后端由新建的 `CategoryCommandService`（写）与已有的 `CategoryQueryService`（读）支撑。
 
@@ -860,7 +862,7 @@ system-server 通过追加变更集 `006-product-list-filter-dictionaries` 写�
 #### 4.4.1 已关联平台商品的类型禁止禁用（2026-10-23）
 
 - 编辑接口与独立状态接口在状态实际变更为 `INACTIVE`（20，页面字典称“禁用”）前，统一校验 `sc_platform_spu.product_type = typeCode AND status != ARCHIVED`。存在任一未归档 SPU 即拒绝；草稿、上架、下架 SPU 均计入，无须存在 SKU。口径与类型卡片 `spuCount`、删除校验一致；只有已归档商品时允许禁用。
-- 新增错误 `PRODUCT_TYPE_DISABLE_FORBIDDEN_HAS_PRODUCTS`（1050001184），固定文案“该商品类型下已存在平台商品，无法禁用。”，重试指令为 `RETRY_SAME_KEY_AFTER_CONDITION_CHANGE`。保留删除错误 1050001084 的原有语义。
+- 新增错误 `PRODUCT_TYPE_DISABLE_FORBIDDEN_HAS_PRODUCTS`（1050001186；合并远程分类修复后避开其已占用的1050001184/1050001185），固定文案“该商品类型下已存在平台商品，无法禁用。”，重试指令为 `RETRY_SAME_KEY_AFTER_CONDITION_CHANGE`。保留删除错误 1050001084 的原有语义。
 - `ProductTypeAdminService.update` 与 `changeStatus` 共用校验；在现有供应链事务内先锁定类型行，再检查关联商品，通过后才修改字段并持久化。拒绝时整次编辑失败，名称、图标、描述、排序、操作人和版本均不变。不传状态、保持原状态或变更为启用不执行禁用检查；历史已禁用类型可继续编辑基础信息或重新启用，本次不自动清理存量状态。
 - 关联检查使用 MyBatis Plus Lambda 条件与现有 `(product_type, status)` 索引，不加载整批商品，不新增注解 SQL，不反向锁定 SPU。检查前不得引入普通快照查询：类型锁后首次读取关联数据须包含等待期间新提交的商品。新增及改入此类型的商品继续通过 `requireActiveForUpdate` 锁定同一类型行，保证新引用与禁用串行；真实 MySQL 覆盖创建先提交、禁用先提交两个方向。
 - HTTP 使用现有 `ServiceException` → `CommonResult` 业务错误契约，不增加接口字段。当前前端 `/Users/mac/codespace/supplychainhubweb` 的统一 Axios 拦截器展示 `msg`，`TypeForm.vue` 失败时保留弹窗，不显示成功提示；本次无需修改前端，也不在服务中重复记录业务拒绝日志。

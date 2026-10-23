@@ -33,6 +33,12 @@ import static org.mockito.Mockito.when;
  * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#33-商品分类树管理无限级同级防重与层级重算}。
  */
 class CategoryCommandServiceTest {
+    static {
+        com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(
+                new org.apache.ibatis.builder.MapperBuilderAssistant(new org.apache.ibatis.session.Configuration(), ""),
+                com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSpuDO.class);
+    }
+
 
     private final ProductCategoryMapper categoryMapper = mock(ProductCategoryMapper.class);
     private final PlatformSpuMapper spuMapper = mock(PlatformSpuMapper.class);
@@ -242,7 +248,7 @@ class CategoryCommandServiceTest {
         assertThat(child.getParentId()).isEqualTo(10L);
         assertThat(child.getCategoryLevel()).isEqualTo((short) 3);
         assertThat(child.getCategoryName()).isEqualTo("仅改名");
-        verify(categoryMapper, never()).selectList(any());
+        verify(categoryMapper).selectList(any()); // 仅分类写锁，不执行子树迁移
     }
 
     /** 显式传空字符串请求挂到根，必须拒绝。 */
@@ -309,4 +315,48 @@ class CategoryCommandServiceTest {
                 .extracting(ex -> ((ServiceException) ex).getCode())
                 .isEqualTo(CATEGORY_HAS_CHILDREN.getCode());
     }
+    @Test
+    void disableAndDeleteParentReportGrandchildProductBeforeChildrenRestriction() {
+        ProductCategoryDO parent = category(10L, null, "CAT_004", "吃喝玩乐");
+        ProductCategoryDO child = category(20L, 10L, "CAT_016_001", "吃");
+        ProductCategoryDO grandchild = category(30L, 20L, "CAT_020_001", "孙分类");
+        when(categoryMapper.selectByCodeForUpdate("CAT_004")).thenReturn(parent);
+        when(categoryMapper.selectList(any())).thenReturn(List.of(parent, child, grandchild));
+        when(categoryMapper.selectCount(any())).thenReturn(1L);
+        when(spuMapper.selectList(any())).thenReturn(List.of(
+                com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSpuDO.builder()
+                        .primaryCategoryId(99L).secondaryCategoryIds(List.of(30L))
+                        .status(CatalogEntityStatus.INACTIVE.getCode()).build()));
+
+        assertThatThrownBy(() -> service.changeStatus("CAT_004", CatalogEntityStatus.INACTIVE, 1L))
+                .isInstanceOf(ServiceException.class).hasMessageContaining("禁用")
+                .hasMessageContaining("CAT_004").hasMessageContaining("CAT_020_001");
+        assertThatThrownBy(() -> service.delete("CAT_004", 1L))
+                .isInstanceOf(ServiceException.class).hasMessageContaining("删除")
+                .hasMessageContaining("CAT_020_001");
+        assertThat(parent.getStatus()).isEqualTo(CatalogEntityStatus.ACTIVE.getCode());
+        verify(categoryMapper, never()).updateById(any(ProductCategoryDO.class));
+    }
+
+    @Test
+    void disableAllowsEmptySubtreeAndArchivedProductDoesNotBlock() {
+        ProductCategoryDO parent = category(10L, null, "CAT_PARENT", "父分类");
+        ProductCategoryDO child = category(20L, 10L, "CAT_CHILD", "子分类");
+        when(categoryMapper.selectByCodeForUpdate("CAT_PARENT")).thenReturn(parent);
+        when(categoryMapper.selectList(any())).thenReturn(List.of(parent, child));
+        when(spuMapper.selectList(any())).thenReturn(List.of(
+                com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSpuDO.builder()
+                        .primaryCategoryId(20L).status(CatalogEntityStatus.ARCHIVED.getCode()).build()));
+        when(categoryMapper.updateById(any(ProductCategoryDO.class))).thenReturn(1);
+        when(clock.now()).thenReturn(LocalDateTime.now());
+        service.changeStatus("CAT_PARENT", CatalogEntityStatus.INACTIVE, 1L);
+        assertThat(parent.getStatus()).isEqualTo(CatalogEntityStatus.INACTIVE.getCode());
+        assertThat(child.getStatus()).isEqualTo(CatalogEntityStatus.ACTIVE.getCode());
+    }
+
+    private static ProductCategoryDO category(Long id, Long parentId, String code, String name) {
+        return ProductCategoryDO.builder().id(id).parentId(parentId).categoryCode(code).categoryName(name)
+                .status(CatalogEntityStatus.ACTIVE.getCode()).version(0L).build();
+    }
+
 }

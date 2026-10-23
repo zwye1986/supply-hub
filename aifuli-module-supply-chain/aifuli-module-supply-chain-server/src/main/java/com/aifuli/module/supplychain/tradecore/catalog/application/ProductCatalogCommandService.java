@@ -223,7 +223,7 @@ public class ProductCatalogCommandService {
                 CatalogEntityStatus.DRAFT.getCode(), command.operatorId()));
     }
 
-    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
+    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class, isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public String createCategory(CreateCategoryCommand command) {
         return categoryCommandService.create(new CategoryCommandService.CreateCommand(command.categoryCode(),
                 command.categoryName(), null, null, command.parentCategoryCode(), command.sort(),
@@ -235,8 +235,10 @@ public class ProductCatalogCommandService {
      * 旧契约不携带 SKU 列表，因此只建 SPU 草稿；复合校验（动态商品类型、类目有效性、限购区间、配送模式）与新入口一致。
      * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#45-存量主数据接口治理m1masterdataadmincontroller}。
      */
-    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
+    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class, isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public String createSpu(CreateSpuCommand command) {
+        // 分类写锁必须先于编号/SPU/品牌/类型锁；见 docs/superpowers/specs/2026-10-22-category-subtree-product-guard-design.md#4-并发与事务。
+        CategoryProductReferences.lockForWrite(categoryMapper);
         log.info("创建平台 SPU 草稿（兼容入口） spuCode={} brandCode={} operatorId={}",
                 command.spuCode(), command.brandCode(), command.operatorId());
         BrandDO brand = requireBrand(command.brandCode());
@@ -336,7 +338,7 @@ public class ProductCatalogCommandService {
         brandAdminService.changeStatus(code, target, operatorId);
     }
 
-    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
+    @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class, isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public void changeCategoryStatus(String code, CatalogEntityStatus target, Long operatorId) {
         categoryCommandService.changeStatus(code, target, operatorId);
     }
@@ -657,6 +659,8 @@ public class ProductCatalogCommandService {
      */
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class, isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public String createProduct(SaveSpuCommand command) {
+        // 分类写锁必须先于编号/SPU/品牌/类型锁；见 docs/superpowers/specs/2026-10-22-category-subtree-product-guard-design.md#4-并发与事务。
+        CategoryProductReferences.lockForWrite(categoryMapper);
         // 默认定价同步初始化与复合保存共用RC，见docs/superpowers/specs/2026-10-11-supplier-offer-lifecycle-design.md#34-闭环四同步重算的锁顺序与并发事务规范。
         com.aifuli.module.supplychain.tradecore.supply.application.SupplierLifecycleTransactions.requireReadCommitted();
         log.info("创建平台商品 spuCode={} spuName={} sellableCategory={} productType={} productClassification={} "
@@ -734,6 +738,8 @@ public class ProductCatalogCommandService {
     /** 全量更新 SPU，并按 SKU 编码执行新增、修改和安全停用。 */
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class, isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public void updateProduct(String spuCode, SaveSpuCommand command) {
+        // 分类写锁必须先于编号/SPU/品牌/类型锁；见 docs/superpowers/specs/2026-10-22-category-subtree-product-guard-design.md#4-并发与事务。
+        CategoryProductReferences.lockForWrite(categoryMapper);
         // 默认定价同步初始化与复合保存共用RC，见docs/superpowers/specs/2026-10-11-supplier-offer-lifecycle-design.md#34-闭环四同步重算的锁顺序与并发事务规范。
         com.aifuli.module.supplychain.tradecore.supply.application.SupplierLifecycleTransactions.requireReadCommitted();
         log.info("更新平台商品 spuCode={} skuCount={} operatorId={}", spuCode,
@@ -1192,6 +1198,7 @@ public class ProductCatalogCommandService {
                 || (activeRequired && category.getStatus() != CatalogEntityStatus.ACTIVE.getCode())) {
             throw exception(CATEGORY_NOT_FOUND);
         }
+        CategoryProductReferences.requireWritableAncestors(categoryMapper, category, activeRequired);
         return category;
     }
 
