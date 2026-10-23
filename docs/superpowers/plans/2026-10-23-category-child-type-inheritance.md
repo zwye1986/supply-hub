@@ -46,5 +46,6 @@ mvn -B -o -pl aifuli-module-supply-chain/aifuli-module-supply-chain-server -am \
   -Dsurefire.failIfNoSpecifiedTests=false -Dfailsafe.failIfNoSpecifiedTests=false verify
 ```
 
-- [x] 将实际结果、接口请求示例、错误边界与待执行的共享环境验收追加到 `docs/集成测试.md`，保留原有未提交内容。
-- [x] 检查 `git diff --check`，交付 Swagger 字段及调用说明；只交付本地修改，不推送、不部署、不写共享数据库。
+- [x] 将实际结果、接口请求示例、错误边界与共享环境验收步骤追加到 `docs/集成测试.md`，保留原有未提交内容。
+- [x] 检查 `git diff --check`，以中文提交并推送 `origin/dev`、`github/dev`，交付 Swagger 字段及调用说明。
+- [x] 用户授权后从 `f9f0c535` 干净 worktree 重新打包并部署 pro143 `supply-chain-server`，完成容器健康、JAR 一致性、Liquibase、Swagger 与启动日志核验；真实管理端业务写入和页面验收仍待执行，详见 `docs/集成测试.md` 对应章节。
