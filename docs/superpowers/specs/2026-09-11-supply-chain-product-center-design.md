@@ -854,8 +854,17 @@ system-server 通过追加变更集 `006-product-list-filter-dictionaries` 写�
 * `GET /supply-chain/product-types/{typeCode}`：类型详情。
 * `POST /supply-chain/product-types`：新增商品类型（支持自动生成 `PT_`+ULID 或前端指定，名称唯一性校验，图标 `iconUrl` 必填，描述 `description`，初始状态 `status` 允许指定 10 启用或 20 停用，缺省为 10，排序，内部备注）。
 * `PUT /supply-chain/product-types/{typeCode}`：更新商品类型（名称、图标 `iconUrl` 必填、描述 `description`、排序、备注、状态 `status`，名称防重校验；`status` 可选传入，传入非空值时联动变更启用/停用状态，仅允许 10 启用或 20 停用，90 归档必须走删除端点以触发引用强校验）。
-* `PUT /supply-chain/product-types/{typeCode}/status`：启用/停用商品类型（停用后新增 SPU 不可选，历史 SPU 不受影响）。
+* `PUT /supply-chain/product-types/{typeCode}/status`：启用/停用商品类型；与编辑接口共用下述禁用校验。
 * `DELETE /supply-chain/product-types/{typeCode}`：删除商品类型（强校验：若有未归档 SPU 引用该类型，禁止删除，抛出 `PRODUCT_TYPE_HAS_PRODUCTS`）。
+
+#### 4.4.1 已关联平台商品的类型禁止禁用（2026-10-23）
+
+- 编辑接口与独立状态接口在状态实际变更为 `INACTIVE`（20，页面字典称“禁用”）前，统一校验 `sc_platform_spu.product_type = typeCode AND status != ARCHIVED`。存在任一未归档 SPU 即拒绝；草稿、上架、下架 SPU 均计入，无须存在 SKU。口径与类型卡片 `spuCount`、删除校验一致；只有已归档商品时允许禁用。
+- 新增错误 `PRODUCT_TYPE_DISABLE_FORBIDDEN_HAS_PRODUCTS`（1050001184），固定文案“该商品类型下已存在平台商品，无法禁用。”，重试指令为 `RETRY_SAME_KEY_AFTER_CONDITION_CHANGE`。保留删除错误 1050001084 的原有语义。
+- `ProductTypeAdminService.update` 与 `changeStatus` 共用校验；在现有供应链事务内先锁定类型行，再检查关联商品，通过后才修改字段并持久化。拒绝时整次编辑失败，名称、图标、描述、排序、操作人和版本均不变。不传状态、保持原状态或变更为启用不执行禁用检查；历史已禁用类型可继续编辑基础信息或重新启用，本次不自动清理存量状态。
+- 关联检查使用 MyBatis Plus Lambda 条件与现有 `(product_type, status)` 索引，不加载整批商品，不新增注解 SQL，不反向锁定 SPU。检查前不得引入普通快照查询：类型锁后首次读取关联数据须包含等待期间新提交的商品。新增及改入此类型的商品继续通过 `requireActiveForUpdate` 锁定同一类型行，保证新引用与禁用串行；真实 MySQL 覆盖创建先提交、禁用先提交两个方向。
+- HTTP 使用现有 `ServiceException` → `CommonResult` 业务错误契约，不增加接口字段。当前前端 `/Users/mac/codespace/supplychainhubweb` 的统一 Axios 拦截器展示 `msg`，`TypeForm.vue` 失败时保留弹窗，不显示成功提示；本次无需修改前端，也不在服务中重复记录业务拒绝日志。
+- 验证包括两个入口的逻辑单测、HTTP 错误码与提示契约、真实 MySQL/Liquibase/Mapper 下的商品状态口径及编辑原子性、并发锁竞争、供应链架构门禁。人工联调步骤及实际执行证据维护在 `docs/集成测试.md`。
 
 ---
 
@@ -900,7 +909,7 @@ system-server 通过追加变更集 `006-product-list-filter-dictionaries` 写�
 
 6. `ProductTypeValidationService` 是 `productType` 准入的唯一入口；`ProductCatalogCommandService`、`SupplierSupplyScopeService`、`BuyerAdminCommandService` 及兼容接口不得再调用 `ClosedEnums.parseRequired(ProductTypeTag.class, ...)`。
    - 新增业务关系时，`ProductTypeValidationService.requireActiveForUpdate(typeCode)` 与类型停用操作必须锁定同一 `sc_product_type` 行，避免“校验通过后并发停用”导致新关系引用已停用类型。
-   - 停用类型后禁止新增 SPU 或新增供销范围；历史 SPU 与历史范围保留可读，但不得用于新增关系。重新启用后恢复可选。
+   - 按 §4.4.1，存在未归档 SPU 时禁止禁用类型；允许禁用的类型在禁用后禁止新增 SPU 或新增供销范围。历史已禁用类型的 SPU 与历史范围保留可读，但不得用于新增关系。重新启用后恢复可选。
 
 ### 5.3 商品中心数据字典与配置变更
 

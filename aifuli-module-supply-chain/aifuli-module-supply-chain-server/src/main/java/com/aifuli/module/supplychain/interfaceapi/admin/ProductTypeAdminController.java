@@ -62,7 +62,7 @@ public class ProductTypeAdminController {
 
     @PutMapping("/{typeCode}")
     @PreAuthorize(PRODUCT_TYPE_UPDATE_EXPRESSION)
-    @Operation(summary = "更新商品类型")
+    @Operation(summary = "更新商品类型", description = "存在未归档平台 SPU 时禁止变更为禁用，整次编辑不保存。")
     public CommonResult<Boolean> update(
             @Parameter(description = "商品类型永久业务编码", example = "PT_01ABC") @PathVariable String typeCode,
             @Valid @RequestBody ProductTypeSaveReqVO request) {
@@ -73,7 +73,7 @@ public class ProductTypeAdminController {
 
     @PutMapping("/{typeCode}/status")
     @PreAuthorize(PRODUCT_TYPE_UPDATE_STATUS_EXPRESSION)
-    @Operation(summary = "启用或停用商品类型", description = "停用仅阻止新增或启用商品，不影响历史商品读取。")
+    @Operation(summary = "启用或停用商品类型", description = "存在未归档平台 SPU 时禁止变更为禁用；草稿、上架、下架商品均计入。")
     public CommonResult<Boolean> status(
             @Parameter(description = "商品类型永久业务编码", example = "PT_01ABC") @PathVariable String typeCode,
             @Valid @RequestBody CatalogStatusSwitchReqVO request) {

@@ -16,6 +16,8 @@ import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.dao.DuplicateKeyException;
 
 import java.time.LocalDateTime;
@@ -29,6 +31,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 
 /**
  * 商品类型管理应用服务单测。
@@ -201,5 +205,86 @@ class ProductTypeAdminServiceTest {
                 .isInstanceOf(ServiceException.class)
                 .extracting(ex -> ((ServiceException) ex).getCode())
                 .isEqualTo(PRODUCT_STATUS_INVALID.getCode());
+    }
+
+    /** 两个状态写入口均须先校验引用，拒绝时连内存对象的其他编辑字段也不改变。 */
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void disablingReferencedTypeRejectsEntireEdit(boolean throughEdit) {
+        ProductTypeDO type = ProductTypeDO.builder().id(1L).typeCode("PT_USED")
+                .typeName("原名称").iconUrl("https://example.com/old.png").sort(1)
+                .description("原描述").remark("原备注").version(3L).updatedBy(1L)
+                .status(CatalogEntityStatus.ACTIVE.getCode()).build();
+        ProductTypeDO original = new ProductTypeDO(type.getId(), type.getTypeCode(), type.getTypeName(),
+                type.getIconUrl(), type.getSort(), type.getStatus(), type.getDescription(), type.getRemark(),
+                type.getVersion(), type.getCreatedBy(), type.getCreatedAt(), type.getUpdatedBy(), type.getUpdatedAt());
+        when(typeMapper.selectByCodeForUpdate("PT_USED")).thenReturn(type);
+        when(spuMapper.selectCount(any())).thenReturn(1L);
+
+        assertThatThrownBy(() -> {
+            if (throughEdit) {
+                service.update("PT_USED", new ProductTypeAdminService.UpdateCommand(
+                        "新名称", "https://example.com/new.png", 20, CatalogEntityStatus.INACTIVE.getCode(),
+                        "新描述", "新备注", 2L));
+            } else {
+                service.changeStatus("PT_USED", CatalogEntityStatus.INACTIVE, 2L);
+            }
+        }).isInstanceOf(ServiceException.class)
+                .hasMessage("该商品类型下已存在平台商品，无法禁用。");
+
+        assertThat(type).isEqualTo(original);
+        verify(typeMapper, never()).updateById(any(ProductTypeDO.class));
+        verify(clock, never()).now();
+    }
+
+    @Test
+    void changeStatusAllowsDisablingEmptyType() {
+        ProductTypeDO type = ProductTypeDO.builder().id(1L).typeCode("PT_EMPTY")
+                .status(CatalogEntityStatus.ACTIVE.getCode()).build();
+        when(typeMapper.selectByCodeForUpdate("PT_EMPTY")).thenReturn(type);
+        when(spuMapper.selectCount(any())).thenReturn(0L);
+        when(typeMapper.updateById(any(ProductTypeDO.class))).thenReturn(1);
+
+        service.changeStatus("PT_EMPTY", CatalogEntityStatus.INACTIVE, 2L);
+
+        assertThat(type.getStatus()).isEqualTo(CatalogEntityStatus.INACTIVE.getCode());
+        verify(spuMapper).selectCount(any());
+    }
+
+    /** 保持状态及重新启用不应因历史商品引用而无法保存。 */
+    @ParameterizedTest
+    @ValueSource(shorts = {10, 20})
+    void updatePreservesExistingStatusWithoutReferenceCheck(short status) {
+        ProductTypeDO type = ProductTypeDO.builder().id(1L).typeCode("PT_LEGACY")
+                .status(status).build();
+        when(typeMapper.selectByCodeForUpdate("PT_LEGACY")).thenReturn(type);
+        when(typeMapper.updateById(any(ProductTypeDO.class))).thenReturn(1);
+
+        service.update("PT_LEGACY", new ProductTypeAdminService.UpdateCommand(
+                "新名称", "https://example.com/new.png", 20, status, "新描述", null, 2L));
+
+        assertThat(type.getTypeName()).isEqualTo("新名称");
+        assertThat(type.getStatus()).isEqualTo(status);
+        verify(spuMapper, never()).selectCount(any());
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void enablingReferencedTypeDoesNotCheckReferences(boolean throughEdit) {
+        ProductTypeDO type = ProductTypeDO.builder().id(1L).typeCode("PT_LEGACY")
+                .status(CatalogEntityStatus.INACTIVE.getCode()).build();
+        when(typeMapper.selectByCodeForUpdate("PT_LEGACY")).thenReturn(type);
+        when(typeMapper.updateById(any(ProductTypeDO.class))).thenReturn(1);
+
+        if (throughEdit) {
+            service.update("PT_LEGACY", new ProductTypeAdminService.UpdateCommand(
+                    "新名称", "https://example.com/new.png", 20, CatalogEntityStatus.ACTIVE.getCode(),
+                    "新描述", null, 2L));
+        } else {
+            service.changeStatus("PT_LEGACY", CatalogEntityStatus.ACTIVE, 2L);
+        }
+
+        assertThat(type.getStatus()).isEqualTo(CatalogEntityStatus.ACTIVE.getCode());
+        verify(spuMapper, never()).selectCount(any());
     }
 }

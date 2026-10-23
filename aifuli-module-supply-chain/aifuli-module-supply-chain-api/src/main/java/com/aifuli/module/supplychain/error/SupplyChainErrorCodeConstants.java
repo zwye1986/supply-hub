@@ -112,6 +112,12 @@ public interface SupplyChainErrorCodeConstants {
     ErrorCode PRODUCT_TYPE_INACTIVE = error(1_050_001_082, "商品类型未启用");
     ErrorCode PRODUCT_TYPE_DUPLICATE = error(1_050_001_083, "商品类型编码或名称已存在");
     ErrorCode PRODUCT_TYPE_HAS_PRODUCTS = error(1_050_001_084, "商品类型仍有关联商品，禁止删除");
+    /**
+     * 商品类型禁用准入及前端提示。
+     * 设计见 docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#441-已关联平台商品的类型禁止禁用2026-10-23。
+     */
+    ErrorCode PRODUCT_TYPE_DISABLE_FORBIDDEN_HAS_PRODUCTS = error(1_050_001_184,
+            "该商品类型下已存在平台商品，无法禁用。");
     ErrorCode BRAND_NAME_DUPLICATE = error(1_050_001_085, "品牌名称已存在");
     ErrorCode BRAND_HAS_PRODUCTS = error(1_050_001_086, "品牌仍有关联商品，禁止删除");
     ErrorCode CATEGORY_NAME_DUPLICATE_UNDER_SAME_PARENT =
@@ -405,6 +411,7 @@ public interface SupplyChainErrorCodeConstants {
             entry(PRODUCT_TYPE_INACTIVE, RetryDirective.RETRY_SAME_KEY_AFTER_CONDITION_CHANGE),
             entry(PRODUCT_TYPE_DUPLICATE, RetryDirective.DO_NOT_RETRY),
             entry(PRODUCT_TYPE_HAS_PRODUCTS, RetryDirective.RETRY_SAME_KEY_AFTER_CONDITION_CHANGE),
+            entry(PRODUCT_TYPE_DISABLE_FORBIDDEN_HAS_PRODUCTS, RetryDirective.RETRY_SAME_KEY_AFTER_CONDITION_CHANGE),
             entry(BRAND_NAME_DUPLICATE, RetryDirective.DO_NOT_RETRY),
             entry(BRAND_HAS_PRODUCTS, RetryDirective.RETRY_SAME_KEY_AFTER_CONDITION_CHANGE),
             entry(CATEGORY_NAME_DUPLICATE_UNDER_SAME_PARENT, RetryDirective.DO_NOT_RETRY),

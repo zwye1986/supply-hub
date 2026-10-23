@@ -230,7 +230,7 @@ member 的 `platform-api.WUSHENG.inbound/outbound` 使用 `additivity=false`，�
 - 桥接覆盖订阅、信号、request/cancel 及异常兜底；作用域退出恢复完整原 MDC，无 Context 编号时不能使用线程遗留 traceId。
 - 继续保留命名 Hook 的独立注册/撤销，不清空其它 Hook。升级 Reactor/WebFlux 必须验证信号语义、fusion 边界和性能，不承诺未经压测的吞吐。
 - Feign 每次发送使用当前作用域编号并单值注入，不能复用 RequestTemplate 上一次的编号。非 Feign HTTP/SDK 只有具备受支持协议时才显式传播，不能假设所有外部服务都支持平台 Header。
-- 管理端实际实现位于 `/Users/mac/Documents/codeSpace/supplychainhubweb/src/config/axios/service.ts`，已有错误响应追踪号提取。真实浏览器仍需核验跨域凭据模式下显式暴露 `trace-id`；无响应的网络超时不保证能取得后端编号，不能用虚构编号替代。
+- 管理端实际实现位于 `/Users/mac/codespace/supplychainhubweb/src/config/axios/service.ts`（用户于 2026-10-11 确认当前仓库路径），已有错误响应追踪号提取。真实浏览器仍需核验跨域凭据模式下显式暴露 `trace-id`；无响应的网络超时不保证能取得后端编号，不能用虚构编号替代。
 
 ### 5.3 后台执行与来源关联
 

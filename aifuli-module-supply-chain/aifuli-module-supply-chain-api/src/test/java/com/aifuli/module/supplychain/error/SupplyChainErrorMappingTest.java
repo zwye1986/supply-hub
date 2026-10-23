@@ -26,6 +26,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 class SupplyChainErrorMappingTest {
 
     @Test
+    void productTypeDisableRejectionHasExplicitFrontendMessageAndConditionalRetry() {
+        assertErrorContract(SupplyChainErrorCodeConstants.PRODUCT_TYPE_DISABLE_FORBIDDEN_HAS_PRODUCTS,
+                1_050_001_184, "该商品类型下已存在平台商品，无法禁用。",
+                RetryDirective.RETRY_SAME_KEY_AFTER_CONDITION_CHANGE);
+    }
+
+    @Test
     void externalSkuConflictHasFrontendBusinessCodeAndDoesNotRetry() {
         assertErrorContract(SupplyChainErrorCodeConstants.SUPPLIER_OFFER_EXTERNAL_SKU_CONFLICT, 1_050_001_183,
                 "供应商商品编码「{}」已被{}占用，下架商品仍占用编码，请核对后修改。", RetryDirective.DO_NOT_RETRY);

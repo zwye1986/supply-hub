@@ -32,6 +32,7 @@ import static com.aifuli.framework.common.exception.util.ServiceExceptionUtil.ex
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_CONCURRENT_UPDATE;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_STATUS_INVALID;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_TYPE_DUPLICATE;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_TYPE_DISABLE_FORBIDDEN_HAS_PRODUCTS;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_TYPE_HAS_PRODUCTS;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_TYPE_NOT_FOUND;
 
@@ -39,8 +40,8 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
  * 商品类型管理应用服务。
  * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#44-商品类型管理prd-87producttypeadmincontroller}。
  *
- * <p>不变量：类型编码与名称在未归档范围内唯一；停用只阻止新增或启用引用该类型的 SPU，历史 SPU 保持可读；
- * 仍被未归档 SPU 引用的类型禁止删除。状态端点只接受启用/停用，归档必须走删除路径以触发引用强校验。</p>
+ * <p>不变量：类型编码与名称在未归档范围内唯一；仍被未归档 SPU 引用的类型禁止禁用或删除，
+ * 历史已禁用类型的 SPU 保持可读。状态端点只接受启用/停用，归档必须走删除路径以触发引用强校验。</p>
  */
 @Slf4j
 @Service
@@ -155,14 +156,13 @@ public class ProductTypeAdminService {
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public void update(String typeCode, UpdateCommand command) {
         ProductTypeDO type = requireLive(typeCode, true);
+        if (command.status() != null) {
+            validateStatusChange(type, command.status());
+        }
         type.setTypeName(command.typeName().trim());
         type.setIconUrl(command.iconUrl() != null ? command.iconUrl().trim() : null);
         type.setSort(command.sort() == null ? type.getSort() : command.sort());
         if (command.status() != null) {
-            if (command.status() != CatalogEntityStatus.ACTIVE.getCode()
-                    && command.status() != CatalogEntityStatus.INACTIVE.getCode()) {
-                throw exception(PRODUCT_STATUS_INVALID);
-            }
             type.setStatus(command.status());
         }
         if (command.description() != null) {
@@ -187,6 +187,7 @@ public class ProductTypeAdminService {
         if (type.getStatus() == target.getCode()) {
             return;
         }
+        validateStatusChange(type, target.getCode());
         type.setStatus(target.getCode());
         touch(type, operatorId);
         requireUpdated(typeMapper.updateById(type));
@@ -214,6 +215,30 @@ public class ProductTypeAdminService {
             throw exception(PRODUCT_TYPE_NOT_FOUND);
         }
         return type;
+    }
+
+    /**
+     * 两个状态写入口的统一禁用准入；调用方必须在供应链事务中先取得类型行锁。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#441-已关联平台商品的类型禁止禁用2026-10-23}。
+     *
+     * <p>只在实际变更为禁用时检查未归档 SPU，包含草稿与下架商品，不依赖 SKU。
+     * 类型锁与新增/改入商品的准入共用，检查前不作普通快照查询，保证等待后可见新提交的引用；
+     * 不反向锁 SPU，避免与商品编辑的 SPU→类型锁顺序形成环。校验通过前不修改任何编辑字段。</p>
+     */
+    private void validateStatusChange(ProductTypeDO type, short targetStatus) {
+        if (targetStatus != CatalogEntityStatus.ACTIVE.getCode()
+                && targetStatus != CatalogEntityStatus.INACTIVE.getCode()) {
+            throw exception(PRODUCT_STATUS_INVALID);
+        }
+        if (targetStatus != CatalogEntityStatus.INACTIVE.getCode() || type.getStatus() == targetStatus) {
+            return;
+        }
+        Long count = spuMapper.selectCount(new LambdaQueryWrapper<PlatformSpuDO>()
+                .eq(PlatformSpuDO::getProductType, type.getTypeCode())
+                .ne(PlatformSpuDO::getStatus, CatalogEntityStatus.ARCHIVED.getCode()));
+        if (count != null && count > 0) {
+            throw exception(PRODUCT_TYPE_DISABLE_FORBIDDEN_HAS_PRODUCTS);
+        }
     }
 
     private ProductTypeView toView(ProductTypeDO type, TypeCounts counts) {
