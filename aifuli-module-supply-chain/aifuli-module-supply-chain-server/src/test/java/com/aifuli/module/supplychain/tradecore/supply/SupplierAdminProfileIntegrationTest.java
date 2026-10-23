@@ -5,6 +5,7 @@ import com.aifuli.module.supplychain.infrastructure.configuration.SupplyChainDat
 import com.aifuli.module.supplychain.infrastructure.identity.BusinessNoGenerator;
 import com.aifuli.module.supplychain.infrastructure.identity.UlidGenerator;
 import com.aifuli.module.supplychain.infrastructure.security.AesGcmEnvelopeCrypto;
+import com.aifuli.module.supplychain.interfaceapi.admin.SupplierAdminController;
 import com.aifuli.module.supplychain.tradecore.catalog.application.ProductCatalogCommandService;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.FulfillmentType;
@@ -30,6 +31,7 @@ import com.aifuli.module.supplychain.tradecore.supply.dal.mysql.SupplierSettleme
 import com.aifuli.module.supplychain.tradecore.supply.domain.OfferStatus;
 import com.aifuli.module.supplychain.tradecore.supply.domain.SupplierStatus;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -40,8 +42,10 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
 import com.aifuli.module.supplychain.testsupport.ProductCenterTestConfiguration;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.testcontainers.containers.MySQLContainer;
 
+import java.time.LocalDateTime;
 import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -52,6 +56,9 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.SUPPLIER_SCOPE_CONFLICT;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
  * 供应商管理端建档、期初、供货配置与合作商品上架。
@@ -79,6 +86,75 @@ class SupplierAdminProfileIntegrationTest {
     static void stopContainer() {
         if (EXTERNAL_JDBC_URL == null && MYSQL.isRunning()) {
             MYSQL.stop();
+        }
+    }
+
+    /**
+     * 编号片段必须在真实 MySQL 分页前筛选；HTTP 多选与日期端点共同约束结果，归档行不能混入。
+     * 设计见 docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#51-列表。
+     */
+    @Test
+    void filtersSupplierCodeFragmentBeforePagingWithRepeatedStatusesAndIsoDates() throws Exception {
+        try (ConfigurableApplicationContext context = applicationContext()) {
+            var command = context.getBean(SupplierProfileCommandService.class);
+            var query = context.getBean(SupplierProfileQueryService.class);
+            var mapper = context.getBean(SupplierMapper.class);
+            var codes = List.of("SPL_FILTER008_A", "OLD008NEXT", "SPL_FILTER008_ARCHIVED",
+                    "SPL_FILTER009_A", "SPL_FILTER008_OLD", "SPL_FILTER008_BLACKLIST");
+            var statuses = List.of(SupplierStatus.ACTIVE, SupplierStatus.SUSPENDED, SupplierStatus.ARCHIVED,
+                    SupplierStatus.ACTIVE, SupplierStatus.ACTIVE, SupplierStatus.BLACKLIST);
+            var from = LocalDateTime.of(2026, 10, 20, 0, 0);
+            var to = LocalDateTime.of(2026, 10, 20, 23, 59, 59);
+            var times = List.of(from, to, from.plusHours(12), from.plusHours(1), from.minusSeconds(1), from.plusHours(2));
+            for (int i = 0; i < codes.size(); i++) {
+                String generatedCode = command.create(createCommand("编号筛选夹具" + i, "FILTER-CREDIT-" + i, 0L));
+                // 仅在独占测试库构造历史编号和确定时间，不修改生产编号生成或生命周期入口。
+                mapper.update(null, new LambdaUpdateWrapper<SupplierDO>()
+                        .eq(SupplierDO::getSupplierCode, generatedCode)
+                        .set(SupplierDO::getSupplierCode, codes.get(i))
+                        .set(SupplierDO::getStatus, statuses.get(i).getCode())
+                        .set(SupplierDO::getUpdatedAt, times.get(i)));
+            }
+            var mvc = MockMvcBuilders.standaloneSetup(
+                    new SupplierAdminController(null, query, null, null, null, null, null)).build();
+            String path = "/supply-chain/suppliers";
+            mvc.perform(get(path).param("supplierCode", "008"))
+                    .andExpect(status().isOk()).andExpect(jsonPath("$.code").value(0))
+                    .andExpect(jsonPath("$.data.total").value(4));
+            for (String separator : List.of(" ", "T")) {
+                for (int pageNo : List.of(1, 2)) {
+                    mvc.perform(get(path).param("supplierCode", "008")
+                                    .queryParam("status", "ACTIVE", "SUSPENDED")
+                                    .queryParam("updatedFrom", "2026-10-20" + separator + "00:00:00")
+                                    .queryParam("updatedTo", "2026-10-20" + separator + "23:59:59")
+                                    .param("pageNo", String.valueOf(pageNo)).param("pageSize", "1"))
+                            .andExpect(status().isOk()).andExpect(jsonPath("$.code").value(0))
+                            .andExpect(jsonPath("$.data.total").value(2))
+                            .andExpect(jsonPath("$.data.list.length()").value(1))
+                            .andExpect(jsonPath("$.data.list[0].supplierCode").value(codes.get(2 - pageNo)));
+                }
+                mvc.perform(get(path).param("supplierCode", "008")
+                                .queryParam("updatedFrom", "2026-10-20" + separator + "00:00:01"))
+                        .andExpect(status().isOk()).andExpect(jsonPath("$.data.total").value(2));
+                mvc.perform(get(path).param("supplierCode", "008")
+                                .queryParam("updatedTo", "2026-10-20" + separator + "23:59:58"))
+                        .andExpect(status().isOk()).andExpect(jsonPath("$.data.total").value(3));
+            }
+            mvc.perform(get(path).param("supplierCode", codes.getFirst()))
+                    .andExpect(jsonPath("$.data.total").value(1))
+                    .andExpect(jsonPath("$.data.list[0].supplierCode").value(codes.getFirst()));
+            mvc.perform(get(path).param("supplierCode", "UNMATCHED-CODE"))
+                    .andExpect(jsonPath("$.data.total").value(0))
+                    .andExpect(jsonPath("$.data.list").isEmpty());
+            mvc.perform(get(path).param("supplierCode", "008").param("view", "simple"))
+                    .andExpect(jsonPath("$.data").isEmpty());
+            mvc.perform(get(path).param("supplierCode", codes.getFirst()).param("view", "simple"))
+                    .andExpect(jsonPath("$.data.length()").value(1))
+                    .andExpect(jsonPath("$.data[0].supplierCode").value(codes.getFirst()));
+            for (String invalid : List.of("2026-02-30 00:00:00", "2026/10/20 00:00:00")) {
+                mvc.perform(get(path).queryParam("updatedFrom", invalid)).andExpect(status().isBadRequest());
+                mvc.perform(get(path).queryParam("updatedTo", invalid)).andExpect(status().isBadRequest());
+            }
         }
     }
 

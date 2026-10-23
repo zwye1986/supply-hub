@@ -35,6 +35,9 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.annotation.JsonSetter;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.enums.Explode;
+import io.swagger.v3.oas.annotations.enums.ParameterStyle;
+import io.swagger.v3.oas.annotations.media.ArraySchema;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -47,6 +50,7 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -98,21 +102,50 @@ public class SupplierAdminController {
     @GetMapping
     @PreAuthorize(SUPPLIER_QUERY_EXPRESSION)
     @Operation(summary = "分页查询供应商",
-            description = "筛选用多值 status/sellableCategories/supplyModes 与 updatedFrom/To。"
+            description = "普通列表按 supplierName/supplierCode 包含匹配，按 updatedAt 倒序分页，归档行不返回。"
+                    + "多选参数固定为 status/sellableCategories/supplyModes，使用重复键，例如 status=ACTIVE&status=SUSPENDED；"
+                    + "不要传 categoryL1Ids、status[0]、sellableCategories[0] 或 supplyModes[0]。"
+                    + "同一项内 OR、不同项间 AND，品类与模式须命中同一条供货配置。"
+                    + "updatedFrom/updatedTo 保留前端 yyyy-MM-dd HH:mm:ss，兼容 ISO yyyy-MM-dd'T'HH:mm:ss；"
+                    + "按 Asia/Shanghai 本地时间筛选，包含端点，不做 UTC 偏移。"
+                    + "示例：/admin-api/supply-chain/suppliers?supplierCode=008&sellableCategories=PHYSICAL"
+                    + "&supplyModes=API_DIRECT&status=ACTIVE&status=SUSPENDED"
+                    + "&updatedFrom=2026-10-20%2000:00:00&updatedTo=2026-10-20%2023:59:59&pageNo=1&pageSize=20。"
                     + "view=simple 只返回正常（ACTIVE）的 {supplierCode,supplierName}[]，不强制分页。"
+                    + "simple 名称仍模糊、编号仍精确，忽略其它筛选条件；已传日期仍须符合绑定格式。"
                     + "身份用 supplierCode，金额单位 CNY 分。")
     public CommonResult<?> page(
-            @Parameter(description = "供应商标准名称，模糊") @RequestParam(required = false) String supplierName,
-            @Parameter(description = "供应商永久业务编码") @RequestParam(required = false) String supplierCode,
-            @Parameter(description = "合作状态枚举名，可多选：ACTIVE / SUSPENDED / BLACKLIST")
+            @Parameter(description = "供应商标准名称，包含式模糊匹配") @RequestParam(required = false) String supplierName,
+            @Parameter(description = "供应商永久业务编码；普通列表包含匹配（008 可命中 SPL_008），view=simple 仍精确匹配",
+                    example = "008") @RequestParam(required = false) String supplierCode,
+            @Parameter(description = "合作状态英文枚举名：ACTIVE / SUSPENDED / BLACKLIST；字典 supply_chain_supplier_status。"
+                    + "多选用 status=ACTIVE&status=SUSPENDED，省略表示不限，归档态始终排除",
+                    style = ParameterStyle.FORM, explode = Explode.TRUE,
+                    array = @ArraySchema(schema = @Schema(type = "string")))
             @RequestParam(required = false) List<String> status,
-            @Parameter(description = "可售品类枚举名，可多选") @RequestParam(required = false) List<String> sellableCategories,
-            @Parameter(description = "供货模式枚举名，可多选") @RequestParam(required = false) List<String> supplyModes,
-            @Parameter(description = "最后修改时间起，Asia/Shanghai") @RequestParam(required = false) LocalDateTime updatedFrom,
-            @Parameter(description = "最后修改时间止，Asia/Shanghai") @RequestParam(required = false) LocalDateTime updatedTo,
+            @Parameter(description = "可售品类英文枚举名，取 supply_chain_sellable_category 字典值，不是分类 ID。"
+                    + "多选用 sellableCategories=PHYSICAL&sellableCategories=JD，省略表示不限",
+                    style = ParameterStyle.FORM, explode = Explode.TRUE,
+                    array = @ArraySchema(schema = @Schema(type = "string")))
+            @RequestParam(required = false) List<String> sellableCategories,
+            @Parameter(description = "供货模式英文枚举名：API_DIRECT / DROP_SHIP / BATCH / PICKUP / H5；"
+                    + "字典 supply_chain_supply_mode。多选用 supplyModes=API_DIRECT&supplyModes=H5，省略表示不限",
+                    style = ParameterStyle.FORM, explode = Explode.TRUE,
+                    array = @ArraySchema(schema = @Schema(type = "string")))
+            @RequestParam(required = false) List<String> supplyModes,
+            @Parameter(description = "最后修改时间下界，包含端点；Asia/Shanghai 本地时间 yyyy-MM-dd HH:mm:ss，"
+                    + "兼容 ISO yyyy-MM-dd'T'HH:mm:ss；可省略，不做时区偏移。前端无需调整日期格式，空格按 URL 正常编码",
+                    example = "2026-10-20 00:00:00", schema = @Schema(implementation = String.class))
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME, fallbackPatterns = "yyyy-MM-dd HH:mm:ss")
+            @RequestParam(required = false) LocalDateTime updatedFrom,
+            @Parameter(description = "最后修改时间上界，包含端点；Asia/Shanghai 本地时间 yyyy-MM-dd HH:mm:ss，"
+                    + "兼容 ISO yyyy-MM-dd'T'HH:mm:ss；可省略，不做时区偏移。前端无需调整日期格式，空格按 URL 正常编码",
+                    example = "2026-10-20 23:59:59", schema = @Schema(implementation = String.class))
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME, fallbackPatterns = "yyyy-MM-dd HH:mm:ss")
+            @RequestParam(required = false) LocalDateTime updatedTo,
             @Parameter(description = "投影：simple 为名称下拉") @RequestParam(required = false) String view,
-            @Parameter(description = "页码，从 1 开始") @RequestParam(required = false) Integer pageNo,
-            @Parameter(description = "每页条数") @RequestParam(required = false) Integer pageSize) {
+            @Parameter(description = "页码，从 1 开始，默认 1") @RequestParam(required = false) Integer pageNo,
+            @Parameter(description = "每页条数，默认 20") @RequestParam(required = false) Integer pageSize) {
         if ("simple".equals(view)) {
             return success(queryService.listSimple(supplierName, supplierCode));
         }

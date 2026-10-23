@@ -2,6 +2,7 @@ package com.aifuli.module.supplychain.interfaceapi.admin;
 
 import com.aifuli.module.supplychain.tradecore.supply.application.SupplierCooperativeProductService.OfferListItem;
 import com.aifuli.module.supplychain.tradecore.supply.domain.OfferFulfillmentScore;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import io.swagger.v3.oas.annotations.Operation;
@@ -9,22 +10,88 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import org.junit.jupiter.api.Test;
+import org.springdoc.core.configuration.SpringDocConfiguration;
+import org.springdoc.core.properties.SpringDocConfigProperties;
+import org.springdoc.webmvc.core.configuration.SpringDocWebMvcConfiguration;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Import;
+import org.springframework.mock.web.MockServletContext;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.context.support.AnnotationConfigWebApplicationContext;
+import org.springframework.web.servlet.config.annotation.EnableWebMvc;
 
 import java.lang.reflect.Method;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
  * 供应商管理端 REST 契约：名词资源、金额分、枚举名、开票子资源无 get/save。
  * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#36-openapiswagger}。
  */
 class SupplierAdminRestContractTest {
+
+    /**
+     * 检查实际生成的 OpenAPI，而非仅检查注解存在，保证前端获得可直接使用的筛选传输契约。
+     * 设计见 docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#51-列表。
+     */
+    @Test
+    void generatedOpenApiDocumentsSupplierFilterEncodingAndExamples() throws Exception {
+        try (var context = new AnnotationConfigWebApplicationContext()) {
+            context.setServletContext(new MockServletContext());
+            context.register(SupplierOpenApiConfiguration.class);
+            context.refresh();
+            var mvc = MockMvcBuilders.webAppContextSetup(context).build();
+            var result = mvc.perform(get("/v3/api-docs")).andExpect(status().isOk()).andReturn();
+            var operation = new ObjectMapper().readTree(result.getResponse().getContentAsByteArray())
+                    .path("paths").path("/supply-chain/suppliers").path("get");
+            Map<String, JsonNode> parameters = new HashMap<>();
+            operation.path("parameters").forEach(parameter ->
+                    parameters.put(parameter.path("name").asText(), parameter));
+            for (String name : List.of("status", "sellableCategories", "supplyModes")) {
+                JsonNode parameter = parameters.get(name);
+                assertThat(parameter).as("%s 必须出现在生成的接口文档中", name).isNotNull();
+                assertThat(parameter.path("schema").path("type").asText()).isEqualTo("array");
+                assertThat(parameter.path("schema").path("items").path("type").asText()).isEqualTo("string");
+                assertThat(parameter.path("style").asText()).isEqualTo("form");
+                assertThat(parameter.path("explode").asBoolean()).isTrue();
+            }
+            assertThat(parameters.get("supplierCode").path("description").asText())
+                    .contains("包含", "view=simple", "精确");
+            assertThat(parameters.get("supplierCode").path("example").asText()).isEqualTo("008");
+            for (String name : List.of("updatedFrom", "updatedTo")) {
+                JsonNode parameter = parameters.get(name);
+                assertThat(parameter.path("description").asText())
+                        .contains("Asia/Shanghai", "包含", "yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd'T'HH:mm:ss");
+                assertThat(parameter.path("schema").path("type").asText()).isEqualTo("string");
+                assertThat(parameter.path("schema").has("format")).isFalse();
+            }
+            assertThat(parameters.get("updatedFrom").path("example").asText()).isEqualTo("2026-10-20 00:00:00");
+            assertThat(parameters.get("updatedTo").path("example").asText()).isEqualTo("2026-10-20 23:59:59");
+            assertThat(operation.path("description").asText()).contains("重复键", "categoryL1Ids", "view=simple");
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableWebMvc
+    @Import({SpringDocConfiguration.class, SpringDocConfigProperties.class, SpringDocWebMvcConfiguration.class})
+    static class SupplierOpenApiConfiguration {
+        @Bean
+        SupplierAdminController supplierAdminController() {
+            // 仅执行文档端点，不调用供应商业务端点，也不加载数据库或扩大扫描范围。
+            return new SupplierAdminController(null, null, null, null, null, null, null);
+        }
+    }
 
     /** 新增销售建议价与历史L1价格同时序列化，兼容提示价可以缺省。 */
     @Test

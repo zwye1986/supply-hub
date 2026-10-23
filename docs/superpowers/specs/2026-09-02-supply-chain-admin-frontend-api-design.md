@@ -89,7 +89,7 @@
 ### 3.2 金额、时间、分页
 
 - 所有金额字段后缀 `Cents`，单位 CNY 分。前端展示「元」时自行 `/100`。
-- 时间 ISO-8601 UTC。列表「日期」筛选项可收 `yyyy-MM-dd'T'HH:mm:ss` 区间。
+- 时间 ISO-8601 UTC。列表「日期」筛选项可收 `yyyy-MM-dd'T'HH:mm:ss` 区间；供应商列表的 `updatedFrom/updatedTo` 特按 §5.1 使用 Asia/Shanghai 本地时间，不附加时区、不转换为 UTC，本次不调整其它接口的时间契约。
 - 列表默认 `pageNo=1`、`pageSize=20`。供应商/分销商按 `updatedAt` 倒序；合作/分销/项目商品按 `createdAt` 倒序。
 - 响应包在既有 `CommonResult`；分页为 `PageResult{ list, total }`。
 
@@ -270,7 +270,24 @@ SPU / 供货范围写入的 `productClassification` 不走 `ClosedEnums`：类�
 
 筛选：`supplierName`、`supplierCode`、`sellableCategories`（多，枚举名）、`supplyModes`（多）、`status`（多，枚举名）、`updatedFrom`、`updatedTo`、`pageNo`、`pageSize`。
 
-名称下拉：同一集合加 `view=simple`，只返回状态为 `ACTIVE`（正常）的 `{ supplierCode, supplierName }[]`（可不分页）。暂停、黑名单、归档供应商不得作为商品列表筛选项。
+2026-10-23 禅道 #166 修订（本轮仅后端，前端由前端工程师独立对接）：
+
+- 普通分页列表的 `supplierName`、`supplierCode` 均为包含式 `LIKE` 匹配；编号片段 `008` 能命中 `SPL_008`，不局限前缀或完整编号。只变更列表筛选，不修改详情、编辑、状态变更等按永久业务编码精确定位的规则。筛选在数据库分页前完成，`total` 统计同一筛选结果，归档供应商始终排除。
+- 三个多选参数固定为 `sellableCategories`、`supplyModes`、`status`，值为英文枚举名，省略/空集合表示不限制该项。推荐重复键传输（OpenAPI `style=form, explode=true`），例如 `status=ACTIVE&status=SUSPENDED`；不要传 `status[0]`、`supplyModes[0]` 或旧字段 `categoryL1Ids`，后端不增加这些错误键的兼容。前端可在此接口局部使用 `qs.stringify(params, { arrayFormat: 'repeat', skipNulls: true })`，无需改全局 Axios 配置。
+- 同一多选项内为 OR，不同筛选项为 AND；品类和模式同时指定时必须命中同一条供货配置，不改变现有供货范围查询语义。`status` 为 `ACTIVE/SUSPENDED/BLACKLIST`，模式为 `API_DIRECT/DROP_SHIP/BATCH/PICKUP/H5`；品类使用 `supply_chain_sellable_category` 字典英文值。
+- `updatedFrom/updatedTo` 按用户追加要求保留前端当前的 `yyyy-MM-dd HH:mm:ss` 格式，例如 `2026-10-20 00:00:00`；同时兼容既有 ISO `T` 格式 `2026-10-20T00:00:00`。仅在这两个请求参数上使用 ISO 绑定加空格格式 fallback，不修改全局转换器或其它接口。二者分别表示 Asia/Shanghai 本地修改时间下界/上界，均包含端点、可单独省略；不附加时区或做八小时时区偏移。前端保持 `value-format="YYYY-MM-DD HH:mm:ss"` 不变，URL 中空格正常编码为 `%20` 或 `+`。无效日期/不支持的格式仍按既有参数错误处理，本次不新增区间先后校验。
+- 日期参数在 OpenAPI 声明为字符串并分别列出两种格式及空格格式示例，不再标为仅适用于 RFC3339 的 `date-time`，避免生成客户端拒绝页面现有格式。
+- Swagger 的方法说明和参数说明须包含上述匹配方式、正确参数名、多选编码、枚举来源及日期示例；列表响应结构、RBAC、事务、日志及 DDL 不变。
+
+供前端对接的请求示例（经网关，管理端登录态及 `supply-chain:supplier:query` 或 `supply-chain:admin` 权限沿用现有配置）：
+
+```http
+GET /admin-api/supply-chain/suppliers?pageNo=1&pageSize=20&supplierCode=008&sellableCategories=PHYSICAL&sellableCategories=JD&supplyModes=API_DIRECT&status=ACTIVE&status=SUSPENDED&updatedFrom=2026-10-20%2000:00:00&updatedTo=2026-10-20%2023:59:59
+```
+
+名称下拉：同一集合加 `view=simple`，只返回状态为 `ACTIVE`（正常）的 `{ supplierCode, supplierName }[]`（可不分页），名称仍模糊、编号仍精确，忽略品类/模式/状态/时间/分页筛选。暂停、黑名单、归档供应商不得作为商品列表筛选项。
+
+本次测试门禁：先用真实 MySQL 回归证明旧实现无法按编号片段命中，再检查包含匹配、状态/时间组合、归档排除与跨页 `total`；HTTP 契约检查重复键多选、空格/ISO 两种日期实际绑定与无效日期拒绝，生成的 `/v3/api-docs` 检查数组 `style/explode`、编号语义与日期示例。前端文件不改动，后端通过不代表现有页面错误参数已修复；联调证据与待办记录在 `docs/集成测试.md`。
 
 列表行：`id`、`supplierCode`、`supplierName`、`status`、聚合自供货配置的 `sellableCategories[]` / `productTypes[]` / `productClassifications[]` / `supplyModes[]`（均为枚举名）、`skuCount`（未退役 Offer 数）、`onboardedAt`、`updatedAt`、主联系人 `contactName`/`contactMobile`（原值回显）。
 

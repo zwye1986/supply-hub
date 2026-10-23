@@ -76,7 +76,8 @@ public class SupplierProfileQueryService {
     private final CategoryQueryService categoryQueryService;
 
     /**
-     * 分页查询供应商。按更新时间倒序；归档行永不出现。
+     * 分页查询供应商。名称和编号均按包含式 LIKE 筛选后分页，total 使用相同条件。
+     * 按更新时间倒序；归档行永不出现，详情与名称下拉的编号仍精确匹配。
      * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#51-列表}。
      */
     public PageResult<SupplierListItem> page(SupplierPageQuery query) {
@@ -87,7 +88,7 @@ public class SupplierProfileQueryService {
         List<Short> statusCodes = toStatusCodes(query.statuses());
         LambdaQueryWrapper<SupplierDO> wrapper = new LambdaQueryWrapper<SupplierDO>()
                 .like(hasText(query.supplierName()), SupplierDO::getSupplierName, query.supplierName())
-                .eq(hasText(query.supplierCode()), SupplierDO::getSupplierCode, query.supplierCode())
+                .like(hasText(query.supplierCode()), SupplierDO::getSupplierCode, query.supplierCode())
                 .in(!statusCodes.isEmpty(), SupplierDO::getStatus, statusCodes)
                 .ge(query.updatedFrom() != null, SupplierDO::getUpdatedAt, query.updatedFrom())
                 .le(query.updatedTo() != null, SupplierDO::getUpdatedAt, query.updatedTo())
