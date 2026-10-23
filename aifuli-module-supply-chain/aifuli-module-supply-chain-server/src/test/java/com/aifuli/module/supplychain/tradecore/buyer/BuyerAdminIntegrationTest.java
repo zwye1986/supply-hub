@@ -35,6 +35,8 @@ import com.aifuli.module.supplychain.tradecore.catalog.application.BuyerProductC
 import com.aifuli.module.supplychain.tradecore.catalog.application.BuyerProductQueryService;
 import com.aifuli.module.supplychain.tradecore.catalog.application.BuyerProductQueryService.BuyerProductListItem;
 import com.aifuli.module.supplychain.tradecore.catalog.application.ProductCatalogCommandService;
+import com.aifuli.module.supplychain.tradecore.catalog.application.CategoryCommandService;
+import com.aifuli.module.supplychain.tradecore.catalog.domain.CategoryVisibility;
 import com.aifuli.module.supplychain.tradecore.catalog.application.SettlementPriceResolver;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerProductL2OverrideDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.BuyerProductL2OverrideVersionDO;
@@ -499,6 +501,64 @@ class BuyerAdminIntegrationTest {
         }
     }
 
+    /**
+     * 详情数量只属于当前分销商：归档项目、移除商品、下级及其它分销商数据均不混入；
+     * 独立结算方不改变项目的关联归属。使用真实 MySQL COUNT 与完整迁移验证过滤条件。
+     * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#62-列表与档案}。
+     */
+    @Test
+    void detailCountsOnlyCurrentBuyerNonArchivedProjectsAndActiveProducts() {
+        try (ConfigurableApplicationContext context = applicationContext()) {
+            BuyerAdminCommandService command = context.getBean(BuyerAdminCommandService.class);
+            BuyerAdminQueryService query = context.getBean(BuyerAdminQueryService.class);
+            BuyerMapper buyerMapper = context.getBean(BuyerMapper.class);
+            BuyerProjectMapper projectMapper = context.getBean(BuyerProjectMapper.class);
+            BuyerProductMapper productMapper = context.getBean(BuyerProductMapper.class);
+            String root = command.create(createCommand(
+                    "数量根分销商", "数量根有限公司", "91110000000000201X", 1, null, 0L));
+            String child = command.create(createCommand(
+                    "数量子分销商", "数量子有限公司", "91110000000000202X", 2, root, 0L));
+            String other = command.create(createCommand(
+                    "数量其它分销商", "数量其它有限公司", "91110000000000203X", 1, null, 0L));
+            Long rootId = buyerMapper.selectByBuyerCode(root).getId();
+            Long childId = buyerMapper.selectByBuyerCode(child).getId();
+            Long otherId = buyerMapper.selectByBuyerCode(other).getId();
+            assertThat(query.get(root)).extracting("projectCount", "skuCount").containsExactly(0L, 0L);
+
+            LocalDateTime now = LocalDateTime.of(2026, 10, 23, 9, 0);
+            for (BuyerProjectStatus status : BuyerProjectStatus.values()) {
+                insertProject(projectMapper, "PRJ_COUNT_" + status.name(), rootId, status, now);
+            }
+            insertProject(projectMapper, "PRJ_COUNT_CHILD", childId, BuyerProjectStatus.ACTIVE, now);
+            insertProject(projectMapper, "PRJ_COUNT_OTHER", otherId, BuyerProjectStatus.ACTIVE, now);
+            BuyerProjectDO otherProject = projectMapper.selectByProjectCode("PRJ_COUNT_OTHER");
+            otherProject.setSettlementBuyerId(rootId);
+            projectMapper.updateById(otherProject);
+            BuyerProjectDO ownProject = projectMapper.selectByProjectCode("PRJ_COUNT_ACTIVE");
+            ownProject.setSettlementBuyerId(otherId);
+            projectMapper.updateById(ownProject);
+            productMapper.insert(BuyerProductDO.builder().buyerProductCode("BPR_COUNT_1")
+                    .buyerId(rootId).platformSkuId(91001L).status(CatalogEntityStatus.ACTIVE.getCode())
+                    .createdAt(now).updatedAt(now).build());
+            productMapper.insert(BuyerProductDO.builder().buyerProductCode("BPR_COUNT_2")
+                    .buyerId(rootId).platformSkuId(91002L).status(CatalogEntityStatus.ACTIVE.getCode())
+                    .createdAt(now).updatedAt(now).build());
+            productMapper.insert(BuyerProductDO.builder().buyerProductCode("BPR_COUNT_REMOVED")
+                    .buyerId(rootId).platformSkuId(91003L).status(CatalogEntityStatus.ARCHIVED.getCode())
+                    .createdAt(now).updatedAt(now).build());
+            productMapper.insert(BuyerProductDO.builder().buyerProductCode("BPR_COUNT_CHILD")
+                    .buyerId(childId).platformSkuId(91001L).status(CatalogEntityStatus.ACTIVE.getCode())
+                    .createdAt(now).updatedAt(now).build());
+            productMapper.insert(BuyerProductDO.builder().buyerProductCode("BPR_COUNT_OTHER")
+                    .buyerId(otherId).platformSkuId(91001L).status(CatalogEntityStatus.ACTIVE.getCode())
+                    .createdAt(now).updatedAt(now).build());
+
+            assertThat(query.get(root)).extracting("projectCount", "skuCount").containsExactly(4L, 2L);
+            assertThat(query.get(child)).extracting("projectCount", "skuCount").containsExactly(1L, 1L);
+            assertThat(query.get(other)).extracting("projectCount", "skuCount").containsExactly(1L, 1L);
+        }
+    }
+
     private static void insertProject(BuyerProjectMapper projectMapper, String projectCode, Long buyerId,
                                       BuyerProjectStatus status, LocalDateTime now) {
         projectMapper.insert(BuyerProjectDO.builder()
@@ -519,7 +579,7 @@ class BuyerAdminIntegrationTest {
      */
     private static void addsProductAndIgnoresLegacyTemplatePrice(
             ConfigurableApplicationContext context, String buyerCode) {
-        seedCatalog(context.getBean(ProductCatalogCommandService.class));
+        seedCatalog(context.getBean(ProductCatalogCommandService.class), context.getBean(CategoryCommandService.class));
         PlatformSkuMapper skuMapper = context.getBean(PlatformSkuMapper.class);
         PlatformSettlementPriceMapper l1Mapper = context.getBean(PlatformSettlementPriceMapper.class);
         PlatformSettlementPriceVersionMapper l1VersionMapper =
@@ -632,12 +692,14 @@ class BuyerAdminIntegrationTest {
                 .isEqualTo(legacyTemplateVersion.getId());
     }
 
-    private static void seedCatalog(ProductCatalogCommandService catalog) {
+    private static void seedCatalog(ProductCatalogCommandService catalog, CategoryCommandService categories) {
         catalog.createBrand(new ProductCatalogCommandService.CreateBrandCommand(
                 "BRD_001", "影院品牌", null, null, 0, 1L));
         catalog.changeBrandStatus("BRD_001", CatalogEntityStatus.ACTIVE, 1L);
-        catalog.createCategory(new ProductCatalogCommandService.CreateCategoryCommand(
-                "CAT_001", "权益商品", null, 0, 1L));
+        // 根分类显式配置类型，子分类沿用现有继承规则，保证测试数据满足当前分类契约。
+        categories.create(new CategoryCommandService.CreateCommand(
+                "CAT_001", "权益商品", "MOVIE", null, null, 0,
+                CategoryVisibility.VISIBLE.getCode(), CatalogEntityStatus.DRAFT.getCode(), 1L));
         catalog.changeCategoryStatus("CAT_001", CatalogEntityStatus.ACTIVE, 1L);
         catalog.createCategory(new ProductCatalogCommandService.CreateCategoryCommand(
                 "CAT_001_001", "卡券", "CAT_001", 0, 1L));

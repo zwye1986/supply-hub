@@ -203,6 +203,12 @@ public class BuyerAdminQueryService {
         return items;
     }
 
+    /**
+     * 查询当前分销商档案及本级数量，不遍历下级。项目按关联归属而非结算方计数，排除归档；
+     * 分销商品仅计有效关联，不受平台 SKU 的发布或供给状态影响。两项分别由数据库 COUNT 返回，
+     * 无关联时为 0，避免为详情加载全部项目或商品。
+     * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#62-列表与档案}。
+     */
     public BuyerDetail get(String buyerCode) {
         log.info("查询分销商详情 buyerCode={}", buyerCode);
         BuyerDO buyer = requireBuyer(buyerCode);
@@ -234,6 +240,12 @@ public class BuyerAdminQueryService {
             BuyerDO parent = buyerMapper.selectById(buyer.getParentBuyerId());
             parentBuyerCode = parent == null ? null : parent.getBuyerCode();
         }
+        long projectCount = projectMapper.selectCount(new LambdaQueryWrapper<BuyerProjectDO>()
+                .eq(BuyerProjectDO::getBuyerId, buyer.getId())
+                .ne(BuyerProjectDO::getStatus, BuyerProjectStatus.ARCHIVED.getCode()));
+        long skuCount = productMapper.selectCount(new LambdaQueryWrapper<BuyerProductDO>()
+                .eq(BuyerProductDO::getBuyerId, buyer.getId())
+                .eq(BuyerProductDO::getStatus, CatalogEntityStatus.ACTIVE.getCode()));
         return new BuyerDetail(
                 buyer.getId(),
                 buyer.getBuyerCode(),
@@ -266,7 +278,9 @@ public class BuyerAdminQueryService {
                         c.getContactName(), c.getContactMobile(), c.getContactEmail())).toList(),
                 primary == null ? null : primary.getContactName(),
                 primary == null ? null : primary.getContactMobile(),
-                account == null || account.getBalance() == null ? 0L : account.getBalance());
+                account == null || account.getBalance() == null ? 0L : account.getBalance(),
+                projectCount,
+                skuCount);
     }
 
     /**
@@ -782,7 +796,8 @@ public class BuyerAdminQueryService {
 
     /**
      * 分销商详情。档案敏感字段在管理端查询权限内按原值回显，下级不嵌套；
-     * {@code accountBalanceCents} 只读。库内信封加密与日志脱敏规则不变。
+     * {@code accountBalanceCents}、本级未归档项目数和有效分销商品 SKU 数只读，数量均不含下级。
+     * 库内信封加密与日志脱敏规则不变。
      * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#62-列表与档案}。
      */
     public record BuyerDetail(
@@ -814,7 +829,11 @@ public class BuyerAdminQueryService {
             @Schema(description = "联系人列表") List<ContactLine> contacts,
             @Schema(description = "主联系人姓名") String primaryContactName,
             @Schema(description = "主联系人手机号") String primaryContactMobile,
-            @Schema(description = "采购商账本余额，单位CNY分，只读") long accountBalanceCents) {
+            @Schema(description = "采购商账本余额，单位CNY分，只读") long accountBalanceCents,
+            @Schema(description = "当前分销商未归档关联项目数，不含下级，无关联时为0，只读",
+                    accessMode = Schema.AccessMode.READ_ONLY, example = "0") long projectCount,
+            @Schema(description = "当前分销商有效分销商品SKU数，已移除不计入，不含下级，无关联时为0，只读",
+                    accessMode = Schema.AccessMode.READ_ONLY, example = "0") long skuCount) {
     }
 
     /** 分销商详情商品类型回显项；id 为可提交的商品类型业务编码。 */

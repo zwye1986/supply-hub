@@ -429,6 +429,14 @@ SKU 未填供货上限时继承供货配置 `maxQuantity`；未填最低起购�
 
 `GET /supply-chain/buyers/{buyerCode}`、`POST /supply-chain/buyers`、`PUT /supply-chain/buyers/{buyerCode}` 档案字段对齐前端分销商表单：名称、联系人、分销品类/类型（`sellableCategories[]` / `productTypes[]` 枚举名，不是类目 id）、合作模式、类型、择优倾向、结算方式/周期、对接方式、合作开始日、说明、公司/信用代码/法人/地址/银行/证件、余额 `openingBalanceCents`（创建为期初；编辑为目标总余额，允许 0，省略或 null 不动账）。详情中的 `legalPersonMobile`、`bankAccount`、`contacts[].mobile`、`primaryContactMobile` 及证件 fileKey 均按原值回显，不提供 `legalPersonMobileMasked` / `bankAccountMasked` 字段。字典见专文 §3。
 
+详情响应增加只读数量字段（2026-10-23，用户确认仅统计当前分销商）：
+
+- `projectCount`：当前分销商未归档关联项目数，按 `sc_buyer_project.buyer_id` 归属统计，排除 `ARCHIVED`，包含草稿、启用、暂停和已结束项目；不按独立结算方统计，不包含下级分销商项目。
+- `skuCount`：当前分销商有效分销商品 SKU 数，统计 `sc_buyer_product.buyer_id` 属于当前分销商且状态为有效（`ACTIVE`）的关联记录，已移除记录不计入；不额外按平台 SKU 发布/供给状态筛选，不统计项目商品，也不包含下级分销商商品。
+- 两个字段均为非空 `int64`，无关联时返回 `0`；仅为响应字段，不参与创建或更新。详情分别使用 MyBatis Plus Lambda 条件执行一次数据库 `COUNT`，不读取全部关联记录、不遍历组织树，不改变列表按可见子树汇总的口径。
+- Swagger / Knife4j 的详情响应 schema 必须展开 `BuyerDetail.projectCount` / `skuCount`，标记只读并说明当前分销商范围、状态排除规则及无记录返回 `0`；详情操作说明同步注明与列表子树汇总的区别。本次只修改后端与接口文档，不修改前端，不新增 DDL。
+- 自动化门禁覆盖详情空关联、项目归档排除、商品移除排除、上下级及其它分销商隔离、关联方与结算方区分，以及 JSON 字段与生成 OpenAPI 类型/只读说明；真实数据库场景使用独占 MySQL、完整 Liquibase 和 Mapper，人工验收维护 `docs/集成测试.md`。
+
 详情响应中的 `productTypes[]` 为对象数组，字段固定为 `{ id, name }`：按已保存的 `scope_kind=PRODUCT_TYPE` 范围编码关联 `sc_product_type.type_code`，`id` 取商品类型业务编码，`name` 取商品类型名称，不暴露商品类型表内部自增主键。创建/编辑请求的 `productTypes[]` 仍提交商品类型业务编码；列表响应继续返回编码数组，避免改变列表筛选与既有投影契约。
 
 分页列表行除基础档案字段外，还返回以下只读字段。数量和集合按**本次响应里可见的子树**汇总，不把被筛选掉的同级算进去：

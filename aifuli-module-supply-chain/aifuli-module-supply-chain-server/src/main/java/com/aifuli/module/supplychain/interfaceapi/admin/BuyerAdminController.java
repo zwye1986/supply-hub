@@ -155,7 +155,8 @@ public class BuyerAdminController {
     @PreAuthorize(BUYER_QUERY_EXPRESSION)
     @Operation(summary = "分销商详情",
             description = "身份用 buyerCode。档案字段在查询权限内按原值回显，含内部主键和只读 accountBalanceCents；"
-                    + "下级不嵌套，日志仍禁止记录完整敏感字段。")
+                    + "只读 projectCount 为当前分销商未归档关联项目数，skuCount 为当前分销商有效分销商品SKU数（已移除不计入）；"
+                    + "两项均不含下级，无关联时返回0，不采用列表的可见子树汇总口径。下级不嵌套，日志仍禁止记录完整敏感字段。")
     public CommonResult<BuyerDetail> get(@PathVariable String buyerCode) {
         return success(queryService.get(buyerCode));
     }

@@ -21,6 +21,8 @@ import com.aifuli.module.supplychain.tradecore.buyer.domain.BuyerStatus;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProductTypeDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProductTypeMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
@@ -283,6 +285,36 @@ class BuyerAdminQueryServiceTest {
         when(categoryScopeMapper.selectByBuyerId(23L)).thenReturn(List.of());
 
         assertThat(service.get("BYR_NO_START").cooperationStartedAt()).isEqualTo(createdAt);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void getReturnsCurrentBuyerProjectAndSkuCounts() {
+        BuyerDO buyer = BuyerDO.builder().id(21L).buyerCode("BYR_COUNTS")
+                .distributionLevel((short) 1).status(BuyerStatus.ACTIVE.getCode()).build();
+        when(buyerMapper.selectByBuyerCode("BYR_COUNTS")).thenReturn(buyer);
+        when(projectMapper.selectCount(any(LambdaQueryWrapper.class))).thenReturn(2L);
+        when(productMapper.selectCount(any(LambdaQueryWrapper.class))).thenReturn(3L);
+
+        JsonNode detail = new ObjectMapper().findAndRegisterModules().valueToTree(service.get("BYR_COUNTS"));
+        assertThat(detail.path("projectCount").asLong(-1L)).isEqualTo(2L);
+        assertThat(detail.path("skuCount").asLong(-1L)).isEqualTo(3L);
+        verify(projectMapper).selectCount(any(LambdaQueryWrapper.class));
+        verify(productMapper).selectCount(any(LambdaQueryWrapper.class));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void getReturnsZeroCountsWhenCurrentBuyerHasNoAssociations() {
+        BuyerDO buyer = BuyerDO.builder().id(22L).buyerCode("BYR_EMPTY")
+                .distributionLevel((short) 1).status(BuyerStatus.ACTIVE.getCode()).build();
+        when(buyerMapper.selectByBuyerCode("BYR_EMPTY")).thenReturn(buyer);
+        when(projectMapper.selectCount(any(LambdaQueryWrapper.class))).thenReturn(0L);
+        when(productMapper.selectCount(any(LambdaQueryWrapper.class))).thenReturn(0L);
+
+        JsonNode detail = new ObjectMapper().findAndRegisterModules().valueToTree(service.get("BYR_EMPTY"));
+        assertThat(detail.path("projectCount").asLong(-1L)).isZero();
+        assertThat(detail.path("skuCount").asLong(-1L)).isZero();
     }
 
     @Test

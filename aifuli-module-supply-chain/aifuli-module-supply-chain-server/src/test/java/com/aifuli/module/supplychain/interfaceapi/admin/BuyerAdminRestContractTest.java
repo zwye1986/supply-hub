@@ -229,6 +229,36 @@ class BuyerAdminRestContractTest {
     }
 
     @Test
+    void detailJsonExposesProjectAndSkuCounts() {
+        ObjectMapper mapper = new ObjectMapper();
+        Set<String> propertyNames = mapper.getSerializationConfig()
+                .introspect(mapper.constructType(BuyerDetail.class)).findProperties().stream()
+                .map(property -> property.getName()).collect(Collectors.toSet());
+
+        assertThat(propertyNames).contains("projectCount", "skuCount");
+    }
+
+    @Test
+    @SuppressWarnings("rawtypes")
+    void detailDocumentsCurrentBuyerReadOnlyCountsForSwagger() throws Exception {
+        Operation operation = BuyerAdminController.class.getDeclaredMethod("get", String.class)
+                .getAnnotation(Operation.class);
+        assertThat(operation.description()).contains("projectCount", "skuCount", "不含下级");
+        Schema<?> detailSchema = ModelConverters.getInstance().readAll(BuyerDetail.class).get("BuyerDetail");
+        assertThat(detailSchema).isNotNull();
+        assertThat(detailSchema.getProperties()).containsKeys("projectCount", "skuCount");
+        Schema<?> projectCount = detailSchema.getProperties().get("projectCount");
+        Schema<?> skuCount = detailSchema.getProperties().get("skuCount");
+        assertThat(projectCount.getDescription()).isEqualTo("当前分销商未归档关联项目数，不含下级，无关联时为0，只读");
+        assertThat(skuCount.getDescription()).isEqualTo("当前分销商有效分销商品SKU数，已移除不计入，不含下级，无关联时为0，只读");
+        for (Schema<?> count : List.of(projectCount, skuCount)) {
+            assertThat(count.getType()).isEqualTo("integer");
+            assertThat(count.getFormat()).isEqualTo("int64");
+            assertThat(count.getReadOnly()).isTrue();
+        }
+    }
+
+    @Test
     void detailProductTypesExposeIdAndName() {
         ObjectMapper mapper = new ObjectMapper();
         Set<String> propertyNames = mapper.getSerializationConfig()
