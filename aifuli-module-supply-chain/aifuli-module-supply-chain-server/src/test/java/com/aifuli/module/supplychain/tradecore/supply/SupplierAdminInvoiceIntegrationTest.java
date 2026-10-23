@@ -22,6 +22,8 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.context.ConfigurableApplicationContext;
@@ -113,6 +115,67 @@ class SupplierAdminInvoiceIntegrationTest {
             assertThat(afterProfileChange.invoiceTitle()).isEqualTo("独立发票抬头");
             assertThat(afterProfileChange.bankName()).isEqualTo("招商银行");
             assertThat(afterProfileChange.bankAccount()).isEqualTo("6225880000000001");
+
+            SupplierInvoiceView personal = invoices.save(supplierCode, new SaveInvoiceCommand(
+                    "PERSONAL", "张三", "91110000MA1K3ABC0X", "",
+                    "工商银行", "6222021001001234567", "地址"), 8L);
+            assertThat(personal.titleType()).isEqualTo("PERSONAL");
+            assertThat(personal.socialCreditCode()).isNull();
+            assertThat(personal.phone()).isNull();
+            assertThat(personal.bankName()).isEqualTo("工商银行");
+            assertThat(personal.bankAccount()).isEqualTo("6222021001001234567");
+            assertThat(invoices.get(supplierCode)).isEqualTo(personal);
+            row = invoiceMapper.selectBySupplierId(supplierId);
+            assertThat(row.getPhone()).isNull();
+            assertThat(row.getBankName()).isEqualTo("工商银行");
+            assertThat(row.getBankAccount()).isEqualTo("6222021001001234567");
+            assertThat(row.getSocialCreditCode()).isNull();
+            assertThat(query.get(supplierCode).bankName()).isEqualTo("档案新银行");
+        }
+    }
+
+    /**
+     * 真实新增与更新均覆盖电话空值，防止只放开 Java 校验却遗漏 DDL 或 NULL 更新策略。
+     * 设计见 {@code docs/superpowers/specs/2026-09-07-供应链管理端开票信息设计.md#61-校验}。
+     */
+    @ParameterizedTest
+    @CsvSource({"ENTERPRISE,91110000000000012X", "PERSONAL,91110000000000013X"})
+    void invoiceRoundTripsBankFieldsAndOptionalPhone(String titleType, String creditCode) {
+        try (ConfigurableApplicationContext context = applicationContext()) {
+            SupplierProfileCommandService command = context.getBean(SupplierProfileCommandService.class);
+            SupplierInvoiceService invoices = context.getBean(SupplierInvoiceService.class);
+            SupplierInvoiceMapper invoiceMapper = context.getBean(SupplierInvoiceMapper.class);
+            SupplierMapper supplierMapper = context.getBean(SupplierMapper.class);
+            String supplierCode = command.create(createCommand("选填电话" + titleType, creditCode));
+            Long supplierId = supplierMapper.selectByCode(supplierCode).getId();
+
+            SupplierInvoiceView inserted = invoices.save(supplierCode, new SaveInvoiceCommand(
+                    titleType, "有效抬头", creditCode, null,
+                    " 工商银行 ", " 6222021001001234567 ", null), 8L);
+            assertThat(inserted.phone()).isNull();
+            assertThat(inserted.bankName()).isEqualTo("工商银行");
+            assertThat(inserted.bankAccount()).isEqualTo("6222021001001234567");
+            assertThat(invoices.get(supplierCode)).isEqualTo(inserted);
+
+            for (String emptyPhone : new String[]{null, "", "   "}) {
+                SupplierInvoiceView withPhone = invoices.save(supplierCode, new SaveInvoiceCommand(
+                        titleType, "有效抬头", creditCode, " 13900000000 ",
+                        "工商银行", "6222021001001234567", null), 8L);
+                assertThat(withPhone.phone()).isEqualTo("13900000000");
+
+                SupplierInvoiceView cleared = invoices.save(supplierCode, new SaveInvoiceCommand(
+                        titleType, "更新抬头", creditCode, emptyPhone,
+                        "建设银行", "6217001234567890123", "苏州"), 8L);
+                assertThat(cleared.phone()).isNull();
+                assertThat(cleared.bankName()).isEqualTo("建设银行");
+                assertThat(cleared.bankAccount()).isEqualTo("6217001234567890123");
+                assertThat(invoices.get(supplierCode)).isEqualTo(cleared);
+                SupplierInvoiceDO row = invoiceMapper.selectBySupplierId(supplierId);
+                assertThat(row.getPhone()).isNull();
+                assertThat(row.getBankName()).isEqualTo("建设银行");
+                assertThat(row.getBankAccount()).isEqualTo("6217001234567890123");
+                assertThat(supplierMapper.selectByCode(supplierCode).getBankName()).isEqualTo("测试银行");
+            }
         }
     }
 

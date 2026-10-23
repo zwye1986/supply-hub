@@ -3,6 +3,9 @@ package com.aifuli.module.supplychain.tradecore.profile.application;
 import com.aifuli.framework.common.exception.ServiceException;
 import com.aifuli.module.supplychain.tradecore.profile.domain.InvoiceTitleType;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.NullAndEmptySource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.ENUM_NOT_OPEN;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.INVOICE_FIELD_INVALID;
@@ -10,7 +13,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * 开票保存校验：企业必填银行字段，个人清空信用代码与账号。
+ * 开票保存校验：电话选填，个人保留银行字段但清空信用代码，企业必填规则不变。
  * 设计见 {@code docs/superpowers/specs/2026-09-07-供应链管理端开票信息设计.md#61-校验}。
  */
 class InvoiceFieldRulesTest {
@@ -27,19 +30,33 @@ class InvoiceFieldRulesTest {
     }
 
     @Test
-    void personalClearsBankFieldsEvenIfSubmitted() {
+    void personalPreservesBankFieldsAndClearsCreditCode() {
         InvoiceFieldRules.Normalized saved = InvoiceFieldRules.normalizeForSave(
                 "PERSONAL", "张三", "13800000000", "91110000MA1K3ABC0X",
-                "工商银行", "6222021001001234567", " ");
+                " 工商银行 ", " 6222021001001234567 ", " ");
         assertThat(saved.titleType()).isEqualTo(InvoiceTitleType.PERSONAL);
         assertThat(saved.socialCreditCode()).isNull();
-        assertThat(saved.bankName()).isNull();
-        assertThat(saved.bankAccount()).isNull();
+        assertThat(saved.bankName()).isEqualTo("工商银行");
+        assertThat(saved.bankAccount()).isEqualTo("6222021001001234567");
         assertThat(saved.invoiceAddress()).isNull();
     }
 
+    @ParameterizedTest
+    @NullAndEmptySource
+    @ValueSource(strings = {"   "})
+    void phoneIsOptionalForBothTitleTypes(String phone) {
+        for (InvoiceTitleType type : InvoiceTitleType.values()) {
+            InvoiceFieldRules.Normalized saved = InvoiceFieldRules.normalizeForSave(
+                    type.name(), "有效抬头", phone, "91110000MA1K3ABC0X",
+                    "工商银行", "6222021001001234567", null);
+            assertThat(saved.phone()).as("%s 电话可空", type).isNull();
+            assertThat(saved.bankName()).isEqualTo("工商银行");
+            assertThat(saved.bankAccount()).isEqualTo("6222021001001234567");
+        }
+    }
+
     @Test
-    void missingTitleOrPhoneIsInvalid() {
+    void missingTitleIsInvalid() {
         assertThatThrownBy(() -> InvoiceFieldRules.normalizeForSave(
                 "ENTERPRISE", " ", "13800000000", "91110000MA1K3ABC0X",
                 "工商银行", "6222021001001234567", null))
@@ -47,7 +64,7 @@ class InvoiceFieldRulesTest {
                 .extracting(ex -> ((ServiceException) ex).getCode())
                 .isEqualTo(INVOICE_FIELD_INVALID.getCode());
         assertThatThrownBy(() -> InvoiceFieldRules.normalizeForSave(
-                "PERSONAL", "张三", null, null, null, null, null))
+                "PERSONAL", " ", null, null, null, null, null))
                 .isInstanceOf(ServiceException.class)
                 .extracting(ex -> ((ServiceException) ex).getCode())
                 .isEqualTo(INVOICE_FIELD_INVALID.getCode());

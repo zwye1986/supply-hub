@@ -79,7 +79,7 @@ class BuyerInvoiceServiceTest {
     }
 
     @Test
-    void savePersonalClearsBankColumns() {
+    void savePersonalPreservesBankColumns() {
         BuyerDO buyer = BuyerDO.builder().id(4L).buyerCode("BYR_A").buyerName("分销商甲").build();
         when(buyerMapper.selectByBuyerCodeForUpdate("BYR_A")).thenReturn(buyer);
         when(invoiceMapper.selectByBuyerId(4L)).thenReturn(null)
@@ -89,6 +89,8 @@ class BuyerInvoiceServiceTest {
                         .titleType("PERSONAL")
                         .invoiceTitle("张三")
                         .phone("13800000000")
+                        .bankName("工商银行")
+                        .bankAccount("6222021001001234567")
                         .createdAt(LocalDateTime.of(2026, 9, 7, 11, 0))
                         .updatedAt(LocalDateTime.of(2026, 9, 7, 11, 0))
                         .build());
@@ -99,16 +101,18 @@ class BuyerInvoiceServiceTest {
 
         ArgumentCaptor<BuyerInvoiceDO> captor = ArgumentCaptor.forClass(BuyerInvoiceDO.class);
         verify(invoiceMapper).insert(captor.capture());
-        assertThat(captor.getValue().getBankAccount()).isNull();
+        assertThat(captor.getValue().getBankName()).isEqualTo("工商银行");
+        assertThat(captor.getValue().getBankAccount()).isEqualTo("6222021001001234567");
         assertThat(captor.getValue().getSocialCreditCode()).isNull();
         assertThat(captor.getValue().getTitleType()).isEqualTo("PERSONAL");
         verify(buyerMapper, never()).updateById(any(BuyerDO.class));
         assertThat(view.persisted()).isTrue();
-        assertThat(view.bankAccount()).isNull();
+        assertThat(view.bankName()).isEqualTo("工商银行");
+        assertThat(view.bankAccount()).isEqualTo("6222021001001234567");
     }
 
     @Test
-    void savePersonalUpdateClearsExistingBankColumns() {
+    void savePersonalUpdateReplacesBankColumnsAndClearsCreditCode() {
         BuyerDO buyer = BuyerDO.builder().id(4L).buyerCode("BYR_A").buyerName("分销商甲").build();
         BuyerInvoiceDO existing = BuyerInvoiceDO.builder()
                 .id(6L)
@@ -140,9 +144,9 @@ class BuyerInvoiceServiceTest {
         ArgumentCaptor<BuyerInvoiceDO> captor = ArgumentCaptor.forClass(BuyerInvoiceDO.class);
         verify(invoiceMapper).updateById(captor.capture());
         assertThat(captor.getValue().getId()).isEqualTo(6L);
-        assertThat(captor.getValue().getBankAccount()).isNull();
+        assertThat(captor.getValue().getBankAccount()).isEqualTo("6222021001001234567");
         assertThat(captor.getValue().getSocialCreditCode()).isNull();
-        assertThat(captor.getValue().getBankName()).isNull();
+        assertThat(captor.getValue().getBankName()).isEqualTo("工商银行");
         verify(invoiceMapper, never()).insert(any(BuyerInvoiceDO.class));
     }
 }

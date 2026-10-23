@@ -36,12 +36,16 @@ public class BuyerInvoiceDO {
     /** 统一社会信用代码。个人抬头保存时须清空，更新策略 ALWAYS。 */
     @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private String socialCreditCode;
-    /** 电话 */
+    /**
+     * 电话。选填，空值更新须覆盖旧值。
+     * 设计见 {@code docs/superpowers/specs/2026-09-07-供应链管理端开票信息设计.md#61-校验}。
+     */
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private String phone;
-    /** 开户行。个人抬头保存时须清空，更新策略 ALWAYS。 */
+    /** 开户行。两种抬头均按提交值保存，空值更新须覆盖旧值。 */
     @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private String bankName;
-    /** 开户账号。个人抬头保存时须清空，更新策略 ALWAYS。 */
+    /** 开户账号。两种抬头均按提交值保存，空值更新须覆盖旧值。 */
     @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private String bankAccount;
     /** 开票地址 */
