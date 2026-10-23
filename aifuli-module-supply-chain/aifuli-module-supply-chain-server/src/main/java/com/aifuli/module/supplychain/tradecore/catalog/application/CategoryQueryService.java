@@ -1,7 +1,6 @@
 package com.aifuli.module.supplychain.tradecore.catalog.application;
 
 import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.ProductCategoryDO;
-import com.aifuli.module.supplychain.tradecore.catalog.dal.dataobject.PlatformSpuDO;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.ProductCategoryMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.dal.mysql.PlatformSpuMapper;
 import com.aifuli.module.supplychain.tradecore.catalog.domain.CatalogEntityStatus;
@@ -115,7 +114,8 @@ public class CategoryQueryService {
             }
         }
 
-        Map<Long, Long> productCounts = productCounts();
+        Map<Long, Long> productCounts = CategoryProductReferences.subtreeCounts(
+                rows, CategoryProductReferences.loadLiveSpus(spuMapper));
         // effectiveVisible 依赖祖先链，必须在建节点前算好，否则建树后还要重新替换 children 中的节点引用。
         Map<Long, Boolean> visibilityCache = new HashMap<>();
         Map<Long, ManagementCategoryNode> byId = new LinkedHashMap<>();
@@ -256,19 +256,6 @@ public class CategoryQueryService {
         return roots;
     }
 
-    private Map<Long, Long> productCounts() {
-        Map<Long, Long> counts = new LinkedHashMap<>();
-        List<PlatformSpuDO> spus = spuMapper.selectList(new LambdaQueryWrapper<PlatformSpuDO>()
-                .ne(PlatformSpuDO::getStatus, CatalogEntityStatus.ARCHIVED.getCode()));
-        for (PlatformSpuDO spu : spus) {
-            if (spu.getPrimaryCategoryId() != null) counts.merge(spu.getPrimaryCategoryId(), 1L, Long::sum);
-            if (spu.getSecondaryCategoryIds() != null) {
-                spu.getSecondaryCategoryIds().stream().distinct().forEach(id -> counts.merge(id, 1L, Long::sum));
-            }
-        }
-        return counts;
-    }
-
     /**
      * 计算节点对外可见性：自身 {@code visible == 1} 且全部祖先均可见。
      * 结果按节点缓存，避免深树上逐节点重复回溯整条祖先链；进入递归前先写入 {@code false} 占位，
@@ -317,7 +304,7 @@ public class CategoryQueryService {
             @Schema(description = "前端展示可见性: 1-显示, 0-隐藏") Short visible,
             @Schema(description = "管理状态：0草稿，10启用，20禁用，90已归档；字典 supply_chain_category_status") Short status,
             @Schema(description = "自身及全部祖先均显示时为true") boolean effectiveVisible,
-            @Schema(description = "未归档关联SPU数量") long productCount,
+            @Schema(description = "自身及全部后代分类关联的未归档SPU归属数量之和，同一SPU在同一分类只计一次") long productCount,
             @Schema(description = "创建时间，Asia/Shanghai") LocalDateTime createdAt,
             @Schema(description = "更新时间，Asia/Shanghai") LocalDateTime updatedAt,
             @Schema(description = "直接子类目") List<ManagementCategoryNode> children) {

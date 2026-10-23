@@ -840,7 +840,7 @@ Cardshop 暴露出的安全问题作为中台反向约束：供应商请求不�
 
 一期仍维护预付账户汇总：`available = balance - frozen`，且 `frozen >= 0`。一期弱化可用余额门槛：不要求 `balance >= 0` 或 `balance >= frozen`，冻结不检查 `available >= amount`，确认扣减允许 `balance` 为负。冻结使用带账户版本的原子更新（不再带可用余额条件），账户汇总、账本流水、资金预留、订单事实及 Outbox 在同一本地事务中提交。详见[《一期弱化采购商账户余额门槛》](./2026-08-17-supply-chain-phase1-buyer-account-overdraft.md)。
 
-一期不建设采购商入金单。首次启用 Buyer 前，由受控初始化命令在一个事务中创建账户、写入经审批确认的期初余额（**允许为 0**），并追加唯一 `entry_key=OPENING_BALANCE:{buyerId}:{currency}` 的 `DEPOSIT（入金）`账本流水；命令必须记录操作人、依据和审计摘要且只允许成功一次。缺账户时卡券受理与 O2O 预下单拒绝，错误码 `BUYER_ACCOUNT_NOT_OPENED`。后续充值能力不属于 M1，禁止运营人员直接更新 `balance`。
+一期不建设采购商入金单。首次启用 Buyer 前，由受控初始化命令在一个事务中创建账户、写入经审批确认的期初余额（**允许为 0**），并追加唯一 `entry_key=OPENING_BALANCE:{buyerId}:{currency}` 的 `DEPOSIT（入金）`账本流水；命令必须记录操作人、依据和审计摘要且只允许成功一次。缺账户时卡券受理与 O2O 预下单拒绝，错误码 `BUYER_ACCOUNT_NOT_OPENED`。后续充值能力不属于 M1，禁止运营人员直接更新 `balance`。2026-10-23 增加分销商管理端余额修正入口：设置目标总余额并由账户应用服务同事务追加 ADJUSTMENT，详情见[分销商账户余额编辑详细设计](./2026-10-23-buyer-admin-balance-adjustment-design.md)。该入口不复用第 13 章对账申请审批流程。
 
 `sc_supply_reservation` 属于本地数量或资产池启用后的后续模型，一期不建表。`REMOTE_ON_DEMAND/REMOTE_OBSERVED` 都不能创建虚假供给预占；奇那梦履约只冻结 Buyer 资金并固化 Offer/Connector 版本。
 

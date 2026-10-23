@@ -9,6 +9,7 @@ import com.aifuli.module.supplychain.infrastructure.identity.BusinessNoPrefixes;
 import com.aifuli.module.supplychain.infrastructure.security.EnvelopeCryptoPort;
 import com.aifuli.module.supplychain.infrastructure.security.EnvelopeCryptoPort.EncryptedPayload;
 import com.aifuli.module.supplychain.tradecore.account.application.BuyerAccountOpeningService;
+import com.aifuli.module.supplychain.tradecore.account.application.BuyerAccountAdjustmentService;
 import com.aifuli.module.supplychain.tradecore.account.application.BuyerAccountOpeningService.OpeningBalanceCommand;
 import com.aifuli.module.supplychain.tradecore.account.domain.Money;
 import com.aifuli.module.supplychain.tradecore.buyer.dal.dataobject.BuyerCategoryScopeDO;
@@ -52,7 +53,6 @@ import java.util.List;
 
 import static com.aifuli.framework.common.exception.util.ServiceExceptionUtil.exception;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BUYER_CREDIT_CODE_DUPLICATE;
-import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BUYER_OPENING_ALREADY_DONE;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BUYER_PARENT_INVALID;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BUYER_PROFILE_NOT_FOUND;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BUYER_STATUS_CONFLICT;
@@ -86,6 +86,7 @@ public class BuyerAdminCommandService {
     private final BuyerCategoryScopeMapper categoryScopeMapper;
     private final BuyerFileRefMapper fileRefMapper;
     private final BuyerAccountOpeningService accountOpeningService;
+    private final BuyerAccountAdjustmentService accountAdjustmentService;
     private final BusinessNoGenerator businessNoGenerator;
     private final ScopedBusinessCodeService scopedBusinessCodeService;
     private final EnvelopeCryptoPort envelopeCrypto;
@@ -159,11 +160,8 @@ public class BuyerAdminCommandService {
 
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
     public void update(UpdateBuyerCommand command) {
-        log.info("更新分销商档案 buyerCode={} openingBalanceCents={} operatorId={}",
+        log.info("[BUYER_PROFILE_UPDATE][更新分销商档案请求] buyerCode={}, openingBalanceCents={}, operatorId={}",
                 command.buyerCode(), command.openingBalanceCents(), command.operatorId());
-        if (command.openingBalanceCents() != null) {
-            throw exception(BUYER_OPENING_ALREADY_DONE);
-        }
         validateClosedEnums(command.distributorType(), command.supplyPreference(),
                 command.settlementMethod(), command.cooperationModes(), command.integrationModes());
         List<ContactLine> contacts = requireContacts(command.contacts());
@@ -208,6 +206,12 @@ public class BuyerAdminCommandService {
         replaceCategoryScopes(buyer.getId(), command.sellableCategories(), command.productTypes(), now);
         replaceFileRefs(buyer.getId(), requireFileKeys(command.licenseFileKeys(), command.licenseFileKey()),
                 requireFileKeys(command.qualificationFileKeys(), command.qualificationFileKey()), now);
+        // 余额设置加入当前档案事务；差额流水失败时，档案及关联行也必须回滚。
+        // 设计：docs/superpowers/specs/2026-10-23-buyer-admin-balance-adjustment-design.md#3-事务分层与并发。
+        if (command.openingBalanceCents() != null) {
+            accountAdjustmentService.adjust(new BuyerAccountAdjustmentService.AdjustmentCommand(
+                    buyer.getId(), command.openingBalanceCents(), command.operatorId(), command.traceId()));
+        }
     }
 
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class)
@@ -640,6 +644,7 @@ public class BuyerAdminCommandService {
             List<String> sellableCategories,
             List<String> productTypes,
             Long openingBalanceCents,
-            Long operatorId) implements SensitiveFields {
+            Long operatorId,
+            String traceId) implements SensitiveFields {
     }
 }

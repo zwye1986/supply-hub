@@ -117,7 +117,11 @@ public interface SupplyChainErrorCodeConstants {
     ErrorCode CATEGORY_NAME_DUPLICATE_UNDER_SAME_PARENT =
             error(1_050_001_087, "分类名称在同一父级下已存在");
     ErrorCode CATEGORY_HAS_CHILDREN = error(1_050_001_088, "分类仍有有效子分类，禁止删除");
-    ErrorCode CATEGORY_HAS_PRODUCTS = error(1_050_001_089, "分类仍有关联商品，禁止删除");
+    ErrorCode CATEGORY_DISABLE_HAS_PRODUCTS = error(1_050_001_184,
+            "无法禁用分类「{}」（{}）：自身或后代分类「{}」（{}）仍关联平台商品，请先调整商品分类或归档相关商品");
+    ErrorCode CATEGORY_ANCESTOR_UNAVAILABLE = error(1_050_001_185,
+            "分类或其祖先「{}」（{}）未启用或已归档，不能关联平台商品，请选择可用分类");
+    ErrorCode CATEGORY_HAS_PRODUCTS = error(1_050_001_089, "无法删除分类「{}」（{}）：自身或后代分类「{}」（{}）仍关联平台商品，请先调整商品分类或归档相关商品");
     ErrorCode CATEGORY_PARENT_INVALID = error(1_050_001_090, "分类父级无效或形成循环");
     ErrorCode PRODUCT_CANNOT_DELETE_HAS_SUPPLIER_OFFER =
             error(1_050_001_091, "商品仍有关联供应商报价，禁止删除");
@@ -409,6 +413,8 @@ public interface SupplyChainErrorCodeConstants {
             entry(BRAND_HAS_PRODUCTS, RetryDirective.RETRY_SAME_KEY_AFTER_CONDITION_CHANGE),
             entry(CATEGORY_NAME_DUPLICATE_UNDER_SAME_PARENT, RetryDirective.DO_NOT_RETRY),
             entry(CATEGORY_HAS_CHILDREN, RetryDirective.RETRY_SAME_KEY_AFTER_CONDITION_CHANGE),
+            entry(CATEGORY_DISABLE_HAS_PRODUCTS, RetryDirective.RETRY_SAME_KEY_AFTER_CONDITION_CHANGE),
+            entry(CATEGORY_ANCESTOR_UNAVAILABLE, RetryDirective.RETRY_SAME_KEY_AFTER_CONDITION_CHANGE),
             entry(CATEGORY_HAS_PRODUCTS, RetryDirective.RETRY_SAME_KEY_AFTER_CONDITION_CHANGE),
             entry(CATEGORY_PARENT_INVALID, RetryDirective.DO_NOT_RETRY),
             entry(PRODUCT_CANNOT_DELETE_HAS_SUPPLIER_OFFER, RetryDirective.RETRY_SAME_KEY_AFTER_CONDITION_CHANGE),

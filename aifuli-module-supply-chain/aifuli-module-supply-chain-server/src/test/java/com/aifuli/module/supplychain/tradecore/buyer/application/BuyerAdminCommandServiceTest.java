@@ -7,6 +7,7 @@ import com.aifuli.module.supplychain.infrastructure.security.EnvelopeCryptoPort;
 import com.aifuli.module.supplychain.infrastructure.security.EnvelopeCryptoPort.EncryptedPayload;
 import com.aifuli.module.supplychain.infrastructure.time.SupplyChainDatabaseClock;
 import com.aifuli.module.supplychain.tradecore.account.application.BuyerAccountOpeningService;
+import com.aifuli.module.supplychain.tradecore.account.application.BuyerAccountAdjustmentService;
 import com.aifuli.module.supplychain.tradecore.account.application.BuyerAccountOpeningService.OpeningBalanceCommand;
 import com.aifuli.module.supplychain.tradecore.account.domain.Money;
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerAdminCommandService.ContactLine;
@@ -33,7 +34,6 @@ import java.security.MessageDigest;
 import java.time.LocalDateTime;
 import java.util.List;
 
-import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BUYER_OPENING_ALREADY_DONE;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BUYER_PROFILE_NOT_FOUND;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BUYER_STATUS_CONFLICT;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.ENUM_NOT_OPEN;
@@ -59,6 +59,7 @@ class BuyerAdminCommandServiceTest {
     private final BuyerCategoryScopeMapper categoryScopeMapper = mock(BuyerCategoryScopeMapper.class);
     private final BuyerFileRefMapper fileRefMapper = mock(BuyerFileRefMapper.class);
     private final BuyerAccountOpeningService accountOpeningService = mock(BuyerAccountOpeningService.class);
+    private final BuyerAccountAdjustmentService accountAdjustmentService = mock(BuyerAccountAdjustmentService.class);
     private final BusinessNoGenerator businessNoGenerator = mock(BusinessNoGenerator.class);
     private final com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService scopedBusinessCodeService =
             mock(com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService.class);
@@ -73,7 +74,7 @@ class BuyerAdminCommandServiceTest {
         when(databaseClock.now()).thenReturn(LocalDateTime.of(2026, 9, 4, 11, 0));
         service = new BuyerAdminCommandService(
                 databaseClock, buyerMapper, contactMapper, integrationModeMapper, cooperationModeMapper,
-                categoryScopeMapper, fileRefMapper, accountOpeningService,
+                categoryScopeMapper, fileRefMapper, accountOpeningService, accountAdjustmentService,
                 businessNoGenerator, scopedBusinessCodeService,
                 envelopeCrypto, productTypeValidationService);
         when(scopedBusinessCodeService.allocateRoot(
@@ -209,12 +210,20 @@ class BuyerAdminCommandServiceTest {
     }
 
     @Test
-    void updateRejectsOpeningBalanceWhenAccountExists() {
-        assertThatThrownBy(() -> service.update(updateWithOpening(0L)))
-                .isInstanceOf(ServiceException.class)
-                .extracting(ex -> ((ServiceException) ex).getCode())
-                .isEqualTo(BUYER_OPENING_ALREADY_DONE.getCode());
+    void updateAllowsTargetBalanceWithoutReopeningAccount() {
+        when(buyerMapper.selectByBuyerCodeForUpdate("BYR_EXISTING")).thenReturn(buyer(BuyerStatus.ACTIVE));
+        service.update(updateWithOpening(0L));
+        verify(buyerMapper).updateById(any(BuyerDO.class));
         verify(accountOpeningService, never()).open(any());
+        verify(accountAdjustmentService).adjust(new BuyerAccountAdjustmentService.AdjustmentCommand(
+                5L, 0L, 1L, "buyer-admin-update-test"));
+    }
+
+    @Test
+    void updateWithoutBalanceDoesNotAdjustAccount() {
+        when(buyerMapper.selectByBuyerCodeForUpdate("BYR_EXISTING")).thenReturn(buyer(BuyerStatus.ACTIVE));
+        service.update(updateWithOpening(null));
+        verify(accountAdjustmentService, never()).adjust(any());
     }
 
     @Test
@@ -277,7 +286,7 @@ class BuyerAdminCommandServiceTest {
                 null, null, "测试科技有限公司", "91110000000000001X",
                 "李四", "13900139000", "上海市浦东新区", "测试银行", "6222021234567890",
                 null, null, null, null, List.of(), List.of(), List.of(), List.of(),
-                opening, 1L);
+                opening, 1L, "buyer-admin-update-test");
     }
 
     private static UpdateBuyerCommand updateWithCooperation(LocalDateTime cooperationStartedAt) {
@@ -287,7 +296,7 @@ class BuyerAdminCommandServiceTest {
                 cooperationStartedAt, null, "测试科技有限公司", "91110000000000001X",
                 "李四", "13900139000", "上海市浦东新区", "测试银行", "6222021234567890",
                 null, null, null, null, List.of(), List.of(), List.of(), List.of(),
-                null, 1L);
+                null, 1L, "buyer-admin-update-test");
     }
 
     private static BuyerDO buyer(BuyerStatus status) {

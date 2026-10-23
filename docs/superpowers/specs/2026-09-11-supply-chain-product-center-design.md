@@ -822,6 +822,8 @@ system-server 通过追加变更集 `006-product-list-filter-dictionaries` 写�
 ---
 
 ### 4.2 商品分类管理：`CategoryAdminController`
+2026-10-22 修订：管理树 SPU 数量包含自身及所有后代，禁用/删除统一检查子树商品引用，并与商品绑定写入串行化；详细口径、父分类删除边界和事务锁协议见 [分类子树 SPU 统计与禁用删除保护](2026-10-22-category-subtree-product-guard-design.md)。下述接口路径保持兼容。
+
 基路径：`/supply-chain/categories`
 后端由新建的 `CategoryCommandService`（写）与已有的 `CategoryQueryService`（读）支撑。
 

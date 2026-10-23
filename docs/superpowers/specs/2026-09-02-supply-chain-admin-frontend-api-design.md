@@ -410,7 +410,7 @@ SKU 未填供货上限时继承供货配置 `maxQuantity`；未填最低起购�
 - `view=simple`：名称/编号下拉 `{ buyerCode, buyerName }`
 - `view=parent-options`：`excludeBuyerCode`、`forLevel`，供「上级分销商」下拉
 
-`GET /supply-chain/buyers/{buyerCode}`、`POST /supply-chain/buyers`、`PUT /supply-chain/buyers/{buyerCode}` 档案字段对齐前端分销商表单：名称、联系人、分销品类/类型（`sellableCategories[]` / `productTypes[]` 枚举名，不是类目 id）、合作模式、类型、择优倾向、结算方式/周期、对接方式、合作开始日、说明、公司/信用代码/法人/地址/银行/证件、期初 `openingBalanceCents`（创建一次，允许 0）。详情中的 `legalPersonMobile`、`bankAccount`、`contacts[].mobile`、`primaryContactMobile` 及证件 fileKey 均按原值回显，不提供 `legalPersonMobileMasked` / `bankAccountMasked` 字段。字典见专文 §3。
+`GET /supply-chain/buyers/{buyerCode}`、`POST /supply-chain/buyers`、`PUT /supply-chain/buyers/{buyerCode}` 档案字段对齐前端分销商表单：名称、联系人、分销品类/类型（`sellableCategories[]` / `productTypes[]` 枚举名，不是类目 id）、合作模式、类型、择优倾向、结算方式/周期、对接方式、合作开始日、说明、公司/信用代码/法人/地址/银行/证件、余额 `openingBalanceCents`（创建为期初；编辑为目标总余额，允许 0，省略或 null 不动账）。详情中的 `legalPersonMobile`、`bankAccount`、`contacts[].mobile`、`primaryContactMobile` 及证件 fileKey 均按原值回显，不提供 `legalPersonMobileMasked` / `bankAccountMasked` 字段。字典见专文 §3。
 
 详情响应中的 `productTypes[]` 为对象数组，字段固定为 `{ id, name }`：按已保存的 `scope_kind=PRODUCT_TYPE` 范围编码关联 `sc_product_type.type_code`，`id` 取商品类型业务编码，`name` 取商品类型名称，不暴露商品类型表内部自增主键。创建/编辑请求的 `productTypes[]` 仍提交商品类型业务编码；列表响应继续返回编码数组，避免改变列表筛选与既有投影契约。
 
@@ -427,7 +427,7 @@ SKU 未填供货上限时继承供货配置 `maxQuantity`；未填最低起购�
 
 由于同一集合接口还兼容 `view=simple` 与 `view=parent-options` 投影，Java 运行时返回类型允许保持 `CommonResult<?>`；但 OpenAPI 的默认 `200` 响应必须显式声明为 `CommonResult<PageResult<BuyerListItem>>` 对应的具体文档模型，不能退化为 `CommonResultObject`。Swagger / Knife4j 的默认分页响应必须能展开 `BuyerListItem`，并展示上述全部列表字段。
 
-期初写入既有采购商唯一账本，禁止写入供应商结算账户。管理端创建不要求前端传 evidence 文件；服务端使用受控 `entry_key=ADMIN_OPENING:{buyerId}:CNY`（或等价不可伪造键）走一次性开户。已存在账户再带余额 → 与供应商相同语义的已开户错误。编辑页余额只读。
+期初写入既有采购商唯一账本，禁止写入供应商结算账户。管理端创建不要求前端传 evidence 文件；服务端使用受控 `entry_key=ADMIN_OPENING:{buyerId}:CNY`（或等价不可伪造键）走一次性开户。分销商 PUT 编辑复用 `openingBalanceCents` 设置目标总余额，差额非零时同事务追加 `ADJUSTMENT` 流水；同值不动账，冻结金额保持不变。仅改后端的详细规则见[分销商账户余额编辑详细设计](./2026-10-23-buyer-admin-balance-adjustment-design.md)，后续版本必须解决的旧页面覆盖问题见 §6.2.1。供应商编辑余额限制不变。
 
 `PATCH /supply-chain/buyers/{buyerCode}` `{ "status": "SUSPENDED"|"ACTIVE"|"BLACKLIST" }`。批量：`PATCH /supply-chain/buyers` `{ buyerCodes, status }`（暂停/恢复）。
 
@@ -450,6 +450,24 @@ Springdoc `components.schemas` 中冲突的通用简单类名。生成契约必�
 `GET /supply-chain/projects?buyerCode=`：该分销商的项目（不要再单独做 `GET /buyers/{code}/projects`，避免两套列表）。
 
 编号：创建时系统生成 `buyerCode`（保持现有生成规则；若无管理端生成则新增 `BYR_` 前缀，与供应商 `SPL_` 并列）。前端 mock 的 `18-001` 格式不作为后端格式。
+
+### 6.2.1 余额编辑方案的已知缺陷与后续迭代
+
+**记录日期：2026-10-23；跟踪编号：`BUYER-BALANCE-STALE-001`；状态：已知限制，本次暂缓，后续版本必须解决。** 跟踪入口见[项目待办列表](../../待办列表.md#后续版本必须解决分销商余额编辑的旧页面覆盖问题)。
+
+**适用范围与实现状态：** 用户确认余额输入表示“调整后的账户总余额”，本次仅修改后端，保持前端请求格式不变：创建时 `openingBalanceCents` 为期初余额，编辑时为目标总余额；后端对实际差额追加 `ADJUSTMENT` 流水，账户、流水与档案同事务提交，冻结金额不变。用户明确暂不处理旧页面覆盖问题，但要求记录并在后续版本解决。原后端拒绝编辑请求携带余额字段；本次实现按[分销商账户余额编辑详细设计](./2026-10-23-buyer-admin-balance-adjustment-design.md)调整，实施、自动化和部署状态分别以实际记录为准，不表示已部署。
+
+**触发场景：** 当前前端编辑页加载账户余额后，保存档案时总会提交 `openingBalanceCents`，请求不包含余额是否被主动修改的标识或账户版本。例如页面加载余额为 100 元，期间订单扣款 10 元，数据库余额变为 90 元；用户只修改联系人后保存，页面仍提交 100 元。放开编辑余额后，后端将按目标余额追加 +10 元调账流水，使总余额回到 100 元。订单扣款流水仍在，但其对总余额的影响被本次非主动调账抵消。期间发生退款、另一管理员调账，或请求已提交后响应丢失再重试，也可能产生同类覆盖。
+
+**影响与本次边界：** 后端无法仅凭目标余额区分主动调账与旧值回传。账户行锁、服务端更新时的版本 CAS 和完整流水只能保证单次写入一致，不能证明客户端基于最新账户状态操作；同值跳过也无法消除上述风险。本次按用户确认暂不增加前端修改意图、客户端账户版本或稳定操作编号协议，不得因此宣称已解决旧页面覆盖或跨交易重试幂等。
+
+**TODO（后续版本必须完成）：** 按[项目待办列表 `BUYER-BALANCE-STALE-001`](../../待办列表.md#后续版本必须解决分销商余额编辑的旧页面覆盖问题)联动当前前端仓库 `/Users/mac/codespace/supplychainhubweb`，先修订接口契约，再实现以下能力：
+
+1. 前端仅在用户主动修改余额时提交资金字段；普通档案保存不触发余额设置。
+2. 详情返回与余额一致的账户版本，余额修改请求携带预期版本；后端锁定账户后校验版本，冲突时整体回滚并要求刷新、重新确认，禁止自动用旧目标余额重试。
+3. 同一次主动调整携带稳定操作编号；后端先识别已提交操作并回放结果，再判断新操作的版本。同编号同参数不重复动账，同编号不同参数冲突。操作编号不能在每次网络重试时重新生成。
+
+**关闭缺陷的验收要求（尚未执行）：** 覆盖“加载 100 元 → 并发扣款至 90 元 → 只改联系人保存”后余额仍为 90 元且无调账流水；主动调账与订单扣款、冻结、退款或另一管理员调账竞争时，旧版本请求明确冲突且档案、余额、流水均无部分提交；主动调整在提交成功、响应丢失、随后又发生交易后按原操作编号重试，不再次设置余额或追加流水。需完成前端交互、HTTP 契约及真实 MySQL 并发/事务测试，并将联调步骤和实际结果写入 `docs/集成测试.md`；完成这些证据后才可关闭待办。
 
 ### 6.3 分销商品
 
@@ -580,7 +598,7 @@ O2O / INSTORE 仍 `buyerSettlementAmount = channelPayAmount`，不读三级价�
 | `PROJECT_STATUS_INVALID` | 非法项目状态迁移 |
 | `PROJECT_SKU_NOT_IN_BUYER_CATALOG` | 项目 SKU 不是该分销商的分销商品 |
 | `SUPPLY_SCOPE_MODE_INVALID` | 供货配置模式集合为空或含未知值 |
-| `BUYER_OPENING_ALREADY_DONE` | 分销商期初已入账，禁止再改余额字段 |
+| `BUYER_OPENING_ALREADY_DONE` | 历史错误码保留；分销商 PUT 已按 2026-10-23 设计允许编辑余额，不再抛此错误 |
 | `BUYER_CREDIT_CODE_DUPLICATE` | 公司名称+统一社会信用代码联合重复 |
 | `INVOICE_FIELD_INVALID` | 开票信息字段不完整或与抬头类型冲突 |
 | `SUPPLIER_CODE_REQUIRED` | 排除已添加供应商品时必须指定供应商（`excludeAddedSupplierOffers=true` 但 `supplierCode` 空白） |
