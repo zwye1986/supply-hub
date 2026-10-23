@@ -442,7 +442,10 @@ ALTER TABLE sc_platform_sku
   - 若存在有效子分类（`status != 90`），拒绝删除（`CATEGORY_HAS_CHILDREN`）。
   - 若存在未归档 SPU 引用该分类（作为 `primary_category_id` 或在 `secondary_category_ids` 中），拒绝删除（`CATEGORY_HAS_PRODUCTS`）。
 * **商品类型与描述**：
-  - 新增、编辑分类时可提交原型多选参数 `typeCodes`（或兼容单选 `productType`，任一提供即可，至少包含一个有效且启用的商品类型编码，由 `sc_product_type` 维护）；仅启用类型可建立新的分类关联。
+  - 新增根分类、编辑分类时可提交原型多选参数 `typeCodes`（或兼容单选 `productType`，新增根分类时任一提供即可，至少包含一个有效且启用的商品类型编码，由 `sc_product_type` 维护）；仅启用类型可建立新的分类关联。
+  - **2026-10-23 新建子分类继承规则**：`parentCategoryCode` 非空时，服务端在既有分类写锁和事务内读取直接父分类，以父级 `typeCodes` 完整列表及其顺序创建子分类，首项同步为 `productType`；父级无列表但有兼容 `productType` 时按单值继承。请求中的 `typeCodes` / `productType` 可省略；如提交则忽略其值，不允许覆盖父级类型（字段格式校验仍生效）。不得只继承首项、取子集或合并请求类型。
+  - 继承仍执行现有启用商品类型校验；父分类不存在或已归档返回 `CATEGORY_NOT_FOUND`，父分类两种类型字段均为空返回 `CATEGORY_PRODUCT_TYPE_REQUIRED`；继承类型不存在、已归档或未启用时沿用 `PRODUCT_TYPE_NOT_FOUND` / `PRODUCT_TYPE_INACTIVE`，不回退到请求类型、不修改父分类。
+  - 本次只调整新建接口和 Swagger 说明，不调整已有分类编辑、父级修改后的级联同步、历史数据或前端；继承是创建时的快照，不建立动态关联。现有详情、管理树接口继续回显实际存储的类型，无需新增接口或数据库字段。
   - 多选类型持久化至 `sc_product_category.type_codes`（JSON 数组），首个类型冗余同步至 `product_type` 保障存量索引与查询；编辑时不传或传空数组保持原商品类型不变。
   - 已绑定类型后即使类型被停用，分类详情仍按原编码回显；后续再次显式变更分类商品类型时必须选择当前启用类型。
   - `description` 与原型别名 `remark` 互为别名兼容，最长 200 字，空字符串与纯空白统一保存为 `NULL`；历史数据的 `productType`、`typeCodes`、`description` 为空时原样返回 `null`，不得推断填充。
@@ -830,7 +833,7 @@ system-server 通过追加变更集 `006-product-list-filter-dictionaries` 写�
 * `GET /supply-chain/categories`：保留存量启用类目选项树契约，仅返回 `status=ACTIVE` 的节点。
 * `GET /supply-chain/categories/management-tree`：商品中心管理树，支持 `keyword`（编码或名称模糊匹配）与 `status`（分类状态）入参；采用「树枝保留模式」（子节点命中筛选条件时向上保留所有祖先节点以维持树形层级结构，剪除非命中且无命中后代的分支），返回符合条件的未归档节点及 `children`、关联商品计数、`visible`、`status`、`effectiveVisible`、只读 `categoryNodeNo`，节点扩展回显 `productType`、`typeCodes`、`description`、`remark`、`createdAt` 与 `updatedAt`。
 * `GET /supply-chain/categories/{categoryCode}`：分类详情，返回专用 `CategoryDetail`，同时返回 `productType`、`typeCodes`（商品类型编码数组）、`description`、`remark` 与只读 `categoryNodeNo`；不得直接暴露数据库 DO、乐观锁版本或操作人 ID。
-* `POST /supply-chain/categories`：创建分类（支持手填符合三位流水格式的编码，缺省由统一编号服务分配；支持上级类目挂载、原型多选 `typeCodes` 与单选 `productType` 兼容、`remark` 与 `description` 描述兼容、启用商品类型绑定校验、同一父级下名称唯一校验、显示控制）。
+* `POST /supply-chain/categories`：创建分类（支持手填符合三位流水格式的编码，缺省由统一编号服务分配；支持上级类目挂载、原型多选 `typeCodes` 与单选 `productType` 兼容、`remark` 与 `description` 描述兼容、启用商品类型绑定校验、同一父级下名称唯一校验、显示控制）。2026-10-23 起，新建子分类的类型完整继承直接父分类，忽略请求中的类型值；新建根分类仍须提供商品类型，具体边界见 §3.3。
 * `PUT /supply-chain/categories/{categoryCode}`：更新分类（名称、商品类型多选/单选、分类描述/备注、排序、显示状态）。`parentCategoryCode` 缺省或相同父级可保存，实际变更父级则拒绝；同一父级下名称唯一校验对所有更新请求生效。
 * `PUT /supply-chain/categories/{categoryCode}/status`：启用/停用分类状态。
 * `DELETE /supply-chain/categories/{categoryCode}`：删除分类（强校验子类目与未归档 SPU 引用）。

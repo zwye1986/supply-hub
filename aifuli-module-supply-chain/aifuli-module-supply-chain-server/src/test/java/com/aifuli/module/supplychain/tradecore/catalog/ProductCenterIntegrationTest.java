@@ -144,6 +144,15 @@ class ProductCenterIntegrationTest {
             assertThat(treeNode.createdAt()).isNotNull();
             assertThat(treeNode.updatedAt()).isNotNull();
 
+            // 新建子分类可省略类型，完整继承父级 JSON 列和首项，不依赖前端提交默认值。
+            String childCode = categoryService.create(new CategoryCommandService.CreateCommand(
+                    null, "继承类型子分类", null, null, null, categoryCode, 0, (short) 1,
+                    CatalogEntityStatus.ACTIVE.getCode(), 1L));
+            CategoryQueryService.CategoryDetail childDetail = categoryQueryService.detail(childCode);
+            assertThat(childDetail.productType()).isEqualTo("EQUITY_PRODUCT");
+            assertThat(childDetail.typeCodes()).containsExactly("EQUITY_PRODUCT", "MOVIE", "DINING");
+            assertThat(childDetail.parentId()).isEqualTo(categoryId);
+
             // 测试编辑多商品类型与清空描述
             categoryService.update(categoryCode, new CategoryCommandService.UpdateCommand(
                     "商品中心测试分类已更新", null, List.of("MOVIE", "DINING"), "更新后备注", null, 1, (short) 1, 1L));
@@ -159,6 +168,18 @@ class ProductCenterIntegrationTest {
             assertThat(clearedDescDetail.description()).isNull();
             assertThat(clearedDescDetail.remark()).isNull();
             assertThat(clearedDescDetail.typeCodes()).containsExactly("MOVIE", "DINING");
+
+            // 根分类编辑不级联；孙分类继承直接父级快照，忽略请求中的类型子集和异值单选。
+            String grandchildCode = categoryService.create(new CategoryCommandService.CreateCommand(
+                    null, "继承类型孙分类", "MOVIE", List.of("DINING"), null, childCode, 0, (short) 1,
+                    CatalogEntityStatus.ACTIVE.getCode(), 1L));
+            CategoryQueryService.CategoryDetail grandchildDetail = categoryQueryService.detail(grandchildCode);
+            assertThat(grandchildDetail.productType()).isEqualTo("EQUITY_PRODUCT");
+            assertThat(grandchildDetail.typeCodes()).containsExactly("EQUITY_PRODUCT", "MOVIE", "DINING");
+            assertThat(grandchildDetail.parentId()).isEqualTo(categoryService.detail(childCode).getId());
+            assertThat(grandchildDetail.categoryLevel()).isEqualTo((short) 3);
+            assertThat(categoryQueryService.detail(childCode).typeCodes())
+                    .containsExactly("EQUITY_PRODUCT", "MOVIE", "DINING");
 
             String spuCode = commandService.createProduct(new SaveSpuCommand(
                     "SPU_001", "商品中心虚拟直充", "复合保存回归", brandId, categoryId, List.of(),

@@ -28,6 +28,7 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.CATEGORY_NOT_FOUND;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.CATEGORY_PARENT_INVALID;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.CATEGORY_PARENT_IMMUTABLE;
+import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.CATEGORY_PRODUCT_TYPE_REQUIRED;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_CONCURRENT_UPDATE;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.PRODUCT_STATUS_INVALID;
 
@@ -51,12 +52,22 @@ public class CategoryCommandService {
     private final SupplyChainDatabaseClock databaseClock;
     private final ProductTypeValidationService productTypeValidationService;
 
+    /**
+     * 根分类使用请求类型；子分类在父级行锁内完整继承直接父级类型，忽略请求类型，防止绕过表单改写。
+     * 历史父级仅有单值时兼容继承；无类型或类型未启用时拒绝创建，不使用请求值补齐。
+     * 设计见 {@code docs/superpowers/specs/2026-09-11-supply-chain-product-center-design.md#33-商品分类树管理无限级同级防重与父级不可变}。
+     */
     @Transactional(transactionManager = TRANSACTION_MANAGER, rollbackFor = Exception.class, isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public String create(CreateCommand command) {
         CategoryProductReferences.lockForWrite(categoryMapper);
         ProductCategoryDO parent = hasText(command.parentCategoryCode())
                 ? requireLive(command.parentCategoryCode(), true) : null;
-        List<String> validatedTypeCodes = validateAndResolveTypeCodes(command.typeCodes(), command.productType());
+        List<String> validatedTypeCodes = parent == null
+                ? validateAndResolveTypeCodes(command.typeCodes(), command.productType())
+                : validateAndResolveTypeCodes(parent.getTypeCodes(), parent.getProductType());
+        if (parent != null && validatedTypeCodes.isEmpty()) {
+            throw exception(CATEGORY_PRODUCT_TYPE_REQUIRED);
+        }
         String productType = validatedTypeCodes.isEmpty()
                 ? (hasText(command.productType()) ? command.productType().trim() : null)
                 : validatedTypeCodes.get(0);

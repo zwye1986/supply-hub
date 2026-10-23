@@ -19,12 +19,49 @@ import java.util.Arrays;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /**
  * 类目管理端 OpenAPI 契约：必须有 Tag/Operation，保留集合 GET 并仅新增 management-tree。
  * 设计见 {@code docs/superpowers/specs/2026-09-02-supply-chain-admin-frontend-api-design.md#36-openapiswagger}。
  */
 class CategoryAdminContractTest {
+
+    /** 子分类请求可省略类型，根分类缺少类型仍须返回原业务错误。 */
+    @Test
+    void createRequiresRequestTypesOnlyForRootCategories() {
+        var commands = mock(com.aifuli.module.supplychain.tradecore.catalog.application.CategoryCommandService.class);
+        when(commands.create(any())).thenReturn("CAT_007_001");
+        var controller = new CategoryAdminController(mock(CategoryQueryService.class), commands);
+        var request = new CategoryAdminController.CategorySaveReqVO();
+        request.setCategoryName("子分类");
+        request.setParentCategoryCode("CAT_001");
+
+        assertThat(controller.create(request).getData()).isEqualTo("CAT_007_001");
+
+        request.setParentCategoryCode(" ");
+        assertThatThrownBy(() -> controller.create(request))
+                .isInstanceOf(com.aifuli.framework.common.exception.ServiceException.class)
+                .extracting(ex -> ((com.aifuli.framework.common.exception.ServiceException) ex).getCode())
+                .isEqualTo(com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.CATEGORY_PRODUCT_TYPE_REQUIRED.getCode());
+    }
+
+    /** Swagger 必须明确子分类完整继承、请求不能覆盖和根分类类型必填。 */
+    @Test
+    void documentsChildTypeInheritanceInGeneratedSchema() throws NoSuchMethodException {
+        Method create = CategoryAdminController.class.getMethod("create", CategoryAdminController.CategorySaveReqVO.class);
+        assertThat(create.getAnnotation(Operation.class).description())
+                .contains("子分类", "继承", "忽略", "根分类");
+        var schemas = ModelConverters.getInstance().readAll(CategoryAdminController.CategorySaveReqVO.class);
+        Map<String, io.swagger.v3.oas.models.media.Schema> properties =
+                schemas.get("CategorySaveReqVO").getProperties();
+        for (String field : java.util.List.of("typeCodes", "productType")) {
+            assertThat(properties.get(field).getDescription()).contains("继承", "忽略", "根分类");
+        }
+    }
 
     @Test
     void documentsTreeCollectionAndHasNoInvoiceOrTreePath() {
@@ -92,11 +129,11 @@ class CategoryAdminContractTest {
         var productType = CategoryAdminController.CategorySaveReqVO.class.getDeclaredField("productType");
         assertThat(productType.getAnnotation(Size.class).max()).isEqualTo(32);
         assertThat(productType.getAnnotation(io.swagger.v3.oas.annotations.media.Schema.class).description())
-                .isEqualTo("商品类型编码，由sc_product_type动态维护");
+                .startsWith("商品类型编码，由sc_product_type动态维护");
 
         var typeCodes = CategoryAdminController.CategorySaveReqVO.class.getDeclaredField("typeCodes");
         assertThat(typeCodes.getAnnotation(Schema.class).description())
-                .isEqualTo("商品类型编码列表，由sc_product_type动态维护");
+                .startsWith("商品类型编码列表，由sc_product_type动态维护");
 
         var description = CategoryAdminController.CategorySaveReqVO.class.getDeclaredField("description");
         assertThat(description.getAnnotation(Size.class).max()).isEqualTo(200);

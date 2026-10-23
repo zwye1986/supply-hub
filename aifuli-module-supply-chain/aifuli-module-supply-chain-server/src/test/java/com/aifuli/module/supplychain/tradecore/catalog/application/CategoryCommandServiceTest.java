@@ -23,6 +23,8 @@ import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -109,6 +111,75 @@ class CategoryCommandServiceTest {
         assertThat(last.getProductType()).isEqualTo("EQUITY_PRODUCT");
         assertThat(last.getTypeCodes()).containsExactly("EQUITY_PRODUCT", "MOVIE", "DINING");
         assertThat(last.getDescription()).isEqualTo("多类型说明");
+    }
+
+    /** 新建子分类完整继承父级多选及顺序，请求中的其它类型不能覆盖或追加。 */
+    @Test
+    void createChildInheritsAllParentTypesDespiteConflictingRequest() {
+        ProductCategoryDO parent = ProductCategoryDO.builder()
+                .id(10L).categoryCode("CAT_001").categoryNodeNo((short) 7).categoryLevel((short) 1)
+                .status(CatalogEntityStatus.ACTIVE.getCode()).productType("MOVIE")
+                .typeCodes(List.of("MOVIE", "EQUITY_PRODUCT")).build();
+        when(categoryMapper.selectByCodeForUpdate("CAT_001")).thenReturn(parent);
+        when(scopedBusinessCodeService.allocateChild(any(), anyLong(), anyInt(), any(), any()))
+                .thenReturn(new com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService.Allocation(
+                        "CAT_007_001", 1));
+        for (String type : List.of("MOVIE", "EQUITY_PRODUCT", "DINING")) {
+            when(productTypeValidationService.requireActiveForUpdate(type))
+                    .thenReturn(ProductTypeDO.builder().typeCode(type).build());
+        }
+
+        service.create(new CategoryCommandService.CreateCommand(
+                null, "子分类", "DINING", List.of("DINING"), null, "CAT_001", null, null, null, 1L));
+
+        ArgumentCaptor<ProductCategoryDO> captor = ArgumentCaptor.forClass(ProductCategoryDO.class);
+        verify(categoryMapper).insert(captor.capture());
+        assertThat(captor.getValue().getProductType()).isEqualTo("MOVIE");
+        assertThat(captor.getValue().getTypeCodes()).containsExactly("MOVIE", "EQUITY_PRODUCT");
+        assertThat(captor.getValue().getParentId()).isEqualTo(10L);
+        assertThat(captor.getValue().getCategoryLevel()).isEqualTo((short) 2);
+    }
+
+    /** 历史父分类仅有兼容单值时，子分类不传类型也能继承并写入列表。 */
+    @Test
+    void createChildInheritsLegacyParentProductTypeWithoutRequestType() {
+        ProductCategoryDO parent = ProductCategoryDO.builder()
+                .id(10L).categoryCode("CAT_001").categoryNodeNo((short) 7).categoryLevel((short) 1)
+                .status(CatalogEntityStatus.ACTIVE.getCode()).productType("EQUITY_PRODUCT").build();
+        when(categoryMapper.selectByCodeForUpdate("CAT_001")).thenReturn(parent);
+        when(scopedBusinessCodeService.allocateChild(any(), anyLong(), anyInt(), any(), any()))
+                .thenReturn(new com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService.Allocation(
+                        "CAT_007_001", 1));
+        when(productTypeValidationService.requireActiveForUpdate("EQUITY_PRODUCT"))
+                .thenReturn(ProductTypeDO.builder().typeCode("EQUITY_PRODUCT").build());
+
+        service.create(new CategoryCommandService.CreateCommand(
+                null, "兼容子分类", null, null, null, "CAT_001", null, null, null, 1L));
+
+        ArgumentCaptor<ProductCategoryDO> captor = ArgumentCaptor.forClass(ProductCategoryDO.class);
+        verify(categoryMapper).insert(captor.capture());
+        assertThat(captor.getValue().getProductType()).isEqualTo("EQUITY_PRODUCT");
+        assertThat(captor.getValue().getTypeCodes()).containsExactly("EQUITY_PRODUCT");
+    }
+
+    /** 父分类缺少类型时不能使用请求类型补齐父级缺失的业务事实。 */
+    @Test
+    void createChildRejectsParentWithoutProductTypesEvenWhenRequestHasType() {
+        ProductCategoryDO parent = ProductCategoryDO.builder()
+                .id(10L).categoryCode("CAT_001").categoryNodeNo((short) 7).categoryLevel((short) 1)
+                .status(CatalogEntityStatus.ACTIVE.getCode()).build();
+        when(categoryMapper.selectByCodeForUpdate("CAT_001")).thenReturn(parent);
+        when(scopedBusinessCodeService.allocateChild(any(), anyLong(), anyInt(), any(), any()))
+                .thenReturn(new com.aifuli.module.supplychain.infrastructure.identity.ScopedBusinessCodeService.Allocation(
+                        "CAT_007_001", 1));
+        when(productTypeValidationService.requireActiveForUpdate("DINING"))
+                .thenReturn(ProductTypeDO.builder().typeCode("DINING").build());
+
+        assertThatThrownBy(() -> service.create(new CategoryCommandService.CreateCommand(
+                null, "无继承来源", "DINING", null, "CAT_001", null, null, null, 1L)))
+                .isInstanceOf(ServiceException.class)
+                .extracting(ex -> ((ServiceException) ex).getCode())
+                .isEqualTo(com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.CATEGORY_PRODUCT_TYPE_REQUIRED.getCode());
     }
 
     @Test

@@ -86,9 +86,14 @@ public class CategoryAdminController {
 
     @PostMapping
     @PreAuthorize(CATEGORY_CREATE_EXPRESSION)
-    @Operation(summary = "创建商品分类", description = "categoryCode 为空时生成 CAT_+ULID；同一父级下名称唯一。")
+    @Operation(summary = "创建商品分类", description = "categoryCode 为空时由统一编号服务生成；同一父级下名称唯一。"
+            + "新建根分类（parentCategoryCode 为空）必须提交 typeCodes 或兼容单值 productType。"
+            + "新建子分类自动完整继承直接父分类的商品类型及顺序，忽略请求中的 typeCodes 和 productType，不能覆盖父级类型；"
+            + "父级仅有 productType 时按单值继承。继承类型仍须存在且启用。"
+            + "父分类不存在或已归档返回 CATEGORY_NOT_FOUND；父级无类型或根分类未提交类型返回 CATEGORY_PRODUCT_TYPE_REQUIRED；"
+            + "类型不存在或未启用分别返回 PRODUCT_TYPE_NOT_FOUND、PRODUCT_TYPE_INACTIVE。成功返回新分类编码。")
     public CommonResult<String> create(@Valid @RequestBody CategorySaveReqVO request) {
-        if (!request.hasProductType()) {
+        if ((request.parentCategoryCode == null || request.parentCategoryCode.isBlank()) && !request.hasProductType()) {
             throw exception(CATEGORY_PRODUCT_TYPE_REQUIRED);
         }
         List<String> typeCodes = request.resolveTypeCodes();
@@ -102,8 +107,8 @@ public class CategoryAdminController {
     @PutMapping("/{categoryCode}")
     @PreAuthorize(CATEGORY_UPDATE_EXPRESSION)
     @Operation(summary = "更新商品分类",
-            description = "parentCategoryCode 三态：不传表示不变更父级，空字符串表示挂到根，非空编码表示挂到该父级。"
-                    + "仅在实际变更父级时防循环并递归重算整棵子树层级。")
+            description = "parentCategoryCode 不传、null 或原父级可保存，实际变更父级返回 CATEGORY_PARENT_IMMUTABLE。"
+                    + "本接口不受新建子分类类型继承规则影响，仍按原规则编辑商品类型，不级联修改后代。")
     public CommonResult<Boolean> update(
             @Parameter(description = "平台类目永久编码", example = "CAT_01ABC")
             @PathVariable String categoryCode,
@@ -151,10 +156,13 @@ public class CategoryAdminController {
         private String categoryName;
 
         @Size(max = 32)
-        @Schema(description = "商品类型编码，由sc_product_type动态维护")
+        @Schema(description = "商品类型编码，由sc_product_type动态维护。根分类创建时与 typeCodes 至少提供一项；"
+                + "新建子分类继承父级类型，本字段可省略，提交值被忽略；编辑规则不变", example = "EQUITY_PRODUCT")
         private String productType;
 
-        @Schema(description = "商品类型编码列表，由sc_product_type动态维护")
+        @Schema(description = "商品类型编码列表，由sc_product_type动态维护。根分类创建时优先于 productType，首项同步为 productType；"
+                + "新建子分类完整继承父级列表及顺序，本字段可省略，提交值被忽略；字段格式校验仍生效，编辑规则不变",
+                example = "[\"EQUITY_PRODUCT\",\"MOVIE\"]")
         private List<@NotBlank @Size(max = 32) String> typeCodes;
 
         @Size(max = 200)
@@ -166,8 +174,8 @@ public class CategoryAdminController {
         private String remark;
 
         @Size(max = 32)
-        @Schema(description = "父分类编码。创建时为空表示根分类；更新时三态：不传或 null 表示不变更父级，"
-                + "空字符串表示显式挂到根，非空编码表示挂到该父级")
+        @Schema(description = "父分类编码。创建时为空表示根分类；非空时创建子分类并继承该父级商品类型。"
+                + "更新时不传、null 或原父级可保存，实际变更父级被拒绝", example = "CAT_001")
         private String parentCategoryCode;
 
         @Schema(description = "同级排序")
