@@ -18,6 +18,7 @@ import com.aifuli.module.supplychain.infrastructure.identity.BusinessNoGenerator
 import com.aifuli.module.supplychain.infrastructure.identity.UlidGenerator;
 import com.aifuli.module.supplychain.infrastructure.security.AesGcmEnvelopeCrypto;
 import com.aifuli.module.supplychain.tradecore.account.application.BuyerAccountOpeningService;
+import com.aifuli.module.supplychain.tradecore.account.application.BuyerAccountAdjustmentService;
 import com.aifuli.module.supplychain.tradecore.account.domain.Money;
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerAdminCommandService;
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerAdminCommandService.ContactLine;
@@ -961,7 +962,7 @@ class ProjectAdminIntegrationTest {
     @Import({SupplyChainDataSourceConfiguration.class, UlidGenerator.class, BusinessNoGenerator.class,
             AesGcmEnvelopeCrypto.class, ProductCatalogCommandService.class, ProductCenterTestConfiguration.class,
             SettlementPriceResolver.class,
-            BuyerAccountOpeningService.class, AccountLedgerWriter.class,
+            BuyerAccountOpeningService.class, BuyerAccountAdjustmentService.class, AccountLedgerWriter.class,
             FundReservationService.class,
             BuyerAccountReturnService.class,
             BuyerAdminCommandService.class, BuyerAdminQueryService.class,

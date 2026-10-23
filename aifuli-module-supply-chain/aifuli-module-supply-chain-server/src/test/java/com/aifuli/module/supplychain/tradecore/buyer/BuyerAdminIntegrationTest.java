@@ -6,6 +6,8 @@ import com.aifuli.module.supplychain.infrastructure.identity.BusinessNoGenerator
 import com.aifuli.module.supplychain.infrastructure.identity.UlidGenerator;
 import com.aifuli.module.supplychain.infrastructure.security.AesGcmEnvelopeCrypto;
 import com.aifuli.module.supplychain.tradecore.account.application.BuyerAccountOpeningService;
+import com.aifuli.module.supplychain.tradecore.account.application.BuyerAccountAdjustmentService;
+import com.aifuli.module.supplychain.tradecore.account.application.FundReservationService;
 import com.aifuli.module.supplychain.tradecore.account.dal.dataobject.BuyerAccountDO;
 import com.aifuli.module.supplychain.tradecore.account.dal.mysql.BuyerAccountMapper;
 import com.aifuli.module.supplychain.tradecore.account.domain.Money;
@@ -60,6 +62,16 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.springframework.beans.factory.config.BeanPostProcessor;
+import org.springframework.jdbc.core.JdbcTemplate;
+import com.aifuli.module.supplychain.tradecore.ledger.dal.dataobject.AccountLedgerDO;
+import com.aifuli.module.supplychain.tradecore.ledger.dal.mysql.AccountLedgerMapper;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.context.ConfigurableApplicationContext;
@@ -76,7 +88,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BUYER_OPENING_ALREADY_DONE;
 import static com.aifuli.module.supplychain.error.SupplyChainErrorCodeConstants.BUYER_PARENT_INVALID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -177,7 +188,7 @@ class BuyerAdminIntegrationTest {
     }
 
     @Test
-    void createsOpeningOnceAndRejectsSecondBalanceAndParentRules() {
+    void createsOpeningOnceAndAllowsSameBalanceAndParentRules() {
         try (ConfigurableApplicationContext context = applicationContext()) {
             BuyerAdminCommandService command = context.getBean(BuyerAdminCommandService.class);
             BuyerAdminQueryService query = context.getBean(BuyerAdminQueryService.class);
@@ -188,10 +199,8 @@ class BuyerAdminIntegrationTest {
             assertThat(l1).startsWith("BYR_");
             BuyerAccountDO account = accountMapper.selectByBuyerId(buyerMapper.selectByBuyerCode(l1).getId());
             assertThat(account.getBalance()).isZero();
-            assertThatThrownBy(() -> command.update(updateWithOpening(l1, 0L)))
-                    .isInstanceOf(ServiceException.class)
-                    .extracting(ex -> ((ServiceException) ex).getCode())
-                    .isEqualTo(BUYER_OPENING_ALREADY_DONE.getCode());
+            command.update(updateWithOpening(l1, 0L));
+            assertThat(accountMapper.selectByBuyerId(account.getBuyerId()).getVersion()).isEqualTo(account.getVersion());
 
             assertThatThrownBy(() -> command.create(levelTwoWithoutParent()))
                     .isInstanceOf(ServiceException.class)
@@ -209,6 +218,171 @@ class BuyerAdminIntegrationTest {
             command.changeStatus(l1, BuyerStatus.ACTIVE, 1L);
 
             addsProductAndIgnoresLegacyTemplatePrice(context, l1);
+        }
+    }
+
+    private static final AtomicInteger BALANCE_BUYER_SEQUENCE = new AtomicInteger(300);
+
+    /** 真实账户和账本验证，设计见 2026-10-23-buyer-admin-balance-adjustment-design.md §6。 */
+    @ParameterizedTest
+    @CsvSource({"1500,500", "600,-400", "0,-1000"})
+    void adjustsBalanceAndAppendsAuditedLedger(long target, long delta) {
+        try (ConfigurableApplicationContext context = applicationContext()) {
+            String code = createBalanceBuyer(context);
+            BuyerAccountDO before = balanceAccount(context, code);
+            // 通过真实资金服务创建冻结与账本，验证归零不触碰冻结、不强加 balance >= frozen。
+            context.getBean(FundReservationService.class)
+                    .freeze(new FundReservationService.FreezeCommand(
+                            before.getBuyerId(), "CARD_ORDER", "balance-test-" + code,
+                            Money.cny(800L), null, "freeze-balance-test", null));
+            long version = balanceAccount(context, code).getVersion();
+            context.getBean(BuyerAdminCommandService.class).update(balanceUpdate(context, code, target));
+            BuyerAccountDO after = balanceAccount(context, code);
+            assertThat(after.getBalance()).isEqualTo(target);
+            assertThat(after.getFrozen()).isEqualTo(800L);
+            assertThat(after.getVersion()).isEqualTo(version + 1);
+            assertThat(after.getUpdatedBy()).isEqualTo(1L);
+            var entries = balanceLedgers(context, after.getId());
+            assertThat(entries).hasSize(3);
+            AccountLedgerDO entry = entries.getLast();
+            assertThat(entry.getEntryType()).isEqualTo("ADJUSTMENT");
+            assertThat(entry.getBalanceBefore()).isEqualTo(1000L);
+            assertThat(entry.getBalanceAfter()).isEqualTo(target);
+            assertThat(entry.getBalanceDelta()).isEqualTo(delta);
+            assertThat(entry.getFrozenBefore()).isEqualTo(800L);
+            assertThat(entry.getFrozenAfter()).isEqualTo(800L);
+            assertThat(entry.getFrozenDelta()).isZero();
+            assertThat(entry.getOperatorId()).isEqualTo(1L);
+            assertThat(entry.getTraceId()).isEqualTo("buyer-admin-update-test");
+            assertThat(entry.getReferenceType()).isEqualTo("ADMIN_BALANCE_ADJUSTMENT");
+            assertThat(entry.getEntryKey()).isEqualTo("ADMIN_BALANCE_ADJUSTMENT:" + entry.getReferenceNo());
+            assertThat(entry.getCausationId()).isEqualTo(entry.getReferenceNo());
+            assertThat(entry.getEvidenceRef()).contains(entry.getReferenceNo());
+            assertThat(entry.getEvidenceDigest()).hasSize(32);
+            assertThat(entry.getAuditNote()).isEqualTo("管理端分销商余额修正");
+            assertThat(entry.getOccurredAt()).isEqualTo(after.getUpdatedAt());
+            assertThat(context.getBean(BuyerAdminQueryService.class).get(code).accountBalanceCents()).isEqualTo(target);
+        }
+    }
+
+    @ParameterizedTest
+    @CsvSource(value = {"1000", "NULL"}, nullValues = "NULL")
+    void sameOrAbsentBalanceDoesNotWriteAccountOrLedger(Long target) {
+        try (ConfigurableApplicationContext context = applicationContext()) {
+            String code = createBalanceBuyer(context);
+            BuyerAccountDO before = balanceAccount(context, code);
+            context.getBean(BuyerAdminCommandService.class).update(balanceUpdate(context, code, target));
+            assertThat(balanceAccount(context, code)).isEqualTo(before);
+            assertThat(balanceLedgers(context, before.getId())).hasSize(1);
+            assertThat(context.getBean(BuyerAdminQueryService.class).get(code).buyerName()).isEqualTo("一级");
+        }
+    }
+
+    @Test
+    void ledgerFailureRollsBackProfileContactsAccountAndInsertedLedger() {
+        try (ConfigurableApplicationContext context = applicationContext()) {
+            String code = createBalanceBuyer(context);
+            BuyerAdminCommandService commands = context.getBean(BuyerAdminCommandService.class);
+            BuyerAdminQueryService queries = context.getBean(BuyerAdminQueryService.class);
+            var profileBefore = queries.get(code);
+            BuyerAccountDO before = balanceAccount(context, code);
+            JdbcTemplate jdbc = new JdbcTemplate(context.getBean("supplyChainDataSource", javax.sql.DataSource.class));
+            var contactsBefore = jdbc.queryForList("SELECT * FROM sc_buyer_contact WHERE buyer_id = ? ORDER BY id", before.getBuyerId());
+            var ledgersBefore = balanceLedgers(context, before.getId());
+            context.getBean(AdjustmentLedgerFailureInjector.class).fail = true;
+            assertThatThrownBy(() -> commands.update(balanceUpdate(context, code, 2000L)))
+                    .isInstanceOf(IllegalStateException.class).hasMessage("injected after adjustment ledger insert");
+            assertThat(queries.get(code)).isEqualTo(profileBefore);
+            assertThat(jdbc.queryForList("SELECT * FROM sc_buyer_contact WHERE buyer_id = ? ORDER BY id", before.getBuyerId()))
+                    .isEqualTo(contactsBefore);
+            assertThat(balanceAccount(context, code)).isEqualTo(before);
+            assertThat(balanceLedgers(context, before.getId())).isEqualTo(ledgersBefore);
+        }
+    }
+
+    @Test
+    void adjustmentServiceRequiresOuterSupplyChainTransaction() {
+        try (ConfigurableApplicationContext context = applicationContext()) {
+            String code = createBalanceBuyer(context);
+            BuyerAccountDO before = balanceAccount(context, code);
+            assertThatThrownBy(() -> context.getBean(BuyerAccountAdjustmentService.class).adjust(
+                    new BuyerAccountAdjustmentService.AdjustmentCommand(before.getBuyerId(), 0, 1L, "trace-test")))
+                    .isInstanceOf(org.springframework.transaction.IllegalTransactionStateException.class);
+            assertThat(balanceAccount(context, code)).isEqualTo(before);
+            assertThat(balanceLedgers(context, before.getId())).hasSize(1);
+        }
+    }
+
+    @Test
+    void concurrentDifferentTargetsProduceContinuousLedgerChain() throws Exception {
+        try (ConfigurableApplicationContext context = applicationContext(); var pool = Executors.newFixedThreadPool(2)) {
+            String code = createBalanceBuyer(context);
+            var commands = context.getBean(BuyerAdminCommandService.class);
+            CountDownLatch ready = new CountDownLatch(2);
+            CountDownLatch start = new CountDownLatch(1);
+            var tasks = new java.util.ArrayList<java.util.concurrent.Future<?>>();
+            for (long target : new long[]{1500L, 2000L}) {
+                tasks.add(pool.submit(() -> {
+                    ready.countDown();
+                    if (!start.await(10, TimeUnit.SECONDS)) throw new IllegalStateException("start timeout");
+                    commands.update(balanceUpdate(context, code, target));
+                    return null;
+                }));
+            }
+            assertThat(ready.await(10, TimeUnit.SECONDS)).isTrue();
+            start.countDown();
+            for (var task : tasks) task.get(20, TimeUnit.SECONDS);
+            BuyerAccountDO after = balanceAccount(context, code);
+            var entries = balanceLedgers(context, after.getId());
+            assertThat(entries).hasSize(3);
+            assertThat(entries.get(1).getBalanceBefore()).isEqualTo(1000L);
+            assertThat(entries.get(2).getBalanceBefore()).isEqualTo(entries.get(1).getBalanceAfter());
+            assertThat(entries.get(2).getBalanceAfter()).isEqualTo(after.getBalance());
+            assertThat(entries.get(1).getEntryKey()).isNotEqualTo(entries.get(2).getEntryKey());
+            assertThat(after.getVersion()).isEqualTo(2L);
+        }
+    }
+
+    private static String createBalanceBuyer(ConfigurableApplicationContext context) {
+        int seq = BALANCE_BUYER_SEQUENCE.incrementAndGet();
+        return context.getBean(BuyerAdminCommandService.class).create(createCommand(
+                "余额测试" + seq, "余额测试有限公司" + seq, String.format("911100000000%06d", seq), 1, null, 1000L));
+    }
+
+    private static UpdateBuyerCommand balanceUpdate(ConfigurableApplicationContext context, String code, Long target) {
+        BuyerDO buyer = context.getBean(BuyerMapper.class).selectByBuyerCode(code);
+        return updateCommand(code, "一级", buyer.getLegalEntityName(), buyer.getCreditCode(), 1, null, target);
+    }
+
+    private static BuyerAccountDO balanceAccount(ConfigurableApplicationContext context, String code) {
+        return context.getBean(BuyerAccountMapper.class).selectByBuyerId(
+                context.getBean(BuyerMapper.class).selectByBuyerCode(code).getId());
+    }
+
+    private static List<AccountLedgerDO> balanceLedgers(ConfigurableApplicationContext context, Long accountId) {
+        return context.getBean(AccountLedgerMapper.class).selectList(new LambdaQueryWrapper<AccountLedgerDO>()
+                .eq(AccountLedgerDO::getAccountId, accountId).orderByAsc(AccountLedgerDO::getId));
+    }
+
+    /** 仅测试使用：在真实账本 INSERT 后注入异常，验证外层事务没有提前提交或独立提交。 */
+    static class AdjustmentLedgerFailureInjector implements BeanPostProcessor {
+        volatile boolean fail;
+
+        @Override
+        public Object postProcessAfterInitialization(Object bean, String name) {
+            if (bean instanceof AccountLedgerWriter writer) {
+                AccountLedgerWriter spy = org.mockito.Mockito.spy(writer);
+                org.mockito.Mockito.doAnswer(invocation -> {
+                    invocation.callRealMethod();
+                    AccountLedgerWriter.LedgerEntry entry = invocation.getArgument(0);
+                    if (fail && "ADJUSTMENT".equals(entry.entryType())) {
+                        throw new IllegalStateException("injected after adjustment ledger insert");
+                    }
+                    return null;
+                }).when(spy).append(any());
+                return spy;
+            }
+            return bean;
         }
     }
 
@@ -531,7 +705,7 @@ class BuyerAdminIntegrationTest {
                 List.of(),
                 List.of(),
                 opening,
-                1L);
+                1L, "buyer-admin-update-test");
     }
 
     private ConfigurableApplicationContext applicationContext() {
@@ -568,7 +742,10 @@ class BuyerAdminIntegrationTest {
     @Import({SupplyChainDataSourceConfiguration.class, UlidGenerator.class, BusinessNoGenerator.class,
             AesGcmEnvelopeCrypto.class, ProductCatalogCommandService.class, ProductCenterTestConfiguration.class,
             SettlementPriceResolver.class,
-            BuyerAccountOpeningService.class, AccountLedgerWriter.class,
+            BuyerAccountOpeningService.class,
+            BuyerAccountAdjustmentService.class,
+            FundReservationService.class,
+            AccountLedgerWriter.class,
             BuyerAdminCommandService.class, BuyerAdminQueryService.class,
             BuyerInvoiceService.class,
             BuyerProductCommandService.class, BuyerProductQueryService.class,
@@ -578,6 +755,11 @@ class BuyerAdminIntegrationTest {
             com.aifuli.module.supplychain.tradecore.catalog.application.BuyerAcceptanceCatalogIdentityProbe.class,
             GenericBatchPricingService.class})
     static class TestConfiguration {
+        @Bean
+        static AdjustmentLedgerFailureInjector adjustmentLedgerFailureInjector() {
+            return new AdjustmentLedgerFailureInjector();
+        }
+
         @Bean
         ObjectMapper objectMapper() {
             return new ObjectMapper().findAndRegisterModules();

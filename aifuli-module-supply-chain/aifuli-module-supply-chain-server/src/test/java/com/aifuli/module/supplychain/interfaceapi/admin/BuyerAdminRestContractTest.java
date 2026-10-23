@@ -1,5 +1,17 @@
 package com.aifuli.module.supplychain.interfaceapi.admin;
 
+import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerAdminCommandService.UpdateBuyerCommand;
+import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerAdminCommandService;
+import com.aifuli.framework.common.enums.UserTypeEnum;
+import com.aifuli.framework.security.core.LoginUser;
+import com.aifuli.framework.security.core.util.SecurityFrameworkUtils;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.http.MediaType;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.mockito.ArgumentCaptor;
 import com.aifuli.module.supplychain.interfaceapi.admin.BuyerAdminController.BuyerPageResponse;
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerAdminQueryService.BuyerChildItem;
 import com.aifuli.module.supplychain.tradecore.buyer.application.BuyerAdminQueryService.BuyerDetail;
@@ -27,6 +39,12 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 
 /**
  * 分销商管理端 REST：名词资源、开票为 /{buyerCode}/invoice、无 create/page/get/status/batch 路径、无 projects 子资源。
@@ -34,6 +52,50 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 与 {@code docs/superpowers/specs/2026-09-07-供应链管理端开票信息设计.md}。
  */
 class BuyerAdminRestContractTest {
+
+    /** 原 PUT JSON 无需新增版本字段；同时校验登录操作人和链路编号进入内部命令。 */
+    @ParameterizedTest
+    @ValueSource(strings = {"9999900", "0", "null", "ABSENT"})
+    void updateKeepsBalanceJsonContract(String balance) throws Exception {
+        var commands = mock(BuyerAdminCommandService.class);
+        var controller = new BuyerAdminController(commands, null, null, null, null, null, null);
+        var mvc = MockMvcBuilders.standaloneSetup(controller).build();
+        var user = new LoginUser();
+        user.setId(8L);
+        user.setUserType(UserTypeEnum.ADMIN.getValue());
+        SecurityFrameworkUtils.setLoginUser(user, new MockHttpServletRequest());
+        try {
+            String body = "{\"buyerName\":\"测试分销商\""
+                    + ("ABSENT".equals(balance) ? "" : ",\"openingBalanceCents\":" + balance) + "}";
+            mvc.perform(put("/supply-chain/buyers/BYR_011")
+                            .contentType(MediaType.APPLICATION_JSON).content(body))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.code").value(0))
+                    .andExpect(jsonPath("$.data").value(true));
+            var captured = ArgumentCaptor.forClass(UpdateBuyerCommand.class);
+            verify(commands).update(captured.capture());
+            var command = captured.getValue();
+            assertThat(command.buyerCode()).isEqualTo("BYR_011");
+            assertThat(command.openingBalanceCents()).isEqualTo(
+                    "null".equals(balance) || "ABSENT".equals(balance) ? null : Long.valueOf(balance));
+            assertThat(command.operatorId()).isEqualTo(8L);
+            assertThat(command.traceId()).isNotBlank();
+        } finally {
+            SecurityContextHolder.clearContext();
+        }
+    }
+
+    @Test
+    void updateRejectsNegativeTargetAtHttpBoundary() throws Exception {
+        var commands = mock(BuyerAdminCommandService.class);
+        var mvc = MockMvcBuilders
+                .standaloneSetup(new BuyerAdminController(commands, null, null, null, null, null, null)).build();
+        mvc.perform(put("/supply-chain/buyers/BYR_011")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"buyerName\":\"测试分销商\",\"openingBalanceCents\":-1}"))
+                .andExpect(status().isBadRequest());
+        verifyNoInteractions(commands);
+    }
 
     /** 项目选品搜索框与类目下拉均由服务端分页接口接收。 */
     @Test

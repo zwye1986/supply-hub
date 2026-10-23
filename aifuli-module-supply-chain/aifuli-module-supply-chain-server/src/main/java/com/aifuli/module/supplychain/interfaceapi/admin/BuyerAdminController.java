@@ -194,7 +194,7 @@ public class BuyerAdminController {
     @PutMapping("/{buyerCode}")
     @PreAuthorize(BUYER_UPDATE_EXPRESSION)
     @Operation(summary = "编辑分销商档案",
-            description = "身份用 buyerCode。编辑再带 openingBalanceCents 拒绝。金额单位 CNY 分。")
+            description = "身份用 buyerCode。openingBalanceCents 为目标总余额，省略或 null 不动账；差额写调账流水。金额单位 CNY 分。")
     public CommonResult<Boolean> update(@PathVariable String buyerCode,
                                           @Valid @RequestBody BuyerSaveReqVO request) {
         commandService.update(toUpdateCommand(buyerCode, request));
@@ -376,7 +376,7 @@ public class BuyerAdminController {
                 request.getLicenseFileKey(), request.getIdFrontFileKey(), request.getIdBackFileKey(),
                 request.getQualificationFileKey(), request.getLicenseFileKeys(),
                 request.getQualificationFileKeys(), request.getSellableCategories(), request.getProductTypes(),
-                request.getOpeningBalanceCents(), getLoginUserId());
+                request.getOpeningBalanceCents(), getLoginUserId(), traceId());
     }
 
     /**
@@ -488,7 +488,7 @@ public class BuyerAdminController {
         @Schema(description = "动态商品类型编码")
         private List<String> productTypes;
         @Min(0)
-        @Schema(description = "期初余额，单位CNY分，仅创建可写")
+        @Schema(description = "账户总余额，单位为分；创建为期初余额，空视为0；编辑为目标余额，省略或null不动账")
         private Long openingBalanceCents;
     }
 
